@@ -24,16 +24,22 @@ export function createApp(db: Db) {
     const { req, res } = toReqRes(c.req.raw);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     const server = buildMcpServer(db, actor);
-    await server.connect(transport);
-    // NB: don't pre-parse the body ourselves (e.g. `await c.req.json()`) — the
-    // transport's internal request listener reads `req`'s body stream itself,
-    // and that stream is the same one `toReqRes` wired up. Reading it twice
-    // throws "ReadableStream is locked".
-    await transport.handleRequest(req, res);
     res.on("close", () => {
       transport.close();
       server.close();
     });
+    try {
+      await server.connect(transport);
+      // NB: don't pre-parse the body ourselves (e.g. `await c.req.json()`) — the
+      // transport's internal request listener reads `req`'s body stream itself,
+      // and that stream is the same one `toReqRes` wired up. Reading it twice
+      // throws "ReadableStream is locked".
+      await transport.handleRequest(req, res);
+    } catch (err) {
+      transport.close();
+      server.close();
+      throw err;
+    }
     return toFetchResponse(res);
   });
 

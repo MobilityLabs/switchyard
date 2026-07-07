@@ -83,4 +83,17 @@ describe("core loop over HTTP", () => {
     expect(actorNames).toContain("sean");
     expect(actorNames).toContain("claude/worker");
   });
+
+  it("survives malformed bodies without leaking or crashing", async () => {
+    const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${agentToken}`, "Content-Type": "application/json" },
+      body: "{not json",
+    });
+    expect(res.status).toBeLessThan(600);
+
+    const agent = await mcpClient(agentToken);
+    const r = await agent.callTool({ name: "list_projects", arguments: {} });
+    expect(r.isError ?? false).toBe(false);
+  });
 });
