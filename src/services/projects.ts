@@ -11,6 +11,12 @@ export function createProject(db: Db, input: { key: string; name: string }): Pro
       `Project key "${input.key}" is invalid — use 2–10 uppercase letters, e.g. "AIPI".`
     );
   }
+  const existing = db.select().from(projects).where(eq(projects.key, input.key)).get();
+  if (existing) {
+    throw new SwitchyardError(
+      `A project with key "${input.key}" already exists — call list_projects to see it.`
+    );
+  }
   return db.insert(projects).values(input).returning().get();
 }
 

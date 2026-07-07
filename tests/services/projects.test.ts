@@ -26,4 +26,11 @@ describe("projects", () => {
     expect(reserveIssueNumber(db, p.id)).toBe(1);
     expect(reserveIssueNumber(db, p.id)).toBe(2);
   });
+
+  it("rejects duplicate keys with an agent-legible error", () => {
+    const db = openDb(":memory:");
+    createProject(db, { key: "AIPI", name: "aipi" });
+    expect(() => createProject(db, { key: "AIPI", name: "again" }))
+      .toThrowError(/project with key "AIPI" already exists/i);
+  });
 });
