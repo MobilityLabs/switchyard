@@ -29,3 +29,7 @@ export function authenticate(db: Db, token: string): Actor | null {
   const row = db.select().from(actors).where(eq(actors.tokenHash, hashToken(token))).get();
   return row ? { id: row.id, name: row.name, type: row.type } : null;
 }
+
+export function listActors(db: Db): Actor[] {
+  return db.select().from(actors).all().map((r) => ({ id: r.id, name: r.name, type: r.type }));
+}
