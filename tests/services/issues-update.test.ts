@@ -34,6 +34,18 @@ describe("updateIssue", () => {
     expect(() => updateIssue(db, human, "AIPI-1", { assigneeName: "ghost" }))
       .toThrowError(/no actor named "ghost"/i);
   });
+
+  it("no-op labels update records no event", () => {
+    updateIssue(db, human, "AIPI-1", { labels: ["a"] });
+    const before = listIssueEvents(db, getIssue(db, "AIPI-1").id).length;
+    updateIssue(db, human, "AIPI-1", { labels: ["a"] });
+    expect(listIssueEvents(db, getIssue(db, "AIPI-1").id)).toHaveLength(before);
+  });
+
+  it("rejects unknown priorities legibly", () => {
+    expect(() => updateIssue(db, human, "AIPI-1", { priority: "mega" as never }))
+      .toThrowError(/valid priorities/i);
+  });
 });
 
 describe("claimIssue", () => {

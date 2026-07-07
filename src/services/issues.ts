@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { issues, projects, actors as actorsTable, STATUSES, type Status, type Priority } from "../db/schema.js";
+import { issues, projects, actors as actorsTable, STATUSES, PRIORITIES, type Status, type Priority } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
@@ -120,6 +120,11 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
     }
     if (patch.priority !== undefined && patch.priority !== current.priority) {
+      if (!PRIORITIES.includes(patch.priority)) {
+        throw new SwitchyardError(
+          `"${patch.priority}" is not a priority — valid priorities are: ${PRIORITIES.join(", ")}.`
+        );
+      }
       changes.priority = patch.priority;
       toRecord.push({ type: "priority_changed", payload: { from: current.priority, to: patch.priority } });
     }
@@ -131,7 +136,7 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       changes.description = patch.description;
       toRecord.push({ type: "description_changed", payload: {} });
     }
-    if (patch.labels !== undefined) {
+    if (patch.labels !== undefined && JSON.stringify(patch.labels) !== JSON.stringify(current.labels)) {
       changes.labels = patch.labels;
       toRecord.push({ type: "labels_changed", payload: { to: patch.labels } });
     }
