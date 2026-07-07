@@ -32,4 +32,13 @@ describe("searchIssues", () => {
     expect(all).toHaveLength(3);
     expect(all[0].ref).toBe("HAND-1");
   });
+
+  it("treats %, _ and ~ in text as literals", () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Progress at 50% done" });
+    createIssue(db, human, { projectKey: "AIPI", title: "snake_case naming" });
+    createIssue(db, human, { projectKey: "AIPI", title: "v1.2~beta release" });
+    expect(searchIssues(db, { text: "50%" }).map((i) => i.title)).toEqual(["Progress at 50% done"]);
+    expect(searchIssues(db, { text: "e_c" }).map((i) => i.title)).toEqual(["snake_case naming"]);
+    expect(searchIssues(db, { text: "2~beta" }).map((i) => i.title)).toEqual(["v1.2~beta release"]);
+  });
 });
