@@ -111,6 +111,11 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
           `"${patch.status}" is not a status — valid statuses are: ${STATUSES.join(", ")}.`
         );
       }
+      if (current.status === "triage" && actor.type === "agent") {
+        throw new SwitchyardError(
+          `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`
+        );
+      }
       changes.status = patch.status;
       toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
     }

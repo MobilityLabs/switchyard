@@ -46,6 +46,20 @@ describe("updateIssue", () => {
     expect(() => updateIssue(db, human, "AIPI-1", { priority: "mega" as never }))
       .toThrowError(/valid priorities/i);
   });
+
+  it("agents cannot move issues out of triage; humans can", () => {
+    const filed = createIssue(db, agent, {
+      projectKey: "AIPI", title: "Agent-filed",
+      provenance: { sourceType: "manual", detail: "x" },
+    });
+    // non-status edits by agents are still allowed in triage
+    expect(updateIssue(db, agent, filed.ref, { priority: "high" }).priority).toBe("high");
+    expect(() => updateIssue(db, agent, filed.ref, { status: "todo" }))
+      .toThrowError(/only humans move issues out of triage/i);
+    expect(() => claimIssue(db, agent, filed.ref))
+      .toThrowError(/only humans move issues out of triage/i);
+    expect(updateIssue(db, human, filed.ref, { status: "todo" }).status).toBe("todo");
+  });
 });
 
 describe("claimIssue", () => {
