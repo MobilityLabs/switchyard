@@ -5,6 +5,7 @@ import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
+import { getOpenBlockers } from "./dependencies.js";
 
 export type Provenance = {
   sourceType: "session" | "todo" | "ci" | "manual";
@@ -97,12 +98,6 @@ export type UpdateIssueInput = {
   assigneeName?: string | null;
   labels?: string[];
 };
-
-// Replaced by the real implementation in dependencies.ts in Task 6.
-export let getOpenBlockers = (_db: Db, _issueId: number): IssueView[] => [];
-export function _setGetOpenBlockers(fn: typeof getOpenBlockers) {
-  getOpenBlockers = fn;
-}
 
 export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssueInput): IssueView {
   return db.transaction((tx) => {

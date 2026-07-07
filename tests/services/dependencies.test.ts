@@ -4,6 +4,7 @@ import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue } from "../../src/services/issues.js";
 import { addDependency, getOpenBlockers, nextTask } from "../../src/services/dependencies.js";
+import { listIssueEvents } from "../../src/services/events.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -40,5 +41,16 @@ describe("dependencies", () => {
   it("nextTask skips issues assigned to someone else", () => {
     updateIssue(db, human, "AIPI-2", { assigneeName: "sean" });
     expect(nextTask(db, agent)?.ref).toBe("AIPI-1");
+  });
+
+  it("nextTask throws legibly for an unknown project key", () => {
+    expect(() => nextTask(db, agent, "ZZ")).toThrowError(/no project with key "ZZ"/i);
+  });
+
+  it("re-adding the same dependency records exactly one blocked_by_added event", () => {
+    addDependency(db, human, "AIPI-1", "AIPI-2");
+    addDependency(db, human, "AIPI-1", "AIPI-2");
+    const types = listIssueEvents(db, 2).filter((e) => e.type === "blocked_by_added");
+    expect(types).toHaveLength(1);
   });
 });

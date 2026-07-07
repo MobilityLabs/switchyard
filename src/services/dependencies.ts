@@ -3,7 +3,8 @@ import type { Db } from "../db/index.js";
 import { dependencies, issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
-import { getIssue, toView, type IssueView, _setGetOpenBlockers } from "./issues.js";
+import { getIssue, toView, type IssueView } from "./issues.js";
+import { getProjectByKey } from "./projects.js";
 import { recordEvent } from "./events.js";
 
 const CLOSED = ["done", "canceled"] as const;
@@ -11,18 +12,24 @@ const PRIORITY_RANK = sql`CASE ${issues.priority}
   WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
 
 export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedRef: string): void {
-  const blocker = getIssue(db, blockerRef);
-  const blocked = getIssue(db, blockedRef);
-  if (blocker.id === blocked.id) {
-    throw new SwitchyardError(`An issue cannot block itself (${blockerRef}).`);
-  }
-  db.insert(dependencies)
-    .values({ blockerId: blocker.id, blockedId: blocked.id })
-    .onConflictDoNothing()
-    .run();
-  recordEvent(db, {
-    issueId: blocked.id, actorId: actor.id,
-    type: "blocked_by_added", payload: { blocker: blocker.ref },
+  db.transaction((tx) => {
+    const blocker = getIssue(tx as Db, blockerRef);
+    const blocked = getIssue(tx as Db, blockedRef);
+    if (blocker.id === blocked.id) {
+      throw new SwitchyardError(`An issue cannot block itself (${blockerRef}).`);
+    }
+    const inserted = tx
+      .insert(dependencies)
+      .values({ blockerId: blocker.id, blockedId: blocked.id })
+      .onConflictDoNothing()
+      .returning()
+      .get();
+    if (inserted) {
+      recordEvent(tx as Db, {
+        issueId: blocked.id, actorId: actor.id,
+        type: "blocked_by_added", payload: { blocker: blocker.ref },
+      });
+    }
   });
 }
 
@@ -36,23 +43,21 @@ export function getOpenBlockers(db: Db, issueId: number): IssueView[] {
   return rows.map((r) => toView(db, r.issue));
 }
 
-// Wire the real blocker check into claimIssue (replaces Task 5's placeholder).
-_setGetOpenBlockers(getOpenBlockers);
-
 export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView | null {
+  const project = projectKey !== undefined ? getProjectByKey(db, projectKey) : undefined;
+  const conditions = [
+    eq(issues.status, "todo"),
+    or(isNull(issues.assigneeId), eq(issues.assigneeId, actor.id)),
+  ];
+  if (project) conditions.push(eq(issues.projectId, project.id));
   const candidates = db
     .select()
     .from(issues)
-    .where(and(
-      eq(issues.status, "todo"),
-      or(isNull(issues.assigneeId), eq(issues.assigneeId, actor.id)),
-    ))
+    .where(and(...conditions))
     .orderBy(PRIORITY_RANK, issues.createdAt)
     .all();
   for (const row of candidates) {
-    const view = toView(db, row);
-    if (projectKey !== undefined && !view.ref.startsWith(projectKey + "-")) continue;
-    if (getOpenBlockers(db, row.id).length === 0) return view;
+    if (getOpenBlockers(db, row.id).length === 0) return toView(db, row);
   }
   return null;
 }
