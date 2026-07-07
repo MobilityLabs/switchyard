@@ -5,11 +5,14 @@ import { toReqRes, toFetchResponse } from "fetch-to-node";
 import type { Db } from "./db/index.js";
 import { authenticate } from "./services/actors.js";
 import { buildMcpServer } from "./mcp/server.js";
+import { buildAuthRoutes } from "./rest/auth-routes.js";
 
 export function createApp(db: Db) {
   const app = new Hono();
 
   app.get("/health", (c) => c.json({ ok: true }));
+
+  app.route("/", buildAuthRoutes(db));
 
   app.post("/mcp", async (c) => {
     const auth = c.req.header("authorization") ?? "";

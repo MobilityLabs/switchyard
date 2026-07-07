@@ -1,11 +1,13 @@
 import { openDb } from "./db/index.js";
 import { createActor } from "./services/actors.js";
 import { createProject } from "./services/projects.js";
+import { createLoginLink } from "./services/auth.js";
 
 const [dbPath, cmd, ...args] = process.argv.slice(2);
 if (!dbPath || !cmd) {
   console.log("usage: tsx src/cli.ts <db-path> add-actor <name> <human|agent>");
   console.log("       tsx src/cli.ts <db-path> add-project <KEY> <name...>");
+  console.log("       tsx src/cli.ts <db-path> mint-login <name>");
   process.exit(1);
 }
 const db = openDb(dbPath);
@@ -27,6 +29,16 @@ if (cmd === "add-actor") {
   }
   const project = createProject(db, { key, name: nameParts.join(" ") || key });
   console.log(`created project ${project.key}: ${project.name}`);
+} else if (cmd === "mint-login") {
+  const [name] = args;
+  if (!name) {
+    console.error("mint-login needs: <actor name>");
+    process.exit(1);
+  }
+  const { path } = createLoginLink(db, name);
+  const base = process.env.SWITCHYARD_URL ?? "http://localhost:3300";
+  console.log(`login link (valid 15 minutes, single use):`);
+  console.log(base + path);
 } else {
   console.error(`unknown command "${cmd}"`);
   process.exit(1);
