@@ -12,6 +12,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2",
+    "fetch-to-node": "^2.1.0",
     "hono": "^4.12.28",
     "zod": "^3.25.76"
   },
