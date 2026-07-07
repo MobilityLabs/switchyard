@@ -63,3 +63,34 @@ export const events = sqliteTable("events", {
   payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
   createdAt: integer("created_at").notNull().default(now()),
 });
+
+export const sessions = sqliteTable("sessions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tokenHash: text("token_hash").notNull().unique(),
+  actorId: integer("actor_id").notNull().references(() => actors.id),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull().default(now()),
+});
+
+export const loginLinks = sqliteTable("login_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tokenHash: text("token_hash").notNull().unique(),
+  actorId: integer("actor_id").notNull().references(() => actors.id),
+  expiresAt: integer("expires_at").notNull(),
+  usedAt: integer("used_at"),
+  createdAt: integer("created_at").notNull().default(now()),
+});
+
+export const webhooks = sqliteTable("webhooks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  url: text("url").notNull(),
+  projectId: integer("project_id").references(() => projects.id),
+  secret: text("secret"),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdAt: integer("created_at").notNull().default(now()),
+});
+
+export const webhookCursor = sqliteTable("webhook_cursor", {
+  id: integer("id").primaryKey(),
+  lastEventId: integer("last_event_id").notNull().default(0),
+});
