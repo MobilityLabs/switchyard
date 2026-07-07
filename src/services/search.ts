@@ -26,11 +26,13 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
     conditions.push(sql`EXISTS (SELECT 1 FROM json_each(${issues.labels}) WHERE json_each.value = ${filters.label})`);
   }
   if (filters.text) {
-    const pattern = `%${filters.text.toLowerCase()}%`;
+    // Escape SQL wildcard characters (% and _) so they're treated as literals
+    const escaped = filters.text.toLowerCase().replace(/[%_]/g, "~$&");
+    const pattern = `%${escaped}%`;
     conditions.push(
       or(
-        sql`lower(${issues.title}) LIKE ${pattern}`,
-        sql`lower(${issues.description}) LIKE ${pattern}`
+        sql`lower(${issues.title}) LIKE ${pattern} ESCAPE '~'`,
+        sql`lower(${issues.description}) LIKE ${pattern} ESCAPE '~'`
       )!
     );
   }
