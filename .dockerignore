@@ -1,0 +1,8 @@
+node_modules
+.git
+.superpowers
+docs
+tests
+*.db
+*.db-*
+.DS_Store
