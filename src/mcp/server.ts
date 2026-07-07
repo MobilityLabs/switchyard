@@ -8,7 +8,7 @@ import { listProjects } from "../services/projects.js";
 import {
   createIssue, getIssue, updateIssue, claimIssue,
 } from "../services/issues.js";
-import { nextTask } from "../services/dependencies.js";
+import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 
@@ -84,6 +84,124 @@ export function buildMcpServer(db: Db, actor: Actor): McpServer {
       inputSchema: { project_key: z.string().optional() },
     },
     guard(({ project_key }: { project_key?: string }) => nextTask(db, actor, project_key))
+  );
+
+  server.registerTool(
+    "file_issue",
+    {
+      description:
+        "Create an issue. ALWAYS file discovered work (TODOs, flaky tests, follow-ups, bugs you " +
+        "noticed but did not fix) instead of only mentioning it in chat. Agent-filed issues go to " +
+        "the triage inbox for human review, so file freely but with clear titles and provenance. " +
+        "Provenance: source_type is where this came from; source_detail is a file:line, session id, " +
+        "or short note; source_url is a CI run or PR link.",
+      inputSchema: {
+        project_key: z.string(),
+        title: z.string(),
+        description: z.string().optional(),
+        priority: z.enum(PRIORITIES).optional(),
+        labels: z.array(z.string()).optional(),
+        parent_ref: z.string().optional(),
+        source_type: z.enum(["session", "todo", "ci", "manual"]).optional(),
+        source_detail: z.string().optional(),
+        source_url: z.string().optional(),
+      },
+    },
+    guard((a: {
+      project_key: string; title: string; description?: string;
+      priority?: (typeof PRIORITIES)[number]; labels?: string[]; parent_ref?: string;
+      source_type?: "session" | "todo" | "ci" | "manual";
+      source_detail?: string; source_url?: string;
+    }) =>
+      createIssue(db, actor, {
+        projectKey: a.project_key, title: a.title, description: a.description,
+        priority: a.priority, labels: a.labels, parentRef: a.parent_ref,
+        provenance: a.source_type
+          ? { sourceType: a.source_type, detail: a.source_detail, url: a.source_url }
+          : undefined,
+      })
+    )
+  );
+
+  server.registerTool(
+    "claim_issue",
+    {
+      description:
+        "Assign yourself to an issue and move it to in_progress. Fails with guidance if the issue " +
+        "is blocked. Prefer next_task to pick what to claim.",
+      inputSchema: { ref: z.string() },
+    },
+    guard(({ ref }: { ref: string }) => claimIssue(db, actor, ref))
+  );
+
+  server.registerTool(
+    "update_issue",
+    {
+      description:
+        "Update an issue's fields. Conventions: before moving an issue to in_review, post a comment " +
+        "saying what was done and how it was verified. NEVER move an issue you worked on to done — " +
+        "a human or a review step does that.",
+      inputSchema: {
+        ref: z.string(),
+        status: z.enum(STATUSES).optional(),
+        priority: z.enum(PRIORITIES).optional(),
+        title: z.string().optional(),
+        description: z.string().optional(),
+        assignee: z.string().nullable().optional(),
+        labels: z.array(z.string()).optional(),
+      },
+    },
+    guard((a: {
+      ref: string; status?: (typeof STATUSES)[number]; priority?: (typeof PRIORITIES)[number];
+      title?: string; description?: string; assignee?: string | null; labels?: string[];
+    }) =>
+      updateIssue(db, actor, a.ref, {
+        status: a.status, priority: a.priority, title: a.title,
+        description: a.description, assigneeName: a.assignee, labels: a.labels,
+      })
+    )
+  );
+
+  server.registerTool(
+    "comment",
+    {
+      description:
+        "Add a comment to an issue. Use for progress notes, questions for humans, and final " +
+        "summaries (what was done, how it was verified).",
+      inputSchema: { ref: z.string(), body: z.string() },
+    },
+    guard(({ ref, body }: { ref: string; body: string }) => {
+      addComment(db, actor, ref, body);
+      return { ok: true };
+    })
+  );
+
+  server.registerTool(
+    "add_dependency",
+    {
+      description:
+        "Declare that one issue blocks another (blocker must finish first). Blocked issues are " +
+        "skipped by next_task and cannot be claimed until the blocker is done or canceled.",
+      inputSchema: { blocker_ref: z.string(), blocked_ref: z.string() },
+    },
+    guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
+      addDependency(db, actor, blocker_ref, blocked_ref);
+      return { ok: true };
+    })
+  );
+
+  server.registerTool(
+    "triage_queue",
+    {
+      description:
+        "List issues waiting in triage (agent-filed, pending human review), with provenance. Use " +
+        "when a human asks you to help triage: suggest duplicates, priorities, and merges — but " +
+        "the accept/dismiss decision is theirs.",
+      inputSchema: { project_key: z.string().optional() },
+    },
+    guard(({ project_key }: { project_key?: string }) =>
+      searchIssues(db, { projectKey: project_key, status: "triage" })
+    )
   );
 
   return server;
