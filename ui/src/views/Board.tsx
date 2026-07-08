@@ -59,6 +59,11 @@ function Card({ issue }: { issue: Issue }) {
       className="card"
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/plain", issue.ref)}
+      onClick={(e) => {
+        // Whole card opens the issue; anchors inside keep native behavior.
+        if ((e.target as HTMLElement).closest("a")) return;
+        location.hash = `#/issue/${issue.ref}`;
+      }}
     >
       <a className="ref" href={`#/issue/${issue.ref}`}>{issue.ref}</a>
       <p>{issue.title}</p>

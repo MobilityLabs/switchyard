@@ -67,7 +67,7 @@ h2 { display: flex; align-items: center; gap: 8px; }
 .column h3 { margin: 2px 4px 10px; font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 .card {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px; margin-bottom: 8px; cursor: grab;
+  padding: 10px; margin-bottom: 8px; cursor: pointer;
 }
 .card p { margin: 6px 0; font-size: 13px; }
 .card:active { cursor: grabbing; }
