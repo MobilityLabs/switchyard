@@ -5,6 +5,7 @@ import { useRoute } from "./router";
 import { usePoll } from "./usePoll";
 import Shell from "./Shell";
 import Triage from "./views/Triage";
+import Board from "./views/Board";
 
 export default function App() {
   const [me, setMe] = useState<Actor | null>(null);
@@ -38,7 +39,7 @@ function ShellRouter({ me }: { me: Actor }) {
   return (
     <Shell me={me} projects={projects.data ?? []}>
       {route.view === "triage" && <Triage />}
-      {route.view === "board" && <p>board: {route.project}</p>}
+      {route.view === "board" && <Board project={route.project} />}
       {route.view === "issue" && <p>issue: {route.ref}</p>}
     </Shell>
   );
