@@ -10,7 +10,7 @@ import { createProject, listProjects } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
 import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
-import { addDependency, nextTask } from "../services/dependencies.js";
+import { addDependency, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { listRecentEvents } from "../services/events.js";
 import { searchIssues } from "../services/search.js";
@@ -86,7 +86,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/issues/:ref", (c) => {
     const ref = c.req.param("ref");
-    return c.json({ ...getIssue(db, ref), activity: getActivity(db, ref) });
+    return c.json({
+      ...getIssue(db, ref),
+      activity: getActivity(db, ref),
+      dependencies: listDependencies(db, ref),
+    });
   });
 
   app.patch("/issues/:ref", body(issueUpdateBody), (c) =>
@@ -174,6 +178,16 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   app.post("/dependencies", body(dependencyBody), (c) => {
     const { blockerRef, blockedRef } = c.req.valid("json");
     addDependency(db, c.var.actor, blockerRef, blockedRef);
+    return c.json({ ok: true });
+  });
+
+  app.delete("/dependencies", (c) => {
+    const blockerRef = c.req.query("blockerRef");
+    const blockedRef = c.req.query("blockedRef");
+    if (!blockerRef || !blockedRef) {
+      return c.json({ error: "blockerRef and blockedRef query params are required" }, 400);
+    }
+    removeDependency(db, c.var.actor, blockerRef, blockedRef);
     return c.json({ ok: true });
   });
 

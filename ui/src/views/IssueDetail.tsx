@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { addComment, getIssue, updateIssue } from "../api";
+import { addComment, addDependency, getIssue, removeDependency, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
-import { PRIORITIES, STATUSES, type Activity, type Priority, type Status } from "../types";
+import { href } from "../router";
+import { PRIORITIES, STATUSES, type Activity, type DependencyRef, type Priority, type Status } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 
@@ -88,6 +89,8 @@ export default function IssueDetail({ refId }: { refId: string }) {
         : <p className="empty">No description.</p>}
       {data.description && <DesignEmbeds text={data.description} />}
 
+      <Dependencies refId={refId} deps={data.dependencies} act={act} />
+
       <h3>Activity</h3>
       <div className="activity">
         {data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} />)}
@@ -114,6 +117,94 @@ export default function IssueDetail({ refId }: { refId: string }) {
         {uploading && <span className="uploading-note">uploading…</span>}
       </div>
     </section>
+  );
+}
+
+const OPEN_STATUSES: Status[] = ["triage", "backlog", "todo", "in_progress", "in_review"];
+
+function Dependencies({
+  refId,
+  deps,
+  act,
+}: {
+  refId: string;
+  deps: { blockedBy: DependencyRef[]; blocks: DependencyRef[] };
+  act: (fn: () => Promise<unknown>) => void;
+}) {
+  const [direction, setDirection] = useState<"blocked-by" | "blocks">("blocked-by");
+  const [other, setOther] = useState("");
+  const openBlockers = deps.blockedBy.filter((d) => OPEN_STATUSES.includes(d.status));
+
+  const add = () => {
+    const ref = other.trim().toUpperCase();
+    if (!ref) return;
+    act(() =>
+      (direction === "blocked-by" ? addDependency(ref, refId) : addDependency(refId, ref))
+        .then(() => setOther("")),
+    );
+  };
+
+  const row = (d: DependencyRef, dir: "blocked-by" | "blocks") => (
+    <li key={`${dir}-${d.ref}`}>
+      <a className="ref" href={href({ view: "issue", ref: d.ref })}>{d.ref}</a>{" "}
+      {d.title} <span className={`badge dep-status dep-${d.status}`}>{d.status.replace(/_/g, " ")}</span>
+      <button
+        className="chip-remove"
+        title="Remove this dependency"
+        onClick={() =>
+          act(() =>
+            dir === "blocked-by" ? removeDependency(d.ref, refId) : removeDependency(refId, d.ref),
+          )
+        }
+      >
+        ×
+      </button>
+    </li>
+  );
+
+  return (
+    <div className="dependencies panel">
+      <h3>Dependencies</h3>
+      {openBlockers.length > 0 && (
+        <p className="banner warn">
+          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents can't claim this issue.
+        </p>
+      )}
+      {deps.blockedBy.length > 0 && (
+        <>
+          <h4>Blocked by</h4>
+          <ul className="dep-list">{deps.blockedBy.map((d) => row(d, "blocked-by"))}</ul>
+        </>
+      )}
+      {deps.blocks.length > 0 && (
+        <>
+          <h4>Blocks</h4>
+          <ul className="dep-list">{deps.blocks.map((d) => row(d, "blocks"))}</ul>
+        </>
+      )}
+      {deps.blockedBy.length === 0 && deps.blocks.length === 0 && (
+        <p className="empty">No dependencies.</p>
+      )}
+      <div className="dep-add">
+        <span>This issue is</span>
+        <select value={direction} onChange={(e) => setDirection(e.target.value as "blocked-by" | "blocks")}>
+          <option value="blocked-by">blocked by</option>
+          <option value="blocks">blocking</option>
+        </select>
+        <input
+          className="label-input"
+          value={other}
+          placeholder="SYD-12"
+          onChange={(e) => setOther(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            add();
+          }}
+        />
+        <button disabled={!other.trim()} onClick={add}>Add</button>
+      </div>
+    </div>
   );
 }
 
@@ -148,7 +239,9 @@ export function Event({ ev, projectKey }: { ev: Activity; projectKey: string }) 
   const fromTo =
     ev.payload.from !== undefined || ev.payload.to !== undefined
       ? ` (${ev.payload.from ?? "…"} → ${ev.payload.to ?? "…"})`
-      : "";
+      : ev.payload.blocker !== undefined
+        ? ` (${ev.payload.blocker})`
+        : "";
   return (
     <p className="event">
       <strong>{ev.actorName}</strong> {ev.type.replace(/_/g, " ")}{fromTo} <time>{when}</time>

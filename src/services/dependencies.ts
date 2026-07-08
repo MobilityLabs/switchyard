@@ -38,6 +38,56 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
   });
 }
 
+/** Remove a dependency edge. A no-op (no event) if the edge doesn't exist —
+ * removal is mistake correction, so idempotency beats erroring. */
+export function removeDependency(db: Db, actor: Actor, blockerRef: string, blockedRef: string): void {
+  db.transaction((tx) => {
+    const blocker = getIssue(tx as Db, blockerRef);
+    const blocked = getIssue(tx as Db, blockedRef);
+    const deleted = tx
+      .delete(dependencies)
+      .where(and(eq(dependencies.blockerId, blocker.id), eq(dependencies.blockedId, blocked.id)))
+      .returning()
+      .get();
+    if (deleted) {
+      recordEvent(tx as Db, {
+        issueId: blocked.id, actorId: actor.id,
+        type: "blocked_by_removed", payload: { blocker: blocker.ref },
+      });
+    }
+  });
+}
+
+export type DependencyView = { ref: string; title: string; status: string };
+
+/** Both directions of an issue's dependency edges, for display. Unlike
+ * getOpenBlockers this includes closed issues — the UI shows (and lets you
+ * unlink) resolved blockers too. */
+export function listDependencies(
+  db: Db,
+  ref: string
+): { blockedBy: DependencyView[]; blocks: DependencyView[] } {
+  const issue = getIssue(db, ref);
+  const pick = (rows: { i: typeof issues.$inferSelect }[]): DependencyView[] =>
+    rows.map(({ i }) => {
+      const v = toView(db, i);
+      return { ref: v.ref, title: v.title, status: v.status };
+    });
+  const blockedBy = db
+    .select({ i: issues })
+    .from(dependencies)
+    .innerJoin(issues, eq(dependencies.blockerId, issues.id))
+    .where(eq(dependencies.blockedId, issue.id))
+    .all();
+  const blocks = db
+    .select({ i: issues })
+    .from(dependencies)
+    .innerJoin(issues, eq(dependencies.blockedId, issues.id))
+    .where(eq(dependencies.blockerId, issue.id))
+    .all();
+  return { blockedBy: pick(blockedBy), blocks: pick(blocks) };
+}
+
 function isReachable(db: Db, fromId: number, toId: number): boolean {
   const visited = new Set<number>([fromId]);
   const queue = [fromId];
