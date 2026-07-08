@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Schedule the Dreamer (SYD-28) to run nightly at 04:30 local time.
+
+  Modeled on cc-autodream's launchd job (see
+  ~/sites/cc-autodream/launchd/com.user.autodream.plist.example): a plain
+  LaunchAgent with StartCalendarInterval, RunAtLoad off (install arms the
+  schedule without firing a run), and an explicit PATH since launchd
+  processes don't source a login shell's profile.
+
+  Install:
+    cp launchd/com.switchyard.dreamer.plist ~/Library/LaunchAgents/
+    # Edit ~/Library/LaunchAgents/com.switchyard.dreamer.plist:
+    #   replace REPLACE_WITH_TOKEN below with a real actor token
+    #   (npx tsx src/cli.ts switchyard.db add-actor dreamer agent), and
+    #   double-check SWITCHYARD_URL / WorkingDirectory for your host.
+    launchctl load ~/Library/LaunchAgents/com.switchyard.dreamer.plist
+    launchctl start com.switchyard.dreamer    # run now to test
+
+  Logs: ~/.claude/dreams/switchyard-dreamer.log (the run itself, written by
+  scripts/dreamer.sh) and ~/.claude/dreams/launchd.{out,err}.log (launchd's
+  own capture, mostly empty — dreamer.sh redirects the claude call's
+  stdout/stderr into its own log).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.switchyard.dreamer</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>/Users/sean/sites/switchyard/scripts/dreamer.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/sean/sites/switchyard</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/sean/.claude/dreams/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/sean/.claude/dreams/launchd.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/sean</string>
+        <key>SWITCHYARD_URL</key>
+        <string>http://localhost:3300</string>
+        <key>SWITCHYARD_TOKEN</key>
+        <string>REPLACE_WITH_TOKEN</string>
+    </dict>
+</dict>
+</plist>

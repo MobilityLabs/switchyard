@@ -49,7 +49,14 @@ All routes under `/api` accept a bearer token (agents) or the session cookie (hu
 `GET/POST /api/projects` · `GET /api/actors` · `GET/POST /api/issues` ·
 `GET/PATCH /api/issues/:ref` · `POST /api/issues/:ref/claim` ·
 `POST /api/issues/:ref/comments` · `GET /api/next-task` ·
-`POST /api/dependencies` · `GET/POST /api/webhooks` · `DELETE /api/webhooks/:id`.
+`POST /api/dependencies` · `GET/POST /api/webhooks` · `DELETE /api/webhooks/:id` ·
+`GET /api/events`.
+
+`GET /api/events?since=<unix>&limit=<n>` — global, newest-first activity feed
+(events joined with issue ref/title, project key, and actor name). `limit`
+defaults to 200, capped at 500. Powers reflection tooling like the Dreamer
+(below); useful for any external consumer that wants "what happened
+recently" without polling per-issue.
 
 Issues in `triage` can only be moved out by human actors (enforced server-side).
 
@@ -128,6 +135,47 @@ Labeling an issue `auto` is consent to run that issue's content (title,
 description, comments) through a headless session with your local permission
 profile — review the issue text like you'd review a script before running it,
 and keep the worker's permission allowlist tight.
+
+## The Dreamer
+
+A nightly reflection job (SYD-28): once a night, a headless Claude Code
+session reads the last 24h of tracker activity (`GET /api/events`) plus the
+full board and triage queue, looks for patterns — review-column latency,
+needs-input response gaps, stale/parked issues, recurring themes in what
+agents file, board hygiene, error signals, and integration opportunities
+(e.g. repeated manual SHA citations that a GitHub link would remove) — and:
+
+1. writes a dated digest to `~/.claude/dreams/switchyard-YYYY-MM-DD.md`
+   (counts, top 3-5 ranked observations, open questions — a one-minute read), and
+2. files at most 3 concrete, decision-grade findings back into triage
+   (after checking they aren't already tracked), each with provenance
+   `sourceType: "session"`, `detail: "dreamer nightly YYYY-MM-DD"`.
+
+It never modifies existing issues — read and file only. See
+`prompts/dreamer.md` for the full instructions and `scripts/dreamer.sh` for
+the runner (modeled on cc-autodream's lean headless-invocation pattern).
+
+Install the nightly schedule (04:30 local time):
+
+```bash
+cp launchd/com.switchyard.dreamer.plist ~/Library/LaunchAgents/
+# edit the copy: replace REPLACE_WITH_TOKEN with a real actor token
+# (npx tsx src/cli.ts switchyard.db add-actor dreamer agent), and check
+# SWITCHYARD_URL / WorkingDirectory match your host
+launchctl load ~/Library/LaunchAgents/com.switchyard.dreamer.plist
+```
+
+Manual run:
+
+```bash
+SWITCHYARD_URL=http://localhost:3300 SWITCHYARD_TOKEN=... sh scripts/dreamer.sh
+```
+
+Dry run (writes the digest, files nothing):
+
+```bash
+SWITCHYARD_URL=http://localhost:3300 SWITCHYARD_TOKEN=... DREAMER_DRY_RUN=1 sh scripts/dreamer.sh
+```
 
 ## Development
 
