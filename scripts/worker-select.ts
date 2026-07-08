@@ -105,6 +105,38 @@ export function findResumeRefs(
   return { refs: [...refs], lastEventId: Math.max(newestId, lastEventId) };
 }
 
+/**
+ * Coordinates re-entrant calls to a single-flight async task (agent-worker's
+ * tick): at most one invocation of `fn` runs at a time. A call that arrives
+ * while one is already running doesn't run `fn` itself — it marks a re-run
+ * as queued, and the in-flight call replays `fn` once more immediately after
+ * it finishes. This is what lets the event poll's resume trigger land a
+ * dispatch even when it arrives mid-tick, instead of being silently dropped
+ * until the next periodic tick (up to `intervalSeconds` later).
+ */
+export type TickGate = { inFlight: boolean; queued: boolean };
+
+export function newTickGate(): TickGate {
+  return { inFlight: false, queued: false };
+}
+
+export async function runGated(gate: TickGate, fn: () => Promise<void>): Promise<void> {
+  if (gate.inFlight) {
+    gate.queued = true;
+    return;
+  }
+  gate.inFlight = true;
+  try {
+    await fn();
+  } finally {
+    gate.inFlight = false;
+    if (gate.queued) {
+      gate.queued = false;
+      void runGated(gate, fn).catch((err) => console.error(`re-armed tick failed: ${(err as Error).message}`));
+    }
+  }
+}
+
 /** Per-ref dispatch-attempt tracking, kept in memory by the polling loop. */
 export type RetryState = { attempts: number; lastUpdatedAt: number };
 
@@ -158,8 +190,14 @@ export function recordAttempt(retryState: Map<string, RetryState>, ref: string, 
  * entrypoint has something to push, and must name the branch in its comment
  * since the human reviewing has no other way to find it.
  */
-export function buildContainerizedPrompt(ref: string): string {
+export function buildContainerizedPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
+  const resumedPreamble = opts.resumed
+    ? `You previously escalated a question on Switchyard issue ${ref} and a human ` +
+      `has now answered it. Call get_issue first and read the activity feed for ` +
+      `the answer, then continue the work from where the escalation left off. `
+    : "";
   return (
+    resumedPreamble +
     `Work Switchyard issue ${ref} using the switchyard MCP tools. ` +
     `Call claim_issue first. Implement the work with tests. Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
@@ -189,7 +227,8 @@ export function buildDockerArgs(
   issue: WorkerIssue,
   project: WorkerProject,
   config: WorkerConfig,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  opts: { resumed?: boolean } = {}
 ): string[] {
   if (!env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY) {
     throw new Error(
@@ -198,7 +237,7 @@ export function buildDockerArgs(
   }
 
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
-  const prompt = buildContainerizedPrompt(issue.ref);
+  const prompt = buildContainerizedPrompt(issue.ref, opts);
   const image = config.image ?? DEFAULT_WORKER_IMAGE;
 
   return [

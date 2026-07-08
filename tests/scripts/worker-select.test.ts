@@ -5,12 +5,26 @@ import {
   recordAttempt,
 findResumeRefs,
   buildDockerArgs,
+  buildContainerizedPrompt,
+  newTickGate,
+  runGated,
   type WorkerConfig,
   type WorkerIssue,
   type WorkerProject,
   type RetryState,
   type FeedEvent,
 } from "../../scripts/worker-select.js";
+
+/** A promise plus its resolve/reject, for controlling when async work settles in tests. */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+  let resolve!: (v: T) => void;
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 const config: WorkerConfig = {
   url: "http://localhost:3300",
@@ -233,5 +247,120 @@ describe("dispatchPolicy all-todo", () => {
   it("labeled policy still requires the label", () => {
     const out = selectDispatchable([issue("SYD-1"), issue("SYD-2", ["auto"])], base, [].values());
     expect(out.map((i: { ref: string }) => i.ref)).toEqual(["SYD-2"]);
+  });
+});
+
+describe("buildContainerizedPrompt", () => {
+  it("builds the standard containerized prompt", () => {
+    const prompt = buildContainerizedPrompt("SYD-7");
+    expect(prompt).toContain("SYD-7");
+    expect(prompt).toContain("claim_issue");
+    expect(prompt).toContain("agent/SYD-7");
+    expect(prompt).not.toMatch(/escalat/i);
+  });
+
+  it("primes a resumed session to read the human's answer in the activity feed", () => {
+    const prompt = buildContainerizedPrompt("SYD-7", { resumed: true });
+    expect(prompt).toContain("SYD-7");
+    expect(prompt).toMatch(/escalat/i);
+    expect(prompt).toMatch(/answer/i);
+    expect(prompt).toMatch(/get_issue|activity/i);
+  });
+});
+
+describe("buildDockerArgs resumed threading", () => {
+  const project: WorkerProject = { repo: "/repo/syd" };
+  const oauthEnv = { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret" };
+
+  it("threads opts.resumed into the containerized WORKER_PROMPT", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv, { resumed: true });
+    const promptArg = args.find((a) => a.startsWith("WORKER_PROMPT="));
+    expect(promptArg).toMatch(/escalat/i);
+    expect(promptArg).toMatch(/answer/i);
+  });
+
+  it("omits the resumed preamble when opts.resumed is not set", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    const promptArg = args.find((a) => a.startsWith("WORKER_PROMPT="));
+    expect(promptArg).not.toMatch(/escalat/i);
+  });
+});
+
+describe("runGated / newTickGate", () => {
+  it("runs fn immediately when nothing is in flight", async () => {
+    const gate = newTickGate();
+    let calls = 0;
+    await runGated(gate, async () => {
+      calls++;
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("queues a call that arrives while fn is in flight and re-runs fn once the in-flight call finishes", async () => {
+    const gate = newTickGate();
+    let calls = 0;
+    const first = deferred<void>();
+    const firstRun = runGated(gate, async () => {
+      calls++;
+      await first.promise;
+    });
+
+    // A second call arrives mid-flight: it must not run fn again right away.
+    const secondRun = runGated(gate, async () => {
+      calls++;
+      await first.promise;
+    });
+    await Promise.resolve(); // let both promise chains start
+    expect(calls).toBe(1);
+
+    first.resolve();
+    await firstRun;
+    await secondRun;
+    // The queued call re-armed and ran fn exactly once more.
+    expect(calls).toBe(2);
+  });
+
+  it("coalesces multiple calls that arrive during the same in-flight run into a single re-run", async () => {
+    const gate = newTickGate();
+    let calls = 0;
+    const first = deferred<void>();
+    const firstRun = runGated(gate, async () => {
+      calls++;
+      await first.promise;
+    });
+
+    await runGated(gate, async () => { calls++; });
+    await runGated(gate, async () => { calls++; });
+    await runGated(gate, async () => { calls++; });
+    expect(calls).toBe(1);
+
+    first.resolve();
+    await firstRun;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toBe(2);
+  });
+
+  it("propagates an error from the initial (non-queued) call", async () => {
+    const gate = newTickGate();
+    await expect(
+      runGated(gate, async () => {
+        throw new Error("boom");
+      })
+    ).rejects.toThrow("boom");
+  });
+
+  it("does not deadlock the gate after an error — a later call still runs", async () => {
+    const gate = newTickGate();
+    await expect(
+      runGated(gate, async () => {
+        throw new Error("boom");
+      })
+    ).rejects.toThrow("boom");
+
+    let ran = false;
+    await runGated(gate, async () => {
+      ran = true;
+    });
+    expect(ran).toBe(true);
   });
 });
