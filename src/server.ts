@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { toReqRes, toFetchResponse } from "fetch-to-node";
 import type { Db } from "./db/index.js";
@@ -47,6 +48,8 @@ export function createApp(db: Db) {
     }
     return toFetchResponse(res);
   });
+
+  app.use("/*", serveStatic({ root: "./dist/ui" }));
 
   return app;
 }

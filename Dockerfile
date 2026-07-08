@@ -8,6 +8,8 @@ RUN npm ci
 COPY tsconfig.json drizzle.config.ts ./
 COPY drizzle ./drizzle
 COPY src ./src
+COPY ui ./ui
+RUN npx vite build --config ui/vite.config.ts
 
 RUN mkdir -p /data
 
