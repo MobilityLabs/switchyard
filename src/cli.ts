@@ -10,7 +10,7 @@ if (!dbPath || !cmd) {
   console.log("usage: tsx src/cli.ts <db-path> add-actor <name> <human|agent>");
   console.log("       tsx src/cli.ts <db-path> add-project <KEY> <name...>");
   console.log("       tsx src/cli.ts <db-path> mint-login <name>");
-  console.log("       tsx src/cli.ts <db-path> add-webhook <url> [PROJECT_KEY]");
+  console.log("       tsx src/cli.ts <db-path> add-webhook <url> [PROJECT_KEY] [secret]");
   console.log("       tsx src/cli.ts <db-path> list-webhooks");
   console.log("       tsx src/cli.ts <db-path> rm-webhook <id>");
   process.exit(1);
@@ -46,13 +46,13 @@ try {
     console.log(`login link (valid 15 minutes, single use):`);
     console.log(base + path);
   } else if (cmd === "add-webhook") {
-    const [url, projectKey] = args;
+    const [url, projectKey, secret] = args;
     if (!url) {
-      console.error("add-webhook needs: <url> [PROJECT_KEY]");
+      console.error("add-webhook needs: <url> [PROJECT_KEY] [secret]");
       process.exit(1);
     }
-    const hook = addWebhook(db, { url, projectKey });
-    console.log(`webhook ${hook.id} -> ${hook.url}${projectKey ? ` (project ${projectKey})` : " (all projects)"}`);
+    const hook = addWebhook(db, { url, projectKey, secret });
+    console.log(`webhook ${hook.id} -> ${hook.url}${projectKey ? ` (project ${projectKey})` : " (all projects)"}${secret ? " (signed)" : ""}`);
   } else if (cmd === "list-webhooks") {
     for (const h of listWebhooks(db)) {
       console.log(`${h.id}: ${h.url} projectId=${h.projectId ?? "all"}`);

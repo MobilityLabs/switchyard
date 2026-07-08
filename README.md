@@ -60,6 +60,27 @@ Events POST as JSON (`event`, `issue`, `project`, `actor`, ...) with an
 `x-switchyard-signature: sha256=<hmac>` header when a secret is set.
 Delivery is best-effort (no retries), polled every 2 seconds.
 
+### Slack notifications
+
+A standalone consumer (its own process, not part of the main server) that turns
+select webhook events into Slack messages: new triage filings, needs-input
+escalations, and issues moving to `in_review`. Everything else is dropped.
+
+```bash
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/... npx tsx scripts/slack-notifier.ts
+```
+
+Then register it as a webhook (optionally scoped to a project, optionally signed):
+
+```bash
+npx tsx src/cli.ts switchyard.db add-webhook http://<host>:3301/ [PROJECT] <secret>
+```
+
+If you set a secret, also export it as `SWITCHYARD_WEBHOOK_SECRET` on the notifier
+process so it can verify the `x-switchyard-signature` header. It ships unconfigured
+— nothing posts to Slack until `SLACK_WEBHOOK_URL` is set and the webhook is
+registered.
+
 ## Development
 
 ```bash
