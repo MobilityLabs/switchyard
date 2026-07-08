@@ -1,0 +1,78 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { openDb, type Db } from "../../src/db/index.js";
+import { createActor } from "../../src/services/actors.js";
+import { createProject } from "../../src/services/projects.js";
+import { buildApiRoutes } from "../../src/rest/api-routes.js";
+
+let db: Db, app: ReturnType<typeof buildApiRoutes>;
+let agentH: Record<string, string>, humanH: Record<string, string>;
+
+beforeEach(() => {
+  db = openDb(":memory:");
+  const agent = createActor(db, { name: "claude/dev", type: "agent" });
+  const human = createActor(db, { name: "sean", type: "human" });
+  agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
+  humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };
+  createProject(db, { key: "SYD", name: "Switchyard" });
+  app = buildApiRoutes(db);
+});
+
+async function body<T>(r: Response): Promise<T> { return (await r.json()) as T; }
+
+describe("issue routes", () => {
+  it("drives the core loop over REST", async () => {
+    const filed = await body<{ ref: string; status: string }>(await app.request("/issues", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({
+        projectKey: "SYD", title: "Flaky test",
+        provenance: { sourceType: "todo", detail: "src/x.ts:1" },
+      }),
+    }));
+    expect(filed.status).toBe("triage");
+
+    // agent cannot exit triage (SYD-8, over REST)
+    const denied = await app.request(`/issues/${filed.ref}`, {
+      method: "PATCH", headers: agentH, body: JSON.stringify({ status: "todo" }),
+    });
+    expect(denied.status).toBe(400);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+
+    const accepted = await app.request(`/issues/${filed.ref}`, {
+      method: "PATCH", headers: humanH, body: JSON.stringify({ status: "todo", priority: "high" }),
+    });
+    expect((await body<{ status: string }>(accepted)).status).toBe("todo");
+
+    const next = await body<{ ref: string }>(await app.request("/next-task", { headers: agentH }));
+    expect(next.ref).toBe(filed.ref);
+
+    await app.request(`/issues/${filed.ref}/claim`, { method: "POST", headers: agentH });
+    await app.request(`/issues/${filed.ref}/comments`, {
+      method: "POST", headers: agentH, body: JSON.stringify({ body: "done, 3 tests green" }),
+    });
+    const detail = await body<{ status: string; activity: { type: string }[] }>(
+      await app.request(`/issues/${filed.ref}`, { headers: humanH })
+    );
+    expect(detail.status).toBe("in_progress");
+    expect(detail.activity.map((a) => a.type)).toContain("comment");
+
+    const search = await body<unknown[]>(
+      await app.request("/issues?project=SYD&status=in_progress", { headers: humanH })
+    );
+    expect(search).toHaveLength(1);
+  });
+
+  it("dependencies block claims over REST", async () => {
+    for (const title of ["Schema", "API"]) {
+      await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title }) });
+    }
+    for (const ref of ["SYD-1", "SYD-2"]) {
+      await app.request(`/issues/${ref}`, { method: "PATCH", headers: humanH, body: JSON.stringify({ status: "todo" }) });
+    }
+    await app.request("/dependencies", {
+      method: "POST", headers: humanH, body: JSON.stringify({ blockerRef: "SYD-1", blockedRef: "SYD-2" }),
+    });
+    const denied = await app.request("/issues/SYD-2/claim", { method: "POST", headers: agentH });
+    expect(denied.status).toBe(400);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/blocked by SYD-1/);
+  });
+});
