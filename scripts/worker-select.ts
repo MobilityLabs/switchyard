@@ -21,6 +21,7 @@ export type WorkerConfig = {
   maxConcurrent: number;
   projects: Record<string, WorkerProject>;
   allowedTools?: string[];
+  dispatchPolicy?: "labeled" | "all-todo";
   /** Run dispatched sessions in a Docker container instead of bare on the host. */
   containerized?: boolean;
   /** Image to run when `containerized` is set. Defaults to "switchyard-worker". */
@@ -53,7 +54,13 @@ export function selectDispatchable<T extends WorkerIssue>(
   const selected: T[] = [];
   for (const issue of issues) {
     if (selected.length >= capacity) break;
-    if (!issue.labels.includes(config.label)) continue;
+    if ((config.dispatchPolicy ?? "labeled") === "labeled") {
+      // Opt-in: only issues a human explicitly labeled for dispatch.
+      if (!issue.labels.includes(config.label)) continue;
+    } else {
+      // all-todo: every vetted-ready issue is fair game unless held back.
+      if (issue.labels.includes("hold")) continue;
+    }
     if (!(projectKeyOf(issue.ref) in config.projects)) continue;
     if (issue.assigneeId !== null) continue;
     if (issue.needsInput) continue;

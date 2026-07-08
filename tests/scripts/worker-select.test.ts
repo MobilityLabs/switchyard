@@ -213,3 +213,25 @@ describe("buildDockerArgs", () => {
     ).not.toThrow();
   });
 });
+
+describe("dispatchPolicy all-todo", () => {
+  const base = {
+    url: "http://x", label: "auto", intervalSeconds: 300, maxConcurrent: 5,
+    projects: { SYD: { repo: "/tmp/syd" } },
+  };
+  const issue = (ref: string, labels: string[] = []) =>
+    ({ ref, labels, assigneeId: null, needsInput: false, updatedAt: 1 }) as never;
+
+  it("dispatches unlabeled todos and respects hold", () => {
+    const cfg = { ...base, dispatchPolicy: "all-todo" as const };
+    const out = selectDispatchable(
+      [issue("SYD-1"), issue("SYD-2", ["hold"]), issue("SYD-3", ["auto"])], cfg, [].values(),
+    );
+    expect(out.map((i: { ref: string }) => i.ref)).toEqual(["SYD-1", "SYD-3"]);
+  });
+
+  it("labeled policy still requires the label", () => {
+    const out = selectDispatchable([issue("SYD-1"), issue("SYD-2", ["auto"])], base, [].values());
+    expect(out.map((i: { ref: string }) => i.ref)).toEqual(["SYD-2"]);
+  });
+});
