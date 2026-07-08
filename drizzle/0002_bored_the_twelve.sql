@@ -1,0 +1,1 @@
+ALTER TABLE `issues` ADD `needs_input` integer DEFAULT false NOT NULL;

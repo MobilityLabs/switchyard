@@ -11,6 +11,7 @@ export type SearchFilters = {
   assigneeName?: string;
   label?: string;
   text?: string;
+  needsInput?: boolean;
 };
 
 export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
@@ -24,6 +25,9 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
   }
   if (filters.label) {
     conditions.push(sql`EXISTS (SELECT 1 FROM json_each(${issues.labels}) WHERE json_each.value = ${filters.label})`);
+  }
+  if (filters.needsInput !== undefined) {
+    conditions.push(eq(issues.needsInput, filters.needsInput));
   }
   if (filters.text) {
     // Escape SQL wildcard characters (%, _, and ~) so they're treated as literals

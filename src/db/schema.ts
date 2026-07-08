@@ -42,6 +42,7 @@ export const issues = sqliteTable("issues", {
   sourceType: text("source_type", { enum: ["session", "todo", "ci", "manual"] }),
   sourceDetail: text("source_detail"),
   sourceUrl: text("source_url"),
+  needsInput: integer("needs_input", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull().default(now()),
   updatedAt: integer("updated_at").notNull().default(now()),
 });

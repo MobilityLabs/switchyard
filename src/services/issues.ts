@@ -170,6 +170,11 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       }
     }
 
+    if (actor.type === "human" && current.needsInput) {
+      changes.needsInput = false;
+      toRecord.push({ type: "needs_input_cleared", payload: {} });
+    }
+
     if (Object.keys(changes).length === 0) return current;
     changes.updatedAt = Math.floor(Date.now() / 1000);
     const row = tx.update(issues).set(changes).where(eq(issues.id, current.id)).returning().get();
