@@ -37,6 +37,8 @@ describe("searchIssues", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Progress at 50% done" });
     createIssue(db, human, { projectKey: "AIPI", title: "snake_case naming" });
     createIssue(db, human, { projectKey: "AIPI", title: "v1.2~beta release" });
+    createIssue(db, human, { projectKey: "AIPI", title: "Progress at 50x done" });   // would match "50%" if % were a wildcard
+    createIssue(db, human, { projectKey: "AIPI", title: "each case handling" });      // would match "e_c" if _ were a wildcard
     expect(searchIssues(db, { text: "50%" }).map((i) => i.title)).toEqual(["Progress at 50% done"]);
     expect(searchIssues(db, { text: "e_c" }).map((i) => i.title)).toEqual(["snake_case naming"]);
     expect(searchIssues(db, { text: "2~beta" }).map((i) => i.title)).toEqual(["v1.2~beta release"]);
