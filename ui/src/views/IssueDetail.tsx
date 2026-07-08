@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { addComment, getIssue, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
+import { PollErrorBar } from "../PollErrorBar";
 import { PRIORITIES, STATUSES, type Activity, type Priority, type Status } from "../types";
 
 export default function IssueDetail({ refId }: { refId: string }) {
@@ -8,7 +9,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
-  if (error) return <p className="error-bar">{error}</p>;
+  if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
 
   const act = (fn: () => Promise<unknown>) =>
@@ -29,6 +30,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
+      <PollErrorBar error={error} />
       {data.sourceType && (
         <div className="provenance panel">
           Filed from: {data.sourceType} · {data.sourceDetail ?? ""}

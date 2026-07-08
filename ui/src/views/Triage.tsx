@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
+import { PollErrorBar } from "../PollErrorBar";
 import { PRIORITIES, type Issue, type Priority } from "../types";
 
 export default function Triage() {
@@ -10,9 +11,8 @@ export default function Triage() {
   const act = (fn: () => Promise<unknown>) =>
     fn().then(() => { setActionError(null); reload(); }, (e) => setActionError(e.message));
 
-  if (error) return <p className="error-bar">{error}</p>;
+  if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
-  if (data.length === 0) return <p className="empty">Nothing in triage. The yard is clear.</p>;
 
   return (
     <section className="triage">
@@ -20,9 +20,12 @@ export default function Triage() {
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
-      {data.map((issue) => (
-        <TriageRow key={issue.ref} issue={issue} act={act} />
-      ))}
+      <PollErrorBar error={error} />
+      {data.length === 0
+        ? <p className="empty">Nothing in triage. The yard is clear.</p>
+        : data.map((issue) => (
+            <TriageRow key={issue.ref} issue={issue} act={act} />
+          ))}
     </section>
   );
 }

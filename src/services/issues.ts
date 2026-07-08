@@ -63,6 +63,11 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
         '("session" | "todo" | "ci" | "manual") plus a detail (e.g. "src/api.ts:88" or a session id) or url.'
     );
   }
+  if (input.provenance?.url && !/^https?:\/\//.test(input.provenance.url)) {
+    throw new SwitchyardError(
+      `Provenance url must be http(s) — got "${input.provenance.url}".`
+    );
+  }
   return db.transaction((tx) => {
     const project = getProjectByKey(tx as Db, input.projectKey);
     const number = reserveIssueNumber(tx as Db, project.id);

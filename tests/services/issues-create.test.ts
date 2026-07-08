@@ -35,6 +35,22 @@ describe("createIssue", () => {
     expect(issue.sourceType).toBe("todo");
   });
 
+  it("rejects agent-supplied provenance urls that aren't http(s) and accepts http(s) urls", () => {
+    expect(() =>
+      createIssue(db, agent, {
+        projectKey: "AIPI",
+        title: "Malicious link",
+        provenance: { sourceType: "manual", url: "javascript:alert(1)" },
+      })
+    ).toThrowError(/must be http/i);
+    const issue = createIssue(db, agent, {
+      projectKey: "AIPI",
+      title: "Safe link",
+      provenance: { sourceType: "manual", url: "https://example.com/run/123" },
+    });
+    expect(issue.sourceUrl).toBe("https://example.com/run/123");
+  });
+
   it("getIssue round-trips by ref and rejects unknown refs legibly", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "One" });
     expect(getIssue(db, "AIPI-1").title).toBe("One");

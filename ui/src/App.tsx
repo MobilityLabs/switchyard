@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getMe, ApiError, listProjects, logout } from "./api";
+import { getMe, ApiError, listProjects } from "./api";
 import type { Actor } from "./types";
 import { useRoute } from "./router";
 import { usePoll } from "./usePoll";
@@ -10,15 +10,24 @@ import IssueDetail from "./views/IssueDetail";
 
 export default function App() {
   const [me, setMe] = useState<Actor | null>(null);
-  const [authState, setAuthState] = useState<"loading" | "out" | "in">("loading");
+  const [authState, setAuthState] = useState<"loading" | "out" | "in" | "error">("loading");
 
   useEffect(() => {
     getMe()
       .then((a) => { setMe(a); setAuthState("in"); })
-      .catch((e) => setAuthState(e instanceof ApiError && e.status === 401 ? "out" : "out"));
+      .catch((e) => setAuthState(e instanceof ApiError && e.status === 401 ? "out" : "error"));
   }, []);
 
   if (authState === "loading") return <main className="center"><p>Loading…</p></main>;
+  if (authState === "error") {
+    return (
+      <main className="center login">
+        <h1>Switchyard</h1>
+        <p className="error-bar">Can't reach the server. It may be restarting.</p>
+        <button className="primary" onClick={() => location.reload()}>Retry</button>
+      </main>
+    );
+  }
   if (authState === "out" || !me) {
     return (
       <main className="center login">

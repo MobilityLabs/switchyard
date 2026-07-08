@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
+import { PollErrorBar } from "../PollErrorBar";
 import type { Issue, Status } from "../types";
 
 const BOARD_COLUMNS: Status[] = ["backlog", "todo", "in_progress", "in_review", "done"];
@@ -13,7 +14,7 @@ export default function Board({ project }: { project: string }) {
   const { data, error, reload } = usePoll(() => listIssues({ project }), [project]);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  if (error) return <p className="error-bar">{error}</p>;
+  if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
 
   const move = (ref: string, status: Status) =>
@@ -27,6 +28,7 @@ export default function Board({ project }: { project: string }) {
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
+      <PollErrorBar error={error} />
       <div className="board">
         {BOARD_COLUMNS.map((col) => {
           const cards = data.filter((i) => i.status === col);
