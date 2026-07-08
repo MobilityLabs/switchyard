@@ -4,9 +4,11 @@
   "intervalSeconds": 300,
   "eventPollSeconds": 15,
   "maxConcurrent": 1,
-  "projects": {
+"projects": {
     "SYD": {
       "repo": "/Users/sean/sites/switchyard"
     }
-  }
+  },
+  "containerized": true,
+  "image": "switchyard-worker"
 }

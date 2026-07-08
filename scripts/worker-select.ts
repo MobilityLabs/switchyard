@@ -10,6 +10,8 @@ export type WorkerIssue = {
   updatedAt: number;
 };
 
+export type WorkerProject = { repo: string };
+
 export type WorkerConfig = {
   url: string;
   label: string;
@@ -17,9 +19,16 @@ export type WorkerConfig = {
   /** How often to scan the event feed for answered escalations (default 15s). */
   eventPollSeconds?: number;
   maxConcurrent: number;
-  projects: Record<string, { repo: string }>;
+  projects: Record<string, WorkerProject>;
   allowedTools?: string[];
+  /** Run dispatched sessions in a Docker container instead of bare on the host. */
+  containerized?: boolean;
+  /** Image to run when `containerized` is set. Defaults to "switchyard-worker". */
+  image?: string;
 };
+
+const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+const DEFAULT_WORKER_IMAGE = "switchyard-worker";
 
 export function projectKeyOf(ref: string): string {
   return ref.split("-")[0];
@@ -133,4 +142,70 @@ export function recordAttempt(retryState: Map<string, RetryState>, ref: string, 
   } else {
     retryState.set(ref, { attempts: 1, lastUpdatedAt: updatedAt });
   }
+}
+
+/**
+ * Prompt for a containerized dispatch: same conventions as the bare-host
+ * prompt, plus the branch/push contract the container's entrypoint enforces
+ * (see scripts/container-entry.sh) — the session must commit its work so the
+ * entrypoint has something to push, and must name the branch in its comment
+ * since the human reviewing has no other way to find it.
+ */
+export function buildContainerizedPrompt(ref: string): string {
+  return (
+    `Work Switchyard issue ${ref} using the switchyard MCP tools. ` +
+    `Call claim_issue first. Implement the work with tests. Comment verification ` +
+    `evidence describing what you did and how you verified it, then move the issue ` +
+    `to in_review. Never move it to done — a human or review step does that. ` +
+    `If you are blocked on a decision only a human can make, call request_human_input ` +
+    `with your question and stop. You are in a disposable clone on branch agent/${ref}; ` +
+    `commit your work — it will be pushed for review. The issue comment MUST include ` +
+    `the branch name.`
+  );
+}
+
+/**
+ * Builds the `docker run` argv for a containerized dispatch. Pure so it's
+ * unit-testable without actually spawning docker. Secrets (SWITCHYARD_TOKEN,
+ * CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY) are passed with the bare `-e
+ * VAR` form so their values flow through from the worker's own environment
+ * at `docker run` time rather than being embedded in argv (which would be
+ * visible to anything that can read the process list). Only non-secret
+ * values (issue ref, switchyard URL, prompt, tool allowlist) are embedded
+ * directly.
+ *
+ * Throws if neither auth env var is present, so a misconfigured worker fails
+ * before spinning up a container that would just fail the same check inside
+ * scripts/container-entry.sh.
+ */
+export function buildDockerArgs(
+  issue: WorkerIssue,
+  project: WorkerProject,
+  config: WorkerConfig,
+  env: NodeJS.ProcessEnv
+): string[] {
+  if (!env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      "containerized dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment"
+    );
+  }
+
+  const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+  const prompt = buildContainerizedPrompt(issue.ref);
+  const image = config.image ?? DEFAULT_WORKER_IMAGE;
+
+  return [
+    "run",
+    "--rm",
+    "--name", `syd-${issue.ref}`,
+    "-v", `${project.repo}:/origin`,
+    "-e", `ISSUE_REF=${issue.ref}`,
+    "-e", `SWITCHYARD_URL=${config.url}`,
+    "-e", "SWITCHYARD_TOKEN",
+    "-e", "CLAUDE_CODE_OAUTH_TOKEN",
+    "-e", "ANTHROPIC_API_KEY",
+    "-e", `WORKER_PROMPT=${prompt}`,
+    "-e", `ALLOWED_TOOLS=${allowedTools.join(",")}`,
+    image,
+  ];
 }

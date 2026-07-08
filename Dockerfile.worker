@@ -1,0 +1,15 @@
+# Disposable worker image for Switchyard's containerized dispatch mode (SYD-30).
+# The container clones the target repo inside itself, works on a branch, and
+# pushes the branch back out — it never mutates the host filesystem directly.
+FROM node:24-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+
+COPY scripts/container-entry.sh /entry.sh
+RUN chmod +x /entry.sh
+
+ENTRYPOINT ["/bin/sh", "/entry.sh"]
