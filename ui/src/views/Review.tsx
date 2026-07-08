@@ -5,6 +5,7 @@ import { PollErrorBar } from "../PollErrorBar";
 import type { IssueDetail as IssueDetailType } from "../types";
 import { Event, projectKeyFromRef } from "./IssueDetail";
 import { Markdown } from "../Markdown";
+import { DesignEmbeds } from "../DesignEmbeds";
 
 export default function Review() {
   const { data, error, reload } = usePoll(() => listIssues({ status: "in_review" }), []);
@@ -110,6 +111,7 @@ export default function Review() {
           {current.description
             ? <div className="description panel"><Markdown text={current.description} projectKey={projectKeyFromRef(current.ref)} /></div>
             : <p className="empty">No description.</p>}
+          {current.description && <DesignEmbeds text={current.description} />}
 
           <h4>Activity</h4>
           <div className="activity">

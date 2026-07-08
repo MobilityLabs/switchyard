@@ -4,6 +4,7 @@ import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { PRIORITIES, STATUSES, type Activity, type Priority, type Status } from "../types";
 import { Markdown } from "../Markdown";
+import { DesignEmbeds } from "../DesignEmbeds";
 
 export function projectKeyFromRef(ref: string): string {
   return ref.split("-")[0] ?? "";
@@ -50,6 +51,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
       {data.description
         ? <div className="description panel"><Markdown text={data.description} projectKey={projectKey} /></div>
         : <p className="empty">No description.</p>}
+      {data.description && <DesignEmbeds text={data.description} />}
 
       <h3>Activity</h3>
       <div className="activity">
