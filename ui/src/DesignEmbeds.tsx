@@ -6,7 +6,7 @@ type EmbedKind = "figma" | "paper";
 
 type Embed = { url: string; kind: EmbedKind };
 
-function classify(url: string): EmbedKind | null {
+export function classify(url: string): EmbedKind | null {
   try {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, "");
@@ -18,7 +18,7 @@ function classify(url: string): EmbedKind | null {
   }
 }
 
-function extractEmbeds(text: string): Embed[] {
+export function extractEmbeds(text: string): Embed[] {
   const seen = new Set<string>();
   const embeds: Embed[] = [];
   for (const match of text.matchAll(URL_RE)) {
@@ -70,6 +70,10 @@ function DesignEmbedCard({ embed }: { embed: Embed }) {
           src={src}
           loading="lazy"
           title={`${KIND_LABEL[embed.kind]} preview`}
+          // Defense-in-depth if the embedded origin is ever compromised:
+          // scripts/storage/popups are what the embeds need to function,
+          // everything else (top navigation, forms, downloads) stays blocked.
+          sandbox="allow-scripts allow-same-origin allow-popups"
           allowFullScreen
         />
       )}

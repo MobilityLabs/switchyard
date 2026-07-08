@@ -55,10 +55,10 @@ const ALLOWED_TAGS = [
 ];
 const ALLOWED_ATTR = ["href", "target", "rel", "src", "alt", "title", "class", "checked", "disabled", "type", "start"];
 
-let linkHookInstalled = false;
-function ensureLinkHook() {
-  if (linkHookInstalled) return;
-  linkHookInstalled = true;
+let hooksInstalled = false;
+function ensureHooks() {
+  if (hooksInstalled) return;
+  hooksInstalled = true;
   // Force every surviving <a> to open safely, regardless of what the
   // source markdown/HTML asked for.
   DOMPurify.addHook("afterSanitizeAttributes", (node) => {
@@ -67,10 +67,19 @@ function ensureLinkHook() {
       node.setAttribute("rel", "noreferrer");
     }
   });
+  // <input> is allowlisted only for GFM task-list checkboxes; pin every
+  // surviving input to a disabled checkbox so raw HTML can't render text
+  // fields or other UI-spoofing input types.
+  DOMPurify.addHook("uponSanitizeElement", (node, data) => {
+    if (data.tagName === "input" && node instanceof Element) {
+      node.setAttribute("type", "checkbox");
+      node.setAttribute("disabled", "");
+    }
+  });
 }
-ensureLinkHook();
+ensureHooks();
 
-function renderMarkdown(text: string, projectKey: string): string {
+export function renderMarkdown(text: string, projectKey: string): string {
   const repo = PROJECT_REPOS[projectKey];
 
   const renderer = new marked.Renderer();
