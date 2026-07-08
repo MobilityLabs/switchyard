@@ -270,3 +270,7 @@ SWITCHYARD_URL=http://localhost:3300 SWITCHYARD_TOKEN=... DREAMER_DRY_RUN=1 sh s
 npm test
 npm run typecheck
 ```
+
+Token-lean architecture maps for coding agents live in `codemaps/`
+(generated — regenerate with the `/update-codemaps` skill rather than
+hand-editing).
