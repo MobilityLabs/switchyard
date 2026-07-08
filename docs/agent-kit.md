@@ -58,3 +58,19 @@ leave provenance, none of which a human can triage or audit later. The
 conventions above turn "the tools exist" into "the tools are used the way the
 tracker's gating model (triage inbox, claim-before-work, human-only done)
 assumes they'll be used."
+
+
+## Interactive sessions follow the same discipline
+
+The conventions above are not only for headless workers. Any session working
+tracker-mapped work — including one taking direct verbal instructions from a
+human — must keep the board truthful IN REAL TIME, not retroactively:
+
+1. When asked to build something, file it (or find its issue) FIRST.
+2. If it sits in triage, ask the human to accept it before starting — their
+   verbal instruction is authority to work, but the board should say so too.
+3. `claim_issue` the moment work starts (status: in_progress), not when it ends.
+4. Comment + `in_review` on completion, as usual.
+
+A board that lags reality trains humans to stop trusting it. The status column
+is the product; keep it current.
