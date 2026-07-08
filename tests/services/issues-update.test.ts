@@ -42,6 +42,15 @@ describe("updateIssue", () => {
     expect(listIssueEvents(db, getIssue(db, "AIPI-1").id)).toHaveLength(before);
   });
 
+  it("reordered-but-identical labels record no event, but a real change does", () => {
+    updateIssue(db, human, "AIPI-1", { labels: ["a", "b"] });
+    const afterInitial = listIssueEvents(db, getIssue(db, "AIPI-1").id).length;
+    updateIssue(db, human, "AIPI-1", { labels: ["b", "a"] });
+    expect(listIssueEvents(db, getIssue(db, "AIPI-1").id)).toHaveLength(afterInitial);
+    updateIssue(db, human, "AIPI-1", { labels: ["a", "c"] });
+    expect(listIssueEvents(db, getIssue(db, "AIPI-1").id)).toHaveLength(afterInitial + 1);
+  });
+
   it("rejects unknown priorities legibly", () => {
     expect(() => updateIssue(db, human, "AIPI-1", { priority: "mega" as never }))
       .toThrowError(/valid priorities/i);

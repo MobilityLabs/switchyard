@@ -141,7 +141,10 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       changes.description = patch.description;
       toRecord.push({ type: "description_changed", payload: {} });
     }
-    if (patch.labels !== undefined && JSON.stringify(patch.labels) !== JSON.stringify(current.labels)) {
+    if (
+      patch.labels !== undefined &&
+      JSON.stringify([...patch.labels].sort()) !== JSON.stringify([...current.labels].sort())
+    ) {
       changes.labels = patch.labels;
       toRecord.push({ type: "labels_changed", payload: { to: patch.labels } });
     }
