@@ -27,6 +27,12 @@ Tools: `list_projects`, `get_issue`, `search_issues`, `next_task`,
 `file_issue`, `claim_issue`, `update_issue`, `comment`, `triage_queue`,
 `add_dependency`.
 
+## Web UI
+
+The server serves the web UI at `/` — triage inbox (default), per-project board
+with drag-to-move, and issue detail. Log in once via a minted link (below); the
+session cookie lasts 30 days.
+
 ## Humans: log in
 
 ```bash
