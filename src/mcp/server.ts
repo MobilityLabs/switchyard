@@ -93,6 +93,9 @@ export function buildMcpServer(db: Db, actor: Actor): McpServer {
         "Create an issue. ALWAYS file discovered work (TODOs, flaky tests, follow-ups, bugs you " +
         "noticed but did not fix) instead of only mentioning it in chat. Agent-filed issues go to " +
         "the triage inbox for human review, so file freely but with clear titles and provenance. " +
+        "Your description MUST be decision-grade — a human accepts or dismisses from it alone: " +
+        "(1) what's wrong or needed, (2) why it matters and the impact if ignored, " +
+        "(3) your suggested next action and rough effort. " +
         "Provenance: source_type is where this came from; source_detail is a file:line, session id, " +
         "or short note; source_url is a CI run or PR link.",
       inputSchema: {
