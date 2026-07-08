@@ -64,4 +64,5 @@ Delivery is best-effort (no retries), polled every 2 seconds.
 
 ```bash
 npm test
+npm run typecheck
 ```
