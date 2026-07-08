@@ -99,6 +99,22 @@ describe("dependencies", () => {
     expect(listIssueEvents(db, 2).some((e) => e.type === "blocked_by_removed")).toBe(false);
   });
 
+  it("agents cannot remove a dependency — removal would defeat a human's gate", () => {
+    addDependency(db, human, "AIPI-1", "AIPI-2");
+    expect(() => removeDependency(db, agent, "AIPI-1", "AIPI-2")).toThrowError(/only humans/i);
+    expect(listDependencies(db, "AIPI-2").blockedBy).toHaveLength(1);
+    // Agents CAN still add — declaring a discovered blocker is intended.
+    expect(() => addDependency(db, agent, "AIPI-2", "AIPI-3")).not.toThrow();
+  });
+
+  it("agents cannot PATCH a blocked issue straight to in_progress (same gate as claim)", () => {
+    addDependency(db, human, "AIPI-1", "AIPI-2");
+    expect(() => updateIssue(db, agent, "AIPI-2", { status: "in_progress" }))
+      .toThrowError(/blocked by AIPI-1/);
+    // Humans stay exempt, matching claim semantics for deliberate overrides.
+    expect(updateIssue(db, human, "AIPI-2", { status: "in_progress" }).status).toBe("in_progress");
+  });
+
   it("allows a diamond dependency shape", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "D", priority: "low" }); // AIPI-4
     updateIssue(db, human, "AIPI-4", { status: "todo" });

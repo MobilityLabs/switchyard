@@ -39,8 +39,15 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
 }
 
 /** Remove a dependency edge. A no-op (no event) if the edge doesn't exist —
- * removal is mistake correction, so idempotency beats erroring. */
+ * removal is mistake correction, so idempotency beats erroring. Human-only:
+ * removing a blocker makes gated work claimable, so an agent allowed to
+ * remove edges could unblock itself and take work a human deliberately held. */
 export function removeDependency(db: Db, actor: Actor, blockerRef: string, blockedRef: string): void {
+  if (actor.type === "agent") {
+    throw new SwitchyardError(
+      "Only humans remove dependencies — if you believe a blocker is wrong, say so in a comment."
+    );
+  }
   db.transaction((tx) => {
     const blocker = getIssue(tx as Db, blockerRef);
     const blocked = getIssue(tx as Db, blockedRef);

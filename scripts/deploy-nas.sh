@@ -5,7 +5,8 @@ set -e
 cd "$(dirname "$0")/.."
 echo "shipping source..."
 tar czf - --exclude node_modules --exclude .git --exclude .superpowers --exclude dist \
-  --exclude '*.db' --exclude '*.db-wal' --exclude '*.db-shm' --exclude .DS_Store . \
+  --exclude '*.db' --exclude '*.db-wal' --exclude '*.db-shm' --exclude .DS_Store \
+  --exclude .env --exclude switchyard-worker.json . \
   | ssh 100.85.158.109 'tar xzf - -C mcps/switchyard'
 echo "rebuilding container..."
 ssh 100.85.158.109 'sudo -n /usr/local/bin/switchyard-deploy'
