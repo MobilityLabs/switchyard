@@ -49,6 +49,10 @@ export function createApp(db: Db) {
     return toFetchResponse(res);
   });
 
+  app.on(["GET", "DELETE"], "/mcp", (c) =>
+    c.json({ error: "Method not allowed — POST JSON-RPC to /mcp." }, 405)
+  );
+
   app.use("/*", serveStatic({ root: "./dist/ui" }));
 
   return app;

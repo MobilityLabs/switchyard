@@ -46,6 +46,16 @@ describe("core loop over HTTP", () => {
     expect(res.status).toBe(401);
   });
 
+  it("returns 405 for GET/DELETE on /mcp", async () => {
+    for (const method of ["GET", "DELETE"]) {
+      const res = await fetch(`http://127.0.0.1:${port}/mcp`, { method });
+      expect(res.status).toBe(405);
+      expect(await res.json()).toEqual({
+        error: "Method not allowed — POST JSON-RPC to /mcp.",
+      });
+    }
+  });
+
   it("agent files -> human accepts -> agent claims, comments, moves to review", async () => {
     const agent = await mcpClient(agentToken);
     const human = await mcpClient(humanToken);
