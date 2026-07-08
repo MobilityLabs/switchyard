@@ -8,7 +8,8 @@
     "dev:ui": "vite --config ui/vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "deploy": "sh scripts/deploy-nas.sh"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.8",
