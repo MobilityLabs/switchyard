@@ -10,6 +10,7 @@ export type Issue = {
   assigneeId: number | null; creatorId: number; labels: string[];
   sourceType: "session" | "todo" | "ci" | "manual" | null;
   sourceDetail: string | null; sourceUrl: string | null;
+  needsInput: boolean; snoozedUntil: number | null;
   createdAt: number; updatedAt: number;
 };
 export type Activity = { type: string; actorName: string; payload: Record<string, unknown>; createdAt: number };

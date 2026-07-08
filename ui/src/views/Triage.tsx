@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { listActors, listIssues, updateIssue } from "../api";
+import { listActors, listIssues, markDuplicate, snoozeIssue, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { PRIORITIES, type Issue, type Priority } from "../types";
@@ -15,12 +15,13 @@ function age(unixSeconds: number): string {
 }
 
 export default function Triage() {
-  const { data, error, reload } = usePoll(() => listIssues({ status: "triage" }), []);
+  const { data, error, reload } = usePoll(() => listIssues({ status: "triage", excludeSnoozed: true }), []);
+  const needsInput = usePoll(() => listIssues({ needsInput: true }), []);
   const actors = usePoll(listActors, [], 60000);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const act = (fn: () => Promise<unknown>) =>
-    fn().then(() => { setActionError(null); reload(); }, (e) => setActionError(e.message));
+    fn().then(() => { setActionError(null); reload(); needsInput.reload(); }, (e) => setActionError(e.message));
 
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
@@ -29,11 +30,27 @@ export default function Triage() {
 
   return (
     <section className="triage">
-      <h2>Triage inbox <span className="badge">{data.length}</span></h2>
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
       <PollErrorBar error={error} />
+
+      {needsInput.data && needsInput.data.length > 0 && (
+        <section className="needs-input-lane">
+          <h2>Waiting on humans <span className="badge warn">{needsInput.data.length}</span></h2>
+          {needsInput.data.map((issue) => (
+            <article key={issue.ref} className="needs-input-row">
+              <a className="ref" href={`#/issue/${issue.ref}`}>{issue.ref}</a>
+              <span className="title">{issue.title}</span>
+              <span className="hint">has a question — open to answer</span>
+              <span className="assignee">{actorNames.get(issue.assigneeId ?? -1) ?? "unassigned"}</span>
+              <span className="age">{age(issue.updatedAt)}</span>
+            </article>
+          ))}
+        </section>
+      )}
+
+      <h2>Triage inbox <span className="badge">{data.length}</span></h2>
       {data.length === 0
         ? <p className="empty">Nothing in triage. The yard is clear.</p>
         : data.map((issue) => (
@@ -72,6 +89,20 @@ function TriageRow({
         >
           {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
+        <button onClick={() => act(() => snoozeIssue(issue.ref, Math.floor(Date.now() / 1000) + 86400))}>
+          Snooze 1d
+        </button>
+        <button onClick={() => act(() => snoozeIssue(issue.ref, Math.floor(Date.now() / 1000) + 604800))}>
+          Snooze 1w
+        </button>
+        <button
+          onClick={() => {
+            const of = prompt(`Mark ${issue.ref} as a duplicate of which ref?`);
+            if (of) act(() => markDuplicate(issue.ref, of));
+          }}
+        >
+          Duplicate…
+        </button>
         <button
           className="danger"
           onClick={() => { if (confirm(`Dismiss ${issue.ref}?`)) act(() => updateIssue(issue.ref, { status: "canceled" })); }}
