@@ -33,6 +33,10 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
   exit 1
 fi
 
+# Bind mounts on plain-Linux Docker preserve host UIDs; without this, git
+# refuses the clone with "detected dubious ownership".
+git config --global --add safe.directory /origin
+
 git clone /origin /work
 cd /work
 
@@ -48,13 +52,25 @@ if [ -f package.json ]; then
   npm ci || echo "WARNING: npm ci failed -- continuing without installed dependencies" >&2
 fi
 
-claude mcp add switchyard --transport http "$SWITCHYARD_URL/mcp" \
-  --header "Authorization: Bearer $SWITCHYARD_TOKEN"
+# Written as a file rather than `claude mcp add --header ...` so the bearer
+# token never appears in any process argv (visible via ps / docker top).
+cat > /tmp/switchyard-mcp.json <<MCPEOF
+{
+  "mcpServers": {
+    "switchyard": {
+      "type": "http",
+      "url": "$SWITCHYARD_URL/mcp",
+      "headers": { "Authorization": "Bearer $SWITCHYARD_TOKEN" }
+    }
+  }
+}
+MCPEOF
+chmod 600 /tmp/switchyard-mcp.json
 
 # The container is the sandbox here, not the tool allowlist -- a generous
 # allowlist inside a disposable, network-scoped clone is fine.
 set +e
-claude -p "$WORKER_PROMPT" --permission-mode acceptEdits --allowedTools "$ALLOWED_TOOLS"
+claude -p "$WORKER_PROMPT" --mcp-config /tmp/switchyard-mcp.json --permission-mode acceptEdits --allowedTools "$ALLOWED_TOOLS"
 CLAUDE_EXIT=$?
 set -e
 
