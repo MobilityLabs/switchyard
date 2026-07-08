@@ -64,6 +64,11 @@ function Card({ issue }: { issue: Issue }) {
       <p>{issue.title}</p>
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
+      {issue.labels.length > 0 && (
+        <div className="label-chips-ro">
+          {issue.labels.map((l) => <span key={l} className="badge label-badge">{l}</span>)}
+        </div>
+      )}
     </article>
   );
 }

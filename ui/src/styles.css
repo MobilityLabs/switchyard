@@ -147,6 +147,29 @@ h2 { display: flex; align-items: center; gap: 8px; }
 }
 .needs-input-row .hint { color: var(--warn); font-size: 13px; flex: 1; }
 .needs-input-row .assignee, .needs-input-row .age { color: var(--muted); font-size: 12px; }
+.pill {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); cursor: pointer;
+}
+.pill:hover { border-color: var(--muted); }
+.auto-pill.active { background: var(--accent); border-color: var(--accent); color: #14161a; font-weight: 600; }
+.labels-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 14px; }
+.chip.label-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; padding: 2px 6px 2px 8px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.chip-remove {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  padding: 0 2px; font-size: 13px; line-height: 1; border-radius: 0;
+}
+.chip-remove:hover { color: var(--danger); border-color: transparent; }
+.label-input {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px 10px; font-size: 12px; width: 90px;
+}
+.label-chips-ro { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.label-badge { font-size: 11px; padding: 1px 7px; }
 .review-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .review-nav { display: flex; gap: 8px; }
 .review-issue h3 { margin: 0; flex: 1; }

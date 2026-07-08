@@ -71,6 +71,11 @@ function TriageRow({
         <a className="ref" href={`#/issue/${issue.ref}`}>{issue.ref}</a>
         <span className="title">{issue.title}</span>
         <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
+        {issue.labels.length > 0 && (
+          <div className="label-chips-ro">
+            {issue.labels.map((l) => <span key={l} className="badge label-badge">{l}</span>)}
+          </div>
+        )}
       </div>
       {issue.description && (
         <div className="triage-desc">

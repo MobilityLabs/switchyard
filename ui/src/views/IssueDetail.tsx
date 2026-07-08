@@ -23,6 +23,17 @@ export default function IssueDetail({ refId }: { refId: string }) {
   const act = (fn: () => Promise<unknown>) =>
     fn().then(() => { setActionError(null); reload(); }, (e) => setActionError(e.message));
 
+  const setLabels = (labels: string[]) => act(() => updateIssue(refId, { labels }));
+  const isAuto = data.labels.includes("auto");
+  const toggleAuto = () => setLabels(isAuto ? data.labels.filter((l) => l !== "auto") : [...data.labels, "auto"]);
+  const removeLabel = (label: string) => setLabels(data.labels.filter((l) => l !== label));
+  const addLabel = (raw: string) => {
+    const label = raw.trim();
+    if (!label || data.labels.includes(label)) return;
+    setLabels([...data.labels, label]);
+  };
+  const otherLabels = data.labels.filter((l) => l !== "auto");
+
   return (
     <section className="issue">
       <header className="issue-head">
@@ -34,7 +45,29 @@ export default function IssueDetail({ refId }: { refId: string }) {
         <select value={data.priority} onChange={(e) => act(() => updateIssue(refId, { priority: e.target.value as Priority }))}>
           {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
+        <button
+          className={`pill auto-pill${isAuto ? " active" : ""}`}
+          title="Opt this issue into unattended agent dispatch (label: auto)"
+          onClick={toggleAuto}
+        >
+          🤖 auto
+        </button>
       </header>
+      <div className="labels-row">
+        {otherLabels.map((label) => (
+          <span key={label} className="chip label-chip">
+            {label}
+            <button
+              className="chip-remove"
+              title={`Remove label "${label}"`}
+              onClick={() => removeLabel(label)}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <LabelInput onAdd={addLabel} />
+      </div>
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
@@ -73,6 +106,24 @@ export default function IssueDetail({ refId }: { refId: string }) {
         </button>
       </div>
     </section>
+  );
+}
+
+function LabelInput({ onAdd }: { onAdd: (value: string) => void }) {
+  const [value, setValue] = useState("");
+  return (
+    <input
+      className="label-input"
+      value={value}
+      placeholder="+ label"
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        onAdd(value);
+        setValue("");
+      }}
+    />
   );
 }
 
