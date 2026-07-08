@@ -19,7 +19,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync, readFileSync, mkdirSync, openSync, closeSync, appendFileSync,
-  writeFileSync, rmSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +37,7 @@ import {
   type RetryState,
   type FeedEvent,
 } from "./worker-select.js";
+import { acquirePidLock } from "./pidfile.js";
 
 type ApiIssue = WorkerIssue & { title: string };
 
@@ -73,37 +73,6 @@ function loadDotEnv(): void {
   for (const [key, value] of Object.entries(parseDotEnv(readFileSync(envPath, "utf8")))) {
     if (!(key in process.env)) process.env[key] = value;
   }
-}
-
-/**
- * Single-instance lock: two worker loops would double-dispatch the same
- * issues (claim_issue by the same actor is a silent no-op, so the server
- * doesn't backstop this). Pidfile with liveness check; stale files from
- * crashes are reclaimed.
- */
-function acquireLock(): () => void {
-  const lockDir = path.join(repoRoot(), ".superpowers");
-  mkdirSync(lockDir, { recursive: true });
-  const lockPath = path.join(lockDir, "worker.pid");
-  if (existsSync(lockPath)) {
-    const pid = Number(readFileSync(lockPath, "utf8").trim());
-    if (Number.isInteger(pid) && pid > 0) {
-      try {
-        process.kill(pid, 0); // throws if no such process
-        throw new Error(
-          `another worker loop is already running (pid ${pid}, ${lockPath}) — ` +
-          `stop it first (launchctl unload ~/Library/LaunchAgents/com.switchyard.worker.plist, or kill ${pid})`
-        );
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
-        // Stale pidfile from a crashed worker — reclaim it.
-      }
-    }
-  }
-  writeFileSync(lockPath, String(process.pid));
-  return () => {
-    try { rmSync(lockPath); } catch { /* already gone */ }
-  };
 }
 
 function loadConfig(configPath: string): WorkerConfig {
@@ -350,7 +319,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  const releaseLock = acquireLock();
+  const releaseLock = acquirePidLock(
+    path.join(repoRoot(), ".superpowers", "worker.pid"),
+    "stop it first (launchctl unload ~/Library/LaunchAgents/com.switchyard.worker.plist, or kill the pid)"
+  );
   await tick(config, token, { dryRun });
 
   const eventPollSeconds = config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS;
