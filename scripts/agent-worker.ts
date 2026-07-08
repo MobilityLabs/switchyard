@@ -27,6 +27,8 @@ import {
   findResumeRefs,
   projectKeyOf,
   buildDockerArgs,
+  newTickGate,
+  runGated,
   type WorkerConfig,
   type WorkerIssue,
   type RetryState,
@@ -43,7 +45,7 @@ const retryState = new Map<string, RetryState>();
 // primed to read the answer. Populated by the event poll, consumed by tick().
 const resumeRefs = new Set<string>();
 let eventCursor: number | null = null;
-let tickInFlight = false;
+const tickGate = newTickGate();
 
 function defaultConfigPath(): string {
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -98,7 +100,7 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, opts: { resumed?: boole
       // The container is the sandbox: it clones the repo internally, works on
       // a branch, and pushes it back out — it never touches this host
       // filesystem beyond the /origin mount. See scripts/container-entry.sh.
-      const dockerArgs = buildDockerArgs(issue, project, config, process.env);
+      const dockerArgs = buildDockerArgs(issue, project, config, process.env, opts);
       child = spawn("docker", dockerArgs, {
         detached: true,
         stdio: ["ignore", fd, fd],
@@ -148,10 +150,11 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, opts: { resumed?: boole
 
 async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
   // The event poll can trigger a tick while the interval tick is mid-fetch;
-  // never let two ticks select (and double-dispatch) concurrently.
-  if (tickInFlight) return;
-  tickInFlight = true;
-  try {
+  // never let two ticks select (and double-dispatch) concurrently. runGated
+  // queues rather than drops a call that arrives mid-tick, so a resume
+  // triggered mid-tick still gets dispatched within seconds via an immediate
+  // re-run instead of waiting for the next periodic tick.
+  await runGated(tickGate, async () => {
     let issues: ApiIssue[];
     try {
       issues = await fetchReadyIssues(config, token);
@@ -173,9 +176,7 @@ async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean
         dispatch(issue, config, { resumed });
       }
     }
-  } finally {
-    tickInFlight = false;
-  }
+  });
 }
 
 /**
