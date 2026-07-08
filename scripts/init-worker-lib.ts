@@ -40,8 +40,11 @@ export function validateWorkerConfig(raw: unknown): string[] {
   }
   const c = raw as Partial<WorkerConfig>;
 
-  if (typeof c.url !== "string" || !/^https?:\/\//.test(c.url)) {
+  if (typeof c.url !== "string" || !/^https?:\/\/./.test(c.url)) {
     problems.push('`url` must be an http(s) URL, e.g. "http://100.85.158.109:3300"');
+  }
+  if (c.containerized !== undefined && typeof c.containerized !== "boolean") {
+    problems.push("`containerized` must be true or false, not a string");
   }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
@@ -80,20 +83,22 @@ export const WORKER_LAUNCHD_LABEL = "com.switchyard.worker";
 
 /**
  * Render the LaunchAgent plist that keeps the worker loop alive across
- * logout/reboot. Secrets are NOT embedded: the shell command sources the repo
- * .env (0600) at start, so the plist itself is safe to read or re-render.
- * `nodeBinDir` pins PATH to a concrete node install (launchd doesn't source
- * shell profiles, so nvm-managed node is invisible without it).
+ * logout/reboot. No shell is involved — launchd execs tsx directly, so there
+ * is no quoting surface at all; the worker reads the repo .env itself, so no
+ * secret ever touches this (world-readable) plist. `nodeBinDir` pins PATH to
+ * a concrete node install (launchd doesn't source shell profiles, so
+ * nvm-managed node is invisible without it); `extraPathDirs` carries e.g. the
+ * resolved directory of the `claude` binary for bare-host mode.
  */
-export function renderWorkerPlist(opts: { repoRoot: string; nodeBinDir: string; home: string }): string {
+export function renderWorkerPlist(opts: {
+  repoRoot: string;
+  nodeBinDir: string;
+  home: string;
+  extraPathDirs?: string[];
+}): string {
   const repo = escapeXml(opts.repoRoot);
   const path = escapeXml(
-    `${opts.nodeBinDir}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
-  );
-  // set -a exports everything .env defines (SWITCHYARD_TOKEN for the worker
-  // itself, CLAUDE_CODE_OAUTH_TOKEN passed through to containers).
-  const command = escapeXml(
-    `cd ${shellQuote(opts.repoRoot)} && set -a && . ./.env && set +a && exec npx tsx scripts/agent-worker.ts`
+    [opts.nodeBinDir, ...(opts.extraPathDirs ?? []), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(":")
   );
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -105,13 +110,17 @@ export function renderWorkerPlist(opts: { repoRoot: string; nodeBinDir: string; 
 
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>-c</string>
-        <string>${command}</string>
+        <string>${repo}/node_modules/.bin/tsx</string>
+        <string>${repo}/scripts/agent-worker.ts</string>
     </array>
 
+    <!-- Restart on crash only; a clean exit (SIGINT handler, launchctl unload)
+         stays down instead of respawning forever. -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <!-- If the worker crash-loops, don't respawn faster than every 30s. -->
@@ -136,11 +145,6 @@ export function renderWorkerPlist(opts: { repoRoot: string; nodeBinDir: string; 
 </dict>
 </plist>
 `;
-}
-
-/** POSIX single-quote escaping for embedding a path in a shell command. */
-export function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 export type CheckResult = { name: string; ok: boolean; note?: string; warn?: boolean };

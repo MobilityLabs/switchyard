@@ -3,7 +3,6 @@ import {
   formatChecks,
   parseDotEnv,
   renderWorkerPlist,
-  shellQuote,
   validateWorkerConfig,
 } from "../scripts/init-worker-lib.js";
 
@@ -23,6 +22,13 @@ describe("parseDotEnv", () => {
   it("keeps = signs inside values and ignores malformed lines", () => {
     const env = parseDotEnv("TOKEN=abc==\nnot a var line\n1BAD=x");
     expect(env).toEqual({ TOKEN: "abc==" });
+  });
+
+  it("does not mangle values with spaces or shell metacharacters", () => {
+    // The worker reads .env directly (no shell sourcing), so these must
+    // survive verbatim — a bash `. .env` would have executed or expanded them.
+    const env = parseDotEnv("A=a b && rm -rf /\nB=has$dollar`backtick`");
+    expect(env).toEqual({ A: "a b && rm -rf /", B: "has$dollar`backtick`" });
   });
 });
 
@@ -68,6 +74,12 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, projects: { SYD: {} } })).toHaveLength(1);
     expect(validateWorkerConfig({ ...good, dispatchPolicy: "yolo" })).toHaveLength(1);
   });
+
+  it("rejects a bare scheme url and a string containerized flag", () => {
+    expect(validateWorkerConfig({ ...good, url: "http://" })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, containerized: "true" })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, containerized: true })).toEqual([]);
+  });
 });
 
 describe("renderWorkerPlist", () => {
@@ -77,34 +89,42 @@ describe("renderWorkerPlist", () => {
     home: "/Users/sean",
   });
 
-  it("is a KeepAlive LaunchAgent that sources .env instead of embedding tokens", () => {
+  it("execs tsx directly (no shell) and embeds no secret material", () => {
     expect(plist).toContain("<string>com.switchyard.worker</string>");
-    expect(plist).toContain("<key>KeepAlive</key>\n    <true/>");
-    expect(plist).toContain(". ./.env");
-    expect(plist).toContain("exec npx tsx scripts/agent-worker.ts");
+    expect(plist).toContain("<string>/Users/sean/sites/switchyard/node_modules/.bin/tsx</string>");
+    expect(plist).toContain("<string>/Users/sean/sites/switchyard/scripts/agent-worker.ts</string>");
+    expect(plist).not.toContain("/bin/bash");
+    expect(plist).not.toContain(".env");
     // No secret material may ever appear in the plist (world-readable).
     expect(plist).not.toMatch(/syd_|sya_|sk-ant|OAUTH/);
   });
 
-  it("pins PATH to the given node install for launchd", () => {
-    expect(plist).toContain("/Users/sean/.nvm/versions/node/v24.13.0/bin:/opt/homebrew/bin");
+  it("restarts on crash only — a clean exit must stay down", () => {
+    expect(plist).toMatch(
+      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/
+    );
+    expect(plist).not.toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
   });
 
-  it("escapes XML-significant characters in paths", () => {
+  it("pins PATH to the given node install plus extra dirs for launchd", () => {
+    expect(plist).toContain("/Users/sean/.nvm/versions/node/v24.13.0/bin:/opt/homebrew/bin");
+    const withClaude = renderWorkerPlist({
+      repoRoot: "/r",
+      nodeBinDir: "/n",
+      home: "/h",
+      extraPathDirs: ["/Users/sean/.local/bin"],
+    });
+    expect(withClaude).toContain("/n:/Users/sean/.local/bin:/opt/homebrew/bin");
+  });
+
+  it("escapes XML-significant characters in paths, everywhere they appear", () => {
     const weird = renderWorkerPlist({
-      repoRoot: "/tmp/a&b<c>",
+      repoRoot: "/tmp/it's <a>&b",
       nodeBinDir: "/usr/bin",
       home: "/Users/sean",
     });
-    expect(weird).toContain("/tmp/a&amp;b&lt;c&gt;");
-    expect(weird).not.toContain("a&b<c>");
-  });
-});
-
-describe("shellQuote", () => {
-  it("wraps in single quotes and escapes embedded quotes", () => {
-    expect(shellQuote("/plain/path")).toBe("'/plain/path'");
-    expect(shellQuote("it's")).toBe(`'it'\\''s'`);
+    expect(weird).toContain("<string>/tmp/it's &lt;a&gt;&amp;b/node_modules/.bin/tsx</string>");
+    expect(weird).not.toContain("<a>&b");
   });
 });
 

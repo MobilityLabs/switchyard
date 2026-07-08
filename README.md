@@ -129,10 +129,13 @@ npm run init-worker -- --install-launchd  # + install a KeepAlive LaunchAgent (m
 ```
 
 `--install-launchd` writes `~/Library/LaunchAgents/com.switchyard.worker.plist`
-and loads it: the worker starts immediately, restarts if it crashes, and comes
-back after reboot. No secrets are embedded in the plist — it sources the repo
-`.env` (0600) at start. If a worker process is already running it installs but
-refuses to load (two workers would double-dispatch); stop the old one first.
+and loads it: the worker starts immediately, restarts if it crashes (a clean
+stop stays down — `launchctl unload` to stop it), and comes back after reboot.
+No secrets and no shell are involved in the plist — launchd execs `tsx`
+directly and the worker itself reads the repo `.env` (0600) at start. Two
+worker loops can't run at once: the loop takes a pidfile lock
+(`.superpowers/worker.pid`), and the installer additionally refuses to load
+the LaunchAgent while any worker process is running.
 
 To run it by hand instead:
 

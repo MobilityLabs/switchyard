@@ -9,8 +9,8 @@
 // exists so bringing a new machine (or a rebooted one) online is one command
 // instead of tribal knowledge.
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,11 +112,17 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   }
 
   // Tokens + server
-  results.push({
-    name: ".env",
-    ok: existsSync(envPath),
-    note: existsSync(envPath) ? undefined : `missing ${envPath} — the LaunchAgent sources it at start`,
-  });
+  if (!existsSync(envPath)) {
+    results.push({ name: ".env", ok: false, note: `missing ${envPath} — the worker reads it at start` });
+  } else {
+    const mode = statSync(envPath).mode & 0o777;
+    const tight = (mode & 0o077) === 0;
+    results.push({
+      name: ".env permissions",
+      ok: tight,
+      note: tight ? "0600" : `mode ${mode.toString(8)} is group/world-readable — run: chmod 600 .env`,
+    });
+  }
   const token = env.SWITCHYARD_TOKEN;
   results.push({ name: "SWITCHYARD_TOKEN", ok: Boolean(token) });
 
@@ -164,15 +170,24 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
 }
 
 function workerAlreadyRunning(): boolean {
-  const out = spawnSync("pgrep", ["-f", "agent-worker.ts"], { encoding: "utf8" });
+  const out = spawnSync("pgrep", ["-f", "tsx scripts/agent-worker.ts"], { encoding: "utf8" });
   return out.status === 0 && out.stdout.trim() !== "";
 }
 
-function installLaunchd(): void {
+function installLaunchd(config: WorkerConfig | null): void {
+  // Bare-host mode shells out to `claude`, which launchd won't find on its
+  // minimal PATH (often ~/.local/bin) — resolve it now and pin it in.
+  const extraPathDirs: string[] = [];
+  if (config && !config.containerized) {
+    const which = spawnSync("which", ["claude"], { encoding: "utf8" });
+    if (which.status === 0) extraPathDirs.push(path.dirname(which.stdout.trim()));
+  }
+
   const plist = renderWorkerPlist({
     repoRoot,
     nodeBinDir: path.dirname(process.execPath),
     home: os.homedir(),
+    extraPathDirs,
   });
   const dest = path.join(os.homedir(), "Library", "LaunchAgents", `${WORKER_LAUNCHD_LABEL}.plist`);
   mkdirSync(path.dirname(dest), { recursive: true });
@@ -183,7 +198,9 @@ function installLaunchd(): void {
   if (workerAlreadyRunning()) {
     console.log(
       "\nA worker process is already running — NOT loading the LaunchAgent now\n" +
-      "(two workers would double-dispatch). Stop the current one, then run:\n" +
+      "(two workers would double-dispatch). If it's a previous LaunchAgent install:\n" +
+      `  launchctl unload ${dest} && launchctl load ${dest}\n` +
+      "If it's a hand-started loop, kill it, then:\n" +
       `  launchctl load ${dest}`
     );
     return;
@@ -192,8 +209,17 @@ function installLaunchd(): void {
   // Reload if a previous version was loaded; `unload` on a never-loaded
   // label just errors harmlessly.
   spawnSync("launchctl", ["unload", dest], { stdio: "ignore" });
-  execFileSync("launchctl", ["load", dest], { stdio: "inherit" });
-  console.log(`loaded ${WORKER_LAUNCHD_LABEL} — worker starts now and survives reboot`);
+  const load = spawnSync("launchctl", ["load", dest], { encoding: "utf8" });
+  if (load.status !== 0) {
+    console.error(
+      `launchctl load failed: ${(load.stderr || load.stdout || "").trim()}\n` +
+      "If you're over SSH, run this from a GUI session — or try:\n" +
+      `  launchctl bootstrap gui/$(id -u) ${dest}`
+    );
+    process.exit(1);
+  }
+  console.log(`loaded ${WORKER_LAUNCHD_LABEL} — worker starts now, restarts on crash, survives reboot`);
+  console.log(`stop it with: launchctl unload ${dest}`);
   console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "launchd.out.log")}`);
 }
 
@@ -214,7 +240,7 @@ function selfTest(): void {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const { results } = await doctor();
+  const { results, config } = await doctor();
   console.log(formatChecks(results));
 
   const failed = results.filter((r) => !r.ok);
@@ -225,7 +251,7 @@ async function main(): Promise<void> {
   console.log("\nall checks passed");
 
   if (args.includes("--self-test")) selfTest();
-  if (args.includes("--install-launchd")) installLaunchd();
+  if (args.includes("--install-launchd")) installLaunchd(config);
 }
 
 main().catch((err) => {
