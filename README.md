@@ -27,6 +27,9 @@ Tools: `list_projects`, `get_issue`, `search_issues`, `next_task`,
 `file_issue`, `claim_issue`, `update_issue`, `comment`, `triage_queue`,
 `add_dependency`.
 
+For a per-person setup (user-scoped registration, a CLAUDE.md snippet that
+primes sessions to actually use the tracker) see `docs/agent-kit.md`.
+
 ## Web UI
 
 The server serves the web UI at `/` — triage inbox (default), per-project board
