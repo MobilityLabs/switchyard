@@ -87,6 +87,42 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, runner: "codex" })).toHaveLength(1);
     expect(validateWorkerConfig({ ...good, runner: "sdk", containerized: true })).toHaveLength(1);
   });
+
+  describe("validateWorkerConfig delivery block", () => {
+    const base = {
+      url: "http://localhost:3300",
+      label: "auto",
+      intervalSeconds: 300,
+      maxConcurrent: 1,
+      projects: { SYD: { repo: "/repo" } },
+    };
+
+    it("accepts a valid delivery block", () => {
+      expect(validateWorkerConfig({
+        ...base,
+        delivery: { openPrs: true, pollSeconds: 30, cloneDir: "/tmp/clones", deploy: false },
+      })).toEqual([]);
+    });
+
+    it("accepts an absent delivery block", () => {
+      expect(validateWorkerConfig(base)).toEqual([]);
+    });
+
+    it("rejects a non-object delivery block", () => {
+      expect(validateWorkerConfig({ ...base, delivery: "yes" }).join()).toContain("delivery");
+    });
+
+    it("rejects bad field types", () => {
+      const problems = validateWorkerConfig({
+        ...base,
+        delivery: { openPrs: "true", pollSeconds: -5, cloneDir: "", deploy: 1 },
+      });
+      expect(problems.some((p) => p.includes("delivery.openPrs"))).toBe(true);
+      expect(problems.some((p) => p.includes("delivery.pollSeconds"))).toBe(true);
+      expect(problems.some((p) => p.includes("delivery.cloneDir"))).toBe(true);
+      expect(problems.some((p) => p.includes("delivery.deploy"))).toBe(true);
+    });
+  });
 });
 
 describe("renderWorkerPlist", () => {

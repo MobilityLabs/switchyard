@@ -12,6 +12,17 @@ export type WorkerIssue = {
 
 export type WorkerProject = { repo: string };
 
+export type DeliveryConfig = {
+  /** Open a GitHub PR when a containerized session pushes agent/<ref> (default true). */
+  openPrs?: boolean;
+  /** How often deliver.ts scans the event feed for human done-stamps (default 30s). */
+  pollSeconds?: number;
+  /** Where deliver.ts keeps its clean deploy clones (default ~/.switchyard/deliver-clones). */
+  cloneDir?: string;
+  /** Run the merged project's `npm run deploy` after merging (default true). */
+  deploy?: boolean;
+};
+
 export type WorkerConfig = {
   url: string;
   label: string;
@@ -32,6 +43,8 @@ export type WorkerConfig = {
    * SDK (worker-sdk/ must be installed; incompatible with `containerized`).
    */
   runner?: "cli" | "sdk";
+  /** Delivery gate (SYD-49): worker-side PR publishing + deliver.ts settings. */
+  delivery?: DeliveryConfig;
 };
 
 const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];

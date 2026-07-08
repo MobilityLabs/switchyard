@@ -12,5 +12,10 @@
   "containerized": true,
   "image": "switchyard-worker",
   "dispatchPolicy": "all-todo",
-  "runner": "cli"
+  "runner": "cli",
+  "delivery": {
+    "openPrs": true,
+    "pollSeconds": 30,
+    "deploy": true
+  }
 }
