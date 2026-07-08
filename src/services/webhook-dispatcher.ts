@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { asc, eq, gt } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, events, issues, projects, webhooks, webhookCursor } from "../db/schema.js";
+import { releaseStaleClaims } from "./stale-claims.js";
 
 export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Promise<number> {
   let cursor = db.select().from(webhookCursor).where(eq(webhookCursor.id, 1)).get();
@@ -60,6 +61,12 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
 export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
   const timer = setInterval(() => {
     dispatchPending(db).catch((err) => console.error("webhook dispatch:", err));
+    try {
+      const maxIdleSeconds = Number(process.env.STALE_CLAIM_HOURS ?? 4) * 3600;
+      releaseStaleClaims(db, maxIdleSeconds);
+    } catch (err) {
+      console.error("stale claim release:", err);
+    }
   }, intervalMs);
   timer.unref?.();
   return () => clearInterval(timer);
