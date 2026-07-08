@@ -105,3 +105,11 @@ h2 { display: flex; align-items: center; gap: 8px; }
 }
 .needs-input-row .hint { color: var(--warn); font-size: 13px; flex: 1; }
 .needs-input-row .assignee, .needs-input-row .age { color: var(--muted); font-size: 12px; }
+.review-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.review-nav { display: flex; gap: 8px; }
+.review-issue h3 { margin: 0; flex: 1; }
+.review-verdicts { display: flex; gap: 8px; margin-top: 12px; }
+kbd {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
+  padding: 0 5px; font-size: 11px; font-family: ui-monospace, Menlo, monospace; margin-left: 4px;
+}

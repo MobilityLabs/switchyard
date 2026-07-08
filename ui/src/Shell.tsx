@@ -1,12 +1,14 @@
 import type { ReactNode } from "react";
 import type { Actor, Project } from "./types";
 import { href, useRoute } from "./router";
-import { logout } from "./api";
+import { logout, listIssues } from "./api";
+import { usePoll } from "./usePoll";
 
 export default function Shell(props: { me: Actor; projects: Project[]; children: ReactNode }) {
   const route = useRoute();
   const currentProject =
     route.view === "board" ? route.project : props.projects[0]?.key ?? "";
+  const inReview = usePoll(() => listIssues({ status: "in_review" }), [], 30000);
 
   return (
     <>
@@ -19,6 +21,9 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
             className={route.view === "board" ? "active" : ""}
           >
             Board
+          </a>
+          <a href="#/review" className={route.view === "review" ? "active" : ""}>
+            Review{inReview.data && inReview.data.length > 0 && <span className="badge">{inReview.data.length}</span>}
           </a>
         </nav>
         {route.view === "board" && (

@@ -67,7 +67,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
   );
 }
 
-function Event({ ev }: { ev: Activity }) {
+export function Event({ ev }: { ev: Activity }) {
   const when = new Date(ev.createdAt * 1000).toLocaleString();
   if (ev.type === "comment") {
     return (
