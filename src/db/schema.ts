@@ -43,6 +43,7 @@ export const issues = sqliteTable("issues", {
   sourceDetail: text("source_detail"),
   sourceUrl: text("source_url"),
   needsInput: integer("needs_input", { mode: "boolean" }).notNull().default(false),
+  snoozedUntil: integer("snoozed_until"),
   createdAt: integer("created_at").notNull().default(now()),
   updatedAt: integer("updated_at").notNull().default(now()),
 });

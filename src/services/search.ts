@@ -1,4 +1,4 @@
-import { and, desc, eq, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, issues, type Status } from "../db/schema.js";
 import { toView, type IssueView } from "./issues.js";
@@ -12,6 +12,7 @@ export type SearchFilters = {
   label?: string;
   text?: string;
   needsInput?: boolean;
+  excludeSnoozed?: boolean;
 };
 
 export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
@@ -28,6 +29,10 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
   }
   if (filters.needsInput !== undefined) {
     conditions.push(eq(issues.needsInput, filters.needsInput));
+  }
+  if (filters.excludeSnoozed) {
+    const now = Math.floor(Date.now() / 1000);
+    conditions.push(or(isNull(issues.snoozedUntil), sql`${issues.snoozedUntil} <= ${now}`)!);
   }
   if (filters.text) {
     // Escape SQL wildcard characters (%, _, and ~) so they're treated as literals
