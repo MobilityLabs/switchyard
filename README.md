@@ -118,7 +118,26 @@ cp switchyard-worker.example.json switchyard-worker.json
 }
 ```
 
-Label an issue to opt it in, then run the worker:
+Setting up a machine to run the worker is one command — a doctor that checks
+the whole chain (config, project repos, docker image, tokens in `.env`, server
+reachability, and that the token is an *agent* actor, never a human one):
+
+```bash
+npm run init-worker                       # check everything, change nothing
+npm run init-worker -- --self-test        # + one dry-run tick (prints what would dispatch)
+npm run init-worker -- --install-launchd  # + install a KeepAlive LaunchAgent (macOS)
+```
+
+`--install-launchd` writes `~/Library/LaunchAgents/com.switchyard.worker.plist`
+and loads it: the worker starts immediately, restarts if it crashes (a clean
+stop stays down — `launchctl unload` to stop it), and comes back after reboot.
+No secrets and no shell are involved in the plist — launchd execs `tsx`
+directly and the worker itself reads the repo `.env` (0600) at start. Two
+worker loops can't run at once: the loop takes a pidfile lock
+(`.superpowers/worker.pid`), and the installer additionally refuses to load
+the LaunchAgent while any worker process is running.
+
+To run it by hand instead:
 
 ```bash
 SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts            # poll forever
