@@ -12,6 +12,7 @@ import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
+import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -22,10 +23,10 @@ const ok = (data: unknown): ToolResult => ({
   content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
 });
 
-function guard<A>(fn: (args: A) => unknown): (args: A) => ToolResult {
-  return (args) => {
+function guard<A>(fn: (args: A) => unknown): (args: A) => Promise<ToolResult> {
+  return async (args) => {
     try {
-      return ok(fn(args));
+      return ok(await fn(args));
     } catch (err) {
       if (err instanceof SwitchyardError) {
         return { content: [{ type: "text", text: err.message }], isError: true };
@@ -35,7 +36,7 @@ function guard<A>(fn: (args: A) => unknown): (args: A) => ToolResult {
   };
 }
 
-export function buildMcpServer(db: Db, actor: Actor): McpServer {
+export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = defaultAttachmentsDir()): McpServer {
   const server = new McpServer({ name: "switchyard", version: "0.1.0" });
 
   server.registerTool(
@@ -196,6 +197,28 @@ export function buildMcpServer(db: Db, actor: Actor): McpServer {
       inputSchema: { ref: z.string(), question: z.string() },
     },
     guard(({ ref, question }: { ref: string; question: string }) => requestHumanInput(db, actor, ref, question))
+  );
+
+  server.registerTool(
+    "attach_file",
+    {
+      description:
+        "Attach an image or short video to an issue as evidence (png/jpg/gif/webp/avif/mp4/webm/mov, " +
+        "≤20MB decoded). Returns a markdown snippet — include it in your next comment so humans " +
+        "see the media inline.",
+      inputSchema: { ref: z.string(), filename: z.string(), content_base64: z.string() },
+    },
+    guard(async ({ ref, filename, content_base64 }: { ref: string; filename: string; content_base64: string }) => {
+      const cleaned = content_base64.replace(/\s+/g, "");
+      if (cleaned.length === 0 || cleaned.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned)) {
+        throw new SwitchyardError(
+          "content_base64 is not valid base64 — check the encoding and try again."
+        );
+      }
+      const data = Buffer.from(cleaned, "base64");
+      const { attachment, markdown } = await saveAttachment(db, actor, ref, filename, data, attachmentsDir);
+      return { markdown, url: `/api/attachments/${attachment.id}/${attachment.filename}` };
+    })
   );
 
   server.registerTool(

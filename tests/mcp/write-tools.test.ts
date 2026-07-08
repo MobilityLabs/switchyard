@@ -1,6 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -10,9 +13,9 @@ import { buildMcpServer } from "../../src/mcp/server.js";
 
 let db: Db, human: Actor, agent: Actor, client: Client;
 
-async function connect(actor: Actor) {
+async function connect(actor: Actor, attachmentsDir?: string) {
   const [ct, st] = InMemoryTransport.createLinkedPair();
-  await buildMcpServer(db, actor).connect(st);
+  await buildMcpServer(db, actor, attachmentsDir).connect(st);
   const c = new Client({ name: "test", version: "0.0.0" });
   await c.connect(ct);
   return c;
@@ -152,6 +155,55 @@ describe("MCP write tools", () => {
 
     const cleared = JSON.parse(text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })));
     expect(cleared.needsInput).toBe(false);
+  });
+
+  it("attach_file decodes base64, saves the attachment, and returns a markdown snippet", async () => {
+    const attachmentsDir = mkdtempSync(path.join(tmpdir(), "syd-mcp-attachments-"));
+    try {
+      const humanClient = await connect(human);
+      await humanClient.callTool({
+        name: "file_issue",
+        arguments: { project_key: "AIPI", title: "Evidence needed" },
+      });
+      const attachClient = await connect(agent, attachmentsDir);
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const r = await attachClient.callTool({
+        name: "attach_file",
+        arguments: { ref: "AIPI-1", filename: "evidence.png", content_base64: png.toString("base64") },
+      });
+      const result = JSON.parse(text(r)) as { markdown: string; url: string };
+      expect(result.url).toMatch(/^\/api\/attachments\/\d+\/evidence\.png$/);
+      expect(result.markdown).toBe(`![evidence.png](${result.url})`);
+
+      const id = result.url.split("/")[3];
+      const onDisk = readFileSync(path.join(attachmentsDir, id));
+      expect(onDisk.equals(png)).toBe(true);
+
+      const issue = JSON.parse(text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })));
+      expect(issue.activity.some((e: { type: string }) => e.type === "attachment_added")).toBe(true);
+    } finally {
+      rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("attach_file rejects invalid base64 legibly", async () => {
+    const attachmentsDir = mkdtempSync(path.join(tmpdir(), "syd-mcp-attachments-"));
+    try {
+      const humanClient = await connect(human);
+      await humanClient.callTool({
+        name: "file_issue",
+        arguments: { project_key: "AIPI", title: "Evidence needed" },
+      });
+      const attachClient = await connect(agent, attachmentsDir);
+      const r = await attachClient.callTool({
+        name: "attach_file",
+        arguments: { ref: "AIPI-1", filename: "evidence.png", content_base64: "not-valid-base64!!!" },
+      });
+      expect(r.isError).toBe(true);
+      expect(text(r)).toMatch(/not valid base64/i);
+    } finally {
+      rmSync(attachmentsDir, { recursive: true, force: true });
+    }
   });
 
   it("search_issues supports needs_input filter", async () => {
