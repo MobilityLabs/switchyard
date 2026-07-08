@@ -58,4 +58,31 @@ describe("webhook routes", () => {
     const remaining = (await listAfterDelete.json()) as Array<{ id: number }>;
     expect(remaining).toHaveLength(1);
   });
+
+  it("rejects agent actors managing webhooks but allows agent reads", async () => {
+    const db = openDb(":memory:");
+    const agentH = {
+      authorization: `Bearer ${createActor(db, { name: "claude/dev", type: "agent" }).token}`,
+      "content-type": "application/json",
+    };
+    const app = buildApiRoutes(db);
+
+    const createRes = await app.request("/webhooks", {
+      method: "POST",
+      headers: agentH,
+      body: JSON.stringify({ url: "http://example.com/hook" }),
+    });
+    expect(createRes.status).toBe(400);
+    expect(((await createRes.json()) as { error: string }).error).toMatch(/only humans manage webhooks/i);
+
+    const deleteRes = await app.request("/webhooks/1", {
+      method: "DELETE",
+      headers: agentH,
+    });
+    expect(deleteRes.status).toBe(400);
+    expect(((await deleteRes.json()) as { error: string }).error).toMatch(/only humans manage webhooks/i);
+
+    const listRes = await app.request("/webhooks", { headers: agentH });
+    expect(listRes.status).toBe(200);
+  });
 });

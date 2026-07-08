@@ -42,8 +42,12 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
           "sha256=" + createHmac("sha256", h.secret).update(body).digest("hex");
       }
       try {
-        await fetchFn(h.url, { method: "POST", headers, body, signal: AbortSignal.timeout(5000) });
-        delivered++;
+        const res = await fetchFn(h.url, { method: "POST", headers, body, signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          delivered++;
+        } else {
+          console.error(`webhook ${h.id} -> ${h.url} returned ${res.status}`);
+        }
       } catch (err) {
         console.error(`webhook ${h.id} -> ${h.url} failed: ${(err as Error).message}`);
       }

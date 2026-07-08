@@ -40,7 +40,7 @@ All routes under `/api` accept a bearer token (agents) or the session cookie (hu
 `GET/POST /api/projects` · `GET /api/actors` · `GET/POST /api/issues` ·
 `GET/PATCH /api/issues/:ref` · `POST /api/issues/:ref/claim` ·
 `POST /api/issues/:ref/comments` · `GET /api/next-task` ·
-`POST /api/dependencies` · `GET/POST/DELETE /api/webhooks`.
+`POST /api/dependencies` · `GET/POST /api/webhooks` · `DELETE /api/webhooks/:id`.
 
 Issues in `triage` can only be moved out by human actors (enforced server-side).
 

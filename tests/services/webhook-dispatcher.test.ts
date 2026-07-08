@@ -51,4 +51,25 @@ describe("webhook dispatcher", () => {
     createIssue(db, human, { projectKey: "SYD", title: "One" });
     expect(await dispatchPending(db)).toBe(0); // no matching hook, no throw
   });
+
+  it("does not count non-2xx responses as delivered, and still advances the cursor", async () => {
+    const receiver = new Hono().post("/fail", (c) => c.json({}, 500));
+    let port = 0;
+    const server: ServerType = await new Promise((resolve) => {
+      const s = serve({ fetch: receiver.fetch, port: 0 }, (i) => { port = i.port; resolve(s); });
+    });
+
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    addWebhook(db, { url: `http://127.0.0.1:${port}/fail` });
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event
+
+    expect(await dispatchPending(db)).toBe(0); // hook responded 500, not counted as delivered
+
+    // cursor advanced despite the failed delivery: nothing new to redeliver
+    expect(await dispatchPending(db)).toBe(0);
+
+    server.close();
+  });
 });

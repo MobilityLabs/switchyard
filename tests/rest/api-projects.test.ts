@@ -39,6 +39,18 @@ describe("api auth + projects", () => {
     expect(((await res.json()) as { error: string }).error).toMatch(/2–10 uppercase letters/);
   });
 
+  it("returns a legible 400 for malformed JSON bodies instead of a 500", async () => {
+    const res = await app.request("/projects", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: "{not json",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      "Request body is not valid JSON — send a JSON object."
+    );
+  });
+
   it("lists actors without leaking token hashes", async () => {
     const res = await app.request("/actors", { headers: { cookie } });
     const list = (await res.json()) as Record<string, unknown>[];

@@ -38,6 +38,9 @@ export function buildApiRoutes(db: Db) {
 
   app.onError((err, c) => {
     if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
+    if (err instanceof SyntaxError) {
+      return c.json({ error: "Request body is not valid JSON — send a JSON object." }, 400);
+    }
     console.error(err);
     return c.json({ error: "internal error" }, 500);
   });
@@ -95,10 +98,20 @@ export function buildApiRoutes(db: Db) {
 
   app.get("/webhooks", (c) => c.json(listWebhooks(db).map(redact)));
   app.post("/webhooks", async (c) => {
+    if (c.var.actor.type === "agent") {
+      throw new SwitchyardError(
+        "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
+      );
+    }
     const body = (await c.req.json()) as { url: string; projectKey?: string; secret?: string };
     return c.json(redact(addWebhook(db, body)));
   });
   app.delete("/webhooks/:id", (c) => {
+    if (c.var.actor.type === "agent") {
+      throw new SwitchyardError(
+        "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
+      );
+    }
     removeWebhook(db, Number(c.req.param("id")));
     return c.json({ ok: true });
   });
