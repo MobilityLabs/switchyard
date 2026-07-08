@@ -30,7 +30,15 @@ export type SdkSessionOpts = {
  * runs and child processes uniformly. Never throws for session-level errors —
  * they're logged and reported as a nonzero result. */
 export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
-  const log = (line: string) => appendFileSync(o.logPath, `${line}\n`);
+  // Never let a log-write failure kill the session or reject this promise —
+  // the worker relies on it settling to free the concurrency slot.
+  const log = (line: string) => {
+    try {
+      appendFileSync(o.logPath, `${line}\n`);
+    } catch {
+      /* log dir gone or disk full — the session matters more than the log */
+    }
+  };
   let exit = 1;
   try {
     const stream = query({

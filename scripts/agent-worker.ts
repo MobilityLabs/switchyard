@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseDotEnv } from "./init-worker-lib.js";
+import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import {
   selectDispatchable,
   filterRetryCapped,
@@ -112,7 +112,15 @@ function loadConfig(configPath: string): WorkerConfig {
       `Missing ${configPath} — copy switchyard-worker.example.json to switchyard-worker.json and edit it.`
     );
   }
-  return JSON.parse(readFileSync(configPath, "utf8")) as WorkerConfig;
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+  // Refuse to start on a bad config rather than silently degrade — e.g.
+  // runner:"sdk" + containerized:true would otherwise drop the Docker sandbox
+  // the user thought they configured.
+  const problems = validateWorkerConfig(raw);
+  if (problems.length > 0) {
+    throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
+  }
+  return raw as WorkerConfig;
 }
 
 async function fetchReadyIssues(config: WorkerConfig, token: string): Promise<ApiIssue[]> {
@@ -141,14 +149,14 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
   );
 }
 
-function dispatch(issue: ApiIssue, config: WorkerConfig, opts: { resumed?: boolean } = {}): void {
+function dispatch(issue: ApiIssue, config: WorkerConfig, token: string, opts: { resumed?: boolean } = {}): void {
   const project = config.projects[projectKeyOf(issue.ref)];
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${issue.ref}.log`);
 
   if ((config.runner ?? "cli") === "sdk") {
-    dispatchSdk(issue, project.repo, config, logPath, opts);
+    dispatchSdk(issue, project.repo, config, token, logPath, opts);
     return;
   }
 
@@ -218,14 +226,25 @@ function dispatchSdk(
   issue: ApiIssue,
   repo: string,
   config: WorkerConfig,
+  token: string,
   logPath: string,
   opts: { resumed?: boolean },
 ): void {
   const allowedTools =
     config.allowedTools ?? ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+  // A log-write failure (dir deleted, disk full) must never leak the active
+  // slot or reject the chain — one bad append would otherwise crash the whole
+  // worker via an unhandled rejection.
+  const safeAppend = (text: string) => {
+    try {
+      appendFileSync(logPath, text);
+    } catch (err) {
+      console.error(`could not write ${logPath}: ${(err as Error).message}`);
+    }
+  };
   active.set(issue.ref, "sdk");
   console.log(`dispatched ${issue.ref} (sdk session) -> ${logPath}`);
-  appendFileSync(logPath, `[worker] sdk session starting for ${issue.ref}\n`);
+  safeAppend(`[worker] sdk session starting for ${issue.ref}\n`);
 
   const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
   import(runnerPath)
@@ -234,7 +253,7 @@ function dispatchSdk(
         prompt: buildPrompt(issue.ref, opts),
         cwd: repo,
         switchyardUrl: config.url,
-        switchyardToken: process.env.SWITCHYARD_TOKEN ?? "",
+        switchyardToken: token,
         allowedTools,
         logPath,
       }),
@@ -242,17 +261,17 @@ function dispatchSdk(
     .then(
       (code) => {
         console.log(`${issue.ref} sdk session finished with code ${code}`);
-        appendFileSync(logPath, `[worker] exited with code ${code}\n`);
+        safeAppend(`[worker] exited with code ${code}\n`);
       },
       (err: Error) => {
         console.error(`sdk dispatch failed for ${issue.ref}: ${err.message}`);
-        appendFileSync(
-          logPath,
+        safeAppend(
           `[worker] sdk dispatch failed: ${err.message}\n` +
           `[worker] is worker-sdk installed? run: npm install --prefix worker-sdk\n`,
         );
       },
     )
+    .catch((err: Error) => console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`))
     .finally(() => active.delete(issue.ref));
 }
 
@@ -281,7 +300,7 @@ async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean
       if (opts.dryRun) {
         console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
       } else {
-        dispatch(issue, config, { resumed });
+        dispatch(issue, config, token, { resumed });
       }
     }
   });
