@@ -15,11 +15,20 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, mkdirSync, openSync, closeSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { selectDispatchable, projectKeyOf, type WorkerConfig, type WorkerIssue } from "./worker-select.js";
+import {
+  selectDispatchable,
+  filterRetryCapped,
+  recordAttempt,
+  projectKeyOf,
+  type WorkerConfig,
+  type WorkerIssue,
+  type RetryState,
+} from "./worker-select.js";
 
 type ApiIssue = WorkerIssue & { title: string };
 
 const active = new Map<string, ChildProcess>();
+const retryState = new Map<string, RetryState>();
 
 function defaultConfigPath(): string {
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -101,10 +110,12 @@ async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean
     return;
   }
 
-  const selected = selectDispatchable(issues, config, active.keys());
+  const eligible = filterRetryCapped(issues, retryState);
+  const selected = selectDispatchable(eligible, config, active.keys());
   if (selected.length === 0) return;
 
   for (const issue of selected) {
+    recordAttempt(retryState, issue.ref, issue.updatedAt);
     if (opts.dryRun) {
       console.log(`[dry-run] would dispatch ${issue.ref}: ${issue.title}`);
     } else {

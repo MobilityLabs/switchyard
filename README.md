@@ -82,7 +82,8 @@ npx tsx src/cli.ts switchyard.db add-webhook http://<host>:3301/ [PROJECT] <secr
 If you set a secret, also export it as `SWITCHYARD_WEBHOOK_SECRET` on the notifier
 process so it can verify the `x-switchyard-signature` header. It ships unconfigured
 — nothing posts to Slack until `SLACK_WEBHOOK_URL` is set and the webhook is
-registered.
+registered. Always set a webhook secret when registering — an unsigned webhook
+endpoint will accept spoofed events from anyone who finds the URL.
 
 ## Auto-dispatch
 
@@ -118,9 +119,15 @@ SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --dry-run  # print, don't s
 Safety model: the label gate (nothing runs unlabeled), `maxConcurrent` (caps
 concurrent headless sessions), and the fact that dispatched work still flows
 through the same claim -> in_review -> human-review pipeline as anything else
-— dispatched sessions can never move an issue to `done` themselves. Each
-dispatch's stdout/stderr is logged to
+— dispatched sessions can never move an issue to `done` themselves, and the
+server enforces this (agents attempting a `done` transition are rejected, not
+just discouraged by the prompt). Each dispatch's stdout/stderr is logged to
 `<project repo>/.superpowers/worker-logs/<ref>.log`.
+
+Labeling an issue `auto` is consent to run that issue's content (title,
+description, comments) through a headless session with your local permission
+profile — review the issue text like you'd review a script before running it,
+and keep the worker's permission allowlist tight.
 
 ## Development
 

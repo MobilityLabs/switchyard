@@ -7,6 +7,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { releaseStaleClaims } from "../../src/services/stale-claims.js";
+import { requestHumanInput } from "../../src/services/needs-input.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -82,6 +83,24 @@ describe("releaseStaleClaims", () => {
     const releaseEvent = listIssueEvents(db, issue.id).at(-1)!;
     expect(releaseEvent.type).toBe("claim_released");
     expect(releaseEvent.actorName).toBe("sean"); // fell back to creator
+  });
+
+  it("leaves a stale in_progress issue untouched when needsInput is set", () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    requestHumanInput(db, agent, "AIPI-1", "Which approach do you want here?");
+    const issue = getIssue(db, "AIPI-1");
+    expect(issue.needsInput).toBe(true);
+    ageAllEvents(db, issue.id, 5 * 3600); // 5h old, past the 4h default
+
+    const released = releaseStaleClaims(db);
+    expect(released).toBe(0);
+
+    const after = getIssue(db, "AIPI-1");
+    expect(after.status).toBe("in_progress");
+    expect(after.assigneeId).toBe(agent.id);
+    expect(after.needsInput).toBe(true);
   });
 
   it("respects a custom maxIdleSeconds", () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
 import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
@@ -7,7 +7,7 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { addWebhook } from "../../src/services/webhooks.js";
-import { dispatchPending } from "../../src/services/webhook-dispatcher.js";
+import { dispatchPending, resolveStaleClaimSeconds } from "../../src/services/webhook-dispatcher.js";
 
 describe("webhook dispatcher", () => {
   it("delivers signed events once, then advances the cursor", async () => {
@@ -71,5 +71,37 @@ describe("webhook dispatcher", () => {
     expect(await dispatchPending(db)).toBe(0);
 
     server.close();
+  });
+});
+
+describe("resolveStaleClaimSeconds", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("defaults to 4 hours when STALE_CLAIM_HOURS is unset, without warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(resolveStaleClaimSeconds(undefined)).toBe(4 * 3600);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("honors a valid positive value", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(resolveStaleClaimSeconds("2")).toBe(2 * 3600);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("falls back to 4 hours and warns on a set-but-invalid value", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(resolveStaleClaimSeconds("not-a-number")).toBe(4 * 3600);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    warn.mockClear();
+    expect(resolveStaleClaimSeconds("-1")).toBe(4 * 3600);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    warn.mockClear();
+    expect(resolveStaleClaimSeconds("0")).toBe(4 * 3600);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

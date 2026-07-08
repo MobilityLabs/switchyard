@@ -58,12 +58,29 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
   return delivered;
 }
 
+/**
+ * Resolves STALE_CLAIM_HOURS (as read from the environment) to a seconds value,
+ * falling back to a 4h default when unset or invalid. Warns only when the
+ * value was set but isn't a valid positive number — an unset var is the normal
+ * default case and shouldn't warn.
+ */
+export function resolveStaleClaimSeconds(envValue: string | undefined): number {
+  const n = Number(envValue);
+  const valid = Number.isFinite(n) && n > 0;
+  if (envValue !== undefined && !valid) {
+    console.warn(
+      `STALE_CLAIM_HOURS="${envValue}" is not a valid positive number of hours — falling back to 4h.`
+    );
+  }
+  return (valid ? n : 4) * 3600;
+}
+
 export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
+  const staleSeconds = resolveStaleClaimSeconds(process.env.STALE_CLAIM_HOURS);
   const timer = setInterval(() => {
     dispatchPending(db).catch((err) => console.error("webhook dispatch:", err));
     try {
-      const maxIdleSeconds = Number(process.env.STALE_CLAIM_HOURS ?? 4) * 3600;
-      releaseStaleClaims(db, maxIdleSeconds);
+      releaseStaleClaims(db, staleSeconds);
     } catch (err) {
       console.error("stale claim release:", err);
     }

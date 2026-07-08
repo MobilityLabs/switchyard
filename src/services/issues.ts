@@ -126,6 +126,11 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
           `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`
         );
       }
+      if (patch.status === "done" && actor.type === "agent") {
+        throw new SwitchyardError(
+          "Only humans move issues to done — comment your verification evidence and move it to in_review instead."
+        );
+      }
       changes.status = patch.status;
       toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
     }
@@ -150,6 +155,11 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       patch.labels !== undefined &&
       JSON.stringify([...patch.labels].sort()) !== JSON.stringify([...current.labels].sort())
     ) {
+      if (actor.type === "agent" && patch.labels.includes("auto") && !current.labels.includes("auto")) {
+        throw new SwitchyardError(
+          `Only humans apply the "auto" label — it opts an issue into unattended dispatch.`
+        );
+      }
       changes.labels = patch.labels;
       toRecord.push({ type: "labels_changed", payload: { to: patch.labels } });
     }
@@ -170,7 +180,7 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       }
     }
 
-    if (actor.type === "human" && current.needsInput) {
+    if (patch.status !== undefined && actor.type === "human" && current.needsInput) {
       changes.needsInput = false;
       toRecord.push({ type: "needs_input_cleared", payload: {} });
     }

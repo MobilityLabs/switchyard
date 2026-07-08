@@ -4,6 +4,7 @@ import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
+import { requestHumanInput } from "../../src/services/needs-input.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -69,6 +70,59 @@ describe("updateIssue", () => {
     expect(() => claimIssue(db, agent, filed.ref))
       .toThrowError(/only humans move issues out of triage/i);
     expect(updateIssue(db, human, filed.ref, { status: "todo" }).status).toBe("todo");
+  });
+
+  it("agents cannot move issues to done; humans can", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    expect(() => updateIssue(db, agent, "AIPI-1", { status: "done" }))
+      .toThrowError(/only humans move issues to done/i);
+    expect(getIssue(db, "AIPI-1").status).toBe("in_review");
+    expect(updateIssue(db, human, "AIPI-1", { status: "done" }).status).toBe("done");
+  });
+
+  it("agents cannot add the auto label, but may remove it or keep it", () => {
+    // starting without "auto": agent adding it is rejected
+    updateIssue(db, human, "AIPI-1", { labels: ["urgent"] });
+    expect(() => updateIssue(db, agent, "AIPI-1", { labels: ["auto", "urgent"] }))
+      .toThrowError(/only humans apply the "auto" label/i);
+    expect(getIssue(db, "AIPI-1").labels).toEqual(["urgent"]);
+
+    // a human adding it is fine
+    expect(updateIssue(db, human, "AIPI-1", { labels: ["auto", "urgent"] }).labels.sort())
+      .toEqual(["auto", "urgent"]);
+
+    // agent removing it is fine
+    expect(updateIssue(db, agent, "AIPI-1", { labels: ["urgent"] }).labels).toEqual(["urgent"]);
+
+    // agent keeping an already-present "auto" while changing other labels is fine
+    updateIssue(db, human, "AIPI-1", { labels: ["auto", "urgent"] });
+    expect(updateIssue(db, agent, "AIPI-1", { labels: ["auto", "other"] }).labels.sort())
+      .toEqual(["auto", "other"]);
+  });
+
+  it("needs_input clears only on a status change, not on unrelated field edits", () => {
+    const filed = createIssue(db, agent, {
+      projectKey: "AIPI", title: "Needs a call",
+      description: "Blocked on a decision only a human can make about scope.",
+      provenance: { sourceType: "manual", detail: "x" },
+    });
+    updateIssue(db, human, filed.ref, { status: "todo" });
+    requestHumanInput(db, agent, filed.ref, "Which scope should this cover?");
+    expect(getIssue(db, filed.ref).needsInput).toBe(true);
+
+    // priority/label/title-only edits by a human must NOT clear needsInput
+    updateIssue(db, human, filed.ref, { priority: "high" });
+    expect(getIssue(db, filed.ref).needsInput).toBe(true);
+    updateIssue(db, human, filed.ref, { labels: ["x"] });
+    expect(getIssue(db, filed.ref).needsInput).toBe(true);
+    updateIssue(db, human, filed.ref, { title: "Needs a call (updated)" });
+    expect(getIssue(db, filed.ref).needsInput).toBe(true);
+
+    // a status change by a human does clear it
+    updateIssue(db, human, filed.ref, { status: "in_progress" });
+    expect(getIssue(db, filed.ref).needsInput).toBe(false);
   });
 });
 
