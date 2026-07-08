@@ -25,6 +25,7 @@ describe("issue routes", () => {
       method: "POST", headers: agentH,
       body: JSON.stringify({
         projectKey: "SYD", title: "Flaky test",
+        description: "src/x.ts:1 fails intermittently in CI; looks like a timing issue in the retry loop. Suggest adding a fake timer.",
         provenance: { sourceType: "todo", detail: "src/x.ts:1" },
       }),
     }));

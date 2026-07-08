@@ -64,6 +64,7 @@ describe("core loop over HTTP", () => {
       name: "file_issue",
       arguments: {
         project_key: "AIPI", title: "Flaky retry test",
+        description: "The retry helper occasionally times out under CI load; likely a race in the backoff timer. Suggest adding a deterministic clock in tests.",
         source_type: "session", source_detail: "session-abc123",
       },
     })));

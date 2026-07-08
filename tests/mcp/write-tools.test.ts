@@ -35,6 +35,7 @@ describe("MCP write tools", () => {
       arguments: {
         project_key: "AIPI",
         title: "Flaky test in api suite",
+        description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
         source_type: "todo",
         source_detail: "src/api.ts:88",
       },
@@ -89,7 +90,11 @@ describe("MCP write tools", () => {
   it("triage_queue lists triage issues with provenance", async () => {
     await client.callTool({
       name: "file_issue",
-      arguments: { project_key: "AIPI", title: "A", source_type: "manual", source_detail: "x" },
+      arguments: {
+        project_key: "AIPI", title: "A",
+        description: "Noticed while working another task; needs a human to confirm scope before scheduling.",
+        source_type: "manual", source_detail: "x",
+      },
     });
     const r = await client.callTool({ name: "triage_queue", arguments: {} });
     const queue = JSON.parse(text(r));

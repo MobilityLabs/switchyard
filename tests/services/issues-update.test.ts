@@ -59,6 +59,7 @@ describe("updateIssue", () => {
   it("agents cannot move issues out of triage; humans can", () => {
     const filed = createIssue(db, agent, {
       projectKey: "AIPI", title: "Agent-filed",
+      description: "Filed while working another task; needs a human to confirm priority before scheduling.",
       provenance: { sourceType: "manual", detail: "x" },
     });
     // non-status edits by agents are still allowed in triage

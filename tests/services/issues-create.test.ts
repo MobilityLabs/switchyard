@@ -29,10 +29,28 @@ describe("createIssue", () => {
     const issue = createIssue(db, agent, {
       projectKey: "AIPI",
       title: "Flaky test in api suite",
+      description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
       provenance: { sourceType: "todo", detail: "src/api.ts:88" },
     });
     expect(issue.status).toBe("triage");
     expect(issue.sourceType).toBe("todo");
+  });
+
+  it("agent-created issues require a description a human can triage from", () => {
+    expect(() =>
+      createIssue(db, agent, {
+        projectKey: "AIPI",
+        title: "Flaky test in api suite",
+        provenance: { sourceType: "todo", detail: "src/api.ts:88" },
+      })
+    ).toThrowError(/description a human can triage from/i);
+    const issue = createIssue(db, agent, {
+      projectKey: "AIPI",
+      title: "Flaky test in api suite",
+      description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
+      provenance: { sourceType: "todo", detail: "src/api.ts:88" },
+    });
+    expect(issue.status).toBe("triage");
   });
 
   it("rejects agent-supplied provenance urls that aren't http(s) and accepts http(s) urls", () => {
@@ -40,12 +58,14 @@ describe("createIssue", () => {
       createIssue(db, agent, {
         projectKey: "AIPI",
         title: "Malicious link",
+        description: "Filed via a suspicious webhook payload containing a javascript: URL; flagging for review before trusting the source.",
         provenance: { sourceType: "manual", url: "javascript:alert(1)" },
       })
     ).toThrowError(/must be http/i);
     const issue = createIssue(db, agent, {
       projectKey: "AIPI",
       title: "Safe link",
+      description: "CI run linked below shows the failing build; needs a human to confirm before we retry the deploy.",
       provenance: { sourceType: "manual", url: "https://example.com/run/123" },
     });
     expect(issue.sourceUrl).toBe("https://example.com/run/123");

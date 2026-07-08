@@ -53,6 +53,7 @@ describe("plan 2 loop", () => {
       method: "POST", headers: agentH,
       body: JSON.stringify({
         projectKey: "SYD", title: "Found a bug",
+        description: "Encountered while exercising the REST loop; the response shape didn't match the documented schema. Suggest verifying the serializer.",
         provenance: { sourceType: "session", detail: "rest-loop test" },
       }),
     })).json() as { ref: string; status: string };

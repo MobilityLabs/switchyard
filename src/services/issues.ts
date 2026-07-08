@@ -63,6 +63,11 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
         '("session" | "todo" | "ci" | "manual") plus a detail (e.g. "src/api.ts:88" or a session id) or url.'
     );
   }
+  if (actor.type === "agent" && !input.description?.trim()) {
+    throw new SwitchyardError(
+      "Agent-filed issues need a description a human can triage from — say what's wrong, why it matters, and what you suggest doing."
+    );
+  }
   if (input.provenance?.url && !/^https?:\/\//.test(input.provenance.url)) {
     throw new SwitchyardError(
       `Provenance url must be http(s) — got "${input.provenance.url}".`
