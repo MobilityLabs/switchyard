@@ -206,7 +206,13 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "Attach an image or short video to an issue as evidence (png/jpg/gif/webp/avif/mp4/webm/mov, " +
         "≤20MB decoded). Returns a markdown snippet — include it in your next comment so humans " +
         "see the media inline.",
-      inputSchema: { ref: z.string(), filename: z.string(), content_base64: z.string() },
+      inputSchema: {
+        ref: z.string(),
+        filename: z.string(),
+        // ~20MB decoded (base64 inflates size by ~4/3); rejects oversized
+        // payloads before we spend cycles decoding them.
+        content_base64: z.string().max(28 * 1024 * 1024),
+      },
     },
     guard(async ({ ref, filename, content_base64 }: { ref: string; filename: string; content_base64: string }) => {
       const cleaned = content_base64.replace(/\s+/g, "");

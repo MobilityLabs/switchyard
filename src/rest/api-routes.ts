@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
+import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/index.js";
 import { SwitchyardError } from "../services/errors.js";
 import { authenticate, listActors, type Actor } from "../services/actors.js";
@@ -99,26 +100,35 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     return c.json({ ok: true });
   });
 
-  app.post("/issues/:ref/attachments", async (c) => {
-    const parsed = await c.req.parseBody();
-    const file = parsed["file"];
-    if (!(file instanceof File)) {
-      throw new SwitchyardError('Upload must include a multipart field named "file".');
-    }
-    // Check the declared size before doing the second copy (Blob -> Buffer) —
-    // avoids buffering an oversized upload just to reject it.
-    if (file.size > MAX_ATTACHMENT_SIZE) {
-      throw new SwitchyardError(
-        `Attachment is ${(file.size / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`
+  app.post(
+    "/issues/:ref/attachments",
+    bodyLimit({
+      maxSize: 21 * 1024 * 1024,
+      onError: (c) =>
+        c.json({ error: "Attachment too large — the limit is 20MB." }, 413),
+    }),
+    async (c) => {
+      const parsed = await c.req.parseBody();
+      const file = parsed["file"];
+      if (!(file instanceof File)) {
+        throw new SwitchyardError('Upload must include a multipart field named "file".');
+      }
+      // Check the declared size before doing the second copy (Blob -> Buffer) —
+      // avoids buffering an oversized upload just to reject it. (Belt-and-braces:
+      // the bodyLimit middleware above already rejects oversized bodies pre-buffer.)
+      if (file.size > MAX_ATTACHMENT_SIZE) {
+        throw new SwitchyardError(
+          `Attachment is ${(file.size / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`
+        );
+      }
+      const data = Buffer.from(await file.arrayBuffer());
+      const { attachment, markdown } = await saveAttachment(
+        db, c.var.actor, c.req.param("ref"), file.name, data, attachmentsDir
       );
+      const url = `/api/attachments/${attachment.id}/${attachment.filename}`;
+      return c.json({ id: attachment.id, url, markdown });
     }
-    const data = Buffer.from(await file.arrayBuffer());
-    const { attachment, markdown } = await saveAttachment(
-      db, c.var.actor, c.req.param("ref"), file.name, data, attachmentsDir
-    );
-    const url = `/api/attachments/${attachment.id}/${attachment.filename}`;
-    return c.json({ id: attachment.id, url, markdown });
-  });
+  );
 
   app.get("/attachments/:id/:filename", async (c) => {
     const id = Number(c.req.param("id"));
@@ -143,7 +153,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     c.header("Content-Type", row.contentType);
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Content-Disposition", `inline; filename="${row.filename}"`);
-    c.header("Cache-Control", "public, max-age=31536000, immutable");
+    c.header("Cache-Control", "private, max-age=31536000, immutable");
     return c.body(new Uint8Array(data));
   });
 

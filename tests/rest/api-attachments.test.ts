@@ -73,13 +73,25 @@ describe("attachment routes", () => {
     expect(json.error).toMatch(/svg/i);
   });
 
-  it("rejects uploads over 20MB", async () => {
+  it("rejects uploads over 20MB (post-parse size check)", async () => {
     const { ref } = await fileIssue();
-    const big = Buffer.alloc(21 * 1024 * 1024);
+    // Between MAX_ATTACHMENT_SIZE (20MB) and the bodyLimit middleware's cap
+    // (21MB) so this exercises the post-parse belt-and-braces check rather
+    // than the pre-buffer bodyLimit rejection covered below.
+    const big = Buffer.alloc(20.5 * 1024 * 1024);
     const res = await upload(ref, "huge.png", big);
     expect(res.status).toBe(400);
     const json = await body<{ error: string }>(res);
     expect(json.error).toMatch(/20MB/);
+  });
+
+  it("rejects request bodies over 21MB before buffering (413)", async () => {
+    const { ref } = await fileIssue();
+    const huge = Buffer.alloc(22 * 1024 * 1024);
+    const res = await upload(ref, "way-too-huge.png", huge);
+    expect(res.status).toBe(413);
+    const json = await body<{ error: string }>(res);
+    expect(json.error).toBe("Attachment too large — the limit is 20MB.");
   });
 
   it("rejects disallowed extensions", async () => {
@@ -103,6 +115,7 @@ describe("attachment routes", () => {
     expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("content-disposition")).toMatch(/inline/);
+    expect(res.headers.get("cache-control")).toMatch(/^private/);
     const bytes = Buffer.from(await res.arrayBuffer());
     expect(bytes.equals(data)).toBe(true);
   });
