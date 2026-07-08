@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { listActors, listIssues, markDuplicate, snoozeIssue, updateIssue } from "../api";
+import { addComment, getIssue, listActors, listIssues, markDuplicate, snoozeIssue, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
+import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { href } from "../router";
-import { PRIORITIES, type Issue, type Priority } from "../types";
+import { PRIORITIES, type Issue, type IssueDetail, type Priority } from "../types";
 import { Markdown } from "../Markdown";
-import { projectKeyFromRef } from "./IssueDetail";
+import { DesignEmbeds } from "../DesignEmbeds";
+import { Event, projectKeyFromRef } from "./IssueDetail";
 
 function age(unixSeconds: number): string {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
@@ -22,6 +24,9 @@ export default function Triage() {
   const needsInput = usePoll(() => listIssues({ needsInput: true }), []);
   const actors = usePoll(listActors, [], 60000);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Single expanded row at a time; clicking the same ref again collapses it.
+  const [expandedRef, setExpandedRef] = useState<string | null>(null);
+  const toggleExpanded = (ref: string) => setExpandedRef((cur) => (cur === ref ? null : ref));
 
   const act = (fn: () => Promise<unknown>) =>
     fn().then(() => { setActionError(null); reload(); needsInput.reload(); }, (e) => setActionError(e.message));
@@ -57,17 +62,63 @@ export default function Triage() {
       {data.length === 0
         ? <p className="empty">Nothing in triage. The yard is clear.</p>
         : data.map((issue) => (
-            <TriageRow key={issue.ref} issue={issue} act={act} creatorName={actorNames.get(issue.creatorId)} />
+            <TriageRow
+              key={issue.ref}
+              issue={issue}
+              act={act}
+              creatorName={actorNames.get(issue.creatorId)}
+              expanded={expandedRef === issue.ref}
+              onToggleExpand={() => toggleExpanded(issue.ref)}
+            />
           ))}
     </section>
   );
 }
 
 function TriageRow({
-  issue, act, creatorName,
-}: { issue: Issue; act: (fn: () => Promise<unknown>) => void; creatorName?: string }) {
+  issue, act, creatorName, expanded, onToggleExpand,
+}: {
+  issue: Issue;
+  act: (fn: () => Promise<unknown>) => void;
+  creatorName?: string;
+  expanded: boolean;
+  onToggleExpand: () => void;
+}) {
+  const projectKey = projectKeyFromRef(issue.ref);
+  const [draft, setDraft] = useState("");
+  const [commentError, setCommentError] = useState<string | null>(null);
+  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(issue.ref, draft, setDraft);
+
+  // Only fetches while this row is the expanded one; collapsed rows resolve
+  // to null immediately, same shape as Review's per-issue detail poll.
+  const detail = usePoll<IssueDetail | null>(
+    () => (expanded ? getIssue(issue.ref) : Promise.resolve(null)),
+    [expanded, issue.ref],
+  );
+
+  function postComment() {
+    const body = draft.trim();
+    if (!body) return;
+    addComment(issue.ref, body).then(
+      () => { setCommentError(null); setDraft(""); detail.reload(); },
+      (e) => setCommentError(e.message),
+    );
+  }
+
   return (
-    <article className="triage-row">
+    <article
+      className={`triage-row${expanded ? " expanded" : ""}`}
+      onClick={(e) => {
+        // Row toggles expansion, but interactive controls inside it (row
+        // actions, the ref/source links, the composer) keep native behavior,
+        // and clicks inside the expanded body itself (reading activity,
+        // description text) don't collapse it out from under you.
+        const target = e.target as HTMLElement;
+        if (target.closest("button, select, a, textarea, input")) return;
+        if (target.closest(".triage-expanded")) return;
+        onToggleExpand();
+      }}
+    >
       <div className="triage-main">
         <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
         <span className="title">{issue.title}</span>
@@ -80,7 +131,7 @@ function TriageRow({
       </div>
       {issue.description && (
         <div className="triage-desc">
-          <Markdown text={issue.description} projectKey={projectKeyFromRef(issue.ref)} />
+          <Markdown text={issue.description} projectKey={projectKey} />
         </div>
       )}
       <div className="provenance">
@@ -88,6 +139,41 @@ function TriageRow({
         {issue.sourceType && <> · {issue.sourceType} · {issue.sourceDetail ?? ""}</>}
         {issue.sourceUrl && <> · <a href={issue.sourceUrl} target="_blank" rel="noreferrer">link</a></>}
       </div>
+
+      {expanded && (
+        <div className="triage-expanded">
+          {issue.description
+            ? <div className="description panel"><Markdown text={issue.description} projectKey={projectKey} /></div>
+            : <p className="empty">No description.</p>}
+          {issue.description && <DesignEmbeds text={issue.description} />}
+
+          <h4>Activity</h4>
+          <div className="activity triage-activity">
+            {detail.data
+              ? detail.data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} />)
+              : <p className="empty">Loading activity…</p>}
+          </div>
+
+          {commentError && (
+            <p className="error-bar">{commentError} <button onClick={() => setCommentError(null)}>×</button></p>
+          )}
+          {uploadError && (
+            <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
+          )}
+          <div className="composer">
+            <textarea
+              ref={textareaRef}
+              value={draft}
+              placeholder="Write a comment… (paste an image or video to attach it)"
+              onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPaste}
+            />
+            <button disabled={!draft.trim() || uploading} onClick={postComment}>Comment</button>
+            {uploading && <span className="uploading-note">uploading…</span>}
+          </div>
+        </div>
+      )}
+
       <div className="triage-actions">
         <button className="primary" onClick={() => act(() => updateIssue(issue.ref, { status: "todo" }))}>
           Accept → todo

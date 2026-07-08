@@ -39,8 +39,11 @@ a { color: var(--accent-2); text-decoration: none; }
 .content { padding: 20px; max-width: 1200px; margin: 0 auto; }
 .triage-row {
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 12px 16px; margin-bottom: 10px;
+  padding: 12px 16px; margin-bottom: 10px; cursor: pointer;
 }
+.triage-row.expanded { border-color: var(--accent-2); }
+.triage-expanded { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); cursor: default; }
+.triage-activity { max-height: 240px; overflow-y: auto; }
 .triage-main { display: flex; align-items: center; gap: 10px; }
 .ref { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
 .title { flex: 1; }
