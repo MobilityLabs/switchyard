@@ -20,6 +20,7 @@ import {
   filterRetryCapped,
   recordAttempt,
   projectKeyOf,
+  buildDockerArgs,
   type WorkerConfig,
   type WorkerIssue,
   type RetryState,
@@ -73,21 +74,35 @@ function dispatch(issue: ApiIssue, config: WorkerConfig): void {
 
   let child: ChildProcess;
   try {
-    // Headless sessions can't answer permission prompts — grant the tools the
-    // work needs up front. The "auto" label is the human's consent for this.
-    const allowedTools =
-      config.allowedTools ??
-      ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
-    child = spawn(
-      "claude",
-      ["-p", buildPrompt(issue.ref), "--permission-mode", "acceptEdits",
-       "--allowedTools", allowedTools.join(",")],
-      {
-        cwd: project.repo,
+    if (config.containerized) {
+      // The container is the sandbox: it clones the repo internally, works on
+      // a branch, and pushes it back out — it never touches this host
+      // filesystem beyond the /origin mount. See scripts/container-entry.sh.
+      const dockerArgs = buildDockerArgs(issue, project, config, process.env);
+      child = spawn("docker", dockerArgs, {
         detached: true,
         stdio: ["ignore", fd, fd],
-      },
-    );
+      });
+    } else {
+      // Headless sessions can't answer permission prompts — grant the tools the
+      // work needs up front. The "auto" label is the human's consent for this.
+      const allowedTools =
+        config.allowedTools ??
+        ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+      child = spawn(
+        "claude",
+        ["-p", buildPrompt(issue.ref), "--permission-mode", "acceptEdits",
+         "--allowedTools", allowedTools.join(",")],
+        {
+          cwd: project.repo,
+          detached: true,
+          stdio: ["ignore", fd, fd],
+        },
+      );
+    }
+  } catch (err) {
+    console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
+    return;
   } finally {
     closeSync(fd);
   }

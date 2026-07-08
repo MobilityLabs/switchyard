@@ -3,8 +3,10 @@ import {
   selectDispatchable,
   filterRetryCapped,
   recordAttempt,
+  buildDockerArgs,
   type WorkerConfig,
   type WorkerIssue,
+  type WorkerProject,
   type RetryState,
 } from "../../scripts/worker-select.js";
 
@@ -118,5 +120,56 @@ describe("recordAttempt", () => {
     const state = new Map<string, RetryState>([["SYD-1", { attempts: 3, lastUpdatedAt: 1000 }]]);
     recordAttempt(state, "SYD-1", 2000);
     expect(state.get("SYD-1")).toEqual({ attempts: 1, lastUpdatedAt: 2000 });
+  });
+});
+
+describe("buildDockerArgs", () => {
+  const project: WorkerProject = { repo: "/repo/syd" };
+  const oauthEnv = { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret" };
+
+  it("mounts the right repo", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    const vIndex = args.indexOf("-v");
+    expect(args[vIndex + 1]).toBe("/repo/syd:/origin");
+  });
+
+  it("passes the issue ref through as ISSUE_REF and the container name", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-42" }), project, config, oauthEnv);
+    expect(args).toContain("-e");
+    expect(args).toContain("ISSUE_REF=SYD-42");
+    const nameIndex = args.indexOf("--name");
+    expect(args[nameIndex + 1]).toBe("syd-SYD-42");
+  });
+
+  it("passes secret vars using the bare -e form, never embedding their values", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    for (const secretVar of ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]) {
+      expect(args).toContain(secretVar);
+      // Bare form: the var name appears standalone, never as VAR=value.
+      expect(args.some((a) => a.startsWith(`${secretVar}=`))).toBe(false);
+    }
+    expect(args.join(" ")).not.toContain("oauth-secret");
+  });
+
+  it("respects a custom image", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, { ...config, image: "custom/worker-image" }, oauthEnv);
+    expect(args[args.length - 1]).toBe("custom/worker-image");
+  });
+
+  it("defaults to the switchyard-worker image when none is configured", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    expect(args[args.length - 1]).toBe("switchyard-worker");
+  });
+
+  it("throws when neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is present", () => {
+    expect(() => buildDockerArgs(issue({ ref: "SYD-1" }), project, config, {})).toThrow(
+      /CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/
+    );
+  });
+
+  it("accepts ANTHROPIC_API_KEY as an alternative to the OAuth token", () => {
+    expect(() =>
+      buildDockerArgs(issue({ ref: "SYD-1" }), project, config, { ANTHROPIC_API_KEY: "sk-ant-secret" })
+    ).not.toThrow();
   });
 });
