@@ -35,6 +35,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
           </select>
         )}
         <span className="spacer" />
+        <button className="primary" onClick={() => navigate({ view: "new-issue" })}>+ New issue</button>
         <span className="badge actor">{props.me.name}</span>
         <button onClick={() => logout().then(() => location.reload())}>Log out</button>
       </header>

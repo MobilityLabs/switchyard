@@ -8,6 +8,7 @@ import Triage from "./views/Triage";
 import Board from "./views/Board";
 import IssueDetail from "./views/IssueDetail";
 import Review from "./views/Review";
+import NewIssue from "./views/NewIssue";
 
 // Intercepts clicks on same-origin anchors that point at a known client
 // route and hands them to the History-API router instead of a full page
@@ -81,6 +82,7 @@ function ShellRouter({ me }: { me: Actor }) {
       {route.view === "board" && <Board project={route.project} />}
       {route.view === "issue" && <IssueDetail refId={route.ref} />}
       {route.view === "review" && <Review />}
+      {route.view === "new-issue" && <NewIssue />}
     </Shell>
   );
 }

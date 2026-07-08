@@ -4,7 +4,8 @@ export type Route =
   | { view: "triage" }
   | { view: "board"; project: string }
   | { view: "issue"; ref: string }
-  | { view: "review" };
+  | { view: "review" }
+  | { view: "new-issue" };
 
 // Fired whenever `navigate()` pushes a new history entry, so `useRoute` can
 // re-render without a real `popstate` (which only fires on back/forward).
@@ -19,6 +20,7 @@ function matchRoute(pathname: string): Route | null {
   if (parts[0] === "board" && parts.length === 2 && parts[1]) return { view: "board", project: parts[1] };
   if (parts[0] === "issue" && parts.length === 2 && parts[1]) return { view: "issue", ref: parts[1] };
   if (parts[0] === "review" && parts.length === 1) return { view: "review" };
+  if (parts[0] === "new" && parts.length === 1) return { view: "new-issue" };
   return null;
 }
 
@@ -34,6 +36,7 @@ export function href(route: Route): string {
   if (route.view === "board") return `/board/${route.project}`;
   if (route.view === "issue") return `/issue/${route.ref}`;
   if (route.view === "review") return `/review`;
+  if (route.view === "new-issue") return `/new`;
   return "/";
 }
 

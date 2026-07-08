@@ -183,3 +183,14 @@ kbd {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px;
   padding: 0 5px; font-size: 11px; font-family: ui-monospace, Menlo, monospace; margin-left: 4px;
 }
+.new-issue { max-width: 640px; margin: 0 auto; }
+.new-issue-form { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.new-issue-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.new-issue-form input, .new-issue-form select, .new-issue-form textarea {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; font-family: inherit; font-size: 14px;
+}
+.new-issue-form textarea { min-height: 120px; resize: vertical; }
+.new-issue-form label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
+.new-issue-form label.checkbox-row input { width: auto; }
+.new-issue-form button.primary { align-self: flex-start; }
