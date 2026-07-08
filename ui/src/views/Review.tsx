@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { addComment, getIssue, listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
+import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import type { IssueDetail as IssueDetailType } from "../types";
 import { Event, projectKeyFromRef } from "./IssueDetail";
@@ -21,6 +22,8 @@ export default function Review() {
   }, [clampedIndex, index]);
 
   const current = list[clampedIndex];
+  const { onPaste, uploading, uploadError, setUploadError, textareaRef } =
+    usePasteUpload(current?.ref ?? "", draft, setDraft);
 
   const detail = usePoll<IssueDetailType | null>(
     () => (current ? getIssue(current.ref) : Promise.resolve(null)),
@@ -93,6 +96,9 @@ export default function Review() {
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
+      {uploadError && (
+        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
+      )}
       <PollErrorBar error={error} />
 
       <header className="review-head">
@@ -132,16 +138,19 @@ export default function Review() {
 
           <div className="composer">
             <textarea
+              ref={textareaRef}
               value={draft}
-              placeholder="Write a comment… (Comment posts it; required for Send back)"
+              placeholder="Write a comment… (Comment posts it; required for Send back; paste an image or video to attach it)"
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={onPaste}
             />
+            {uploading && <span className="uploading-note">uploading…</span>}
           </div>
 
           <div className="review-verdicts">
-            <button className="primary" onClick={approve}>Approve → done <kbd>a</kbd></button>
-            <button onClick={sendBack}>Send back → todo <kbd>s</kbd></button>
-            <button disabled={!draft.trim()} onClick={postComment}>Comment</button>
+            <button className="primary" disabled={uploading} onClick={approve}>Approve → done <kbd>a</kbd></button>
+            <button disabled={uploading} onClick={sendBack}>Send back → todo <kbd>s</kbd></button>
+            <button disabled={!draft.trim() || uploading} onClick={postComment}>Comment</button>
           </div>
         </article>
       )}

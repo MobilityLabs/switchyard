@@ -55,6 +55,12 @@ const ALLOWED_TAGS = [
 ];
 const ALLOWED_ATTR = ["href", "target", "rel", "src", "alt", "title", "class", "checked", "disabled", "type", "start"];
 
+// Matches only our own attachment-serving URLs: a same-origin relative path
+// with no extra path segments, query, or scheme — so it can't be smuggled
+// into a protocol-relative ("//host/...") or absolute external URL.
+const ATTACHMENT_SRC_RE = /^\/api\/attachments\/\d+\/[\w.-]+$/;
+const ATTACHMENT_VIDEO_HREF_RE = /^\/api\/attachments\/\d+\/[\w.-]+\.(mp4|webm|mov)$/i;
+
 let hooksInstalled = false;
 function ensureHooks() {
   if (hooksInstalled) return;
@@ -65,6 +71,19 @@ function ensureHooks() {
     if (node.tagName === "A") {
       node.setAttribute("target", "_blank");
       node.setAttribute("rel", "noreferrer");
+    }
+    // Images are only allowed to load from our own attachment-serving route.
+    // Anything else (including protocol-relative/external hosts) is dropped
+    // and swapped for a plain link — undisplayed <img src> is a classic
+    // tracking-pixel/read-receipt vector, so we never let one auto-fetch.
+    if (node.tagName === "IMG") {
+      const src = node.getAttribute("src") ?? "";
+      if (!ATTACHMENT_SRC_RE.test(src)) {
+        const link = node.ownerDocument.createElement("a");
+        link.setAttribute("href", src || "#");
+        link.textContent = node.getAttribute("alt") || src || "image";
+        node.replaceWith(link);
+      }
     }
   });
   // <input> is allowlisted only for GFM task-list checkboxes; pin every
@@ -79,6 +98,23 @@ function ensureHooks() {
 }
 ensureHooks();
 
+// Adds a real <video> element below any link that points at an
+// attachment-served mp4/webm/mov. Built with the DOM API directly, after
+// DOMPurify has already run, rather than by allowing <video> through the
+// sanitizer — the sanitizer config still forbids video/iframe in arbitrary
+// user HTML, so this is the only path a <video> tag can reach the page.
+function attachVideoPreviews(container: HTMLElement): void {
+  for (const a of Array.from(container.querySelectorAll("a"))) {
+    const href = a.getAttribute("href") ?? "";
+    if (!ATTACHMENT_VIDEO_HREF_RE.test(href)) continue;
+    const video = document.createElement("video");
+    video.controls = true;
+    video.preload = "metadata";
+    video.src = href;
+    a.insertAdjacentElement("afterend", video);
+  }
+}
+
 export function renderMarkdown(text: string, projectKey: string): string {
   const repo = PROJECT_REPOS[projectKey];
 
@@ -90,12 +126,17 @@ export function renderMarkdown(text: string, projectKey: string): string {
 
   const rawHtml = marked.parse(text, { gfm: true, breaks: true, renderer }) as string;
 
-  return DOMPurify.sanitize(rawHtml, {
+  const sanitized = DOMPurify.sanitize(rawHtml, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
     FORBID_TAGS: ["iframe", "script", "style"],
     FORBID_ATTR: ["onerror", "onclick", "onload", "onmouseover"],
   });
+
+  const container = document.createElement("div");
+  container.innerHTML = sanitized;
+  attachVideoPreviews(container);
+  return container.innerHTML;
 }
 
 export function Markdown({ text, projectKey }: { text: string; projectKey: string }) {

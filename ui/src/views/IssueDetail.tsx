@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { addComment, getIssue, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
+import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { PRIORITIES, STATUSES, type Activity, type Priority, type Status } from "../types";
 import { Markdown } from "../Markdown";
@@ -14,6 +15,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(refId, draft, setDraft);
 
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
@@ -91,19 +93,25 @@ export default function IssueDetail({ refId }: { refId: string }) {
         {data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} />)}
       </div>
 
+      {uploadError && (
+        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
+      )}
       <div className="composer">
         <textarea
+          ref={textareaRef}
           value={draft}
-          placeholder="Write a comment…"
+          placeholder="Write a comment… (paste an image or video to attach it)"
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={onPaste}
         />
         <button
           className="primary"
-          disabled={!draft.trim()}
+          disabled={!draft.trim() || uploading}
           onClick={() => act(() => addComment(refId, draft).then(() => setDraft("")))}
         >
           Send
         </button>
+        {uploading && <span className="uploading-note">uploading…</span>}
       </div>
     </section>
   );

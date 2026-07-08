@@ -108,7 +108,8 @@ h2 { display: flex; align-items: center; gap: 8px; }
 .markdown pre code { background: none; border: none; padding: 0; }
 .markdown table { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
 .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 8px; }
-.markdown img { max-width: 100%; }
+.markdown img { max-width: 100%; border-radius: var(--radius); }
+.markdown video { max-width: 100%; border-radius: var(--radius); display: block; margin-top: 6px; }
 
 .design-embeds { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .design-embed header { display: flex; align-items: center; gap: 10px; }
@@ -126,11 +127,12 @@ h2 { display: flex; align-items: center; gap: 8px; }
 .comment p { margin: 6px 0 0; white-space: pre-wrap; }
 .event { color: var(--muted); font-size: 13px; margin: 0; }
 .event time, .comment time { color: var(--muted); font-size: 11px; }
-.composer { display: flex; gap: 8px; align-items: flex-end; }
+.composer { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .composer textarea {
   flex: 1; min-height: 70px; background: var(--panel); color: var(--text);
   border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; font-family: inherit;
 }
+.uploading-note { color: var(--muted); font-size: 12px; }
 .triage-desc {
   margin: 8px 0 0; color: var(--text); font-size: 13px; white-space: pre-wrap;
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;

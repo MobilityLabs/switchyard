@@ -23,7 +23,10 @@ describe("sanitizer", () => {
   });
 
   it("strips explicitly forbidden event handlers (onerror)", () => {
-    const el = toDom('<img src="x" onerror="alert(1)">');
+    // Uses an allowed attachment src so the element survives as an <img> (an
+    // external src would be replaced with a plain link — see the img-src
+    // allowlist tests below) and we can assert onerror is stripped from it.
+    const el = toDom('<img src="/api/attachments/1/x.png" onerror="alert(1)">');
     const img = el.querySelector("img");
     expect(img).not.toBeNull();
     expect(img!.hasAttribute("onerror")).toBe(false);
@@ -115,6 +118,43 @@ describe("sanitizer", () => {
       expect(input.getAttribute("type")).toBe("checkbox");
       expect(input.hasAttribute("disabled")).toBe(true);
     }
+  });
+
+  it("strips external img src, replacing it with a plain link (tracking-pixel defense)", () => {
+    const el = toDom('![tracker](https://evil.example/pixel.png)');
+    expect(el.querySelector("img")).toBeNull();
+    const a = el.querySelector("a")!;
+    expect(a).not.toBeNull();
+    expect(a.getAttribute("href")).toBe("https://evil.example/pixel.png");
+    expect(a.textContent).toBe("tracker");
+  });
+
+  it("strips protocol-relative img src too (same-origin-looking bypass)", () => {
+    const el = toDom('<img src="//evil.example/pixel.png" alt="x">');
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.querySelector("a")).not.toBeNull();
+  });
+
+  it("allows img src pointing at the attachment-serving route", () => {
+    const el = toDom("![shot.png](/api/attachments/12/shot.png)");
+    const img = el.querySelector("img")!;
+    expect(img).not.toBeNull();
+    expect(img.getAttribute("src")).toBe("/api/attachments/12/shot.png");
+    expect(el.querySelector("a")).toBeNull();
+  });
+
+  it("renders a <video> below a link to an attachment mp4/webm/mov", () => {
+    const el = toDom("[clip.mp4](/api/attachments/7/clip.mp4)");
+    const video = el.querySelector("video")!;
+    expect(video).not.toBeNull();
+    expect(video.getAttribute("src")).toBe("/api/attachments/7/clip.mp4");
+    expect(video.hasAttribute("controls")).toBe(true);
+    expect(video.getAttribute("preload")).toBe("metadata");
+  });
+
+  it("does not add a video element for a non-attachment link, even with a video extension", () => {
+    const el = toDom("[clip.mp4](https://evil.example/clip.mp4)");
+    expect(el.querySelector("video")).toBeNull();
   });
 });
 

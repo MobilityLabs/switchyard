@@ -45,3 +45,14 @@ export const snoozeIssue = (ref: string, until: number) =>
 export const markDuplicate = (ref: string, of: string) =>
   api<Issue>(`/api/issues/${ref}/duplicate`, { method: "POST", body: JSON.stringify({ of }) });
 export const logout = () => api<{ ok: true }>("/auth/logout", { method: "POST" });
+
+export async function uploadAttachment(ref: string, file: File): Promise<{ id: number; url: string; markdown: string }> {
+  const form = new FormData();
+  form.set("file", file);
+  // Don't route this through api() — it forces a JSON content-type header,
+  // which would stop the browser from setting the multipart boundary.
+  const res = await fetch(`/api/issues/${ref}/attachments`, { method: "POST", body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `HTTP ${res.status}`);
+  return data as { id: number; url: string; markdown: string };
+}
