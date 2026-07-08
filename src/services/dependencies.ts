@@ -74,6 +74,11 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
   const conditions = [
     eq(issues.status, "todo"),
     or(isNull(issues.assigneeId), eq(issues.assigneeId, actor.id)),
+    sql`NOT EXISTS (
+      SELECT 1 FROM dependencies d
+      JOIN issues b ON b.id = d.blocker_id
+      WHERE d.blocked_id = ${issues.id} AND b.status NOT IN ('done', 'canceled')
+    )`,
   ];
   if (project) conditions.push(eq(issues.projectId, project.id));
   const candidates = db
@@ -81,9 +86,7 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
     .from(issues)
     .where(and(...conditions))
     .orderBy(PRIORITY_RANK, issues.createdAt)
+    .limit(1)
     .all();
-  for (const row of candidates) {
-    if (getOpenBlockers(db, row.id).length === 0) return toView(db, row);
-  }
-  return null;
+  return candidates[0] ? toView(db, candidates[0]) : null;
 }
