@@ -18,6 +18,11 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
     if (blocker.id === blocked.id) {
       throw new SwitchyardError(`An issue cannot block itself (${blockerRef}).`);
     }
+    if (isReachable(tx as Db, blocked.id, blocker.id)) {
+      throw new SwitchyardError(
+        `Adding this dependency would create a cycle — ${blockedRef} already blocks ${blockerRef} (directly or transitively).`
+      );
+    }
     const inserted = tx
       .insert(dependencies)
       .values({ blockerId: blocker.id, blockedId: blocked.id })
@@ -31,6 +36,27 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
       });
     }
   });
+}
+
+function isReachable(db: Db, fromId: number, toId: number): boolean {
+  const visited = new Set<number>([fromId]);
+  const queue = [fromId];
+  while (queue.length > 0) {
+    const x = queue.shift()!;
+    const successors = db
+      .select({ blockedId: dependencies.blockedId })
+      .from(dependencies)
+      .where(eq(dependencies.blockerId, x))
+      .all();
+    for (const { blockedId } of successors) {
+      if (blockedId === toId) return true;
+      if (!visited.has(blockedId)) {
+        visited.add(blockedId);
+        queue.push(blockedId);
+      }
+    }
+  }
+  return false;
 }
 
 export function getOpenBlockers(db: Db, issueId: number): IssueView[] {

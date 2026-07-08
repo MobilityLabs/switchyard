@@ -53,4 +53,24 @@ describe("dependencies", () => {
     const types = listIssueEvents(db, 2).filter((e) => e.type === "blocked_by_added");
     expect(types).toHaveLength(1);
   });
+
+  it("rejects a direct cycle (A blocks B, then B blocks A)", () => {
+    addDependency(db, human, "AIPI-1", "AIPI-2");
+    expect(() => addDependency(db, human, "AIPI-2", "AIPI-1")).toThrowError(/cycle/i);
+  });
+
+  it("rejects a transitive cycle (A blocks B, B blocks C, then C blocks A)", () => {
+    addDependency(db, human, "AIPI-1", "AIPI-2");
+    addDependency(db, human, "AIPI-2", "AIPI-3");
+    expect(() => addDependency(db, human, "AIPI-3", "AIPI-1")).toThrowError(/cycle/i);
+  });
+
+  it("allows a diamond dependency shape", () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "D", priority: "low" }); // AIPI-4
+    updateIssue(db, human, "AIPI-4", { status: "todo" });
+    addDependency(db, human, "AIPI-1", "AIPI-2"); // A blocks B
+    addDependency(db, human, "AIPI-1", "AIPI-3"); // A blocks C
+    addDependency(db, human, "AIPI-2", "AIPI-4"); // B blocks D
+    expect(() => addDependency(db, human, "AIPI-3", "AIPI-4")).not.toThrow(); // C blocks D
+  });
 });
