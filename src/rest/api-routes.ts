@@ -11,6 +11,7 @@ import type { Status } from "../db/schema.js";
 import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
 import { addDependency, nextTask } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
+import { listRecentEvents } from "../services/events.js";
 import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
@@ -113,6 +114,17 @@ export function buildApiRoutes(db: Db) {
     const { blockerRef, blockedRef } = c.req.valid("json");
     addDependency(db, c.var.actor, blockerRef, blockedRef);
     return c.json({ ok: true });
+  });
+
+  app.get("/events", (c) => {
+    const since = c.req.query("since");
+    const limit = c.req.query("limit");
+    return c.json(
+      listRecentEvents(db, {
+        since: since !== undefined ? Number(since) : undefined,
+        limit: limit !== undefined ? Number(limit) : undefined,
+      })
+    );
   });
 
   // Redact secret from webhook objects for safe API responses
