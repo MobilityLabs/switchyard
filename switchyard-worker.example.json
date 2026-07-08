@@ -2,6 +2,11 @@
   "url": "http://100.85.158.109:3300",
   "label": "auto",
   "intervalSeconds": 300,
+  "eventPollSeconds": 15,
   "maxConcurrent": 1,
-  "projects": { "SYD": { "repo": "/Users/sean/sites/switchyard" } }
+  "projects": {
+    "SYD": {
+      "repo": "/Users/sean/sites/switchyard"
+    }
+  }
 }

@@ -110,6 +110,7 @@ cp switchyard-worker.example.json switchyard-worker.json
   "url": "http://100.85.158.109:3300",
   "label": "auto",
   "intervalSeconds": 300,
+  "eventPollSeconds": 15,
   "maxConcurrent": 1,
   "projects": { "SYD": { "repo": "/Users/sean/sites/switchyard" } }
 }
@@ -135,6 +136,14 @@ Labeling an issue `auto` is consent to run that issue's content (title,
 description, comments) through a headless session with your local permission
 profile — review the issue text like you'd review a script before running it,
 and keep the worker's permission allowlist tight.
+
+Escalations resume fast: when a session calls `request_human_input`, the issue
+parks (`needsInput`) until a human answers with a comment. The answer releases
+the claim server-side (back to `todo`, unassigned), and the worker's event-feed
+poll (`eventPollSeconds`, default 15s) spots the `needs_input_cleared` event and
+re-dispatches within seconds — the new session's prompt tells it to read the
+answer in the activity feed. If the worker was down when the answer landed, the
+regular `intervalSeconds` poll picks the issue up instead.
 
 ## The Dreamer
 

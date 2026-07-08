@@ -14,6 +14,8 @@ export type WorkerConfig = {
   url: string;
   label: string;
   intervalSeconds: number;
+  /** How often to scan the event feed for answered escalations (default 15s). */
+  eventPollSeconds?: number;
   maxConcurrent: number;
   projects: Record<string, { repo: string }>;
   allowedTools?: string[];
@@ -50,6 +52,41 @@ export function selectDispatchable<T extends WorkerIssue>(
     selected.push(issue);
   }
   return selected;
+}
+
+/** The subset of a GET /api/events row the resume trigger needs. */
+export type FeedEvent = {
+  id: number;
+  type: string;
+  issue: string; // "<PROJECT>-<number>"
+};
+
+/**
+ * Scans the global event feed for `needs_input_cleared` events newer than
+ * `lastEventId` on configured projects — each one means a human just answered
+ * an escalation and the issue should be re-dispatched without waiting for the
+ * next full poll. Returns the distinct refs to resume plus the advanced
+ * cursor. A null cursor means "first look at the feed": it initializes to the
+ * newest event id without triggering on history, so a worker restart never
+ * re-fires old answers.
+ */
+export function findResumeRefs(
+  feed: FeedEvent[],
+  config: WorkerConfig,
+  lastEventId: number | null
+): { refs: string[]; lastEventId: number | null } {
+  if (feed.length === 0) return { refs: [], lastEventId };
+  const newestId = Math.max(...feed.map((e) => e.id));
+  if (lastEventId === null) return { refs: [], lastEventId: newestId };
+
+  const refs = new Set<string>();
+  for (const e of feed) {
+    if (e.id <= lastEventId) continue;
+    if (e.type !== "needs_input_cleared") continue;
+    if (!(projectKeyOf(e.issue) in config.projects)) continue;
+    refs.add(e.issue);
+  }
+  return { refs: [...refs], lastEventId: Math.max(newestId, lastEventId) };
 }
 
 /** Per-ref dispatch-attempt tracking, kept in memory by the polling loop. */

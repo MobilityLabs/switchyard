@@ -3,6 +3,12 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
+import {
+  findResumeRefs,
+  selectDispatchable,
+  type FeedEvent,
+  type WorkerIssue,
+} from "../../scripts/worker-select.js";
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
 let agentH: Record<string, string>, humanH: Record<string, string>;
@@ -53,6 +59,43 @@ describe("escalation, snooze, and duplicate routes", () => {
     });
     const cleared = await body<{ needsInput: boolean }>(await app.request(`/issues/${filed.ref}`, { headers: humanH }));
     expect(cleared.needsInput).toBe(false);
+  });
+
+  it("a human answer releases the claim and the event feed triggers a worker resume", async () => {
+    const filed = await body<{ ref: string }>(await app.request("/issues", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({
+        projectKey: "SYD", title: "Needs a decision mid-flight",
+        description: "Agent work that will hit an open question.",
+        provenance: { sourceType: "manual", detail: "x" },
+      }),
+    }));
+    await app.request(`/issues/${filed.ref}`, {
+      method: "PATCH", headers: humanH, body: JSON.stringify({ status: "todo", labels: ["auto"] }),
+    });
+    await app.request(`/issues/${filed.ref}/claim`, { method: "POST", headers: agentH });
+    await app.request(`/issues/${filed.ref}/request-input`, {
+      method: "POST", headers: agentH, body: JSON.stringify({ question: "Ship behind a flag?" }),
+    });
+
+    // A worker that initialized its event cursor before the answer landed...
+    const config = {
+      url: "http://x", label: "auto", intervalSeconds: 300, maxConcurrent: 1,
+      projects: { SYD: { repo: "/tmp" } },
+    };
+    const before = await body<FeedEvent[]>(await app.request("/events", { headers: agentH }));
+    const cursor = findResumeRefs(before, config, null).lastEventId;
+
+    // ...sees the human's answer as a resume trigger for exactly that ref,
+    await app.request(`/issues/${filed.ref}/comments`, {
+      method: "POST", headers: humanH, body: JSON.stringify({ body: "Yes — behind a flag." }),
+    });
+    const after = await body<FeedEvent[]>(await app.request("/events", { headers: agentH }));
+    expect(findResumeRefs(after, config, cursor).refs).toEqual([filed.ref]);
+
+    // ...and the issue is already released: todo, unassigned, dispatchable.
+    const released = await body<WorkerIssue[]>(await app.request("/issues?status=todo", { headers: agentH }));
+    expect(selectDispatchable(released, config, []).map((i) => i.ref)).toEqual([filed.ref]);
   });
 
   it("snooze is human-only and hides the issue from exclude_snoozed searches", async () => {

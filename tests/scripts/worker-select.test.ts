@@ -3,9 +3,11 @@ import {
   selectDispatchable,
   filterRetryCapped,
   recordAttempt,
+  findResumeRefs,
   type WorkerConfig,
   type WorkerIssue,
   type RetryState,
+  type FeedEvent,
 } from "../../scripts/worker-select.js";
 
 const config: WorkerConfig = {
@@ -98,6 +100,44 @@ describe("filterRetryCapped", () => {
     const issues = [issue({ ref: "SYD-1", updatedAt: 1000 })];
     const state = new Map<string, RetryState>([["SYD-1", { attempts: 1, lastUpdatedAt: 1000 }]]);
     expect(filterRetryCapped(issues, state, 1)).toEqual([]);
+  });
+});
+
+describe("findResumeRefs", () => {
+  const ev = (overrides: Partial<FeedEvent>): FeedEvent => ({
+    id: 1,
+    type: "needs_input_cleared",
+    issue: "SYD-1",
+    ...overrides,
+  });
+
+  it("initializes a null cursor to the newest feed id without triggering on history", () => {
+    const feed = [ev({ id: 9 }), ev({ id: 3 })];
+    expect(findResumeRefs(feed, config, null)).toEqual({ refs: [], lastEventId: 9 });
+  });
+
+  it("keeps a null cursor when the feed is empty", () => {
+    expect(findResumeRefs([], config, null)).toEqual({ refs: [], lastEventId: null });
+  });
+
+  it("returns refs of needs_input_cleared events newer than the cursor", () => {
+    const feed = [ev({ id: 12, issue: "SYD-4" }), ev({ id: 10, issue: "SYD-2" })];
+    expect(findResumeRefs(feed, config, 10)).toEqual({ refs: ["SYD-4"], lastEventId: 12 });
+  });
+
+  it("ignores other event types but still advances the cursor past them", () => {
+    const feed = [ev({ id: 8, type: "comment" }), ev({ id: 7, type: "status_changed" })];
+    expect(findResumeRefs(feed, config, 5)).toEqual({ refs: [], lastEventId: 8 });
+  });
+
+  it("ignores events for projects the worker is not configured for", () => {
+    const feed = [ev({ id: 6, issue: "AIPI-3" })];
+    expect(findResumeRefs(feed, config, 2)).toEqual({ refs: [], lastEventId: 6 });
+  });
+
+  it("dedupes repeated refs", () => {
+    const feed = [ev({ id: 5 }), ev({ id: 4 }), ev({ id: 3, issue: "SYD-2" })];
+    expect(findResumeRefs(feed, config, 2)).toEqual({ refs: ["SYD-1", "SYD-2"], lastEventId: 5 });
   });
 });
 
