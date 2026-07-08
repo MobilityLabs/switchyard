@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
+import { HTTPException } from "hono/http-exception";
 import type { Db } from "../db/index.js";
 import { SwitchyardError } from "../services/errors.js";
 import { authenticate, listActors, type Actor } from "../services/actors.js";
@@ -7,14 +8,21 @@ import { getSessionActor } from "../services/auth.js";
 import { createProject, listProjects } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
-import {
-  createIssue, getIssue, updateIssue, claimIssue,
-  type CreateIssueInput, type UpdateIssueInput,
-} from "../services/issues.js";
+import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
 import { addDependency, nextTask } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
+import {
+  body,
+  projectBody,
+  issueCreateBody,
+  issueUpdateBody,
+  commentBody,
+  dependencyBody,
+  webhookCreateBody,
+  webhookPatchBody,
+} from "./schemas.js";
 
 type Env = { Variables: { actor: Actor } };
 
@@ -38,7 +46,7 @@ export function buildApiRoutes(db: Db) {
 
   app.onError((err, c) => {
     if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
-    if (err instanceof SyntaxError) {
+    if (err instanceof SyntaxError || (err instanceof HTTPException && /malformed json/i.test(err.message))) {
       return c.json({ error: "Request body is not valid JSON — send a JSON object." }, 400);
     }
     console.error(err);
@@ -46,10 +54,7 @@ export function buildApiRoutes(db: Db) {
   });
 
   app.get("/projects", (c) => c.json(listProjects(db)));
-  app.post("/projects", async (c) => {
-    const body = (await c.req.json()) as { key: string; name: string };
-    return c.json(createProject(db, body));
-  });
+  app.post("/projects", body(projectBody), (c) => c.json(createProject(db, c.req.valid("json"))));
   app.get("/actors", (c) => c.json(listActors(db)));
   app.get("/me", (c) => c.json(c.var.actor));
 
@@ -63,33 +68,30 @@ export function buildApiRoutes(db: Db) {
     }))
   );
 
-  app.post("/issues", async (c) => {
-    const body = (await c.req.json()) as CreateIssueInput;
-    return c.json(createIssue(db, c.var.actor, body));
-  });
+  app.post("/issues", body(issueCreateBody), (c) =>
+    c.json(createIssue(db, c.var.actor, c.req.valid("json")))
+  );
 
   app.get("/issues/:ref", (c) => {
     const ref = c.req.param("ref");
     return c.json({ ...getIssue(db, ref), activity: getActivity(db, ref) });
   });
 
-  app.patch("/issues/:ref", async (c) => {
-    const body = (await c.req.json()) as UpdateIssueInput;
-    return c.json(updateIssue(db, c.var.actor, c.req.param("ref"), body));
-  });
+  app.patch("/issues/:ref", body(issueUpdateBody), (c) =>
+    c.json(updateIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json")))
+  );
 
   app.post("/issues/:ref/claim", (c) => c.json(claimIssue(db, c.var.actor, c.req.param("ref"))));
 
-  app.post("/issues/:ref/comments", async (c) => {
-    const { body } = (await c.req.json()) as { body: string };
-    addComment(db, c.var.actor, c.req.param("ref"), body);
+  app.post("/issues/:ref/comments", body(commentBody), (c) => {
+    addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);
     return c.json({ ok: true });
   });
 
   app.get("/next-task", (c) => c.json(nextTask(db, c.var.actor, c.req.query("project") || undefined)));
 
-  app.post("/dependencies", async (c) => {
-    const { blockerRef, blockedRef } = (await c.req.json()) as { blockerRef: string; blockedRef: string };
+  app.post("/dependencies", body(dependencyBody), (c) => {
+    const { blockerRef, blockedRef } = c.req.valid("json");
     addDependency(db, c.var.actor, blockerRef, blockedRef);
     return c.json({ ok: true });
   });
@@ -98,14 +100,13 @@ export function buildApiRoutes(db: Db) {
   const redact = ({ secret, ...rest }: Webhook) => ({ ...rest, hasSecret: secret !== null });
 
   app.get("/webhooks", (c) => c.json(listWebhooks(db).map(redact)));
-  app.post("/webhooks", async (c) => {
+  app.post("/webhooks", body(webhookCreateBody), (c) => {
     if (c.var.actor.type === "agent") {
       throw new SwitchyardError(
         "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
       );
     }
-    const body = (await c.req.json()) as { url: string; projectKey?: string; secret?: string };
-    return c.json(redact(addWebhook(db, body)));
+    return c.json(redact(addWebhook(db, c.req.valid("json"))));
   });
   app.delete("/webhooks/:id", (c) => {
     if (c.var.actor.type === "agent") {
@@ -116,13 +117,13 @@ export function buildApiRoutes(db: Db) {
     removeWebhook(db, Number(c.req.param("id")));
     return c.json({ ok: true });
   });
-  app.patch("/webhooks/:id", async (c) => {
+  app.patch("/webhooks/:id", body(webhookPatchBody), (c) => {
     if (c.var.actor.type === "agent") {
       throw new SwitchyardError(
         "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
       );
     }
-    const { active } = (await c.req.json()) as { active: boolean };
+    const { active } = c.req.valid("json");
     return c.json(redact(setWebhookActive(db, Number(c.req.param("id")), active)));
   });
 

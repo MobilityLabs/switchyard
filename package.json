@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.0.8",
+    "@hono/zod-validator": "^0.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2",
