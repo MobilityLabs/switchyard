@@ -3,6 +3,11 @@ import { addComment, getIssue, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { PRIORITIES, STATUSES, type Activity, type Priority, type Status } from "../types";
+import { Markdown } from "../Markdown";
+
+export function projectKeyFromRef(ref: string): string {
+  return ref.split("-")[0] ?? "";
+}
 
 export default function IssueDetail({ refId }: { refId: string }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
@@ -11,6 +16,8 @@ export default function IssueDetail({ refId }: { refId: string }) {
 
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
+
+  const projectKey = projectKeyFromRef(data.ref);
 
   const act = (fn: () => Promise<unknown>) =>
     fn().then(() => { setActionError(null); reload(); }, (e) => setActionError(e.message));
@@ -41,12 +48,12 @@ export default function IssueDetail({ refId }: { refId: string }) {
         <p className="banner warn">⚠ An agent is waiting on a human answer — reply in a comment below.</p>
       )}
       {data.description
-        ? <pre className="description panel">{data.description}</pre>
+        ? <div className="description panel"><Markdown text={data.description} projectKey={projectKey} /></div>
         : <p className="empty">No description.</p>}
 
       <h3>Activity</h3>
       <div className="activity">
-        {data.activity.map((ev, i) => <Event key={i} ev={ev} />)}
+        {data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} />)}
       </div>
 
       <div className="composer">
@@ -67,13 +74,13 @@ export default function IssueDetail({ refId }: { refId: string }) {
   );
 }
 
-export function Event({ ev }: { ev: Activity }) {
+export function Event({ ev, projectKey }: { ev: Activity; projectKey: string }) {
   const when = new Date(ev.createdAt * 1000).toLocaleString();
   if (ev.type === "comment") {
     return (
       <article className="comment panel">
         <header><strong>{ev.actorName}</strong> <time>{when}</time></header>
-        <p>{String(ev.payload.body ?? "")}</p>
+        <Markdown text={String(ev.payload.body ?? "")} projectKey={projectKey} />
       </article>
     );
   }

@@ -3,7 +3,8 @@ import { addComment, getIssue, listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import type { IssueDetail as IssueDetailType } from "../types";
-import { Event } from "./IssueDetail";
+import { Event, projectKeyFromRef } from "./IssueDetail";
+import { Markdown } from "../Markdown";
 
 export default function Review() {
   const { data, error, reload } = usePoll(() => listIssues({ status: "in_review" }), []);
@@ -107,13 +108,13 @@ export default function Review() {
           )}
 
           {current.description
-            ? <pre className="description panel">{current.description}</pre>
+            ? <div className="description panel"><Markdown text={current.description} projectKey={projectKeyFromRef(current.ref)} /></div>
             : <p className="empty">No description.</p>}
 
           <h4>Activity</h4>
           <div className="activity">
             {detail.data
-              ? detail.data.activity.map((ev, i) => <Event key={i} ev={ev} />)
+              ? detail.data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKeyFromRef(current.ref)} />)
               : <p className="empty">Loading activity…</p>}
           </div>
 

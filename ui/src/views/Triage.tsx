@@ -3,6 +3,8 @@ import { listActors, listIssues, markDuplicate, snoozeIssue, updateIssue } from 
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { PRIORITIES, type Issue, type Priority } from "../types";
+import { Markdown } from "../Markdown";
+import { projectKeyFromRef } from "./IssueDetail";
 
 function age(unixSeconds: number): string {
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
@@ -70,7 +72,11 @@ function TriageRow({
         <span className="title">{issue.title}</span>
         <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
       </div>
-      {issue.description && <p className="triage-desc">{issue.description}</p>}
+      {issue.description && (
+        <div className="triage-desc">
+          <Markdown text={issue.description} projectKey={projectKeyFromRef(issue.ref)} />
+        </div>
+      )}
       <div className="provenance">
         filed by {creatorName ?? "?"} · {age(issue.createdAt)}
         {issue.sourceType && <> · {issue.sourceType} · {issue.sourceDetail ?? ""}</>}

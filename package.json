@@ -17,9 +17,11 @@
     "@hono/zod-validator": "^0.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.11.1",
+    "dompurify": "^3.4.11",
     "drizzle-orm": "^0.45.2",
     "fetch-to-node": "^2.1.0",
     "hono": "^4.12.28",
+    "marked": "^18.0.5",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "zod": "^3.25.76"
