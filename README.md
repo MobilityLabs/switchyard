@@ -84,6 +84,44 @@ process so it can verify the `x-switchyard-signature` header. It ships unconfigu
 — nothing posts to Slack until `SLACK_WEBHOOK_URL` is set and the webhook is
 registered.
 
+## Auto-dispatch
+
+A local poller (`scripts/agent-worker.ts`, meant to run on a person's own machine)
+that spawns headless Claude Code sessions on ready work.
+
+The human control point is a label: only issues in `todo` carrying the
+configured label (`auto` by default) are ever picked up. Copy the example
+config and edit it for your machine:
+
+```bash
+cp switchyard-worker.example.json switchyard-worker.json
+```
+
+```json
+{
+  "url": "http://100.85.158.109:3300",
+  "label": "auto",
+  "intervalSeconds": 300,
+  "maxConcurrent": 1,
+  "projects": { "SYD": { "repo": "/Users/sean/sites/switchyard" } }
+}
+```
+
+Label an issue to opt it in, then run the worker:
+
+```bash
+SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts            # poll forever
+SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --once     # single poll
+SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --dry-run  # print, don't spawn
+```
+
+Safety model: the label gate (nothing runs unlabeled), `maxConcurrent` (caps
+concurrent headless sessions), and the fact that dispatched work still flows
+through the same claim -> in_review -> human-review pipeline as anything else
+— dispatched sessions can never move an issue to `done` themselves. Each
+dispatch's stdout/stderr is logged to
+`<project repo>/.superpowers/worker-logs/<ref>.log`.
+
 ## Development
 
 ```bash
