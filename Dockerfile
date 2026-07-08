@@ -15,6 +15,7 @@ RUN mkdir -p /data
 
 ENV NODE_ENV=production
 ENV SWITCHYARD_DB=/data/switchyard.db
+ENV ATTACHMENTS_DIR=/data/attachments
 ENV PORT=3300
 EXPOSE 3300
 

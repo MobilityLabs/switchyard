@@ -83,6 +83,16 @@ export const loginLinks = sqliteTable("login_links", {
   createdAt: integer("created_at").notNull().default(now()),
 });
 
+export const attachments = sqliteTable("attachments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  issueId: integer("issue_id").notNull().references(() => issues.id),
+  actorId: integer("actor_id").notNull().references(() => actors.id),
+  filename: text("filename").notNull(),
+  contentType: text("content_type").notNull(),
+  size: integer("size").notNull(),
+  createdAt: integer("created_at").notNull().default(now()),
+});
+
 export const webhooks = sqliteTable("webhooks", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   url: text("url").notNull(),

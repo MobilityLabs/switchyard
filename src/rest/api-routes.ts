@@ -16,6 +16,9 @@ import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
+import { saveAttachment, getAttachment, defaultAttachmentsDir, MAX_ATTACHMENT_SIZE } from "../services/attachments.js";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import {
   body,
   projectBody,
@@ -32,7 +35,7 @@ import {
 
 type Env = { Variables: { actor: Actor } };
 
-export function buildApiRoutes(db: Db) {
+export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmentsDir()) {
   const app = new Hono<Env>();
 
   app.use("*", async (c, next) => {
@@ -94,6 +97,54 @@ export function buildApiRoutes(db: Db) {
   app.post("/issues/:ref/comments", body(commentBody), (c) => {
     addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);
     return c.json({ ok: true });
+  });
+
+  app.post("/issues/:ref/attachments", async (c) => {
+    const parsed = await c.req.parseBody();
+    const file = parsed["file"];
+    if (!(file instanceof File)) {
+      throw new SwitchyardError('Upload must include a multipart field named "file".');
+    }
+    // Check the declared size before doing the second copy (Blob -> Buffer) —
+    // avoids buffering an oversized upload just to reject it.
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      throw new SwitchyardError(
+        `Attachment is ${(file.size / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`
+      );
+    }
+    const data = Buffer.from(await file.arrayBuffer());
+    const { attachment, markdown } = await saveAttachment(
+      db, c.var.actor, c.req.param("ref"), file.name, data, attachmentsDir
+    );
+    const url = `/api/attachments/${attachment.id}/${attachment.filename}`;
+    return c.json({ id: attachment.id, url, markdown });
+  });
+
+  app.get("/attachments/:id/:filename", async (c) => {
+    const id = Number(c.req.param("id"));
+    const notFound = () => c.json({ error: `Attachment ${c.req.param("id")} does not exist.` }, 404);
+    if (!Number.isInteger(id)) return notFound();
+    let row;
+    try {
+      row = getAttachment(db, id);
+    } catch {
+      return notFound();
+    }
+    // The filename segment is cosmetic (files are served by id); require it to
+    // match the stored name so it can't be used to alias arbitrary text onto
+    // this attachment's bytes/content-type.
+    if (c.req.param("filename") !== row.filename) return notFound();
+    let data: Buffer;
+    try {
+      data = await fs.readFile(path.join(attachmentsDir, String(id)));
+    } catch {
+      return notFound();
+    }
+    c.header("Content-Type", row.contentType);
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("Content-Disposition", `inline; filename="${row.filename}"`);
+    c.header("Cache-Control", "public, max-age=31536000, immutable");
+    return c.body(new Uint8Array(data));
   });
 
   app.post("/issues/:ref/request-input", body(requestInputBody), (c) =>
