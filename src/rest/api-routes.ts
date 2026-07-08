@@ -14,6 +14,7 @@ import {
 import { addDependency, nextTask } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
+import { addWebhook, listWebhooks, removeWebhook, type Webhook } from "../services/webhooks.js";
 
 type Env = { Variables: { actor: Actor } };
 
@@ -86,6 +87,19 @@ export function buildApiRoutes(db: Db) {
   app.post("/dependencies", async (c) => {
     const { blockerRef, blockedRef } = (await c.req.json()) as { blockerRef: string; blockedRef: string };
     addDependency(db, c.var.actor, blockerRef, blockedRef);
+    return c.json({ ok: true });
+  });
+
+  // Redact secret from webhook objects for safe API responses
+  const redact = ({ secret, ...rest }: Webhook) => ({ ...rest, hasSecret: secret !== null });
+
+  app.get("/webhooks", (c) => c.json(listWebhooks(db).map(redact)));
+  app.post("/webhooks", async (c) => {
+    const body = (await c.req.json()) as { url: string; projectKey?: string; secret?: string };
+    return c.json(redact(addWebhook(db, body)));
+  });
+  app.delete("/webhooks/:id", (c) => {
+    removeWebhook(db, Number(c.req.param("id")));
     return c.json({ ok: true });
   });
 
