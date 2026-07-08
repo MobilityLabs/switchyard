@@ -71,3 +71,21 @@ h2 { display: flex; align-items: center; gap: 8px; }
 }
 .card p { margin: 6px 0; font-size: 13px; }
 .card:active { cursor: grabbing; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
+.issue-head { display: flex; align-items: center; gap: 12px; }
+.issue-head h2 { flex: 1; margin: 0; }
+.issue-head select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px;
+}
+.description { white-space: pre-wrap; font-family: inherit; margin: 12px 0; }
+.activity { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.comment header { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.comment p { margin: 6px 0 0; white-space: pre-wrap; }
+.event { color: var(--muted); font-size: 13px; margin: 0; }
+.event time, .comment time { color: var(--muted); font-size: 11px; }
+.composer { display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea {
+  flex: 1; min-height: 70px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; font-family: inherit;
+}
