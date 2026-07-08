@@ -3,5 +3,7 @@
   "label": "auto",
   "intervalSeconds": 300,
   "maxConcurrent": 1,
-  "projects": { "SYD": { "repo": "/Users/sean/sites/switchyard" } }
+  "projects": { "SYD": { "repo": "/Users/sean/sites/switchyard" } },
+  "containerized": true,
+  "image": "switchyard-worker"
 }

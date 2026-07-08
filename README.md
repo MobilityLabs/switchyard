@@ -111,7 +111,9 @@ cp switchyard-worker.example.json switchyard-worker.json
   "label": "auto",
   "intervalSeconds": 300,
   "maxConcurrent": 1,
-  "projects": { "SYD": { "repo": "/Users/sean/sites/switchyard" } }
+  "projects": { "SYD": { "repo": "/Users/sean/sites/switchyard" } },
+  "containerized": true,
+  "image": "switchyard-worker"
 }
 ```
 
@@ -134,7 +136,47 @@ just discouraged by the prompt). Each dispatch's stdout/stderr is logged to
 Labeling an issue `auto` is consent to run that issue's content (title,
 description, comments) through a headless session with your local permission
 profile — review the issue text like you'd review a script before running it,
-and keep the worker's permission allowlist tight.
+and keep the worker's permission allowlist tight. In containerized mode
+(below) that consent still applies, but its stakes are lower: the session
+never gets a shell on your actual machine, so a tight tool allowlist matters
+less than it does bare on the host.
+
+### Containerized mode (recommended)
+
+By default, dispatched sessions run bare on the host: same process, same
+working tree, same filesystem access as anything else you run locally. Set
+`containerized: true` and Switchyard instead runs the session inside a
+disposable Docker container that clones the repo internally, works on a
+branch, and pushes the branch back — it is structurally unable to touch your
+host filesystem or push to `main`. This is the recommended default; the bare
+mode above stays available for repos or setups where Docker isn't practical.
+
+Build the worker image once (rebuild after upgrading `@anthropic-ai/claude-code`
+or changing `scripts/container-entry.sh`):
+
+```bash
+npm run build:worker-image
+```
+
+Set `containerized: true` in `switchyard-worker.json` (and optionally
+`image` if you're using something other than the default `switchyard-worker`
+tag), and make sure the worker process's environment has one of:
+
+```bash
+CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`
+ANTHROPIC_API_KEY=...         # or a raw API key
+```
+
+`scripts/agent-worker.ts` passes these through to the container via bare
+`-e VAR` (no value embedded in argv) — see `buildDockerArgs` in
+`scripts/worker-select.ts`. Inside the container, `scripts/container-entry.sh`
+clones `/origin` (the host repo, mounted read-write) into `/work`, checks out
+`agent/<ref>`, runs the same `claude -p` session as bare mode (with an
+addendum reminding it to commit and to name the branch in its issue
+comment), and pushes `agent/<ref>` back to `/origin` if it produced any
+commits. The container gets no host filesystem beyond that one mount, and can
+only ever push that one branch name — merging stays a human decision, same
+as bare mode.
 
 ## The Dreamer
 
