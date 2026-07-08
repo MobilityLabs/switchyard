@@ -29,3 +29,9 @@ export function removeWebhook(db: Db, id: number): void {
   const gone = db.delete(webhooks).where(eq(webhooks.id, id)).returning().get();
   if (!gone) throw new SwitchyardError(`There is no webhook with id ${id} — list them with GET /api/webhooks.`);
 }
+
+export function setWebhookActive(db: Db, id: number, active: boolean): Webhook {
+  const row = db.update(webhooks).set({ active }).where(eq(webhooks.id, id)).returning().get();
+  if (!row) throw new SwitchyardError(`There is no webhook with id ${id} — list them with GET /api/webhooks.`);
+  return row;
+}

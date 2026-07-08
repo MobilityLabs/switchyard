@@ -14,7 +14,7 @@ import {
 import { addDependency, nextTask } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
-import { addWebhook, listWebhooks, removeWebhook, type Webhook } from "../services/webhooks.js";
+import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
 
 type Env = { Variables: { actor: Actor } };
 
@@ -51,6 +51,7 @@ export function buildApiRoutes(db: Db) {
     return c.json(createProject(db, body));
   });
   app.get("/actors", (c) => c.json(listActors(db)));
+  app.get("/me", (c) => c.json(c.var.actor));
 
   app.get("/issues", (c) =>
     c.json(searchIssues(db, {
@@ -114,6 +115,15 @@ export function buildApiRoutes(db: Db) {
     }
     removeWebhook(db, Number(c.req.param("id")));
     return c.json({ ok: true });
+  });
+  app.patch("/webhooks/:id", async (c) => {
+    if (c.var.actor.type === "agent") {
+      throw new SwitchyardError(
+        "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
+      );
+    }
+    const { active } = (await c.req.json()) as { active: boolean };
+    return c.json(redact(setWebhookActive(db, Number(c.req.param("id")), active)));
   });
 
   return app;

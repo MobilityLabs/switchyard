@@ -85,4 +85,31 @@ describe("webhook routes", () => {
     const listRes = await app.request("/webhooks", { headers: agentH });
     expect(listRes.status).toBe(200);
   });
+
+  it("PATCH toggles active, human-only", async () => {
+    const db = openDb(":memory:");
+    const humanH = {
+      authorization: `Bearer ${createActor(db, { name: "sean", type: "human" }).token}`,
+      "content-type": "application/json",
+    };
+    const agentH = {
+      authorization: `Bearer ${createActor(db, { name: "claude/dev", type: "agent" }).token}`,
+      "content-type": "application/json",
+    };
+    const app = buildApiRoutes(db);
+    const { id } = (await (await app.request("/webhooks", {
+      method: "POST", headers: humanH, body: JSON.stringify({ url: "http://example.com/h" }),
+    })).json()) as { id: number };
+
+    const off = await app.request(`/webhooks/${id}`, {
+      method: "PATCH", headers: humanH, body: JSON.stringify({ active: false }),
+    });
+    expect(((await off.json()) as { active: boolean }).active).toBe(false);
+
+    const denied = await app.request(`/webhooks/${id}`, {
+      method: "PATCH", headers: agentH, body: JSON.stringify({ active: true }),
+    });
+    expect(denied.status).toBe(400);
+    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans manage webhooks/i);
+  });
 });
