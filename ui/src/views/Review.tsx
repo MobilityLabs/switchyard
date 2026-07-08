@@ -52,6 +52,16 @@ export default function Review() {
       );
   }
 
+  function postComment() {
+    if (!current) return;
+    const body = draft.trim();
+    if (!body) return;
+    addComment(current.ref, body).then(
+      () => { setActionError(null); setDraft(""); detail.reload(); },
+      (e) => setActionError(e.message),
+    );
+  }
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -123,7 +133,7 @@ export default function Review() {
           <div className="composer">
             <textarea
               value={draft}
-              placeholder="Write a comment… (required to send back)"
+              placeholder="Write a comment… (Comment posts it; required for Send back)"
               onChange={(e) => setDraft(e.target.value)}
             />
           </div>
@@ -131,6 +141,7 @@ export default function Review() {
           <div className="review-verdicts">
             <button className="primary" onClick={approve}>Approve → done <kbd>a</kbd></button>
             <button onClick={sendBack}>Send back → todo <kbd>s</kbd></button>
+            <button disabled={!draft.trim()} onClick={postComment}>Comment</button>
           </div>
         </article>
       )}
