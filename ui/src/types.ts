@@ -14,4 +14,8 @@ export type Issue = {
   createdAt: number; updatedAt: number;
 };
 export type Activity = { type: string; actorName: string; payload: Record<string, unknown>; createdAt: number };
-export type IssueDetail = Issue & { activity: Activity[] };
+export type DependencyRef = { ref: string; title: string; status: Status };
+export type IssueDetail = Issue & {
+  activity: Activity[];
+  dependencies: { blockedBy: DependencyRef[]; blocks: DependencyRef[] };
+};

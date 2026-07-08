@@ -131,6 +131,17 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
           "Only humans move issues to done — comment your verification evidence and move it to in_review instead."
         );
       }
+      if (patch.status === "in_progress" && actor.type === "agent") {
+        // Same gate claimIssue enforces — without this, a PATCH straight to
+        // in_progress would let an agent start work a human deliberately
+        // blocked behind another issue.
+        const blockers = getOpenBlockers(tx as Db, current.id);
+        if (blockers.length > 0) {
+          throw new SwitchyardError(
+            `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
+          );
+        }
+      }
       changes.status = patch.status;
       toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
     }
