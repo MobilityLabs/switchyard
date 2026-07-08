@@ -73,11 +73,21 @@ function dispatch(issue: ApiIssue, config: WorkerConfig): void {
 
   let child: ChildProcess;
   try {
-    child = spawn("claude", ["-p", buildPrompt(issue.ref)], {
-      cwd: project.repo,
-      detached: true,
-      stdio: ["ignore", fd, fd],
-    });
+    // Headless sessions can't answer permission prompts — grant the tools the
+    // work needs up front. The "auto" label is the human's consent for this.
+    const allowedTools =
+      config.allowedTools ??
+      ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+    child = spawn(
+      "claude",
+      ["-p", buildPrompt(issue.ref), "--permission-mode", "acceptEdits",
+       "--allowedTools", allowedTools.join(",")],
+      {
+        cwd: project.repo,
+        detached: true,
+        stdio: ["ignore", fd, fd],
+      },
+    );
   } finally {
     closeSync(fd);
   }

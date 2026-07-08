@@ -16,6 +16,7 @@ export type WorkerConfig = {
   intervalSeconds: number;
   maxConcurrent: number;
   projects: Record<string, { repo: string }>;
+  allowedTools?: string[];
 };
 
 export function projectKeyOf(ref: string): string {
