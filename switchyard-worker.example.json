@@ -11,5 +11,6 @@
   },
   "containerized": true,
   "image": "switchyard-worker",
-  "dispatchPolicy": "all-todo"
+  "dispatchPolicy": "all-todo",
+  "runner": "cli"
 }

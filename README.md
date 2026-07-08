@@ -145,6 +145,23 @@ SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --once     # single poll
 SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --dry-run  # print, don't spawn
 ```
 
+### Runners
+
+There is more than one way to spin up a session; `runner` in
+`switchyard-worker.json` picks it:
+
+- `"cli"` (default) — shell out to `claude -p`, bare on the host or inside a
+  Docker container per `containerized`. What's documented above.
+- `"sdk"` — run the session in-process through the Claude Agent SDK. The MCP
+  bearer token is handed over as an in-memory object (never argv, never a
+  temp file), and the worker log gets one line per tool call instead of an
+  opaque transcript. Setup: `npm install --prefix worker-sdk` (its deps are
+  isolated there because the SDK wants zod@4 and the app is on zod@3).
+  Not combinable with `containerized` yet.
+
+Registering non-Claude runners (Codex, Antigravity, Cursor) is being
+researched in SYD-46.
+
 Safety model: the label gate (nothing runs unlabeled), `maxConcurrent` (caps
 concurrent headless sessions), and the fact that dispatched work still flows
 through the same claim -> in_review -> human-review pipeline as anything else

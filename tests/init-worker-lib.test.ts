@@ -80,6 +80,13 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, containerized: "true" })).toHaveLength(1);
     expect(validateWorkerConfig({ ...good, containerized: true })).toEqual([]);
   });
+
+  it("accepts runner cli/sdk, rejects unknown runners and sdk+containerized", () => {
+    expect(validateWorkerConfig({ ...good, runner: "cli" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, runner: "sdk" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, runner: "codex" })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, runner: "sdk", containerized: true })).toHaveLength(1);
+  });
 });
 
 describe("renderWorkerPlist", () => {

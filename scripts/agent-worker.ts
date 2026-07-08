@@ -43,7 +43,10 @@ type ApiIssue = WorkerIssue & { title: string };
 
 const DEFAULT_EVENT_POLL_SECONDS = 15;
 
-const active = new Map<string, ChildProcess>();
+// Ref -> running session. CLI dispatches hold their ChildProcess; SDK
+// dispatches run in-process, so a marker is enough — the map only feeds
+// maxConcurrent accounting and duplicate suppression.
+const active = new Map<string, ChildProcess | "sdk">();
 const retryState = new Map<string, RetryState>();
 // Refs whose escalation was just answered — their next dispatch gets a prompt
 // primed to read the answer. Populated by the event poll, consumed by tick().
@@ -143,6 +146,12 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, opts: { resumed?: boole
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${issue.ref}.log`);
+
+  if ((config.runner ?? "cli") === "sdk") {
+    dispatchSdk(issue, project.repo, config, logPath, opts);
+    return;
+  }
+
   const fd = openSync(logPath, "a");
 
   let child: ChildProcess;
@@ -197,6 +206,54 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, opts: { resumed?: boole
     active.delete(issue.ref);
     console.error(`failed to spawn claude for ${issue.ref}: ${err.message}`);
   });
+}
+
+/**
+ * In-process dispatch through the Claude Agent SDK (runner: "sdk"). The
+ * runner module is imported via a runtime-computed path so machines running
+ * CLI mode — and the main `tsc` pass / server Docker image — never depend on
+ * worker-sdk/ being installed.
+ */
+function dispatchSdk(
+  issue: ApiIssue,
+  repo: string,
+  config: WorkerConfig,
+  logPath: string,
+  opts: { resumed?: boolean },
+): void {
+  const allowedTools =
+    config.allowedTools ?? ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+  active.set(issue.ref, "sdk");
+  console.log(`dispatched ${issue.ref} (sdk session) -> ${logPath}`);
+  appendFileSync(logPath, `[worker] sdk session starting for ${issue.ref}\n`);
+
+  const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
+  import(runnerPath)
+    .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
+      mod.runSdkSession({
+        prompt: buildPrompt(issue.ref, opts),
+        cwd: repo,
+        switchyardUrl: config.url,
+        switchyardToken: process.env.SWITCHYARD_TOKEN ?? "",
+        allowedTools,
+        logPath,
+      }),
+    )
+    .then(
+      (code) => {
+        console.log(`${issue.ref} sdk session finished with code ${code}`);
+        appendFileSync(logPath, `[worker] exited with code ${code}\n`);
+      },
+      (err: Error) => {
+        console.error(`sdk dispatch failed for ${issue.ref}: ${err.message}`);
+        appendFileSync(
+          logPath,
+          `[worker] sdk dispatch failed: ${err.message}\n` +
+          `[worker] is worker-sdk installed? run: npm install --prefix worker-sdk\n`,
+        );
+      },
+    )
+    .finally(() => active.delete(issue.ref));
 }
 
 async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
