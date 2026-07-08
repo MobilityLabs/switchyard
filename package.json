@@ -9,7 +9,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",
     "db:generate": "drizzle-kit generate",
-    "deploy": "sh scripts/deploy-nas.sh"
+    "deploy": "sh scripts/deploy-nas.sh",
+    "build:worker-image": "docker build -f Dockerfile.worker -t switchyard-worker ."
   },
   "dependencies": {
     "@hono/node-server": "^2.0.8",
