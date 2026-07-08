@@ -4,6 +4,7 @@ import type { Actor } from "./types";
 import { useRoute } from "./router";
 import { usePoll } from "./usePoll";
 import Shell from "./Shell";
+import Triage from "./views/Triage";
 
 export default function App() {
   const [me, setMe] = useState<Actor | null>(null);
@@ -36,7 +37,7 @@ function ShellRouter({ me }: { me: Actor }) {
   const projects = usePoll(listProjects, []);
   return (
     <Shell me={me} projects={projects.data ?? []}>
-      {route.view === "triage" && <p>triage view</p>}
+      {route.view === "triage" && <Triage />}
       {route.view === "board" && <p>board: {route.project}</p>}
       {route.view === "issue" && <p>issue: {route.ref}</p>}
     </Shell>
