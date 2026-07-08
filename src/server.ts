@@ -62,4 +62,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const { openDb } = await import("./db/index.js");
   const db = openDb(process.env.SWITCHYARD_DB ?? "switchyard.db");
   startServer(db, Number(process.env.PORT ?? 3300));
+  const { startWebhookDispatcher } = await import("./services/webhook-dispatcher.js");
+  startWebhookDispatcher(db);
 }
