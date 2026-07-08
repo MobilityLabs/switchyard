@@ -18,3 +18,22 @@ button:hover { border-color: var(--muted); }
 button.primary { background: var(--accent); border-color: var(--accent); color: #14161a; font-weight: 600; }
 button.danger { color: var(--danger); }
 a { color: var(--accent-2); text-decoration: none; }
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+  position: sticky; top: 0;
+}
+.logo { font-weight: 700; letter-spacing: 0.3px; color: var(--accent); }
+.topbar nav { display: flex; gap: 12px; }
+.topbar nav a { color: var(--muted); padding: 4px 8px; border-radius: 6px; }
+.topbar nav a.active { color: var(--text); background: var(--panel-2); }
+.topbar select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px;
+}
+.spacer { flex: 1; }
+.badge {
+  font-size: 12px; padding: 2px 8px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+}
+.content { padding: 20px; max-width: 1200px; margin: 0 auto; }

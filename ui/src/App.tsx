@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
-import { getMe, ApiError } from "./api";
+import { getMe, ApiError, listProjects, logout } from "./api";
 import type { Actor } from "./types";
+import { useRoute } from "./router";
+import { usePoll } from "./usePoll";
+import Shell from "./Shell";
 
 export default function App() {
   const [me, setMe] = useState<Actor | null>(null);
@@ -23,5 +26,19 @@ export default function App() {
       </main>
     );
   }
-  return <main className="center"><p>hello {me.name}</p></main>;
+  return (
+    <ShellRouter me={me} />
+  );
+}
+
+function ShellRouter({ me }: { me: Actor }) {
+  const route = useRoute();
+  const projects = usePoll(listProjects, []);
+  return (
+    <Shell me={me} projects={projects.data ?? []}>
+      {route.view === "triage" && <p>triage view</p>}
+      {route.view === "board" && <p>board: {route.project}</p>}
+      {route.view === "issue" && <p>issue: {route.ref}</p>}
+    </Shell>
+  );
 }
