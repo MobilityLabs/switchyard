@@ -31,6 +31,9 @@ export const issueUpdateBody = z.object({
 
 export const commentBody = z.object({ body: z.string() });
 export const dependencyBody = z.object({ blockerRef: z.string(), blockedRef: z.string() });
+export const requestInputBody = z.object({ question: z.string() });
+export const snoozeBody = z.object({ until: z.number().int().positive() });
+export const duplicateBody = z.object({ of: z.string() });
 export const webhookCreateBody = z.object({
   url: z.string(),
   projectKey: z.string().optional(),

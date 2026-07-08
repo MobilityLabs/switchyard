@@ -11,6 +11,7 @@ import {
 import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
+import { requestHumanInput } from "../services/needs-input.js";
 
 type ToolResult = {
   content: { type: "text"; text: string }[];
@@ -65,12 +66,17 @@ export function buildMcpServer(db: Db, actor: Actor): McpServer {
         assignee: z.string().optional(),
         label: z.string().optional(),
         text: z.string().optional(),
+        needs_input: z.boolean().optional(),
       },
     },
-    guard((a: { project_key?: string; status?: (typeof STATUSES)[number]; assignee?: string; label?: string; text?: string }) =>
+    guard((a: {
+      project_key?: string; status?: (typeof STATUSES)[number]; assignee?: string;
+      label?: string; text?: string; needs_input?: boolean;
+    }) =>
       searchIssues(db, {
         projectKey: a.project_key, status: a.status,
         assigneeName: a.assignee, label: a.label, text: a.text,
+        needsInput: a.needs_input,
       })
     )
   );
@@ -181,6 +187,18 @@ export function buildMcpServer(db: Db, actor: Actor): McpServer {
   );
 
   server.registerTool(
+    "request_human_input",
+    {
+      description:
+        "Escalate a question on an issue you are working: sets the needs-input flag and posts your " +
+        "question as a comment so humans see it in their inbox. Use this instead of guessing when " +
+        "blocked on a decision only a human can make. The flag clears when a human replies or changes status.",
+      inputSchema: { ref: z.string(), question: z.string() },
+    },
+    guard(({ ref, question }: { ref: string; question: string }) => requestHumanInput(db, actor, ref, question))
+  );
+
+  server.registerTool(
     "add_dependency",
     {
       description:
@@ -201,10 +219,10 @@ export function buildMcpServer(db: Db, actor: Actor): McpServer {
         "List issues waiting in triage (agent-filed, pending human review), with provenance. Use " +
         "when a human asks you to help triage: suggest duplicates, priorities, and merges — but " +
         "the accept/dismiss decision is theirs.",
-      inputSchema: { project_key: z.string().optional() },
+      inputSchema: { project_key: z.string().optional(), include_snoozed: z.boolean().optional() },
     },
-    guard(({ project_key }: { project_key?: string }) =>
-      searchIssues(db, { projectKey: project_key, status: "triage" })
+    guard(({ project_key, include_snoozed }: { project_key?: string; include_snoozed?: boolean }) =>
+      searchIssues(db, { projectKey: project_key, status: "triage", excludeSnoozed: !include_snoozed })
     )
   );
 

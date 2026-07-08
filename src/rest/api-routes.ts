@@ -12,6 +12,8 @@ import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issu
 import { addDependency, nextTask } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
+import { requestHumanInput } from "../services/needs-input.js";
+import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
 import {
   body,
@@ -22,6 +24,9 @@ import {
   dependencyBody,
   webhookCreateBody,
   webhookPatchBody,
+  requestInputBody,
+  snoozeBody,
+  duplicateBody,
 } from "./schemas.js";
 
 type Env = { Variables: { actor: Actor } };
@@ -65,6 +70,8 @@ export function buildApiRoutes(db: Db) {
       assigneeName: c.req.query("assignee") || undefined,
       label: c.req.query("label") || undefined,
       text: c.req.query("text") || undefined,
+      needsInput: c.req.query("needs_input") === "true" ? true : undefined,
+      excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
     }))
   );
 
@@ -87,6 +94,18 @@ export function buildApiRoutes(db: Db) {
     addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);
     return c.json({ ok: true });
   });
+
+  app.post("/issues/:ref/request-input", body(requestInputBody), (c) =>
+    c.json(requestHumanInput(db, c.var.actor, c.req.param("ref"), c.req.valid("json").question))
+  );
+
+  app.post("/issues/:ref/snooze", body(snoozeBody), (c) =>
+    c.json(snoozeIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").until))
+  );
+
+  app.post("/issues/:ref/duplicate", body(duplicateBody), (c) =>
+    c.json(markDuplicate(db, c.var.actor, c.req.param("ref"), c.req.valid("json").of))
+  );
 
   app.get("/next-task", (c) => c.json(nextTask(db, c.var.actor, c.req.query("project") || undefined)));
 

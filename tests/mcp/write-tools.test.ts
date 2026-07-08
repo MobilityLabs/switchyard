@@ -5,6 +5,7 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { getIssue } from "../../src/services/issues.js";
+import { snoozeIssue } from "../../src/services/triage-actions.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
 let db: Db, human: Actor, agent: Actor, client: Client;
@@ -100,5 +101,75 @@ describe("MCP write tools", () => {
     const queue = JSON.parse(text(r));
     expect(queue).toHaveLength(1);
     expect(queue[0].sourceType).toBe("manual");
+  });
+
+  it("triage_queue excludes snoozed issues by default and includes them with include_snoozed", async () => {
+    await client.callTool({
+      name: "file_issue",
+      arguments: {
+        project_key: "AIPI", title: "Snoozable",
+        description: "Needs a human to confirm scope before scheduling.",
+        source_type: "manual", source_detail: "x",
+      },
+    });
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    snoozeIssue(db, human, "AIPI-1", future);
+
+    const defaultQueue = JSON.parse(text(await client.callTool({ name: "triage_queue", arguments: {} })));
+    expect(defaultQueue).toHaveLength(0);
+
+    const withSnoozed = JSON.parse(text(await client.callTool({
+      name: "triage_queue", arguments: { include_snoozed: true },
+    })));
+    expect(withSnoozed).toHaveLength(1);
+    expect(withSnoozed[0].ref).toBe("AIPI-1");
+  });
+
+  it("request_human_input sets needs-input and clears when a human comments", async () => {
+    await client.callTool({
+      name: "file_issue",
+      arguments: {
+        project_key: "AIPI", title: "Ambiguous requirement",
+        description: "Not sure whether to support multi-tenant here; needs a human decision.",
+        source_type: "manual", source_detail: "x",
+      },
+    });
+    const escalated = JSON.parse(text(await client.callTool({
+      name: "request_human_input",
+      arguments: { ref: "AIPI-1", question: "Should this support multi-tenant configs?" },
+    })));
+    expect(escalated.needsInput).toBe(true);
+
+    const fetched = JSON.parse(text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })));
+    expect(fetched.needsInput).toBe(true);
+    expect(fetched.activity.some((e: { type: string }) => e.type === "needs_input_set")).toBe(true);
+    expect(fetched.activity.some((e: { type: string; payload: { body: string } }) =>
+      e.type === "comment" && e.payload.body === "Should this support multi-tenant configs?"
+    )).toBe(true);
+
+    const humanClient = await connect(human);
+    await humanClient.callTool({ name: "comment", arguments: { ref: "AIPI-1", body: "No, single-tenant is fine." } });
+
+    const cleared = JSON.parse(text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })));
+    expect(cleared.needsInput).toBe(false);
+  });
+
+  it("search_issues supports needs_input filter", async () => {
+    await client.callTool({
+      name: "file_issue",
+      arguments: {
+        project_key: "AIPI", title: "Blocked on decision",
+        description: "Needs a human decision before proceeding.",
+        source_type: "manual", source_detail: "x",
+      },
+    });
+    await client.callTool({
+      name: "request_human_input",
+      arguments: { ref: "AIPI-1", question: "Which approach?" },
+    });
+    const r = await client.callTool({ name: "search_issues", arguments: { needs_input: true } });
+    const results = JSON.parse(text(r));
+    expect(results).toHaveLength(1);
+    expect(results[0].ref).toBe("AIPI-1");
   });
 });
