@@ -85,7 +85,25 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   }
 
   // Runner prerequisites
-  if (config?.containerized) {
+  if (config && (config.runner ?? "cli") === "sdk") {
+    const sdkInstalled = existsSync(
+      path.join(repoRoot, "worker-sdk", "node_modules", "@anthropic-ai", "claude-agent-sdk")
+    );
+    results.push({
+      name: "worker-sdk installed",
+      ok: sdkInstalled,
+      note: sdkInstalled ? undefined : "run: npm install --prefix worker-sdk",
+    });
+    const hasClaudeAuth = Boolean(env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY);
+    results.push({
+      name: "CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY)",
+      ok: true,
+      warn: !hasClaudeAuth,
+      note: hasClaudeAuth
+        ? "in .env / environment"
+        : "not set — SDK sessions fall back to the local claude login",
+    });
+  } else if (config?.containerized) {
     const hasDocker = commandExists("docker");
     results.push({ name: "docker CLI", ok: hasDocker });
     if (hasDocker) {

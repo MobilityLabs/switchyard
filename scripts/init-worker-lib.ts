@@ -46,6 +46,13 @@ export function validateWorkerConfig(raw: unknown): string[] {
   if (c.containerized !== undefined && typeof c.containerized !== "boolean") {
     problems.push("`containerized` must be true or false, not a string");
   }
+  const runner = c.runner ?? "cli";
+  if (runner !== "cli" && runner !== "sdk") {
+    problems.push('`runner` must be "cli" or "sdk"');
+  }
+  if (runner === "sdk" && c.containerized === true) {
+    problems.push('`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)');
+  }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
   }

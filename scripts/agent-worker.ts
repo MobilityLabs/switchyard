@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseDotEnv } from "./init-worker-lib.js";
+import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import {
   selectDispatchable,
   filterRetryCapped,
@@ -43,7 +43,10 @@ type ApiIssue = WorkerIssue & { title: string };
 
 const DEFAULT_EVENT_POLL_SECONDS = 15;
 
-const active = new Map<string, ChildProcess>();
+// Ref -> running session. CLI dispatches hold their ChildProcess; SDK
+// dispatches run in-process, so a marker is enough — the map only feeds
+// maxConcurrent accounting and duplicate suppression.
+const active = new Map<string, ChildProcess | "sdk">();
 const retryState = new Map<string, RetryState>();
 // Refs whose escalation was just answered — their next dispatch gets a prompt
 // primed to read the answer. Populated by the event poll, consumed by tick().
@@ -109,7 +112,15 @@ function loadConfig(configPath: string): WorkerConfig {
       `Missing ${configPath} — copy switchyard-worker.example.json to switchyard-worker.json and edit it.`
     );
   }
-  return JSON.parse(readFileSync(configPath, "utf8")) as WorkerConfig;
+  const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
+  // Refuse to start on a bad config rather than silently degrade — e.g.
+  // runner:"sdk" + containerized:true would otherwise drop the Docker sandbox
+  // the user thought they configured.
+  const problems = validateWorkerConfig(raw);
+  if (problems.length > 0) {
+    throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
+  }
+  return raw as WorkerConfig;
 }
 
 async function fetchReadyIssues(config: WorkerConfig, token: string): Promise<ApiIssue[]> {
@@ -138,11 +149,17 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
   );
 }
 
-function dispatch(issue: ApiIssue, config: WorkerConfig, opts: { resumed?: boolean } = {}): void {
+function dispatch(issue: ApiIssue, config: WorkerConfig, token: string, opts: { resumed?: boolean } = {}): void {
   const project = config.projects[projectKeyOf(issue.ref)];
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${issue.ref}.log`);
+
+  if ((config.runner ?? "cli") === "sdk") {
+    dispatchSdk(issue, project.repo, config, token, logPath, opts);
+    return;
+  }
+
   const fd = openSync(logPath, "a");
 
   let child: ChildProcess;
@@ -199,6 +216,65 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, opts: { resumed?: boole
   });
 }
 
+/**
+ * In-process dispatch through the Claude Agent SDK (runner: "sdk"). The
+ * runner module is imported via a runtime-computed path so machines running
+ * CLI mode — and the main `tsc` pass / server Docker image — never depend on
+ * worker-sdk/ being installed.
+ */
+function dispatchSdk(
+  issue: ApiIssue,
+  repo: string,
+  config: WorkerConfig,
+  token: string,
+  logPath: string,
+  opts: { resumed?: boolean },
+): void {
+  const allowedTools =
+    config.allowedTools ?? ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+  // A log-write failure (dir deleted, disk full) must never leak the active
+  // slot or reject the chain — one bad append would otherwise crash the whole
+  // worker via an unhandled rejection.
+  const safeAppend = (text: string) => {
+    try {
+      appendFileSync(logPath, text);
+    } catch (err) {
+      console.error(`could not write ${logPath}: ${(err as Error).message}`);
+    }
+  };
+  active.set(issue.ref, "sdk");
+  console.log(`dispatched ${issue.ref} (sdk session) -> ${logPath}`);
+  safeAppend(`[worker] sdk session starting for ${issue.ref}\n`);
+
+  const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
+  import(runnerPath)
+    .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
+      mod.runSdkSession({
+        prompt: buildPrompt(issue.ref, opts),
+        cwd: repo,
+        switchyardUrl: config.url,
+        switchyardToken: token,
+        allowedTools,
+        logPath,
+      }),
+    )
+    .then(
+      (code) => {
+        console.log(`${issue.ref} sdk session finished with code ${code}`);
+        safeAppend(`[worker] exited with code ${code}\n`);
+      },
+      (err: Error) => {
+        console.error(`sdk dispatch failed for ${issue.ref}: ${err.message}`);
+        safeAppend(
+          `[worker] sdk dispatch failed: ${err.message}\n` +
+          `[worker] is worker-sdk installed? run: npm install --prefix worker-sdk\n`,
+        );
+      },
+    )
+    .catch((err: Error) => console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`))
+    .finally(() => active.delete(issue.ref));
+}
+
 async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
   // The event poll can trigger a tick while the interval tick is mid-fetch;
   // never let two ticks select (and double-dispatch) concurrently. runGated
@@ -224,7 +300,7 @@ async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean
       if (opts.dryRun) {
         console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
       } else {
-        dispatch(issue, config, { resumed });
+        dispatch(issue, config, token, { resumed });
       }
     }
   });

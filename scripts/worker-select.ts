@@ -26,6 +26,12 @@ export type WorkerConfig = {
   containerized?: boolean;
   /** Image to run when `containerized` is set. Defaults to "switchyard-worker". */
   image?: string;
+  /**
+   * How sessions are spun up: "cli" shells out to `claude -p` (bare or in
+   * Docker per `containerized`); "sdk" runs in-process via the Claude Agent
+   * SDK (worker-sdk/ must be installed; incompatible with `containerized`).
+   */
+  runner?: "cli" | "sdk";
 };
 
 const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
