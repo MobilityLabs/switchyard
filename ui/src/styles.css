@@ -94,6 +94,10 @@ h2 { display: flex; align-items: center; gap: 8px; }
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
 .badge.warn { color: var(--warn); border-color: var(--warn); }
+.banner.warn {
+  background: color-mix(in srgb, var(--warn) 15%, var(--panel)); border: 1px solid var(--warn);
+  border-radius: var(--radius); padding: 8px 12px; margin: 0 0 12px;
+}
 .needs-input-lane { margin-bottom: 22px; }
 .needs-input-row {
   background: var(--panel); border: 1px solid var(--warn); border-radius: var(--radius);

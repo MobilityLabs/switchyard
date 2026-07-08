@@ -63,6 +63,7 @@ function Card({ issue }: { issue: Issue }) {
       <a className="ref" href={`#/issue/${issue.ref}`}>{issue.ref}</a>
       <p>{issue.title}</p>
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
+      {issue.needsInput && <span className="badge warn">⚠ input</span>}
     </article>
   );
 }

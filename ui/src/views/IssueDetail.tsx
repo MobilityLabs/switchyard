@@ -37,6 +37,9 @@ export default function IssueDetail({ refId }: { refId: string }) {
           {data.sourceUrl && <> · <a href={data.sourceUrl} target="_blank" rel="noreferrer">link</a></>}
         </div>
       )}
+      {data.needsInput && (
+        <p className="banner warn">⚠ An agent is waiting on a human answer — reply in a comment below.</p>
+      )}
       {data.description
         ? <pre className="description panel">{data.description}</pre>
         : <p className="empty">No description.</p>}
