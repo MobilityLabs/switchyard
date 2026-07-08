@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getMe, ApiError, listProjects } from "./api";
 import type { Actor } from "./types";
-import { useRoute } from "./router";
+import { isKnownPath, navigate, useRoute } from "./router";
 import { usePoll } from "./usePoll";
 import Shell from "./Shell";
 import Triage from "./views/Triage";
@@ -9,9 +9,37 @@ import Board from "./views/Board";
 import IssueDetail from "./views/IssueDetail";
 import Review from "./views/Review";
 
+// Intercepts clicks on same-origin anchors that point at a known client
+// route and hands them to the History-API router instead of a full page
+// load. Installed once at the app root, capture-phase, so it sees the click
+// before any per-view onClick handler. Anchors it doesn't recognize (external
+// links, target=_blank markdown/design-embed links, modified clicks) pass
+// through untouched.
+function useInternalLinkInterceptor() {
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (e.defaultPrevented || e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const anchor = (e.target as HTMLElement).closest("a");
+      if (!anchor) return;
+      if (anchor.target && anchor.target !== "_self") return;
+      if (anchor.hasAttribute("download")) return;
+      const url = new URL(anchor.href, location.href);
+      if (url.origin !== location.origin) return;
+      if (!isKnownPath(url.pathname)) return;
+      e.preventDefault();
+      navigate(url.pathname);
+    }
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, []);
+}
+
 export default function App() {
   const [me, setMe] = useState<Actor | null>(null);
   const [authState, setAuthState] = useState<"loading" | "out" | "in" | "error">("loading");
+
+  useInternalLinkInterceptor();
 
   useEffect(() => {
     getMe()

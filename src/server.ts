@@ -3,11 +3,30 @@ import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { toReqRes, toFetchResponse } from "fetch-to-node";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import type { Db } from "./db/index.js";
 import { authenticate } from "./services/actors.js";
 import { buildMcpServer } from "./mcp/server.js";
 import { buildAuthRoutes } from "./rest/auth-routes.js";
 import { buildApiRoutes } from "./rest/api-routes.js";
+
+// Paths the client-side router never owns — anything under these should 404
+// as JSON (or be handled by their own route) rather than fall back to the SPA shell.
+const SPA_EXCLUDED_PREFIXES = ["/api", "/auth", "/mcp", "/health", "/attachments"];
+
+// Cached lazily: undefined = not yet attempted, null = build missing.
+let cachedIndexHtml: string | null | undefined;
+
+async function loadIndexHtml(): Promise<string | null> {
+  if (cachedIndexHtml !== undefined) return cachedIndexHtml;
+  try {
+    cachedIndexHtml = await fs.readFile(path.join("./dist/ui", "index.html"), "utf-8");
+  } catch {
+    cachedIndexHtml = null;
+  }
+  return cachedIndexHtml;
+}
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -54,6 +73,22 @@ export function createApp(db: Db) {
   );
 
   app.use("/*", serveStatic({ root: "./dist/ui" }));
+
+  // SPA fallback: any GET that isn't a static asset, an API/auth/mcp/health/
+  // attachments route, and has no file extension (e.g. /issue/SYD-1, /board/SYD,
+  // /review) gets the client shell so the History-API router can take over.
+  app.get("*", async (c) => {
+    const p = c.req.path;
+    if (SPA_EXCLUDED_PREFIXES.some((prefix) => p === prefix || p.startsWith(`${prefix}/`))) {
+      return c.notFound();
+    }
+    if (path.extname(p)) return c.notFound();
+    const html = await loadIndexHtml();
+    if (html === null) {
+      return c.json({ error: "UI build not found — run `npm run build:ui` first." }, 404);
+    }
+    return c.html(html);
+  });
 
   return app;
 }

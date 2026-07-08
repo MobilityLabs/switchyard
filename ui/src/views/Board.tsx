@@ -2,6 +2,7 @@ import { useState } from "react";
 import { listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
+import { href, navigate } from "../router";
 import type { Issue, Status } from "../types";
 
 const BOARD_COLUMNS: Status[] = ["backlog", "todo", "in_progress", "in_review", "done"];
@@ -60,12 +61,13 @@ function Card({ issue }: { issue: Issue }) {
       draggable
       onDragStart={(e) => e.dataTransfer.setData("text/plain", issue.ref)}
       onClick={(e) => {
-        // Whole card opens the issue; anchors inside keep native behavior.
+        // Whole card opens the issue; anchors inside keep native behavior
+        // (the App-level interceptor handles the ref link itself).
         if ((e.target as HTMLElement).closest("a")) return;
-        location.hash = `#/issue/${issue.ref}`;
+        navigate({ view: "issue", ref: issue.ref });
       }}
     >
-      <a className="ref" href={`#/issue/${issue.ref}`}>{issue.ref}</a>
+      <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
       <p>{issue.title}</p>
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
       {issue.needsInput && <span className="badge warn">⚠ input</span>}

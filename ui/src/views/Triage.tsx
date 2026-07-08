@@ -2,6 +2,7 @@ import { useState } from "react";
 import { listActors, listIssues, markDuplicate, snoozeIssue, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
+import { href } from "../router";
 import { PRIORITIES, type Issue, type Priority } from "../types";
 import { Markdown } from "../Markdown";
 import { projectKeyFromRef } from "./IssueDetail";
@@ -42,7 +43,7 @@ export default function Triage() {
           <h2>Waiting on humans <span className="badge warn">{needsInput.data.length}</span></h2>
           {needsInput.data.map((issue) => (
             <article key={issue.ref} className="needs-input-row">
-              <a className="ref" href={`#/issue/${issue.ref}`}>{issue.ref}</a>
+              <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
               <span className="title">{issue.title}</span>
               <span className="hint">has a question — open to answer</span>
               <span className="assignee">{actorNames.get(issue.assigneeId ?? -1) ?? "unassigned"}</span>
@@ -68,7 +69,7 @@ function TriageRow({
   return (
     <article className="triage-row">
       <div className="triage-main">
-        <a className="ref" href={`#/issue/${issue.ref}`}>{issue.ref}</a>
+        <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
         <span className="title">{issue.title}</span>
         <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
         {issue.labels.length > 0 && (
