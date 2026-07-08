@@ -15,6 +15,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const getMe = () => api<Actor>("/api/me");
+export const listActors = () => api<Actor[]>("/api/actors");
 export const listProjects = () => api<Project[]>("/api/projects");
 export const listIssues = (filters: { project?: string; status?: Status } = {}) => {
   const q = new URLSearchParams();
