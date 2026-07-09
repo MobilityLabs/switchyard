@@ -35,6 +35,7 @@ export default function Triage() {
   if (!data) return <p>Loading…</p>;
 
   const actorNames = new Map((actors.data ?? []).map((a) => [a.id, a.name]));
+  const actorNameList = (actors.data ?? []).map((a) => a.name);
 
   return (
     <section className="triage">
@@ -67,6 +68,7 @@ export default function Triage() {
               issue={issue}
               act={act}
               creatorName={actorNames.get(issue.creatorId)}
+              knownActorNames={actorNameList}
               expanded={expandedRef === issue.ref}
               onToggleExpand={() => toggleExpanded(issue.ref)}
             />
@@ -76,11 +78,12 @@ export default function Triage() {
 }
 
 function TriageRow({
-  issue, act, creatorName, expanded, onToggleExpand,
+  issue, act, creatorName, knownActorNames, expanded, onToggleExpand,
 }: {
   issue: Issue;
   act: (fn: () => Promise<unknown>) => void;
   creatorName?: string;
+  knownActorNames: readonly string[];
   expanded: boolean;
   onToggleExpand: () => void;
 }) {
@@ -131,7 +134,7 @@ function TriageRow({
       </div>
       {issue.description && (
         <div className="triage-desc">
-          <Markdown text={issue.description} projectKey={projectKey} />
+          <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
         </div>
       )}
       <div className="provenance">
@@ -143,14 +146,20 @@ function TriageRow({
       {expanded && (
         <div className="triage-expanded">
           {issue.description
-            ? <div className="description panel"><Markdown text={issue.description} projectKey={projectKey} /></div>
+            ? (
+              <div className="description panel">
+                <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
+              </div>
+            )
             : <p className="empty">No description.</p>}
           {issue.description && <DesignEmbeds text={issue.description} />}
 
           <h4>Activity</h4>
           <div className="activity triage-activity">
             {detail.data
-              ? detail.data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} />)
+              ? detail.data.activity.map((ev, i) => (
+                <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={knownActorNames} />
+              ))
               : <p className="empty">Loading activity…</p>}
           </div>
 

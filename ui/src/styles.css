@@ -113,6 +113,14 @@ h2 { display: flex; align-items: center; gap: 8px; }
 .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 8px; }
 .markdown img { max-width: 100%; border-radius: var(--radius); }
 .markdown video { max-width: 100%; border-radius: var(--radius); display: block; margin-top: 6px; }
+.mention {
+  background: color-mix(in srgb, var(--accent-2) 18%, transparent);
+  color: var(--accent-2); border-radius: 999px; padding: 0 6px; font-weight: 600;
+}
+.mention-lead {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent); border: 1px solid var(--accent);
+}
 
 .design-embeds { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .design-embed header { display: flex; align-items: center; gap: 10px; }
