@@ -47,13 +47,73 @@ export type WorkerConfig = {
   delivery?: DeliveryConfig;
   /** Answerer mode (SYD-56): max answer sessions dispatched per issue ref, ever (default 3). */
   maxAnswersPerIssue?: number;
+  /**
+   * Role split (SYD-67): max answer sessions running at once, independent of
+   * `maxConcurrent` (which governs code-dispatch capacity only). Default 2.
+   */
+  maxAnswerConcurrent?: number;
 };
 
 const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
 const DEFAULT_WORKER_IMAGE = "switchyard-worker";
+export const DEFAULT_MAX_ANSWER_CONCURRENT = 2;
 
 export function projectKeyOf(ref: string): string {
   return ref.split("-")[0];
+}
+
+/**
+ * Worker role (SYD-67): which loops a process runs. "code" dispatches
+ * todo-issue work sessions (tick/resume/publish); "answer" services `@agent`
+ * questions (event-poll trigger + the unanswered-questions backstop); "all"
+ * (the default) runs both, preserving pre-split behavior.
+ */
+export type WorkerRole = "code" | "answer" | "all";
+
+export function roleRunsCode(role: WorkerRole): boolean {
+  return role === "code" || role === "all";
+}
+
+export function roleRunsAnswer(role: WorkerRole): boolean {
+  return role === "answer" || role === "all";
+}
+
+/** Parses `--role <code|answer|all>` from argv, defaulting to "all" (pre-split behavior) when absent. */
+export function parseRole(args: string[]): WorkerRole {
+  const idx = args.indexOf("--role");
+  if (idx === -1) return "all";
+  const value = args[idx + 1];
+  if (value !== "code" && value !== "answer" && value !== "all") {
+    throw new Error(`--role must be "code", "answer", or "all" (got ${value ?? "<missing>"})`);
+  }
+  return value;
+}
+
+/** Pidfile basename for a role's single-instance lock — kept distinct so "code" and "answer" can run side by side. */
+export function workerPidFileName(role: WorkerRole): string {
+  return role === "all" ? "worker.pid" : `worker-${role}.pid`;
+}
+
+/**
+ * Guards against overlapping single-role and combined-role workers on the
+ * same machine: an "all" worker would duplicate whatever a single-role
+ * worker is already doing, and vice versa. Same-role overlap is handled by
+ * the ordinary pidfile lock (acquirePidLock). Pure so the exclusion rule is
+ * unit-testable without touching the filesystem.
+ */
+export function checkRoleLockConflict(
+  role: WorkerRole,
+  locked: { all: boolean; code: boolean; answer: boolean }
+): string | null {
+  if (role === "all") {
+    if (locked.code) return "a --role code worker is already running — stop it first, or run this worker with a single role";
+    if (locked.answer) return "a --role answer worker is already running — stop it first, or run this worker with a single role";
+    return null;
+  }
+  if (locked.all) {
+    return "a --role all worker is already running — stop it first, or run this worker without --role";
+  }
+  return null;
 }
 
 /**
@@ -69,7 +129,10 @@ export function selectDispatchable<T extends WorkerIssue>(
   activeRefs: Iterable<string>
 ): T[] {
   const active = new Set(activeRefs);
-  const capacity = config.maxConcurrent - active.size;
+  // maxConcurrent governs code-dispatch capacity only (SYD-67) — answer
+  // sessions (keyed via answerKey) have their own maxAnswerConcurrent pool
+  // and must not eat into it.
+  const capacity = config.maxConcurrent - countWorkActive(active);
   if (capacity <= 0) return [];
 
   const selected: T[] = [];
@@ -179,9 +242,36 @@ export function recordAnswerAttempt(answerState: AnswerState, ref: string): void
   answerState.set(ref, (answerState.get(ref) ?? 0) + 1);
 }
 
+const ANSWER_KEY_SUFFIX = "#answer";
+
 /** Distinct `active` map key for an answer session, so it never collides with a work dispatch on the same ref. */
 export function answerKey(ref: string): string {
-  return `${ref}#answer`;
+  return `${ref}${ANSWER_KEY_SUFFIX}`;
+}
+
+/** Count of `active` keys that are answer sessions (suffixed via answerKey). */
+function countAnswerActive(activeKeys: Iterable<string>): number {
+  let n = 0;
+  for (const key of activeKeys) if (key.endsWith(ANSWER_KEY_SUFFIX)) n++;
+  return n;
+}
+
+/** Count of `active` keys that are code-dispatch (work) sessions — everything that isn't an answer session. */
+function countWorkActive(activeKeys: Iterable<string>): number {
+  let n = 0;
+  for (const key of activeKeys) if (!key.endsWith(ANSWER_KEY_SUFFIX)) n++;
+  return n;
+}
+
+/**
+ * Remaining answer-session capacity under `config.maxAnswerConcurrent`
+ * (default `DEFAULT_MAX_ANSWER_CONCURRENT`) — independent of `maxConcurrent`,
+ * which governs code-dispatch capacity only (SYD-67: answer sessions used to
+ * compete with code dispatch for the same pool, which caused SYD-60
+ * deferrals under load).
+ */
+export function remainingAnswerCapacity(config: WorkerConfig, activeKeys: Iterable<string>): number {
+  return (config.maxAnswerConcurrent ?? DEFAULT_MAX_ANSWER_CONCURRENT) - countAnswerActive(activeKeys);
 }
 
 /**
@@ -190,10 +280,12 @@ export function answerKey(ref: string): string {
  * deferred at capacity or asked while the worker was down) down to the ones
  * the worker should dispatch an answer session for right now: belongs to a
  * configured project, doesn't already have an answer session running,
- * hasn't hit `maxAnswersPerIssue`, and fits within remaining `maxConcurrent`
- * capacity. `activeKeys` is every key currently in the worker's `active`
- * map — work dispatches and answer sessions alike, since they share one
- * capacity pool.
+ * hasn't hit `maxAnswersPerIssue`, and fits within remaining
+ * `maxAnswerConcurrent` capacity — its own pool, separate from the
+ * code-dispatch `maxConcurrent` pool (SYD-67). `activeKeys` is every key
+ * currently in the worker's `active` map — work dispatches and answer
+ * sessions alike — but only the answer-keyed entries count against this
+ * pool.
  */
 export function selectAnswerable(
   refs: string[],
@@ -202,7 +294,7 @@ export function selectAnswerable(
   answerState: ReadonlyMap<string, number>
 ): string[] {
   const active = new Set(activeKeys);
-  const capacity = config.maxConcurrent - active.size;
+  const capacity = remainingAnswerCapacity(config, active);
   if (capacity <= 0) return [];
 
   const eligible = refs.filter(

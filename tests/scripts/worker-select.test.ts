@@ -15,6 +15,13 @@ findResumeRefs,
   runGated,
   answerKey,
   selectAnswerable,
+  remainingAnswerCapacity,
+  roleRunsCode,
+  roleRunsAnswer,
+  parseRole,
+  workerPidFileName,
+  checkRoleLockConflict,
+  DEFAULT_MAX_ANSWER_CONCURRENT,
   type WorkerConfig,
   type WorkerIssue,
   type WorkerProject,
@@ -76,6 +83,12 @@ describe("selectDispatchable", () => {
   it("excludes issues that are already active", () => {
     const issues = [issue({ ref: "SYD-1" }), issue({ ref: "SYD-2" })];
     expect(selectDispatchable(issues, config, ["SYD-1"])).toEqual([issues[1]]);
+  });
+
+  it("does not count active answer sessions against maxConcurrent (SYD-67: separate pools)", () => {
+    const issues = [issue({ ref: "SYD-1" }), issue({ ref: "SYD-2" })];
+    // config.maxConcurrent is 2; two answer sessions are active but that pool is separate.
+    expect(selectDispatchable(issues, config, [answerKey("SYD-8"), answerKey("SYD-9")])).toEqual(issues);
   });
 
   it("returns nothing when already at capacity", () => {
@@ -244,13 +257,16 @@ describe("selectAnswerable", () => {
     expect(selectAnswerable(["SYD-1"], config, ["SYD-1"], new Map())).toEqual(["SYD-1"]);
   });
 
-  it("respects the shared maxConcurrent pool across work and answer sessions", () => {
-    // config.maxConcurrent is 2; one work session and one answer session already active.
-    expect(selectAnswerable(["SYD-2"], config, ["SYD-1", answerKey("SYD-9")], new Map())).toEqual([]);
+  it("answer capacity is independent of active work sessions (SYD-67: no more shared-pool coupling)", () => {
+    // config.maxConcurrent is 2, but that no longer bounds answer capacity —
+    // only maxAnswerConcurrent (default 2) does, and only one answer session
+    // (answerKey("SYD-9")) is active here, so there's still room.
+    expect(selectAnswerable(["SYD-2"], config, ["SYD-1", answerKey("SYD-9")], new Map())).toEqual(["SYD-2"]);
   });
 
-  it("caps the number selected to remaining capacity", () => {
+  it("caps the number selected to remaining maxAnswerConcurrent capacity, ignoring active work sessions", () => {
     const roomy = { ...config, maxConcurrent: 4 };
+    // Two work sessions active — irrelevant to answer capacity (default maxAnswerConcurrent 2).
     expect(selectAnswerable(["SYD-1", "SYD-2", "SYD-3"], roomy, ["SYD-9", "SYD-8"], new Map())).toEqual([
       "SYD-1", "SYD-2",
     ]);
@@ -261,14 +277,105 @@ describe("selectAnswerable", () => {
     expect(selectAnswerable(["SYD-1", "SYD-2"], config, [], state)).toEqual(["SYD-2"]);
   });
 
-  it("returns nothing when already at capacity", () => {
-    expect(selectAnswerable(["SYD-1"], config, ["SYD-8", "SYD-9"], new Map())).toEqual([]);
+  it("returns nothing when already at maxAnswerConcurrent capacity", () => {
+    expect(selectAnswerable(["SYD-1"], config, [answerKey("SYD-8"), answerKey("SYD-9")], new Map())).toEqual([]);
+  });
+
+  it("respects a configured maxAnswerConcurrent", () => {
+    const tight = { ...config, maxAnswerConcurrent: 1 };
+    expect(selectAnswerable(["SYD-1"], tight, [answerKey("SYD-9")], new Map())).toEqual([]);
+  });
+});
+
+describe("remainingAnswerCapacity", () => {
+  it("defaults to DEFAULT_MAX_ANSWER_CONCURRENT when unconfigured", () => {
+    expect(remainingAnswerCapacity(config, [])).toBe(DEFAULT_MAX_ANSWER_CONCURRENT);
+  });
+
+  it("only counts answer-keyed active entries, not work sessions", () => {
+    expect(remainingAnswerCapacity(config, ["SYD-1", "SYD-2", answerKey("SYD-3")])).toBe(
+      DEFAULT_MAX_ANSWER_CONCURRENT - 1
+    );
+  });
+
+  it("respects a configured maxAnswerConcurrent", () => {
+    expect(remainingAnswerCapacity({ ...config, maxAnswerConcurrent: 5 }, [answerKey("SYD-1")])).toBe(4);
   });
 });
 
 describe("answerKey", () => {
   it("suffixes the ref so it never collides with a work-dispatch active key", () => {
     expect(answerKey("SYD-7")).toBe("SYD-7#answer");
+  });
+});
+
+describe("roleRunsCode / roleRunsAnswer", () => {
+  it("all runs both halves", () => {
+    expect(roleRunsCode("all")).toBe(true);
+    expect(roleRunsAnswer("all")).toBe(true);
+  });
+
+  it("code runs only the code half", () => {
+    expect(roleRunsCode("code")).toBe(true);
+    expect(roleRunsAnswer("code")).toBe(false);
+  });
+
+  it("answer runs only the answer half", () => {
+    expect(roleRunsCode("answer")).toBe(false);
+    expect(roleRunsAnswer("answer")).toBe(true);
+  });
+});
+
+describe("parseRole", () => {
+  it("defaults to all when --role is absent", () => {
+    expect(parseRole([])).toBe("all");
+    expect(parseRole(["--once", "--dry-run"])).toBe("all");
+  });
+
+  it("parses --role code / answer / all", () => {
+    expect(parseRole(["--role", "code"])).toBe("code");
+    expect(parseRole(["--role", "answer"])).toBe("answer");
+    expect(parseRole(["--role", "all"])).toBe("all");
+  });
+
+  it("throws on an unknown role value", () => {
+    expect(() => parseRole(["--role", "bogus"])).toThrow(/--role/);
+  });
+
+  it("throws when --role is the last argument with no value", () => {
+    expect(() => parseRole(["--role"])).toThrow(/--role/);
+  });
+});
+
+describe("workerPidFileName", () => {
+  it("uses the bare worker.pid for the all role", () => {
+    expect(workerPidFileName("all")).toBe("worker.pid");
+  });
+
+  it("suffixes single-role pidfiles so they never collide with each other or with all", () => {
+    expect(workerPidFileName("code")).toBe("worker-code.pid");
+    expect(workerPidFileName("answer")).toBe("worker-answer.pid");
+  });
+});
+
+describe("checkRoleLockConflict", () => {
+  it("allows all to start when nothing is locked", () => {
+    expect(checkRoleLockConflict("all", { all: false, code: false, answer: false })).toBeNull();
+  });
+
+  it("refuses all when a single-role worker is already running", () => {
+    expect(checkRoleLockConflict("all", { all: false, code: true, answer: false })).toMatch(/code/);
+    expect(checkRoleLockConflict("all", { all: false, code: false, answer: true })).toMatch(/answer/);
+  });
+
+  it("allows a single role to start alongside the other single role", () => {
+    expect(checkRoleLockConflict("code", { all: false, code: false, answer: true })).toBeNull();
+    expect(checkRoleLockConflict("answer", { all: false, code: true, answer: false })).toBeNull();
+  });
+
+  it("refuses a single role when an all worker is already running", () => {
+    expect(checkRoleLockConflict("code", { all: true, code: false, answer: false })).toMatch(/all/);
+    expect(checkRoleLockConflict("answer", { all: true, code: false, answer: false })).toMatch(/all/);
   });
 });
 

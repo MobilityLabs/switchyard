@@ -103,18 +103,32 @@ project. Both loops read the repo `.env` themselves and each has its own
 launchd installer (KeepAlive, restart-on-crash only):
 
 ```bash
-npm run init-worker -- --install-launchd            # dispatch loop
+npm run init-worker -- --install-launchd            # dispatch + answerer, combined loop
+npm run init-worker -- --install-launchd-code       # dispatch loop only (SYD-67)
+npm run init-worker -- --install-launchd-answer     # answerer loop only (SYD-67)
 npm run init-worker -- --install-launchd-deliver    # delivery gate loop (requires a `delivery` block)
 ```
 
+The combined loop (`--install-launchd`) does both jobs in one process, same
+as before SYD-67. Installing `--install-launchd-code` and
+`--install-launchd-answer` separately runs them as two independent
+processes/pidfiles — e.g. leave the answerer running everywhere (cheap,
+read-only) while disabling code dispatch on a given machine is just
+`launchctl unload ~/Library/LaunchAgents/com.switchyard.worker-code.plist`.
+Running the combined loop alongside either single-role loop is refused at
+startup (each takes its own pidfile lock, and a conflicting role holding its
+lock blocks the other from starting).
+
 Each installer reloads its LaunchAgent if one is already loaded, and refuses
-to load over a loop that's already running by hand (checked via the dispatch
-worker's `pgrep` and the delivery worker's `.superpowers/deliver.pid`). To
-run either ad hoc instead:
+to load over a loop that's already running by hand (checked via the matching
+role's `.superpowers/worker*.pid` and the delivery worker's
+`.superpowers/deliver.pid`). To run any of them ad hoc instead:
 
 ```bash
-SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts   # dispatch loop
-SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts        # delivery gate loop
+SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts                 # combined loop
+SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --role code     # dispatch loop only
+SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --role answer   # answerer loop only
+SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts                      # delivery gate loop
 ```
 
 ### 8. Smoke-test the full gate

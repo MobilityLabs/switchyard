@@ -1,35 +1,47 @@
 // Local-machine poller that dispatches ready Switchyard work to headless Claude
 // Code sessions. Meant to run on Sean's Mac, one process, long-lived.
 //
-//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts            # loop forever
-//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --once     # single tick
-//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --dry-run  # print, don't spawn
+//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts                 # loop forever, both roles
+//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --role code     # dispatch todo issues only
+//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --role answer   # answer @agent questions only
+//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --once          # single tick
+//   SWITCHYARD_TOKEN=... npx tsx scripts/agent-worker.ts --dry-run       # print, don't spawn
+//
+// Role split (SYD-67): "code" and "answer" are independently enableable — the
+// answerer is cheap, read-only, and safe to leave running everywhere; the code
+// role spawns containers that produce PRs and consume real capacity. Each role
+// takes its own pidfile lock (worker.pid / worker-code.pid / worker-answer.pid)
+// so "code" and "answer" can run side by side, but neither can double-run
+// itself, and an "all" worker refuses to start while either single-role worker
+// is running (and vice versa) — see checkRoleLockConflict.
 //
 // Besides the main issue poll (intervalSeconds), a lightweight event-feed poll
 // (eventPollSeconds, default 15s) watches for needs_input_cleared — a human
 // answering an escalation — and re-dispatches that issue within seconds instead
-// of waiting for the next full tick. The same poll also watches for
-// agent_question (SYD-56: a human comment leading with `@agent`) and dispatches
-// a read-only answerer-mode session — it reads the issue/repo and posts a
-// comment, never claims or transitions the issue, and runs on any status
-// (including triage, since answering doesn't bypass the triage gate).
+// of waiting for the next full tick (code role only). The same poll also
+// watches for agent_question (SYD-56: a human comment leading with `@agent`)
+// and dispatches a read-only answerer-mode session (answer role only) — it
+// reads the issue/repo and posts a comment, never claims or transitions the
+// issue, and runs on any status (including triage, since answering doesn't
+// bypass the triage gate).
 //
 // The event poll's agent_question trigger is the fast path, not the guarantee: a
-// question that lands while all maxConcurrent slots are busy would otherwise be
-// silently dropped (SYD-60). The real guarantee is drainUnansweredQuestions, which
+// question that lands while all maxAnswerConcurrent slots are busy would otherwise
+// be silently dropped (SYD-60). The real guarantee is drainUnansweredQuestions, which
 // derives "unanswered" from the event log (GET /api/unanswered-questions — an
 // agent_question with no later agent-actor comment on the same issue) rather than
-// in-memory state, so it's restart-proof. It runs on every full tick and whenever a
-// session slot frees (work or answer session exit), re-dispatching anything still
+// in-memory state, so it's restart-proof. It runs on every full tick (answer role)
+// and whenever an answer session slot frees, re-dispatching anything still
 // unclaimed and under maxAnswersPerIssue.
 //
 // Config: switchyard-worker.json at the repo root (copy switchyard-worker.example.json).
 // Safety model: the "auto" label (or whatever `label` is set to) is the human control
 // point — nothing is dispatched unless a human labels the issue. maxConcurrent caps
-// how many headless sessions can be running at once (shared with answerer-mode
-// sessions); maxAnswersPerIssue additionally caps answer sessions per issue.
-// Dispatched sessions still go through claim -> in_review -> human review; they
-// can never reach `done` themselves.
+// how many code-dispatch sessions can be running at once; maxAnswerConcurrent caps
+// how many answer sessions can be running at once (its own pool, SYD-67 — the two no
+// longer compete for the same slots); maxAnswersPerIssue additionally caps answer
+// sessions per issue. Dispatched sessions still go through claim -> in_review ->
+// human review; they can never reach `done` themselves.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import {
@@ -54,13 +66,21 @@ import {
   runGated,
   answerKey,
   selectAnswerable,
+  parseRole,
+  roleRunsCode,
+  roleRunsAnswer,
+  checkRoleLockConflict,
+  workerPidFileName,
+  remainingAnswerCapacity,
+  DEFAULT_MAX_ANSWER_CONCURRENT,
   type WorkerConfig,
   type WorkerIssue,
   type RetryState,
   type FeedEvent,
   type AnswerState,
+  type WorkerRole,
 } from "./worker-select.js";
-import { acquirePidLock } from "./pidfile.js";
+import { acquirePidLock, isLocked } from "./pidfile.js";
 import { publishAgentBranch } from "./delivery-exec.js";
 import { agentBranch, formatPublishOutcome, type DeliveryEventInput } from "./delivery-lib.js";
 
@@ -70,7 +90,8 @@ const DEFAULT_EVENT_POLL_SECONDS = 15;
 
 // Ref -> running session. CLI dispatches hold their ChildProcess; SDK
 // dispatches run in-process, so a marker is enough — the map only feeds
-// maxConcurrent accounting and duplicate suppression.
+// maxConcurrent / maxAnswerConcurrent accounting (split by key suffix, see
+// answerKey) and duplicate suppression.
 const active = new Map<string, ChildProcess | "sdk">();
 const retryState = new Map<string, RetryState>();
 // Refs whose escalation was just answered — their next dispatch gets a prompt
@@ -180,14 +201,16 @@ function triggerUnansweredDrain(config: WorkerConfig, token: string): void {
   );
 }
 
-function dispatch(issue: ApiIssue, config: WorkerConfig, token: string, opts: { resumed?: boolean } = {}): void {
+function dispatch(
+  issue: ApiIssue, config: WorkerConfig, token: string, role: WorkerRole, opts: { resumed?: boolean } = {}
+): void {
   const project = config.projects[projectKeyOf(issue.ref)];
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${issue.ref}.log`);
 
   if ((config.runner ?? "cli") === "sdk") {
-    dispatchSdk(issue, project.repo, config, token, logPath, opts);
+    dispatchSdk(issue, project.repo, config, token, role, logPath, opts);
     return;
   }
 
@@ -233,7 +256,7 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, token: string, opts: { 
 
   child.on("exit", (code) => {
     active.delete(issue.ref);
-    triggerUnansweredDrain(config, token);
+    if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
     console.log(`${issue.ref} exited with code ${code}`);
     const logLine = (text: string) => {
       try {
@@ -286,6 +309,7 @@ function dispatchSdk(
   repo: string,
   config: WorkerConfig,
   token: string,
+  role: WorkerRole,
   logPath: string,
   opts: { resumed?: boolean },
 ): void {
@@ -333,23 +357,23 @@ function dispatchSdk(
     .catch((err: Error) => console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`))
     .finally(() => {
       active.delete(issue.ref);
-      triggerUnansweredDrain(config, token);
+      if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
     });
 }
 
 /**
- * Dispatches a read-only answerer-mode session (SYD-56) for `ref`: same
- * maxConcurrent pool as work dispatch (shared cost control) plus a
- * per-issue answer cap, restricted to ANSWER_ALLOWED_TOOLS so it cannot
- * claim, transition, or edit anything — it can only read and post a
- * comment. Runs bare-host (never containerized): read-only work doesn't
- * need the branch/push sandbox containerized mode exists for.
+ * Dispatches a read-only answerer-mode session (SYD-56) for `ref`: its own
+ * maxAnswerConcurrent pool, independent of work dispatch's maxConcurrent
+ * (SYD-67), plus a per-issue answer cap, restricted to ANSWER_ALLOWED_TOOLS
+ * so it cannot claim, transition, or edit anything — it can only read and
+ * post a comment. Runs bare-host (never containerized): read-only work
+ * doesn't need the branch/push sandbox containerized mode exists for.
  */
 function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: { dryRun: boolean }): void {
   const key = answerKey(ref);
   if (active.has(key)) return;
-  if (active.size >= config.maxConcurrent) {
-    console.log(`answer session for ${ref} deferred: at maxConcurrent capacity`);
+  if (remainingAnswerCapacity(config, active.keys()) <= 0) {
+    console.log(`answer session for ${ref} deferred: at maxAnswerConcurrent capacity`);
     return;
   }
   if (filterAnswerCapped([ref], answerState, config.maxAnswersPerIssue).length === 0) {
@@ -457,9 +481,9 @@ function dispatchAnswerSdk(
  * Restart-proof backstop for answerer mode (SYD-60): re-derives unanswered
  * @agent questions from the event log via GET /api/unanswered-questions
  * (rather than trusting in-memory state) and dispatches an answer session
- * for each one still eligible. Called on every tick and whenever a session
- * slot frees, so a question deferred at maxConcurrent capacity — or asked
- * while the worker was down or mid-restart — still gets serviced once
+ * for each one still eligible. Called on every tick and whenever an answer
+ * session slot frees, so a question deferred at maxAnswerConcurrent capacity
+ * — or asked while the worker was down or mid-restart — still gets serviced once
  * capacity exists, without depending on the event-poll fast path (pollEvents
  * / findAnswerRefs) having caught the original agent_question event.
  */
@@ -478,34 +502,40 @@ async function drainUnansweredQuestions(config: WorkerConfig, token: string, opt
   }
 }
 
-async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
-  // The event poll can trigger a tick while the interval tick is mid-fetch;
-  // never let two ticks select (and double-dispatch) concurrently. runGated
-  // queues rather than drops a call that arrives mid-tick, so a resume
-  // triggered mid-tick still gets dispatched within seconds via an immediate
-  // re-run instead of waiting for the next periodic tick.
+/**
+ * The periodic poll, filtered by `role` (SYD-67): the code half (fetch
+ * ready issues, dispatch work sessions) only runs for "code"/"all"; the
+ * unanswered-questions recheck only runs for "answer"/"all". A single tick
+ * gate still serializes the whole thing so an event-poll-triggered tick
+ * never races the interval tick, regardless of which halves are active.
+ */
+async function runTick(config: WorkerConfig, token: string, role: WorkerRole, opts: { dryRun: boolean }): Promise<void> {
   await runGated(tickGate, async () => {
-    try {
-      const issues = await fetchReadyIssues(config, token);
-      const eligible = filterRetryCapped(issues, retryState);
-      const selected = selectDispatchable(eligible, config, active.keys());
+    if (roleRunsCode(role)) {
+      try {
+        const issues = await fetchReadyIssues(config, token);
+        const eligible = filterRetryCapped(issues, retryState);
+        const selected = selectDispatchable(eligible, config, active.keys());
 
-      for (const issue of selected) {
-        recordAttempt(retryState, issue.ref, issue.updatedAt);
-        const resumed = resumeRefs.delete(issue.ref);
-        if (opts.dryRun) {
-          console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
-        } else {
-          dispatch(issue, config, token, { resumed });
+        for (const issue of selected) {
+          recordAttempt(retryState, issue.ref, issue.updatedAt);
+          const resumed = resumeRefs.delete(issue.ref);
+          if (opts.dryRun) {
+            console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
+          } else {
+            dispatch(issue, config, token, role, { resumed });
+          }
         }
+      } catch (err) {
+        console.error(`poll failed: ${(err as Error).message}`);
       }
-    } catch (err) {
-      console.error(`poll failed: ${(err as Error).message}`);
     }
     // The recheck runs every tick regardless of whether work dispatch above
     // found anything or failed — it's an independent guarantee, not a
     // continuation of the ready-issues poll.
-    await drainUnansweredQuestions(config, token, opts);
+    if (roleRunsAnswer(role)) {
+      await drainUnansweredQuestions(config, token, opts);
+    }
   });
 }
 
@@ -518,9 +548,12 @@ async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean
  * and primes the resumed session's prompt to read the answer. An
  * agent_question dispatches a read-only answerer-mode session immediately,
  * independent of the issue's status (answering doesn't touch the triage
- * gate — see dispatchAnswer).
+ * gate — see dispatchAnswer). `role` (SYD-67) gates which half acts: a
+ * "code"-only worker never dispatches answer sessions; an "answer"-only
+ * worker never resumes work dispatch. Both scans always run regardless of
+ * role so the shared eventCursor still advances correctly either way.
  */
-async function pollEvents(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
+async function pollEvents(config: WorkerConfig, token: string, role: WorkerRole, opts: { dryRun: boolean }): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/events?limit=100`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
@@ -531,21 +564,52 @@ async function pollEvents(config: WorkerConfig, token: string, opts: { dryRun: b
   const { refs: answerRefs } = findAnswerRefs(feed, config, eventCursor);
   eventCursor = lastEventId;
 
-  for (const ref of answerRefs) {
-    console.log(`question addressed to an agent on ${ref} — dispatching an answer session`);
-    dispatchAnswer(ref, config, token, opts);
+  if (roleRunsAnswer(role)) {
+    for (const ref of answerRefs) {
+      console.log(`question addressed to an agent on ${ref} — dispatching an answer session`);
+      dispatchAnswer(ref, config, token, opts);
+    }
   }
 
-  if (refs.length === 0) return;
-  for (const ref of refs) resumeRefs.add(ref);
-  console.log(`escalation answered on ${refs.join(", ")} — dispatching now`);
-  await tick(config, token, opts);
+  if (roleRunsCode(role) && refs.length > 0) {
+    for (const ref of refs) resumeRefs.add(ref);
+    console.log(`escalation answered on ${refs.join(", ")} — dispatching now`);
+    await runTick(config, token, role, opts);
+  }
+}
+
+/**
+ * Acquires the single-instance pidfile lock for `role` (SYD-67): each role
+ * gets its own pidfile (worker.pid / worker-code.pid / worker-answer.pid) so
+ * "code" and "answer" workers can run side by side, but an "all" worker and
+ * any single-role worker refuse to start together — see
+ * checkRoleLockConflict for the exclusion rule.
+ */
+function acquireRoleLock(role: WorkerRole): () => void {
+  const dir = path.join(repoRoot(), ".superpowers");
+  const paths = {
+    all: path.join(dir, workerPidFileName("all")),
+    code: path.join(dir, workerPidFileName("code")),
+    answer: path.join(dir, workerPidFileName("answer")),
+  };
+  const conflict = checkRoleLockConflict(role, {
+    all: isLocked(paths.all),
+    code: isLocked(paths.code),
+    answer: isLocked(paths.answer),
+  });
+  if (conflict) throw new Error(conflict);
+  const target = role === "all" ? paths.all : role === "code" ? paths.code : paths.answer;
+  return acquirePidLock(
+    target,
+    "stop it first (launchctl unload the matching com.switchyard.worker* LaunchAgent, or kill the pid)"
+  );
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const once = args.includes("--once");
   const dryRun = args.includes("--dry-run");
+  const role = parseRole(args);
 
   loadDotEnv();
   const token = process.env.SWITCHYARD_TOKEN;
@@ -559,26 +623,23 @@ async function main(): Promise<void> {
   if (once) {
     // Single ticks (incl. init-worker's --self-test) may run alongside a live
     // loop — only the loop takes the single-instance lock.
-    await tick(config, token, { dryRun });
+    await runTick(config, token, role, { dryRun });
     return;
   }
 
-  const releaseLock = acquirePidLock(
-    path.join(repoRoot(), ".superpowers", "worker.pid"),
-    "stop it first (launchctl unload ~/Library/LaunchAgents/com.switchyard.worker.plist, or kill the pid)"
-  );
-  await tick(config, token, { dryRun });
+  const releaseLock = acquireRoleLock(role);
+  await runTick(config, token, role, { dryRun });
 
   const eventPollSeconds = config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS;
   console.log(
-    `polling every ${config.intervalSeconds}s, event feed every ${eventPollSeconds}s ` +
-    `(maxConcurrent=${config.maxConcurrent}, label="${config.label}")`
+    `role=${role} polling every ${config.intervalSeconds}s, event feed every ${eventPollSeconds}s ` +
+    `(maxConcurrent=${config.maxConcurrent}, maxAnswerConcurrent=${config.maxAnswerConcurrent ?? DEFAULT_MAX_ANSWER_CONCURRENT}, label="${config.label}")`
   );
   const timer = setInterval(() => {
-    tick(config, token, { dryRun }).catch((err) => console.error(`tick failed: ${(err as Error).message}`));
+    runTick(config, token, role, { dryRun }).catch((err) => console.error(`tick failed: ${(err as Error).message}`));
   }, config.intervalSeconds * 1000);
   const eventTimer = setInterval(() => {
-    pollEvents(config, token, { dryRun }).catch((err) => console.error(`event poll failed: ${(err as Error).message}`));
+    pollEvents(config, token, role, { dryRun }).catch((err) => console.error(`event poll failed: ${(err as Error).message}`));
   }, eventPollSeconds * 1000);
 
   process.on("SIGINT", () => {

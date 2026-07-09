@@ -1,11 +1,20 @@
 // Setup + health-check flow for the local agent worker (SYD-44).
 //
 //   npm run init-worker                                # doctor: check everything, change nothing
-//   npm run init-worker -- --install-launchd           # doctor, then install the worker's KeepAlive LaunchAgent
+//   npm run init-worker -- --install-launchd           # doctor, then install the "all"-role KeepAlive LaunchAgent
+//   npm run init-worker -- --install-launchd-code      # doctor, then install the code-role-only LaunchAgent (SYD-67)
+//   npm run init-worker -- --install-launchd-answer    # doctor, then install the answer-role-only LaunchAgent (SYD-67)
 //   npm run init-worker -- --install-launchd-deliver   # doctor, then install deliver.ts's KeepAlive LaunchAgent
 //   npm run init-worker -- --self-test                 # doctor, then one dry-run worker tick
 //   npm run init-worker -- --protect-main [KEY]        # doctor, then apply branch protection to main
 //                                                       # (all configured projects, or just KEY)
+//
+// Role split (SYD-67): --install-launchd-code and --install-launchd-answer
+// install independent LaunchAgents so code dispatch and answerer mode can be
+// enabled/disabled separately (e.g. `launchctl unload` just the code one).
+// --install-launchd keeps installing the combined "all" role — running "all"
+// alongside a single-role worker is refused at runtime (see
+// checkRoleLockConflict in worker-select.ts), not by this installer.
 //
 // Decision of record (SYD-44): the runner stays basic — `claude -p` headless
 // sessions authenticated by CLAUDE_CODE_OAUTH_TOKEN, no Agent SDK. This script
@@ -17,7 +26,8 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WorkerConfig } from "./worker-select.js";
+import type { WorkerConfig, WorkerRole } from "./worker-select.js";
+import { workerPidFileName } from "./worker-select.js";
 import { isLocked } from "./pidfile.js";
 import {
   buildProtectMainArgs,
@@ -26,10 +36,12 @@ import {
   parseGithubRemote,
   renderDeliverPlist,
   renderWorkerPlist,
+  summarizeRoleStatus,
   validateWorkerConfig,
+  workerLaunchdLabel,
   DELIVER_LAUNCHD_LABEL,
-  WORKER_LAUNCHD_LABEL,
   type CheckResult,
+  type RoleStatus,
 } from "./init-worker-lib.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -229,12 +241,26 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     }
   }
 
+  // Role split (SYD-67): report which of all/code/answer are installed
+  // (LaunchAgent plist present) and/or running (pidfile lock held) so an
+  // operator can see at a glance whether they've e.g. left the answerer
+  // running with the code role disabled on purpose, versus forgotten to
+  // start anything at all.
+  const roles: WorkerRole[] = ["all", "code", "answer"];
+  const roleStatuses: RoleStatus[] = roles.map((role) => ({
+    role,
+    running: isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role))),
+    installed: existsSync(
+      path.join(os.homedir(), "Library", "LaunchAgents", `${workerLaunchdLabel(role)}.plist`)
+    ),
+  }));
+  results.push(summarizeRoleStatus(roleStatuses));
+
   return { results, config };
 }
 
-function workerAlreadyRunning(): boolean {
-  const out = spawnSync("pgrep", ["-f", "tsx scripts/agent-worker.ts"], { encoding: "utf8" });
-  return out.status === 0 && out.stdout.trim() !== "";
+function workerAlreadyRunning(role: WorkerRole): boolean {
+  return isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role)));
 }
 
 function deliverAlreadyRunning(): boolean {
@@ -276,7 +302,15 @@ function installPlist(opts: { label: string; plist: string; alreadyRunning: () =
   console.log(`stop it with: launchctl unload ${dest}`);
 }
 
-function installLaunchd(config: WorkerConfig | null): void {
+/**
+ * Installs the LaunchAgent for `role` (SYD-67: "all" by default, or "code" /
+ * "answer" via --install-launchd-code / --install-launchd-answer). Each role
+ * gets its own label and pidfile, so installing "code" and "answer"
+ * separately runs them side by side; installing "all" on top of either is
+ * left to the runtime lock (checkRoleLockConflict) to refuse, same as
+ * hand-starting the loops would be.
+ */
+function installLaunchd(config: WorkerConfig | null, role: WorkerRole = "all"): void {
   // Bare-host mode shells out to `claude`, which launchd won't find on its
   // minimal PATH (often ~/.local/bin) — resolve it now and pin it in.
   const extraPathDirs: string[] = [];
@@ -290,9 +324,16 @@ function installLaunchd(config: WorkerConfig | null): void {
     nodeBinDir: path.dirname(process.execPath),
     home: os.homedir(),
     extraPathDirs,
+    role,
   });
-  installPlist({ label: WORKER_LAUNCHD_LABEL, plist, alreadyRunning: workerAlreadyRunning, noun: "worker" });
-  console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "launchd.out.log")}`);
+  const logStem = role === "all" ? "launchd" : `launchd-${role}`;
+  installPlist({
+    label: workerLaunchdLabel(role),
+    plist,
+    alreadyRunning: () => workerAlreadyRunning(role),
+    noun: role === "all" ? "worker" : `worker (${role} role)`,
+  });
+  console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", `${logStem}.out.log`)}`);
 }
 
 /** Sibling of installLaunchd for the delivery gate loop (SYD-53) — otherwise deliver.ts has to be started by hand and dies with the terminal. */
@@ -391,7 +432,9 @@ async function main(): Promise<void> {
   console.log("\nall checks passed");
 
   if (args.includes("--self-test")) selfTest();
-  if (args.includes("--install-launchd")) installLaunchd(config);
+  if (args.includes("--install-launchd")) installLaunchd(config, "all");
+  if (args.includes("--install-launchd-code")) installLaunchd(config, "code");
+  if (args.includes("--install-launchd-answer")) installLaunchd(config, "answer");
   if (args.includes("--install-launchd-deliver")) installLaunchdDeliver(config);
 
   const protectIdx = args.indexOf("--protect-main");

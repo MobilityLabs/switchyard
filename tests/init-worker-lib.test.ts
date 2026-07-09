@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   buildProtectMainArgs,
   DELIVER_LAUNCHD_LABEL,
+  WORKER_LAUNCHD_LABEL,
+  WORKER_CODE_LAUNCHD_LABEL,
+  WORKER_ANSWER_LAUNCHD_LABEL,
   formatChecks,
   parseDotEnv,
   parseGithubRemote,
   renderDeliverPlist,
   renderWorkerPlist,
+  summarizeRoleStatus,
   validateWorkerConfig,
+  workerLaunchdLabel,
 } from "../scripts/init-worker-lib.js";
 
 describe("parseDotEnv", () => {
@@ -100,6 +105,14 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, maxAnswersPerIssue: "3" })).toHaveLength(1);
   });
 
+  it("accepts an absent maxAnswerConcurrent and rejects a non-positive-integer one (SYD-67)", () => {
+    expect(validateWorkerConfig(good)).toEqual([]);
+    expect(validateWorkerConfig({ ...good, maxAnswerConcurrent: 2 })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, maxAnswerConcurrent: 0 })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, maxAnswerConcurrent: 1.5 })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, maxAnswerConcurrent: "2" })).toHaveLength(1);
+  });
+
   describe("validateWorkerConfig delivery block", () => {
     const base = {
       url: "http://localhost:3300",
@@ -180,6 +193,81 @@ describe("renderWorkerPlist", () => {
     });
     expect(weird).toContain("<string>/tmp/it's &lt;a&gt;&amp;b/node_modules/.bin/tsx</string>");
     expect(weird).not.toContain("<a>&b");
+  });
+
+  it("omits --role entirely for the default all role, matching pre-split output", () => {
+    expect(plist).not.toContain("--role");
+  });
+
+  describe("role split (SYD-67)", () => {
+    const base = { repoRoot: "/r", nodeBinDir: "/n", home: "/h" };
+
+    it("passes --role code / answer as separate argv entries, and picks the role's label", () => {
+      const code = renderWorkerPlist({ ...base, role: "code" });
+      expect(code).toContain(`<string>${WORKER_CODE_LAUNCHD_LABEL}</string>`);
+      expect(code).toContain("<string>--role</string>");
+      expect(code).toContain("<string>code</string>");
+      expect(code).toContain("<string>/r/scripts/agent-worker.ts</string>");
+
+      const answer = renderWorkerPlist({ ...base, role: "answer" });
+      expect(answer).toContain(`<string>${WORKER_ANSWER_LAUNCHD_LABEL}</string>`);
+      expect(answer).toContain("<string>--role</string>");
+      expect(answer).toContain("<string>answer</string>");
+    });
+
+    it("logs code/answer roles to their own launchd-<role>.{out,err}.log", () => {
+      const code = renderWorkerPlist({ ...base, role: "code" });
+      expect(code).toContain("worker-logs/launchd-code.out.log");
+      expect(code).toContain("worker-logs/launchd-code.err.log");
+    });
+
+    it("role: all is byte-identical to the no-role-passed default", () => {
+      expect(renderWorkerPlist({ ...base, role: "all" })).toBe(renderWorkerPlist(base));
+    });
+  });
+});
+
+describe("workerLaunchdLabel", () => {
+  it("maps each role to a distinct label", () => {
+    expect(workerLaunchdLabel("all")).toBe(WORKER_LAUNCHD_LABEL);
+    expect(workerLaunchdLabel("code")).toBe(WORKER_CODE_LAUNCHD_LABEL);
+    expect(workerLaunchdLabel("answer")).toBe(WORKER_ANSWER_LAUNCHD_LABEL);
+    const labels = new Set([workerLaunchdLabel("all"), workerLaunchdLabel("code"), workerLaunchdLabel("answer")]);
+    expect(labels.size).toBe(3);
+  });
+});
+
+describe("summarizeRoleStatus", () => {
+  it("does not fail when no role is running, but warns", () => {
+    const check = summarizeRoleStatus([
+      { role: "all", running: false, installed: false },
+      { role: "code", running: false, installed: false },
+      { role: "answer", running: false, installed: false },
+    ]);
+    expect(check.ok).toBe(true);
+    expect(check.warn).toBe(true);
+    expect(check.note).toMatch(/nothing is running/i);
+  });
+
+  it("does not warn when at least one role is running", () => {
+    const check = summarizeRoleStatus([
+      { role: "all", running: false, installed: false },
+      { role: "code", running: true, installed: true },
+      { role: "answer", running: false, installed: false },
+    ]);
+    expect(check.warn).toBeFalsy();
+    expect(check.note).toContain("code: running");
+  });
+
+  it("distinguishes installed-but-not-running from not-installed", () => {
+    const check = summarizeRoleStatus([
+      { role: "all", running: false, installed: false },
+      { role: "code", running: false, installed: true },
+      { role: "answer", running: true, installed: true },
+    ]);
+    expect(check.note).toContain("all: not installed");
+    expect(check.note).toContain("code: installed, not running");
+    expect(check.note).toContain("answer: running");
   });
 });
 

@@ -4,6 +4,7 @@
   "intervalSeconds": 300,
   "eventPollSeconds": 15,
   "maxConcurrent": 1,
+  "maxAnswerConcurrent": 2,
   "projects": {
     "SYD": {
       "repo": "/Users/sean/sites/switchyard"
