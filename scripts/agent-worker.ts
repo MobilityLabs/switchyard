@@ -73,6 +73,8 @@ import {
   workerPidFileName,
   remainingAnswerCapacity,
   DEFAULT_MAX_ANSWER_CONCURRENT,
+  withRetry,
+  HttpStatusError,
   type WorkerConfig,
   type WorkerIssue,
   type RetryState,
@@ -143,17 +145,36 @@ function loadConfig(configPath: string): WorkerConfig {
 }
 
 /** Records a structured delivery event (SYD-54) so the issue UI can render a
- * delivery strip — see src/services/delivery-events.ts for the server side. */
+ * delivery strip — see src/services/delivery-events.ts for the server side.
+ * Retries across a self-deploy restart (SYD-66: the tracker is down ~5-15s
+ * during its own deploy, and a write landing in that window used to be
+ * silently lost) and logs the payload if every attempt is exhausted, so the
+ * caller's own catch/log (e.g. the pr_opened handler in dispatch()) still
+ * has the error to report but nothing is lost silently before that. */
 async function postDeliveryEvent(
   config: WorkerConfig, token: string, ref: string, input: DeliveryEventInput
 ): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/delivery-events`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) throw new Error(`POST delivery-events on ${ref} failed: ${res.status} ${await res.text()}`);
+  const label = `POST delivery-events on ${ref}`;
+  try {
+    await withRetry(
+      async () => {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify(input),
+        });
+        if (!res.ok) throw new HttpStatusError(res.status, `${label} failed: ${res.status} ${await res.text()}`);
+      },
+      {
+        onRetry: (attempt, err, delayMs) =>
+          console.error(`retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`),
+      }
+    );
+  } catch (err) {
+    console.error(`giving up on ${label} after retries: ${(err as Error).message}\n  payload: ${JSON.stringify(input)}`);
+    throw err;
+  }
 }
 
 async function fetchReadyIssues(config: WorkerConfig, token: string): Promise<ApiIssue[]> {

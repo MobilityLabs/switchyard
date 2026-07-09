@@ -17,7 +17,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
-import { projectKeyOf, newTickGate, runGated, type WorkerConfig } from "./worker-select.js";
+import {
+  projectKeyOf, newTickGate, runGated, withRetry, HttpStatusError, type WorkerConfig,
+} from "./worker-select.js";
 import {
   findDeliverableRefs,
   feedGap,
@@ -74,14 +76,36 @@ function cloneRootOf(config: WorkerConfig): string {
   return config.delivery?.cloneDir ?? path.join(os.homedir(), ".switchyard", "deliver-clones");
 }
 
+/** Retries the tracker write across a self-deploy restart (SYD-66: the
+ * tracker is down ~5-15s during its own deploy, and a write landing in that
+ * window used to be silently lost). Logs each retry and, if every attempt is
+ * exhausted, logs the payload so it isn't lost silently before rethrowing —
+ * callers keep their existing catch/log handling on top of that. */
+async function postWithRetry(url: string, token: string, label: string, payload: unknown): Promise<void> {
+  try {
+    await withRetry(
+      async () => {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new HttpStatusError(res.status, `${label} failed: ${res.status} ${await res.text()}`);
+      },
+      {
+        onRetry: (attempt, err, delayMs) =>
+          console.error(`retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`),
+      }
+    );
+  } catch (err) {
+    console.error(`giving up on ${label} after retries: ${(err as Error).message}\n  payload: ${JSON.stringify(payload)}`);
+    throw err;
+  }
+}
+
 async function postComment(config: WorkerConfig, token: string, ref: string, body: string): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/comments`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ body }),
-  });
-  if (!res.ok) throw new Error(`POST comment on ${ref} failed: ${res.status} ${await res.text()}`);
+  await postWithRetry(url, token, `POST comment on ${ref}`, { body });
 }
 
 /** Records a structured delivery event (SYD-54) alongside the prose comment
@@ -90,12 +114,7 @@ async function postDeliveryEvent(
   config: WorkerConfig, token: string, ref: string, input: DeliveryEventInput
 ): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/delivery-events`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) throw new Error(`POST delivery-events on ${ref} failed: ${res.status} ${await res.text()}`);
+  await postWithRetry(url, token, `POST delivery-events on ${ref}`, input);
 }
 
 async function deliver(ref: string, config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {
