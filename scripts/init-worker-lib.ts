@@ -252,6 +252,20 @@ export function renderDeliverPlist(opts: {
   });
 }
 
+/**
+ * Extracts the `PATH` launchd would actually see from a rendered plist (see
+ * `renderLaunchdPlist`) — distinct from the doctor process's own shell PATH,
+ * which launchd never inherits. Used by the doctor to verify an installed
+ * LaunchAgent can resolve `claude` (SYD-74: a plist installed while
+ * `containerized` was set used to have no `claude` directory pinned in at
+ * all, so the answer role's bare `claude -p` spawn failed with ENOENT only
+ * once a question actually came in).
+ */
+export function parsePlistPath(plistXml: string): string[] {
+  const m = /<key>PATH<\/key>\s*<string>([^<]*)<\/string>/.exec(plistXml);
+  return m ? m[1].split(":").filter(Boolean) : [];
+}
+
 export type CheckResult = { name: string; ok: boolean; note?: string; warn?: boolean };
 
 export type RoleStatus = { role: WorkerRole; running: boolean; installed: boolean };

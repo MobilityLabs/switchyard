@@ -34,6 +34,7 @@ import {
   formatChecks,
   parseDotEnv,
   parseGithubRemote,
+  parsePlistPath,
   renderDeliverPlist,
   renderWorkerPlist,
   summarizeRoleStatus,
@@ -256,6 +257,27 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   }));
   results.push(summarizeRoleStatus(roleStatuses));
 
+  // SYD-74: for every role actually installed via launchd, verify `claude`
+  // resolves from the plist's own pinned PATH — not this doctor process's
+  // shell PATH, which launchd never sees. Catches a stale or misconfigured
+  // plist (e.g. re-installed before this fix, or `claude` moved since) at
+  // install/doctor time instead of ENOENT the next time a question comes in.
+  for (const status of roleStatuses) {
+    if (!status.installed) continue;
+    const plistPath = path.join(
+      os.homedir(), "Library", "LaunchAgents", `${workerLaunchdLabel(status.role)}.plist`
+    );
+    const dirs = parsePlistPath(readFileSync(plistPath, "utf8"));
+    const found = dirs.some((dir) => existsSync(path.join(dir, "claude")));
+    results.push({
+      name: `${status.role} LaunchAgent PATH resolves claude`,
+      ok: found,
+      note: found
+        ? undefined
+        : `claude not found in plist PATH (${dirs.join(":")}) — re-run --install-launchd${status.role === "all" ? "" : `-${status.role}`}`,
+    });
+  }
+
   return { results, config };
 }
 
@@ -310,14 +332,15 @@ function installPlist(opts: { label: string; plist: string; alreadyRunning: () =
  * left to the runtime lock (checkRoleLockConflict) to refuse, same as
  * hand-starting the loops would be.
  */
-function installLaunchd(config: WorkerConfig | null, role: WorkerRole = "all"): void {
-  // Bare-host mode shells out to `claude`, which launchd won't find on its
-  // minimal PATH (often ~/.local/bin) — resolve it now and pin it in.
+function installLaunchd(role: WorkerRole = "all"): void {
+  // Answer sessions (SYD-56) always shell out to bare `claude -p` on the
+  // host regardless of `containerized` — and bare-host code dispatch needs
+  // it too — so resolve `which claude` unconditionally (SYD-74; this used to
+  // be skipped whenever `containerized` was set, leaving the answer role
+  // with no `claude` on launchd's minimal PATH).
   const extraPathDirs: string[] = [];
-  if (config && !config.containerized) {
-    const which = spawnSync("which", ["claude"], { encoding: "utf8" });
-    if (which.status === 0) extraPathDirs.push(path.dirname(which.stdout.trim()));
-  }
+  const which = spawnSync("which", ["claude"], { encoding: "utf8" });
+  if (which.status === 0) extraPathDirs.push(path.dirname(which.stdout.trim()));
 
   const plist = renderWorkerPlist({
     repoRoot,
@@ -432,9 +455,9 @@ async function main(): Promise<void> {
   console.log("\nall checks passed");
 
   if (args.includes("--self-test")) selfTest();
-  if (args.includes("--install-launchd")) installLaunchd(config, "all");
-  if (args.includes("--install-launchd-code")) installLaunchd(config, "code");
-  if (args.includes("--install-launchd-answer")) installLaunchd(config, "answer");
+  if (args.includes("--install-launchd")) installLaunchd("all");
+  if (args.includes("--install-launchd-code")) installLaunchd("code");
+  if (args.includes("--install-launchd-answer")) installLaunchd("answer");
   if (args.includes("--install-launchd-deliver")) installLaunchdDeliver(config);
 
   const protectIdx = args.indexOf("--protect-main");

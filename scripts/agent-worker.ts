@@ -92,7 +92,7 @@ const DEFAULT_EVENT_POLL_SECONDS = 15;
 // dispatches run in-process, so a marker is enough — the map only feeds
 // maxConcurrent / maxAnswerConcurrent accounting (split by key suffix, see
 // answerKey) and duplicate suppression.
-const active = new Map<string, ChildProcess | "sdk">();
+export const active = new Map<string, ChildProcess | "sdk">();
 const retryState = new Map<string, RetryState>();
 // Refs whose escalation was just answered — their next dispatch gets a prompt
 // primed to read the answer. Populated by the event poll, consumed by tick().
@@ -102,7 +102,7 @@ const tickGate = newTickGate();
 // Answerer mode (SYD-56): count of answer sessions dispatched per ref, kept
 // separate from `active`'s work-session key so an answer and a work session
 // can run concurrently on the same issue.
-const answerState: AnswerState = new Map();
+export const answerState: AnswerState = new Map();
 
 function repoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -369,7 +369,7 @@ function dispatchSdk(
  * post a comment. Runs bare-host (never containerized): read-only work
  * doesn't need the branch/push sandbox containerized mode exists for.
  */
-function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: { dryRun: boolean }): void {
+export function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: { dryRun: boolean }): void {
   const key = answerKey(ref);
   if (active.has(key)) return;
   if (remainingAnswerCapacity(config, active.keys()) <= 0) {
@@ -389,12 +389,12 @@ function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: 
     return;
   }
 
-  recordAnswerAttempt(answerState, ref);
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${ref}.answer.log`);
 
   if ((config.runner ?? "cli") === "sdk") {
+    recordAnswerAttempt(answerState, ref);
     dispatchAnswerSdk(ref, project.repo, config, token, logPath);
     return;
   }
@@ -415,7 +415,17 @@ function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: 
   }
 
   active.set(key, child);
-  console.log(`dispatched answer session for ${ref} (pid ${child.pid}) -> ${logPath}`);
+
+  // `child.pid` is only populated once the OS has actually spawned the
+  // process; reading it synchronously here printed `pid undefined` on a
+  // spawn failure (e.g. ENOENT for a bare `claude` not on launchd's PATH —
+  // SYD-74), since the 'error' event fires on a later tick. Waiting for
+  // 'spawn' also means a failed spawn never reaches recordAnswerAttempt, so
+  // environment errors can't eat the answers-per-issue cap.
+  child.on("spawn", () => {
+    recordAnswerAttempt(answerState, ref);
+    console.log(`dispatched answer session for ${ref} (pid ${child.pid}) -> ${logPath}`);
+  });
 
   child.on("exit", (code) => {
     active.delete(key);
