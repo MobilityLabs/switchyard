@@ -1,16 +1,91 @@
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { Actor, Project } from "./types";
 import { getLastProject, href, navigate, useRoute } from "./router";
-import { logout, listIssues } from "./api";
+import { logout, listIssues, createProject, ApiError } from "./api";
 import { usePoll } from "./usePoll";
+
+const KEY_PATTERN = /^[A-Z]{2,10}$/;
+
+function NewProjectForm(props: { projects: Project[]; onCreated: (p: Project) => void; onCancel: () => void }) {
+  const [key, setKey] = useState("");
+  const [name, setName] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const trimmedName = name.trim();
+  const keyValid = KEY_PATTERN.test(key);
+  const keyTaken = props.projects.some((p) => p.key === key);
+  const canSubmit = keyValid && !keyTaken && trimmedName.length > 0 && !submitting;
+
+  function submit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setError(null);
+    createProject({ key, name: trimmedName }).then(
+      (project) => props.onCreated(project),
+      (e) => { setSubmitting(false); setError(e instanceof ApiError ? e.message : String(e)); },
+    );
+  }
+
+  return (
+    <div className="new-project-popover panel">
+      <form onSubmit={(e) => { e.preventDefault(); submit(); }} onKeyDown={(e) => { if (e.key === "Escape") props.onCancel(); }}>
+        <label>
+          Key
+          <input
+            value={key}
+            onChange={(e) => setKey(e.target.value.toUpperCase())}
+            placeholder="ACME"
+            maxLength={10}
+            autoFocus
+          />
+        </label>
+        {key.length > 0 && !keyValid && <p className="hint">2–10 uppercase letters, e.g. "ACME".</p>}
+        {keyValid && keyTaken && <p className="hint">A project with key "{key}" already exists.</p>}
+        <label>
+          Name
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
+        </label>
+        <p className="banner warn">
+          The key is permanent — issue refs like {key || "KEY"}-1 can never be changed later.
+        </p>
+        {error && <p className="error-bar">{error}</p>}
+        <div className="popover-actions">
+          <button className="primary" type="submit" disabled={!canSubmit}>
+            {submitting ? "Creating…" : "Create project"}
+          </button>
+          <button type="button" onClick={props.onCancel}>Cancel</button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 export default function Shell(props: { me: Actor; projects: Project[]; children: ReactNode }) {
   const route = useRoute();
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [justCreated, setJustCreated] = useState<Project | null>(null);
   const lastProject = getLastProject();
-  const rememberedProject = props.projects.some((p) => p.key === lastProject) ? lastProject : null;
+
+  // Optimistic: the poll that feeds props.projects only refreshes every 15s,
+  // so splice a just-created project into the list immediately and drop the
+  // splice once the real list catches up (avoids ever showing a duplicate).
+  useEffect(() => {
+    if (justCreated && props.projects.some((p) => p.key === justCreated.key)) setJustCreated(null);
+  }, [props.projects, justCreated]);
+  const allProjects = justCreated ? [...props.projects, justCreated] : props.projects;
+
+  const rememberedProject = allProjects.some((p) => p.key === lastProject) ? lastProject : null;
   const currentProject =
-    route.view === "board" ? route.project : rememberedProject ?? props.projects[0]?.key ?? "";
+    route.view === "board" ? route.project : rememberedProject ?? allProjects[0]?.key ?? "";
   const inReview = usePoll(() => listIssues({ status: "in_review" }), [], 30000);
+
+  function onProjectCreated(project: Project) {
+    setJustCreated(project);
+    setShowNewProject(false);
+    navigate({ view: "board", project: project.key });
+  }
 
   return (
     <>
@@ -33,9 +108,19 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
             value={route.project}
             onChange={(e) => navigate({ view: "board", project: e.target.value })}
           >
-            {props.projects.map((p) => <option key={p.key} value={p.key}>{p.key} — {p.name}</option>)}
+            {allProjects.map((p) => <option key={p.key} value={p.key}>{p.key} — {p.name}</option>)}
           </select>
         )}
+        <span className="project-switcher-actions">
+          <button onClick={() => setShowNewProject((v) => !v)}>+ Project</button>
+          {showNewProject && (
+            <NewProjectForm
+              projects={allProjects}
+              onCreated={onProjectCreated}
+              onCancel={() => setShowNewProject(false)}
+            />
+          )}
+        </span>
         <span className="spacer" />
         <button className="primary" onClick={() => navigate({ view: "new-issue" })}>+ New issue</button>
         <span className="badge actor">{props.me.name}</span>
