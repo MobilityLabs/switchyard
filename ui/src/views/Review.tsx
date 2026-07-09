@@ -7,12 +7,14 @@ import type { IssueDetail as IssueDetailType } from "../types";
 import { Event, projectKeyFromRef } from "./IssueDetail";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
+import { useActorNames } from "../useActorNames";
 
 export default function Review() {
   const { data, error, reload } = usePoll(() => listIssues({ status: "in_review" }), []);
   const [index, setIndex] = useState(0);
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const actorNames = useActorNames();
 
   const list = data ?? [];
   const clampedIndex = list.length ? Math.min(index, list.length - 1) : 0;
@@ -125,14 +127,24 @@ export default function Review() {
           )}
 
           {current.description
-            ? <div className="description panel"><Markdown text={current.description} projectKey={projectKeyFromRef(current.ref)} /></div>
+            ? (
+              <div className="description panel">
+                <Markdown
+                  text={current.description}
+                  projectKey={projectKeyFromRef(current.ref)}
+                  knownActorNames={actorNames}
+                />
+              </div>
+            )
             : <p className="empty">No description.</p>}
           {current.description && <DesignEmbeds text={current.description} />}
 
           <h4>Activity</h4>
           <div className="activity">
             {detail.data
-              ? detail.data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKeyFromRef(current.ref)} />)
+              ? detail.data.activity.map((ev, i) => (
+                <Event key={i} ev={ev} projectKey={projectKeyFromRef(current.ref)} knownActorNames={actorNames} />
+              ))
               : <p className="empty">Loading activity…</p>}
           </div>
 

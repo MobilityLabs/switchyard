@@ -4,15 +4,22 @@ import DOMPurify from "dompurify";
 import { PROJECT_REPOS } from "./config";
 
 // Matches, in priority order: a repo-relative file path (optionally with a
-// ":<line>" suffix) or a standalone commit SHA (7-40 hex chars). Applied only
-// to plain-text token leaves from the markdown parser, so fenced/inline code
-// is never touched (those go through marked's separate code/codespan
-// renderers, which we leave untouched).
+// ":<line>" suffix), a standalone commit SHA (7-40 hex chars), or an
+// @mention (word chars plus "./-" so actor names like "claude/dev" match).
+// Applied only to plain-text token leaves from the markdown parser, so
+// fenced/inline code is never touched (those go through marked's separate
+// code/codespan renderers, which we leave untouched).
 const TOKEN_RE = new RegExp(
   "(?<path>\\b(?:src|scripts|tests|ui|docs|drizzle)\\/[\\w./-]+\\.(?:ts|tsx|js|md|json|sql|sh)(?::\\d+)?\\b)" +
-    "|(?<sha>\\b[0-9a-f]{7,40}\\b)",
+    "|(?<sha>\\b[0-9a-f]{7,40}\\b)" +
+    "|@(?<mention>[A-Za-z0-9_]+(?:[./-][A-Za-z0-9_]+)*)",
   "g",
 );
+
+// Convention (SYD-56): a comment whose body leads with "@agent" (case
+// insensitive) summons an answerer session — mirrors AGENT_QUESTION_RE in
+// src/services/comments.ts.
+const LEADING_AGENT_RE = /^@agent\b/i;
 
 function escapeHtml(s: string): string {
   return s
@@ -22,12 +29,26 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// Autolinks a plain-text token. Runs on already-escaped text, so the
-// generated markup is safe even before DOMPurify sees it.
-function autolink(text: string, repo: string | undefined): string {
+// Autolinks and mention-highlights a plain-text token. Runs on
+// already-escaped text, so the generated markup is safe even before
+// DOMPurify sees it. `knownMentions` is a lowercased set of highlightable
+// @targets (the literal "agent" keyword plus known actor names) — anything
+// else is left as plain text, per SYD-57. `leadingSlot` is true only while
+// processing the very first text leaf of the document, so the leading
+// "@agent" summons (and only that occurrence) can get the stronger style.
+function autolink(
+  text: string,
+  repo: string | undefined,
+  knownMentions: Set<string>,
+  leadingSlot: boolean,
+): string {
   const escaped = escapeHtml(text);
   return escaped.replace(TOKEN_RE, (match: string, ...rest: unknown[]) => {
-    const groups = rest[rest.length - 1] as { path?: string; sha?: string };
+    // rest is [...positionalGroups, offset, fullString, namedGroups] — named
+    // capture groups are also numbered, so offset sits three from the end,
+    // not at rest[0].
+    const offset = rest[rest.length - 3] as number;
+    const groups = rest[rest.length - 1] as { path?: string; sha?: string; mention?: string };
     if (groups.path) {
       const lineMatch = /^(.*):(\d+)$/.exec(groups.path);
       const linkPath = lineMatch ? lineMatch[1] : groups.path;
@@ -39,6 +60,13 @@ function autolink(text: string, repo: string | undefined): string {
     if (groups.sha) {
       if (!repo) return `<code>${groups.sha}</code>`;
       return `<a href="${repo}/commit/${groups.sha}"><code>${groups.sha}</code></a>`;
+    }
+    if (groups.mention) {
+      const lower = groups.mention.toLowerCase();
+      if (!knownMentions.has(lower)) return match;
+      const isLeadingAgent = leadingSlot && offset === 0 && lower === "agent";
+      const cls = isLeadingAgent ? "mention mention-lead" : "mention";
+      return `<span class="${cls}">@${groups.mention}</span>`;
     }
     return match;
   });
@@ -115,13 +143,23 @@ function attachVideoPreviews(container: HTMLElement): void {
   }
 }
 
-export function renderMarkdown(text: string, projectKey: string): string {
+export function renderMarkdown(
+  text: string,
+  projectKey: string,
+  knownActorNames: readonly string[] = [],
+): string {
   const repo = PROJECT_REPOS[projectKey];
+  const knownMentions = new Set(knownActorNames.map((n) => n.toLowerCase()));
+  knownMentions.add("agent");
+  const leadingAgent = LEADING_AGENT_RE.test(text.trimStart());
+  let firstLeafSeen = false;
 
   const renderer = new marked.Renderer();
   renderer.text = function (token: Tokens.Text | Tokens.Escape) {
     if ("tokens" in token && token.tokens) return this.parser.parseInline(token.tokens);
-    return autolink(token.text, repo);
+    const isLeadingSlot = leadingAgent && !firstLeafSeen;
+    firstLeafSeen = true;
+    return autolink(token.text, repo, knownMentions, isLeadingSlot);
   };
 
   const rawHtml = marked.parse(text, { gfm: true, breaks: true, renderer }) as string;
@@ -139,8 +177,19 @@ export function renderMarkdown(text: string, projectKey: string): string {
   return container.innerHTML;
 }
 
-export function Markdown({ text, projectKey }: { text: string; projectKey: string }) {
-  const html = useMemo(() => renderMarkdown(text, projectKey), [text, projectKey]);
+export function Markdown({
+  text,
+  projectKey,
+  knownActorNames = [],
+}: {
+  text: string;
+  projectKey: string;
+  knownActorNames?: readonly string[];
+}) {
+  const html = useMemo(
+    () => renderMarkdown(text, projectKey, knownActorNames),
+    [text, projectKey, knownActorNames],
+  );
   // eslint-disable-next-line react/no-danger -- sanitized above via DOMPurify
   return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }

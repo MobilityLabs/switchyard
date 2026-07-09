@@ -9,9 +9,9 @@ import { renderMarkdown } from "./Markdown";
 
 const REPO = "https://github.com/MobilityLabs/switchyard";
 
-function toDom(markdown: string, projectKey = "SYD"): HTMLDivElement {
+function toDom(markdown: string, projectKey = "SYD", knownActorNames: readonly string[] = []): HTMLDivElement {
   const el = document.createElement("div");
-  el.innerHTML = renderMarkdown(markdown, projectKey);
+  el.innerHTML = renderMarkdown(markdown, projectKey, knownActorNames);
   return el;
 }
 
@@ -202,5 +202,62 @@ describe("autolinker", () => {
     // Nothing but the paragraph, the link, and its code span may exist.
     const tags = [...el.querySelectorAll("*")].map((n) => n.tagName.toLowerCase());
     expect(tags.sort()).toEqual(["a", "code", "p"]);
+  });
+});
+
+describe("mentions (SYD-57)", () => {
+  it("highlights a leading @agent summons with the stronger style", () => {
+    const el = toDom("@agent can you take a look?");
+    const span = el.querySelector("span.mention")!;
+    expect(span).not.toBeNull();
+    expect(span.textContent).toBe("@agent");
+    expect(span.classList.contains("mention-lead")).toBe(true);
+  });
+
+  it("highlights a mid-text mention without the leading style", () => {
+    const el = toDom("thanks @agent, cc @sean", "SYD", ["sean"]);
+    const spans = [...el.querySelectorAll("span.mention")];
+    expect(spans.map((s) => s.textContent)).toEqual(["@agent", "@sean"]);
+    expect(spans.every((s) => !s.classList.contains("mention-lead"))).toBe(true);
+  });
+
+  it("preserves actor name casing and matches names containing slashes", () => {
+    const el = toDom("assigning to @claude/dev", "SYD", ["claude/dev"]);
+    const span = el.querySelector("span.mention")!;
+    expect(span).not.toBeNull();
+    expect(span.textContent).toBe("@claude/dev");
+  });
+
+  it("leaves an unknown mention as plain text", () => {
+    const el = toDom("hey @nobody are you there");
+    expect(el.querySelector("span.mention")).toBeNull();
+    expect(el.textContent).toContain("@nobody");
+  });
+
+  it("does not highlight @agent inside an inline code span", () => {
+    const el = toDom("use `@agent` in the composer");
+    expect(el.querySelector("span.mention")).toBeNull();
+    expect(el.querySelector("code")!.textContent).toBe("@agent");
+  });
+
+  it("does not highlight @agent inside a fenced code block", () => {
+    const el = toDom("```\n@agent\n```");
+    expect(el.querySelector("span.mention")).toBeNull();
+    expect(el.querySelector("pre code")!.textContent).toBe("@agent\n");
+  });
+
+  it("only gives the lead style to the very first @agent, not later repeats", () => {
+    const el = toDom("@agent look, then later @agent again");
+    const spans = [...el.querySelectorAll("span.mention")];
+    expect(spans.map((s) => s.textContent)).toEqual(["@agent", "@agent"]);
+    expect(spans[0].classList.contains("mention-lead")).toBe(true);
+    expect(spans[1].classList.contains("mention-lead")).toBe(false);
+  });
+
+  it("does not give the lead style when @agent appears mid-text only", () => {
+    const el = toDom("hey @agent, got a sec?");
+    const span = el.querySelector("span.mention")!;
+    expect(span).not.toBeNull();
+    expect(span.classList.contains("mention-lead")).toBe(false);
   });
 });
