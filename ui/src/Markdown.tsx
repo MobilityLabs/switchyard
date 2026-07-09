@@ -1,7 +1,31 @@
 import { useMemo } from "react";
 import { marked, type Tokens } from "marked";
+import { markedHighlight } from "marked-highlight";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import diff from "highlight.js/lib/languages/diff";
+import json from "highlight.js/lib/languages/json";
+import javascript from "highlight.js/lib/languages/javascript";
+import markdownLang from "highlight.js/lib/languages/markdown";
+import sql from "highlight.js/lib/languages/sql";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
 import DOMPurify from "dompurify";
 import { PROJECT_REPOS } from "./config";
+
+// Small, deliberate language subset (SYD-58) — not hljs's full bundle, so
+// unlisted fence hints (e.g. ```python) fall through to the "unknown
+// language" path below rather than silently pulling in more parsers.
+hljs.registerLanguage("typescript", typescript); // covers ts/tsx aliases
+hljs.registerLanguage("javascript", javascript); // covers js/jsx aliases
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("bash", bash); // covers sh alias
+hljs.registerLanguage("sql", sql);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("xml", xml); // covers html alias
+hljs.registerLanguage("diff", diff);
+hljs.registerLanguage("markdown", markdownLang); // covers md alias
 
 // Matches, in priority order: a repo-relative file path (optionally with a
 // ":<line>" suffix), a standalone commit SHA (7-40 hex chars), or an
@@ -89,6 +113,30 @@ const ALLOWED_ATTR = ["href", "target", "rel", "src", "alt", "title", "class", "
 const ATTACHMENT_SRC_RE = /^\/api\/attachments\/\d+\/[\w.-]+$/;
 const ATTACHMENT_VIDEO_HREF_RE = /^\/api\/attachments\/\d+\/[\w.-]+\.(mp4|webm|mov)$/i;
 
+let highlightInstalled = false;
+function ensureHighlight() {
+  if (highlightInstalled) return;
+  highlightInstalled = true;
+  // hint-only: hljs.highlightAuto is deliberately not used, so output is
+  // deterministic and unrecognized/unhinted fences fall through unhighlighted
+  // (marked-highlight leaves the token's text/escaped untouched when the
+  // highlight callback returns undefined).
+  marked.use(
+    markedHighlight({
+      langPrefix: "language-",
+      highlight(code: string, lang: string) {
+        // Returning `code` unchanged (rather than undefined) still leaves the
+        // token untouched — marked-highlight only rewrites it when the
+        // returned string differs from the input — while satisfying the
+        // library's sync-highlighter type, which requires a string return.
+        if (!lang || !hljs.getLanguage(lang)) return code;
+        return hljs.highlight(code, { language: lang }).value;
+      },
+    }),
+  );
+}
+ensureHighlight();
+
 let hooksInstalled = false;
 function ensureHooks() {
   if (hooksInstalled) return;
@@ -155,6 +203,11 @@ export function renderMarkdown(
   let firstLeafSeen = false;
 
   const renderer = new marked.Renderer();
+  // marked.use(markedHighlight(...)) above only wraps the *default* renderer
+  // instance's `code` method (marked.defaults.renderer) — a plain `new
+  // Renderer()` doesn't inherit it, so copy the wrapped method over. It
+  // doesn't close over `this`, so a plain reference is safe to reuse here.
+  renderer.code = marked.defaults.renderer!.code;
   renderer.text = function (token: Tokens.Text | Tokens.Escape) {
     if ("tokens" in token && token.tokens) return this.parser.parseInline(token.tokens);
     const isLeadingSlot = leadingAgent && !firstLeafSeen;

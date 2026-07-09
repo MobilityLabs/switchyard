@@ -205,6 +205,57 @@ describe("autolinker", () => {
   });
 });
 
+describe("syntax highlighting (SYD-58)", () => {
+  it("wraps a hinted fenced block in hljs-* spans", () => {
+    const el = toDom("```ts\nconst x: number = 1;\n```");
+    const code = el.querySelector("pre code")!;
+    expect(code.getAttribute("class")).toBe("language-ts");
+    expect(code.querySelectorAll("span[class^='hljs-']").length).toBeGreaterThan(0);
+    expect(code.textContent).toContain("const x: number = 1;");
+  });
+
+  it("recognizes aliased language hints (sh, html, tsx)", () => {
+    const sh = toDom("```sh\necho hi\n```").querySelector("pre code")!;
+    expect(sh.querySelectorAll("span[class^='hljs-']").length).toBeGreaterThan(0);
+    const html = toDom("```html\n<div></div>\n```").querySelector("pre code")!;
+    expect(html.querySelectorAll("span[class^='hljs-']").length).toBeGreaterThan(0);
+    const tsx = toDom("```tsx\nconst x = <div/>;\n```").querySelector("pre code")!;
+    expect(tsx.querySelectorAll("span[class^='hljs-']").length).toBeGreaterThan(0);
+  });
+
+  it("renders an unknown-language fence as plain text, no crash", () => {
+    const el = toDom("```python\nprint('hi')\n```");
+    const code = el.querySelector("pre code")!;
+    expect(code.querySelector("span")).toBeNull();
+    expect(code.textContent).toContain("print('hi')");
+  });
+
+  it("renders an unhinted fence as plain text", () => {
+    const el = toDom("```\nplain text\n```");
+    const code = el.querySelector("pre code")!;
+    expect(code.querySelector("span")).toBeNull();
+    expect(code.hasAttribute("class")).toBe(false);
+    expect(code.textContent).toContain("plain text");
+  });
+
+  it("does not highlight inline code spans", () => {
+    const el = toDom("use `const x = 1` inline");
+    const code = el.querySelector("code")!;
+    expect(code.parentElement?.tagName.toLowerCase()).not.toBe("pre");
+    expect(code.querySelector("span")).toBeNull();
+  });
+
+  it("keeps a script/onerror payload inside a fence inert", () => {
+    const el = toDom('```html\n<script>alert(1)</script><img src=x onerror="alert(2)">\n```');
+    expect(el.querySelector("script")).toBeNull();
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.textContent).toContain("alert(1)");
+    // Must render as syntax-highlighted text, not live markup.
+    const code = el.querySelector("pre code")!;
+    expect(code.querySelector("script, img")).toBeNull();
+  });
+});
+
 describe("mentions (SYD-57)", () => {
   it("highlights a leading @agent summons with the stronger style", () => {
     const el = toDom("@agent can you take a look?");

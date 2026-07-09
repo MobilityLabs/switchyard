@@ -83,21 +83,23 @@ h2 { display: flex; align-items: center; gap: 8px; }
 }
 .description { margin: 12px 0; }
 
-.markdown { font-size: 14px; line-height: 1.5; }
+.markdown { font-size: 14px; line-height: 1.6; }
 .markdown > *:first-child { margin-top: 0; }
 .markdown > *:last-child { margin-bottom: 0; }
 .markdown p { margin: 8px 0; white-space: pre-wrap; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 {
-  margin: 14px 0 6px; line-height: 1.3;
+  margin: 16px 0 8px; line-height: 1.3; font-weight: 600;
 }
-.markdown h1 { font-size: 18px; }
-.markdown h2 { font-size: 16px; }
-.markdown h3, .markdown h4, .markdown h5, .markdown h6 { font-size: 14px; }
+.markdown h1 { font-size: 20px; }
+.markdown h2 { font-size: 17px; }
+.markdown h3 { font-size: 15px; }
+.markdown h4, .markdown h5, .markdown h6 { font-size: 14px; color: var(--muted); }
 .markdown a { color: var(--accent-2); text-decoration: underline; text-underline-offset: 2px; }
-.markdown ul, .markdown ol { margin: 8px 0; padding-left: 22px; }
-.markdown li { margin: 2px 0; }
+.markdown ul, .markdown ol { margin: 6px 0; padding-left: 22px; }
+.markdown li { margin: 1px 0; }
+.markdown li + li { margin-top: 1px; }
 .markdown blockquote {
-  margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--line);
+  margin: 8px 0; padding: 2px 12px; border-left: 3px solid var(--line);
   color: var(--muted);
 }
 .markdown code {
@@ -105,13 +107,50 @@ h2 { display: flex; align-items: center; gap: 8px; }
   font-family: ui-monospace, Menlo, monospace; font-size: 12px;
 }
 .markdown pre {
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px 12px; overflow-x: auto; margin: 8px 0;
+  background: #14161a; border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; overflow-x: auto; margin: 10px 0;
 }
-.markdown pre code { background: none; border: none; padding: 0; }
+.markdown pre code {
+  background: none; border: none; padding: 0; font-size: 12.5px; line-height: 1.55;
+}
 .markdown table { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
 .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 8px; }
+.markdown th { background: var(--panel-2); }
 .markdown img { max-width: 100%; border-radius: var(--radius); }
+
+/* Hand-rolled hljs theme on the app's own palette vars — deliberately not a
+   stock hljs stylesheet, which assumes its own background/foreground and
+   fights var(--panel). Class names are hljs's; see SYD-58. */
+.markdown .hljs-comment,
+.markdown .hljs-quote { color: var(--muted); font-style: italic; }
+.markdown .hljs-keyword,
+.markdown .hljs-selector-tag,
+.markdown .hljs-literal,
+.markdown .hljs-subst,
+.markdown .hljs-doctag,
+.markdown .hljs-formula { color: var(--accent-2); }
+.markdown .hljs-string,
+.markdown .hljs-regexp,
+.markdown .hljs-addition,
+.markdown .hljs-meta .hljs-string { color: var(--ok); }
+.markdown .hljs-number,
+.markdown .hljs-built_in,
+.markdown .hljs-builtin-name,
+.markdown .hljs-symbol { color: var(--warn); }
+.markdown .hljs-title,
+.markdown .hljs-title.function_,
+.markdown .hljs-section,
+.markdown .hljs-name { color: var(--accent); }
+.markdown .hljs-attr,
+.markdown .hljs-attribute,
+.markdown .hljs-variable,
+.markdown .hljs-template-variable,
+.markdown .hljs-type,
+.markdown .hljs-class .hljs-title { color: color-mix(in srgb, var(--accent-2) 55%, var(--text)); }
+.markdown .hljs-deletion { color: var(--danger); }
+.markdown .hljs-meta { color: var(--muted); }
+.markdown .hljs-emphasis { font-style: italic; }
+.markdown .hljs-strong { font-weight: 700; }
 .markdown video { max-width: 100%; border-radius: var(--radius); display: block; margin-top: 6px; }
 .mention {
   background: color-mix(in srgb, var(--accent-2) 18%, transparent);
