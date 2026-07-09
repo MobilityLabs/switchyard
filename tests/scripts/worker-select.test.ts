@@ -504,6 +504,21 @@ describe("buildDockerArgs", () => {
       { name: "gh", check: "gh --version", install: "brew install gh" },
     ]);
   });
+
+  it("defaults BASE_BRANCH to main when the project has no override (SYD-69)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    expect(args).toContain("BASE_BRANCH=main");
+    const promptArg = args.find((a) => a.startsWith("WORKER_PROMPT="));
+    expect(promptArg).toContain("origin/main");
+  });
+
+  it("threads a per-project baseBranch override into BASE_BRANCH and the prompt", () => {
+    const devProject: WorkerProject = { repo: "/repo/syd", baseBranch: "develop" };
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), devProject, config, oauthEnv);
+    expect(args).toContain("BASE_BRANCH=develop");
+    const promptArg = args.find((a) => a.startsWith("WORKER_PROMPT="));
+    expect(promptArg).toContain("origin/develop");
+  });
 });
 
 describe("stackChecksEnv", () => {
@@ -563,6 +578,18 @@ describe("buildContainerizedPrompt", () => {
     expect(prompt).toMatch(/escalat/i);
     expect(prompt).toMatch(/answer/i);
     expect(prompt).toMatch(/get_issue|activity/i);
+  });
+
+  it("defaults to noting the base branch as main (SYD-69)", () => {
+    const prompt = buildContainerizedPrompt("SYD-7");
+    expect(prompt).toContain("origin/main");
+    expect(prompt).toMatch(/human decision/i);
+  });
+
+  it("names a custom base branch when given one", () => {
+    const prompt = buildContainerizedPrompt("SYD-7", { baseBranch: "develop" });
+    expect(prompt).toContain("origin/develop");
+    expect(prompt).not.toContain("origin/main");
   });
 });
 

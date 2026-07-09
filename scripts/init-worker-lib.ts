@@ -76,6 +76,12 @@ export function validateWorkerConfig(raw: unknown): string[] {
       if (project?.stack !== undefined) {
         problems.push(...validateWorkerStack(key, project.stack));
       }
+      if (
+        project?.baseBranch !== undefined &&
+        (typeof project.baseBranch !== "string" || project.baseBranch.trim() === "")
+      ) {
+        problems.push(`projects.${key}.baseBranch must be a non-empty string when set`);
+      }
     }
   }
   if (
