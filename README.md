@@ -70,6 +70,30 @@ Events POST as JSON (`event`, `issue`, `project`, `actor`, ...) with an
 `x-switchyard-signature: sha256=<hmac>` header when a secret is set.
 Delivery is best-effort (no retries), polled every 2 seconds.
 
+### Inbound GitHub integration
+
+`POST /webhooks/github` receives GitHub's own webhook deliveries so a PR
+merge/close or a red check run shows up on the issue without an agent
+hand-writing a delivery comment. Register it on the repo(s) agents push
+`agent/<ref>` branches to:
+
+- Payload URL: `https://<host>/webhooks/github`
+- Content type: `application/json`
+- Events: **Pull requests**, **Check suites** (Push is accepted but currently
+  ignored)
+- Secret: any random string, also set as `GITHUB_WEBHOOK_SECRET` in the
+  server's `.env`
+
+The issue is matched by parsing the PR/check-suite branch as `agent/<ref>`
+(falling back to scanning the PR title/body for a bare `<PROJECT>-<n>` ref)
+and recording `gh_pr_opened` / `gh_pr_merged` / `gh_pr_closed` /
+`gh_checks_passed` / `gh_checks_failed` timeline events, attributed to a
+synthetic `github` actor. The SYD-54 delivery strip on the issue view folds
+these in automatically alongside the existing agent-posted delivery events.
+Deliveries are rejected with 401 unless they carry a valid
+`X-Hub-Signature-256` for the configured secret, and 501 if no secret is
+configured at all.
+
 ### Slack notifications
 
 A standalone consumer (its own process, not part of the main server) that turns
