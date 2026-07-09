@@ -48,13 +48,13 @@ export default function Triage() {
         <section className="needs-input-lane">
           <h2>Waiting on humans <span className="badge warn">{needsInput.data.length}</span></h2>
           {needsInput.data.map((issue) => (
-            <article key={issue.ref} className="needs-input-row">
-              <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
+            <a key={issue.ref} className="needs-input-row" href={href({ view: "issue", ref: issue.ref })}>
+              <span className="ref">{issue.ref}</span>
               <span className="title">{issue.title}</span>
               <span className="hint">has a question — open to answer</span>
               <span className="assignee">{actorNames.get(issue.assigneeId ?? -1) ?? "unassigned"}</span>
               <span className="age">{age(issue.updatedAt)}</span>
-            </article>
+            </a>
           ))}
         </section>
       )}

@@ -157,7 +157,9 @@ h2 { display: flex; align-items: center; gap: 8px; }
 .needs-input-row {
   background: var(--panel); border: 1px solid var(--warn); border-radius: var(--radius);
   padding: 10px 16px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px;
+  cursor: pointer; text-decoration: none; color: inherit;
 }
+.needs-input-row:hover { border-color: var(--accent-2); }
 .needs-input-row .hint { color: var(--warn); font-size: 13px; flex: 1; }
 .needs-input-row .assignee, .needs-input-row .age { color: var(--muted); font-size: 12px; }
 .pill {
