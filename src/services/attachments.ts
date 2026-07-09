@@ -1,8 +1,8 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { attachments } from "../db/schema.js";
+import { attachments, actors } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
@@ -91,7 +91,7 @@ export async function saveAttachment(
       issueId: issue.id,
       actorId: actor.id,
       type: "attachment_added",
-      payload: { filename: sanitized, size: data.length },
+      payload: { id: inserted.id, filename: sanitized, size: data.length, contentType },
     });
     return inserted;
   });
@@ -115,4 +115,34 @@ export function getAttachment(db: Db, id: number): AttachmentRow {
     throw new SwitchyardError(`Attachment ${id} does not exist.`);
   }
   return row;
+}
+
+export type AttachmentView = {
+  id: number;
+  filename: string;
+  contentType: string;
+  size: number;
+  actorName: string;
+  createdAt: number;
+};
+
+/** All attachments on an issue, oldest first — covers orphans that no comment
+ * embeds, and lets the UI render an attachments strip alongside the activity
+ * feed's per-event links. */
+export function listAttachments(db: Db, ref: string): AttachmentView[] {
+  const issue = getIssue(db, ref);
+  return db
+    .select({
+      id: attachments.id,
+      filename: attachments.filename,
+      contentType: attachments.contentType,
+      size: attachments.size,
+      createdAt: attachments.createdAt,
+      actorName: actors.name,
+    })
+    .from(attachments)
+    .innerJoin(actors, eq(attachments.actorId, actors.id))
+    .where(eq(attachments.issueId, issue.id))
+    .orderBy(asc(attachments.id))
+    .all();
 }
