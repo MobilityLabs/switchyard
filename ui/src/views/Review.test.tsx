@@ -4,6 +4,15 @@
 // in_review list reorders or grows underneath the reviewer. Selection is
 // keyed by ref (from the URL), and new arrivals surface as a non-disruptive
 // count instead of reordering the current view.
+//
+// SYD-70: approving/sending back an issue in Review mode reloads the list
+// and advances to the next in-review issue, but the scroll container (the
+// `.content` div rendered by Shell — see Shell.tsx) kept its old scroll
+// position, so reviewers landed mid-page on the next issue. Approve, send
+// back, Prev/Next, and their keyboard shortcuts should all snap it back to
+// the top instantly (no smooth-scroll). Ported onto the ref-keyed selection
+// model from SYD-75/77: the scroll reset now lives in a single effect keyed
+// on currentRef (see Review.tsx), so it fires for every navigation path.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -115,5 +124,92 @@ describe("Review selection stability", () => {
     await flush();
 
     expect(location.pathname).toBe("/review/SYD-1");
+  });
+});
+
+function findButton(container: HTMLElement, label: string): HTMLButtonElement {
+  const button = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
+  if (!button) throw new Error(`no button labeled "${label}"`);
+  return button as HTMLButtonElement;
+}
+
+async function click(el: HTMLElement): Promise<void> {
+  await act(async () => { el.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+  await flush();
+}
+
+describe("Review scroll-to-top (SYD-70)", () => {
+  let contentDiv: HTMLDivElement;
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(listIssues).mockReset();
+    vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First"), issue("SYD-2", "Second")]);
+
+    // Mirrors Shell.tsx's <div className="content">{children}</div>, which
+    // is the actual scrolling element (overflow-y: auto; see styles.css).
+    contentDiv = document.createElement("div");
+    contentDiv.className = "content";
+    contentDiv.scrollTo = vi.fn();
+    document.body.appendChild(contentDiv);
+    container = document.createElement("div");
+    contentDiv.appendChild(container);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    contentDiv.remove();
+  });
+
+  async function mount(path: string): Promise<void> {
+    history.replaceState(null, "", path);
+    const root = createRoot(container);
+    await act(async () => { root.render(<ReviewRoute />); });
+    await flush();
+  }
+
+  it("scrolls .content to the top when Next is clicked", async () => {
+    await mount("/review/SYD-1");
+    (contentDiv.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await click(findButton(container, "Next"));
+    expect(contentDiv.scrollTo).toHaveBeenCalledWith(0, 0);
+  });
+
+  it("scrolls .content to the top when Prev is clicked", async () => {
+    await mount("/review/SYD-2");
+    (contentDiv.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await click(findButton(container, "Prev"));
+    expect(contentDiv.scrollTo).toHaveBeenCalledWith(0, 0);
+  });
+
+  it("scrolls .content to the top when the j/k keyboard shortcuts fire", async () => {
+    await mount("/review/SYD-1");
+    (contentDiv.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
+    });
+    await flush();
+    expect(contentDiv.scrollTo).toHaveBeenCalledWith(0, 0);
+  });
+
+  it("scrolls .content to the top after a successful Approve", async () => {
+    await mount("/review/SYD-1");
+    (contentDiv.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await click(findButton(container, "Approve"));
+    expect(contentDiv.scrollTo).toHaveBeenCalledWith(0, 0);
+  });
+
+  it("scrolls .content to the top after a successful Send back", async () => {
+    await mount("/review/SYD-1");
+    const textarea = container.querySelector("textarea")!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      nativeSetter.call(textarea, "please fix the thing");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    (contentDiv.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await click(findButton(container, "Send back"));
+    expect(contentDiv.scrollTo).toHaveBeenCalledWith(0, 0);
   });
 });
