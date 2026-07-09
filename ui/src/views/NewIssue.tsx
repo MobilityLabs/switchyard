@@ -3,7 +3,7 @@ import { createIssue, listProjects, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { navigate } from "../router";
-import { PRIORITIES, type Priority } from "../types";
+import { PRIORITIES, SUMMARY_MAX_LENGTH, type Priority } from "../types";
 import { parseLabels } from "../labels";
 
 export default function NewIssue() {
@@ -12,6 +12,7 @@ export default function NewIssue() {
 
   const [projectKey, setProjectKey] = useState("");
   const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("none");
   const [labelsInput, setLabelsInput] = useState("");
@@ -40,6 +41,7 @@ export default function NewIssue() {
     createIssue({
       projectKey: effectiveProjectKey,
       title: trimmedTitle,
+      summary: summary.trim() || undefined,
       description: description.trim(),
       priority,
     })
@@ -85,6 +87,16 @@ export default function NewIssue() {
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Short summary"
             required
+          />
+        </label>
+
+        <label>
+          Summary
+          <input
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+            placeholder="One or two sentences a human can triage from at a glance"
+            maxLength={SUMMARY_MAX_LENGTH}
           />
         </label>
 

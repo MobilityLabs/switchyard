@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { STATUSES, PRIORITIES } from "../db/schema.js";
+import { SUMMARY_MAX_LENGTH } from "../services/issues.js";
 
 export const projectBody = z.object({ key: z.string(), name: z.string() });
 
@@ -13,6 +14,7 @@ const provenance = z.object({
 export const issueCreateBody = z.object({
   projectKey: z.string(),
   title: z.string().min(1),
+  summary: z.string().max(SUMMARY_MAX_LENGTH).optional(),
   description: z.string().optional(),
   priority: z.enum(PRIORITIES).optional(),
   labels: z.array(z.string()).optional(),
@@ -24,6 +26,7 @@ export const issueUpdateBody = z.object({
   status: z.enum(STATUSES).optional(),
   priority: z.enum(PRIORITIES).optional(),
   title: z.string().min(1).optional(),
+  summary: z.string().max(SUMMARY_MAX_LENGTH).nullable().optional(),
   description: z.string().optional(),
   assigneeName: z.string().nullable().optional(),
   labels: z.array(z.string()).optional(),

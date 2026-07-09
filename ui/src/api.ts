@@ -34,9 +34,9 @@ export const getIssue = (ref: string) => api<IssueDetail>(`/api/issues/${ref}`);
 export const listAttachments = (ref: string) => api<Attachment[]>(`/api/issues/${ref}/attachments`);
 export const updateIssue = (
   ref: string,
-  patch: Partial<{ status: Status; priority: Priority; title: string; description: string; assigneeName: string | null; labels: string[] }>,
+  patch: Partial<{ status: Status; priority: Priority; title: string; description: string; summary: string | null; assigneeName: string | null; labels: string[] }>,
 ) => api<Issue>(`/api/issues/${ref}`, { method: "PATCH", body: JSON.stringify(patch) });
-export const createIssue = (input: { projectKey: string; title: string; description?: string; priority?: Priority }) =>
+export const createIssue = (input: { projectKey: string; title: string; description?: string; summary?: string; priority?: Priority }) =>
   api<Issue>("/api/issues", { method: "POST", body: JSON.stringify(input) });
 export const claimIssue = (ref: string) => api<Issue>(`/api/issues/${ref}/claim`, { method: "POST" });
 export const addComment = (ref: string, body: string) =>

@@ -23,7 +23,7 @@ vi.mock("../api", () => ({
 import { updateIssue } from "../api";
 
 const ISSUE: Issue = {
-  id: 1, ref: "SYD-1", title: "Do the thing", description: "",
+  id: 1, ref: "SYD-1", title: "Do the thing", description: "", summary: null,
   status: "triage", priority: "none",
   assigneeId: null, creatorId: 1, labels: [],
   sourceType: null, sourceDetail: null, sourceUrl: null,

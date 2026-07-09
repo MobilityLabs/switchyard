@@ -8,7 +8,7 @@ import { PRIORITIES, type Issue, type IssueDetail, type Priority } from "../type
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { parseLabels } from "../labels";
-import { Event, projectKeyFromRef } from "./IssueDetail";
+import { DescriptionSection, Event, projectKeyFromRef, summaryText } from "./IssueDetail";
 
 // Issues routinely leave triage with priority "none" (SYD-65) — default the
 // accept-to-todo prompt to "medium" unless a human already set something more
@@ -98,6 +98,7 @@ export function TriageRow({
   const projectKey = projectKeyFromRef(issue.ref);
   const [draft, setDraft] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
+  const [showFullDescription, setShowFullDescription] = useState(false);
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(issue.ref, draft, setDraft);
 
   // Accept → todo prompt (SYD-65): one extra click gets a sane default
@@ -158,10 +159,8 @@ export function TriageRow({
           </div>
         )}
       </div>
-      {issue.description && (
-        <div className="triage-desc">
-          <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
-        </div>
+      {!expanded && summaryText(issue) && (
+        <div className="triage-desc">{summaryText(issue)}</div>
       )}
       <div className="provenance">
         filed by {creatorName ?? "?"} · {age(issue.createdAt)}
@@ -171,14 +170,13 @@ export function TriageRow({
 
       {expanded && (
         <div className="triage-expanded">
-          {issue.description
-            ? (
-              <div className="description panel">
-                <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
-              </div>
-            )
-            : <p className="empty">No description.</p>}
-          {issue.description && <DesignEmbeds text={issue.description} />}
+          <DescriptionSection
+            issue={issue}
+            projectKey={projectKey}
+            knownActorNames={knownActorNames}
+            showFull={showFullDescription}
+            onToggleFull={() => setShowFullDescription((v) => !v)}
+          />
 
           <h4>Activity</h4>
           <div className="activity triage-activity">

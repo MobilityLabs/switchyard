@@ -13,10 +13,21 @@ export type Provenance = {
   url?: string;
 };
 
+export const SUMMARY_MAX_LENGTH = 280;
+
+function checkSummaryLength(summary: string | null | undefined): void {
+  if (summary != null && summary.length > SUMMARY_MAX_LENGTH) {
+    throw new SwitchyardError(
+      `Summary is ${summary.length} characters — summaries must be ${SUMMARY_MAX_LENGTH} or fewer. Keep it to one or two sentences; put the rest in the description.`
+    );
+  }
+}
+
 export type CreateIssueInput = {
   projectKey: string;
   title: string;
   description?: string;
+  summary?: string;
   priority?: Priority;
   labels?: string[];
   parentRef?: string;
@@ -73,6 +84,7 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
       `Provenance url must be http(s) — got "${input.provenance.url}".`
     );
   }
+  checkSummaryLength(input.summary);
   return db.transaction((tx) => {
     const project = getProjectByKey(tx as Db, input.projectKey);
     const number = reserveIssueNumber(tx as Db, project.id);
@@ -84,6 +96,7 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
         number,
         title: input.title,
         description: input.description ?? "",
+        summary: input.summary ?? null,
         status: actor.type === "agent" ? "triage" : "backlog",
         priority: input.priority ?? "none",
         labels: input.labels ?? [],
@@ -105,11 +118,13 @@ export type UpdateIssueInput = {
   priority?: Priority;
   title?: string;
   description?: string;
+  summary?: string | null;
   assigneeName?: string | null;
   labels?: string[];
 };
 
 export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssueInput): IssueView {
+  checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
     const current = getIssue(tx as Db, ref);
     const changes: Partial<typeof issues.$inferInsert> = {};
@@ -161,6 +176,10 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
     if (patch.description !== undefined && patch.description !== current.description) {
       changes.description = patch.description;
       toRecord.push({ type: "description_changed", payload: {} });
+    }
+    if (patch.summary !== undefined && patch.summary !== current.summary) {
+      changes.summary = patch.summary;
+      toRecord.push({ type: "summary_changed", payload: {} });
     }
     if (
       patch.labels !== undefined &&

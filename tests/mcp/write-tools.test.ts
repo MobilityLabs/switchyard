@@ -7,7 +7,7 @@ import path from "node:path";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { getIssue } from "../../src/services/issues.js";
+import { getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { snoozeIssue } from "../../src/services/triage-actions.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
@@ -53,6 +53,51 @@ describe("MCP write tools", () => {
     const issue = JSON.parse(text(r));
     expect(issue.status).toBe("triage");
     expect(getIssue(db, issue.ref).sourceDetail).toBe("src/api.ts:88");
+  });
+
+  it("file_issue accepts a summary and update_issue can change or clear it", async () => {
+    const r = await client.callTool({
+      name: "file_issue",
+      arguments: {
+        project_key: "AIPI",
+        title: "Flaky test in api suite",
+        summary: "api_test.ts flakes intermittently under load.",
+        description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
+        source_type: "todo",
+        source_detail: "src/api.ts:88",
+      },
+    });
+    const issue = JSON.parse(text(r));
+    expect(issue.summary).toBe("api_test.ts flakes intermittently under load.");
+    expect(getIssue(db, issue.ref).summary).toBe("api_test.ts flakes intermittently under load.");
+
+    const updated = JSON.parse(text(await client.callTool({
+      name: "update_issue",
+      arguments: { ref: issue.ref, summary: "Updated summary." },
+    })));
+    expect(updated.summary).toBe("Updated summary.");
+
+    const cleared = JSON.parse(text(await client.callTool({
+      name: "update_issue",
+      arguments: { ref: issue.ref, summary: null },
+    })));
+    expect(cleared.summary).toBeNull();
+  });
+
+  it("file_issue rejects a summary over the MCP-enforced length cap", async () => {
+    const r = await client.callTool({
+      name: "file_issue",
+      arguments: {
+        project_key: "AIPI",
+        title: "Flaky test in api suite",
+        summary: "x".repeat(SUMMARY_MAX_LENGTH + 1),
+        description: "Enough detail for triage.",
+        source_type: "todo",
+        source_detail: "src/api.ts:88",
+      },
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/summary/i);
   });
 
   it("claim, comment, and move to in_review as an agent", async () => {
