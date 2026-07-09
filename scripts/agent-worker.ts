@@ -14,6 +14,15 @@
 // comment, never claims or transitions the issue, and runs on any status
 // (including triage, since answering doesn't bypass the triage gate).
 //
+// The event poll's agent_question trigger is the fast path, not the guarantee: a
+// question that lands while all maxConcurrent slots are busy would otherwise be
+// silently dropped (SYD-60). The real guarantee is drainUnansweredQuestions, which
+// derives "unanswered" from the event log (GET /api/unanswered-questions — an
+// agent_question with no later agent-actor comment on the same issue) rather than
+// in-memory state, so it's restart-proof. It runs on every full tick and whenever a
+// session slot frees (work or answer session exit), re-dispatching anything still
+// unclaimed and under maxAnswersPerIssue.
+//
 // Config: switchyard-worker.json at the repo root (copy switchyard-worker.example.json).
 // Safety model: the "auto" label (or whatever `label` is set to) is the human control
 // point — nothing is dispatched unless a human labels the issue. maxConcurrent caps
@@ -43,6 +52,8 @@ import {
   buildDockerArgs,
   newTickGate,
   runGated,
+  answerKey,
+  selectAnswerable,
   type WorkerConfig,
   type WorkerIssue,
   type RetryState,
@@ -133,6 +144,16 @@ async function fetchReadyIssues(config: WorkerConfig, token: string): Promise<Ap
   return (await res.json()) as ApiIssue[];
 }
 
+async function fetchUnansweredQuestions(config: WorkerConfig, token: string): Promise<string[]> {
+  const url = `${config.url.replace(/\/$/, "")}/api/unanswered-questions`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    throw new Error(`GET /api/unanswered-questions failed: ${res.status} ${await res.text()}`);
+  }
+  const rows = (await res.json()) as { ref: string }[];
+  return rows.map((r) => r.ref);
+}
+
 export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
   const resumedPreamble = opts.resumed
     ? `You previously escalated a question on Switchyard issue ${ref} and a human ` +
@@ -147,6 +168,15 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
     `with your question and stop.`
+  );
+}
+
+/** Fire-and-forget trigger for the unanswered-questions backstop (SYD-60), used from
+ * the slot-freeing callbacks below — none of them are awaited, so errors are caught
+ * and logged here rather than becoming an unhandled rejection. */
+function triggerUnansweredDrain(config: WorkerConfig, token: string): void {
+  drainUnansweredQuestions(config, token, { dryRun: false }).catch((err: Error) =>
+    console.error(`unanswered-questions drain failed: ${err.message}`)
   );
 }
 
@@ -203,6 +233,7 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, token: string, opts: { 
 
   child.on("exit", (code) => {
     active.delete(issue.ref);
+    triggerUnansweredDrain(config, token);
     console.log(`${issue.ref} exited with code ${code}`);
     const logLine = (text: string) => {
       try {
@@ -300,12 +331,10 @@ function dispatchSdk(
       },
     )
     .catch((err: Error) => console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`))
-    .finally(() => active.delete(issue.ref));
-}
-
-/** Distinct `active` map key for an answer session, so it never collides with a work dispatch on the same ref. */
-function answerKey(ref: string): string {
-  return `${ref}#answer`;
+    .finally(() => {
+      active.delete(issue.ref);
+      triggerUnansweredDrain(config, token);
+    });
 }
 
 /**
@@ -366,6 +395,7 @@ function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: 
 
   child.on("exit", (code) => {
     active.delete(key);
+    triggerUnansweredDrain(config, token);
     console.log(`answer session for ${ref} exited with code ${code}`);
   });
   child.on("error", (err) => {
@@ -417,7 +447,35 @@ function dispatchAnswerSdk(
       },
     )
     .catch((err: Error) => console.error(`sdk answer dispatch cleanup error for ${ref}: ${err.message}`))
-    .finally(() => active.delete(key));
+    .finally(() => {
+      active.delete(key);
+      triggerUnansweredDrain(config, token);
+    });
+}
+
+/**
+ * Restart-proof backstop for answerer mode (SYD-60): re-derives unanswered
+ * @agent questions from the event log via GET /api/unanswered-questions
+ * (rather than trusting in-memory state) and dispatches an answer session
+ * for each one still eligible. Called on every tick and whenever a session
+ * slot frees, so a question deferred at maxConcurrent capacity — or asked
+ * while the worker was down or mid-restart — still gets serviced once
+ * capacity exists, without depending on the event-poll fast path (pollEvents
+ * / findAnswerRefs) having caught the original agent_question event.
+ */
+async function drainUnansweredQuestions(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
+  let refs: string[];
+  try {
+    refs = await fetchUnansweredQuestions(config, token);
+  } catch (err) {
+    console.error(`unanswered-questions poll failed: ${(err as Error).message}`);
+    return;
+  }
+  const selected = selectAnswerable(refs, config, active.keys(), answerState);
+  for (const ref of selected) {
+    console.log(`unanswered question on ${ref} — dispatching an answer session`);
+    dispatchAnswer(ref, config, token, opts);
+  }
 }
 
 async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
@@ -427,27 +485,27 @@ async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean
   // triggered mid-tick still gets dispatched within seconds via an immediate
   // re-run instead of waiting for the next periodic tick.
   await runGated(tickGate, async () => {
-    let issues: ApiIssue[];
     try {
-      issues = await fetchReadyIssues(config, token);
+      const issues = await fetchReadyIssues(config, token);
+      const eligible = filterRetryCapped(issues, retryState);
+      const selected = selectDispatchable(eligible, config, active.keys());
+
+      for (const issue of selected) {
+        recordAttempt(retryState, issue.ref, issue.updatedAt);
+        const resumed = resumeRefs.delete(issue.ref);
+        if (opts.dryRun) {
+          console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
+        } else {
+          dispatch(issue, config, token, { resumed });
+        }
+      }
     } catch (err) {
       console.error(`poll failed: ${(err as Error).message}`);
-      return;
     }
-
-    const eligible = filterRetryCapped(issues, retryState);
-    const selected = selectDispatchable(eligible, config, active.keys());
-    if (selected.length === 0) return;
-
-    for (const issue of selected) {
-      recordAttempt(retryState, issue.ref, issue.updatedAt);
-      const resumed = resumeRefs.delete(issue.ref);
-      if (opts.dryRun) {
-        console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
-      } else {
-        dispatch(issue, config, token, { resumed });
-      }
-    }
+    // The recheck runs every tick regardless of whether work dispatch above
+    // found anything or failed — it's an independent guarantee, not a
+    // continuation of the ready-issues poll.
+    await drainUnansweredQuestions(config, token, opts);
   });
 }
 

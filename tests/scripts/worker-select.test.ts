@@ -13,6 +13,8 @@ findResumeRefs,
   buildContainerizedPrompt,
   newTickGate,
   runGated,
+  answerKey,
+  selectAnswerable,
   type WorkerConfig,
   type WorkerIssue,
   type WorkerProject,
@@ -222,6 +224,51 @@ describe("filterAnswerCapped / recordAnswerAttempt", () => {
     recordAnswerAttempt(state, "SYD-1");
     recordAnswerAttempt(state, "SYD-1");
     expect(state.get("SYD-1")).toBe(2);
+  });
+});
+
+describe("selectAnswerable", () => {
+  it("selects an unanswered ref with no answer session running and capacity available", () => {
+    expect(selectAnswerable(["SYD-1"], config, [], new Map())).toEqual(["SYD-1"]);
+  });
+
+  it("drops refs from projects the worker isn't configured for", () => {
+    expect(selectAnswerable(["AIPI-1"], config, [], new Map())).toEqual([]);
+  });
+
+  it("skips a ref that already has an answer session running (the drain-on-free path's duplicate suppression)", () => {
+    expect(selectAnswerable(["SYD-1"], config, [answerKey("SYD-1")], new Map())).toEqual([]);
+  });
+
+  it("does not skip a ref just because its work session is active — work and answer sessions are independent", () => {
+    expect(selectAnswerable(["SYD-1"], config, ["SYD-1"], new Map())).toEqual(["SYD-1"]);
+  });
+
+  it("respects the shared maxConcurrent pool across work and answer sessions", () => {
+    // config.maxConcurrent is 2; one work session and one answer session already active.
+    expect(selectAnswerable(["SYD-2"], config, ["SYD-1", answerKey("SYD-9")], new Map())).toEqual([]);
+  });
+
+  it("caps the number selected to remaining capacity", () => {
+    const roomy = { ...config, maxConcurrent: 4 };
+    expect(selectAnswerable(["SYD-1", "SYD-2", "SYD-3"], roomy, ["SYD-9", "SYD-8"], new Map())).toEqual([
+      "SYD-1", "SYD-2",
+    ]);
+  });
+
+  it("excludes refs that already hit maxAnswersPerIssue", () => {
+    const state: AnswerState = new Map([["SYD-1", 3]]);
+    expect(selectAnswerable(["SYD-1", "SYD-2"], config, [], state)).toEqual(["SYD-2"]);
+  });
+
+  it("returns nothing when already at capacity", () => {
+    expect(selectAnswerable(["SYD-1"], config, ["SYD-8", "SYD-9"], new Map())).toEqual([]);
+  });
+});
+
+describe("answerKey", () => {
+  it("suffixes the ref so it never collides with a work-dispatch active key", () => {
+    expect(answerKey("SYD-7")).toBe("SYD-7#answer");
   });
 });
 
