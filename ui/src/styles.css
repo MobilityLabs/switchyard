@@ -204,6 +204,12 @@ kbd {
 .new-issue-form button.primary { align-self: flex-start; }
 
 .dependencies h4 { margin: 10px 0 4px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.delivery-strip { margin: 12px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.delivery-strip .delivery-pr { display: flex; align-items: center; gap: 6px; }
+.delivery-state.delivery-merged { color: var(--accent-2); border-color: var(--accent-2); }
+.delivery-deploy-ok { color: var(--ok); border-color: var(--ok); }
+.delivery-deploy-failed { color: var(--danger); border-color: var(--danger); }
+.delivery-strip .delivery-failed { flex-basis: 100%; margin: 4px 0 0; }
 .dep-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .dep-list li { display: flex; align-items: center; gap: 6px; font-size: 14px; }
 .dep-status { font-size: 11px; padding: 1px 7px; }

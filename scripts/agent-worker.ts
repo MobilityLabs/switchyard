@@ -51,6 +51,7 @@ import {
 } from "./worker-select.js";
 import { acquirePidLock } from "./pidfile.js";
 import { publishAgentBranch } from "./delivery-exec.js";
+import { agentBranch, formatPublishOutcome, type DeliveryEventInput } from "./delivery-lib.js";
 
 type ApiIssue = WorkerIssue & { title: string };
 
@@ -107,6 +108,20 @@ function loadConfig(configPath: string): WorkerConfig {
     throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
   }
   return raw as WorkerConfig;
+}
+
+/** Records a structured delivery event (SYD-54) so the issue UI can render a
+ * delivery strip — see src/services/delivery-events.ts for the server side. */
+async function postDeliveryEvent(
+  config: WorkerConfig, token: string, ref: string, input: DeliveryEventInput
+): Promise<void> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/delivery-events`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`POST delivery-events on ${ref} failed: ${res.status} ${await res.text()}`);
 }
 
 async function fetchReadyIssues(config: WorkerConfig, token: string): Promise<ApiIssue[]> {
@@ -204,8 +219,17 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, token: string, opts: { 
     if (config.containerized && config.delivery && config.delivery.openPrs !== false) {
       publishAgentBranch(project.repo, issue.ref, issue.title, config.url)
         .then((outcome) => {
-          console.log(`${issue.ref}: ${outcome}`);
-          logLine(`[worker] ${outcome}\n`);
+          const line = formatPublishOutcome(agentBranch(issue.ref), outcome);
+          console.log(`${issue.ref}: ${line}`);
+          logLine(`[worker] ${line}\n`);
+          if ((outcome.status === "opened" || outcome.status === "already-open") && outcome.prNumber !== null) {
+            postDeliveryEvent(config, token, issue.ref, {
+              type: "pr_opened", prNumber: outcome.prNumber, url: outcome.url,
+            }).catch((err: Error) => {
+              console.error(`could not record pr_opened event for ${issue.ref}: ${err.message}`);
+              logLine(`[worker] could not record pr_opened event: ${err.message}\n`);
+            });
+          }
         })
         .catch((err: Error) => {
           console.error(`publish failed for ${issue.ref}: ${err.message}`);

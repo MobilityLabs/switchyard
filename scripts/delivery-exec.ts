@@ -13,8 +13,11 @@ import {
   buildPrListArgs,
   buildPrCreateArgs,
   buildPrMergeArgs,
+  buildPrViewUrlArgs,
+  parsePrNumberFromUrl,
   tailOf,
   MAIN_BRANCH,
+  type PublishOutcome,
 } from "./delivery-lib.js";
 
 const execFileP = promisify(execFile);
@@ -28,29 +31,36 @@ export async function run(cmd: string, args: string[], opts: { cwd?: string } = 
  * Host-side publish step after a containerized session exits: if the session
  * pushed agent/<ref> into the host repo with commits ahead of main, push the
  * branch to GitHub and open a PR (unless one is already open). Returns a
- * human-readable outcome for the worker log. gh runs on the host with the
- * user's keyring auth — containers never see GitHub credentials.
+ * structured outcome — formatPublishOutcome (delivery-lib.ts) renders it for
+ * the worker log, and the caller uses the PR number/url to record a
+ * structured pr_opened event (SYD-54) so the issue UI can show a delivery
+ * strip without parsing prose. gh runs on the host with the user's keyring
+ * auth — containers never see GitHub credentials.
  */
 export async function publishAgentBranch(
   repo: string,
   ref: string,
   issueTitle: string,
   serverUrl: string
-): Promise<string> {
+): Promise<PublishOutcome> {
   const branch = agentBranch(ref);
   try {
     await run("git", ["-C", repo, "rev-parse", "--verify", `refs/heads/${branch}`]);
   } catch {
-    return `no ${branch} branch in ${repo} — nothing to publish`;
+    return { status: "no-branch" };
   }
   const ahead = await run("git", ["-C", repo, "rev-list", `${MAIN_BRANCH}..${branch}`, "--count"]);
-  if (ahead === "0") return `${branch} has no commits ahead of ${MAIN_BRANCH} — nothing to publish`;
+  if (ahead === "0") return { status: "no-commits" };
 
   await run("git", ["-C", repo, ...buildPushArgs(ref)]);
   const open = JSON.parse(await run("gh", buildPrListArgs(ref), { cwd: repo })) as { number: number }[];
-  if (open.length > 0) return `pushed ${branch}; PR #${open[0].number} already open`;
+  if (open.length > 0) {
+    const prNumber = open[0].number;
+    const url = await run("gh", buildPrViewUrlArgs(prNumber), { cwd: repo });
+    return { status: "already-open", prNumber, url };
+  }
   const url = await run("gh", buildPrCreateArgs(ref, issueTitle, serverUrl), { cwd: repo });
-  return `opened PR for ${branch}: ${url}`;
+  return { status: "opened", prNumber: parsePrNumberFromUrl(url), url };
 }
 
 export async function findOpenAgentPr(repo: string, ref: string): Promise<number | null> {

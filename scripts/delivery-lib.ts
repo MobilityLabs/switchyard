@@ -104,6 +104,45 @@ export function buildPrMergeArgs(prNumber: number): string[] {
   return ["pr", "merge", String(prNumber), "--merge", "--delete-branch"];
 }
 
+export function buildPrViewUrlArgs(prNumber: number): string[] {
+  return ["pr", "view", String(prNumber), "--json", "url", "--jq", ".url"];
+}
+
+/** Outcome of a publishAgentBranch call (delivery-exec.ts) — pure so the log-line
+ * formatting and the decision to emit a pr_opened event are both testable. */
+export type PublishOutcome =
+  | { status: "no-branch" }
+  | { status: "no-commits" }
+  | { status: "already-open"; prNumber: number; url: string }
+  | { status: "opened"; prNumber: number | null; url: string };
+
+export function formatPublishOutcome(branch: string, outcome: PublishOutcome): string {
+  switch (outcome.status) {
+    case "no-branch":
+      return `no ${branch} branch — nothing to publish`;
+    case "no-commits":
+      return `${branch} has no commits ahead of ${MAIN_BRANCH} — nothing to publish`;
+    case "already-open":
+      return `pushed ${branch}; PR #${outcome.prNumber} already open`;
+    case "opened":
+      return `opened PR for ${branch}: ${outcome.url}`;
+  }
+}
+
+/** `gh pr create` prints the created PR's URL on stdout — pull the number out
+ * of it so callers don't need a second `gh` round-trip just to get the id. */
+export function parsePrNumberFromUrl(url: string): number | null {
+  const m = /\/pull\/(\d+)/.exec(url);
+  return m ? Number(m[1]) : null;
+}
+
+/** The subset of a structured delivery event the server records (SYD-54),
+ * posted to POST /issues/:ref/delivery-events by deliver.ts and the worker. */
+export type DeliveryEventInput =
+  | { type: "pr_opened"; prNumber: number; url: string }
+  | { type: "delivered"; prNumber: number; mergeSha: string; deploy: DeliveryResult["deploy"] }
+  | { type: "delivery_failed"; message: string };
+
 export type DeliveryResult = {
   prNumber: number;
   mergeSha: string;

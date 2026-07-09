@@ -24,6 +24,7 @@ import {
   parseCursorText,
   deliveryComment,
   deliveryFailureComment,
+  type DeliveryEventInput,
   type DeliveryFeedEvent,
 } from "./delivery-lib.js";
 import { findOpenAgentPr, mergeAgentPr, ensureCleanClone, runDeploy } from "./delivery-exec.js";
@@ -83,6 +84,20 @@ async function postComment(config: WorkerConfig, token: string, ref: string, bod
   if (!res.ok) throw new Error(`POST comment on ${ref} failed: ${res.status} ${await res.text()}`);
 }
 
+/** Records a structured delivery event (SYD-54) alongside the prose comment
+ * so the issue UI can render a delivery strip without parsing text. */
+async function postDeliveryEvent(
+  config: WorkerConfig, token: string, ref: string, input: DeliveryEventInput
+): Promise<void> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/delivery-events`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`POST delivery-events on ${ref} failed: ${res.status} ${await res.text()}`);
+}
+
 async function deliver(ref: string, config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {
   const project = config.projects[projectKeyOf(ref)];
   if (!project) return;
@@ -111,12 +126,18 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
       console.log(`${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`);
     }
     await postComment(config, token, ref, deliveryComment({ prNumber, mergeSha, deploy }));
+    await postDeliveryEvent(config, token, ref, { type: "delivered", prNumber, mergeSha, deploy }).catch((e: Error) =>
+      console.error(`could not record delivered event for ${ref}: ${e.message}`)
+    );
   } catch (err) {
     const message = (err as Error).message;
     console.error(`delivery failed for ${ref}: ${message}`);
     if (dryRun) return;
     await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
       console.error(`could not comment the failure on ${ref}: ${e.message}`)
+    );
+    await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch((e: Error) =>
+      console.error(`could not record delivery_failed event on ${ref}: ${e.message}`)
     );
   }
 }
