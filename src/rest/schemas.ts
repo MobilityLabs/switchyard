@@ -57,6 +57,11 @@ export const webhookCreateBody = z.object({
   secret: z.string().optional(),
 });
 export const webhookPatchBody = z.object({ active: z.boolean() });
+export const githubRepoCreateBody = z.object({
+  fullName: z.string(),
+  projectKey: z.string().optional(),
+  secret: z.string().optional(),
+});
 
 export const body = <T extends z.ZodTypeAny>(schema: T) =>
   zValidator("json", schema, (result, c) => {

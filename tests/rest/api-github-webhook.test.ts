@@ -4,12 +4,13 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 import { buildGithubWebhookRoutes } from "../../src/rest/github-routes.js";
 
 const SECRET = "gh-secret";
 
-function sign(body: string): string {
-  return "sha256=" + createHmac("sha256", SECRET).update(body).digest("hex");
+function sign(body: string, secret: string = SECRET): string {
+  return "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 }
 
 let db: Db;
@@ -98,5 +99,97 @@ describe("POST /webhooks/github", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; handled: boolean };
     expect(body).toMatchObject({ ok: true, handled: false });
+  });
+});
+
+describe("POST /webhooks/github with a per-repo secret", () => {
+  it("verifies against the linked repo's own secret, not the global one", async () => {
+    const repoSecret = "repo-only-secret";
+    addGithubRepo(db, { fullName: "acme/widgets", secret: repoSecret });
+    const raw = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "acme/widgets" },
+      pull_request: { number: 7, head: { ref: "agent/SYD-1" } },
+    });
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(raw, repoSecret),
+      },
+      body: raw,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, handled: true, ref: "SYD-1" });
+  });
+
+  it("rejects a delivery signed with the global secret once the repo has its own", async () => {
+    addGithubRepo(db, { fullName: "acme/widgets", secret: "repo-only-secret" });
+    const raw = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "acme/widgets" },
+      pull_request: { number: 7, head: { ref: "agent/SYD-1" } },
+    });
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(raw, SECRET),
+      },
+      body: raw,
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("falls back to the global secret for a repo linked without its own", async () => {
+    addGithubRepo(db, { fullName: "acme/widgets" });
+    const raw = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "acme/widgets" },
+      pull_request: { number: 7, head: { ref: "agent/SYD-1" } },
+    });
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(raw, SECRET),
+      },
+      body: raw,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, handled: true, ref: "SYD-1" });
+  });
+
+  it("falls back to the global secret for an unlinked repo", async () => {
+    const raw = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "acme/unlinked" },
+      pull_request: { number: 7, head: { ref: "agent/SYD-1" } },
+    });
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(raw, SECRET),
+      },
+      body: raw,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, handled: true, ref: "SYD-1" });
+  });
+
+  it("returns 501 when the repo has no own secret, is unlinked, and no global secret is set", async () => {
+    const unconfigured = buildGithubWebhookRoutes(db, undefined);
+    const raw = JSON.stringify({ action: "opened", repository: { full_name: "acme/unlinked" } });
+    const res = await unconfigured.request("/webhooks/github", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-github-event": "pull_request" },
+      body: raw,
+    });
+    expect(res.status).toBe(501);
   });
 });
