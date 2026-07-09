@@ -38,6 +38,7 @@ import {
   type FeedEvent,
 } from "./worker-select.js";
 import { acquirePidLock } from "./pidfile.js";
+import { publishAgentBranch } from "./delivery-exec.js";
 
 type ApiIssue = WorkerIssue & { title: string };
 
@@ -172,10 +173,28 @@ function dispatch(issue: ApiIssue, config: WorkerConfig, token: string, opts: { 
   child.on("exit", (code) => {
     active.delete(issue.ref);
     console.log(`${issue.ref} exited with code ${code}`);
-    try {
-      appendFileSync(logPath, `\n[worker] exited with code ${code}\n`);
-    } catch (err) {
-      console.error(`could not append exit code to ${logPath}: ${(err as Error).message}`);
+    const logLine = (text: string) => {
+      try {
+        appendFileSync(logPath, text);
+      } catch (err) {
+        console.error(`could not append to ${logPath}: ${(err as Error).message}`);
+      }
+    };
+    logLine(`\n[worker] exited with code ${code}\n`);
+    // Delivery gate (SYD-49): a containerized session that pushed agent/<ref>
+    // gets its branch published to GitHub as a PR, host-side (gh + git auth
+    // live here, never in the container). Merging still waits for a human
+    // done-stamp via scripts/deliver.ts.
+    if (config.containerized && config.delivery && config.delivery.openPrs !== false) {
+      publishAgentBranch(project.repo, issue.ref, issue.title, config.url)
+        .then((outcome) => {
+          console.log(`${issue.ref}: ${outcome}`);
+          logLine(`[worker] ${outcome}\n`);
+        })
+        .catch((err: Error) => {
+          console.error(`publish failed for ${issue.ref}: ${err.message}`);
+          logLine(`[worker] publish failed: ${err.message}\n`);
+        });
     }
   });
 
