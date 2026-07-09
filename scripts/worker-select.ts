@@ -476,6 +476,69 @@ export function buildContainerizedPrompt(ref: string, opts: { resumed?: boolean 
 }
 
 /**
+ * Thrown by tracker-write helpers (deliver.ts, agent-worker.ts) when a fetch
+ * gets a non-ok response, carrying the status so `isRetryableError` can tell
+ * a transient 5xx (the tracker restarting mid-deploy, SYD-66) from a
+ * permanent 4xx that retrying would never fix.
+ */
+export class HttpStatusError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpStatusError";
+    this.status = status;
+  }
+}
+
+/**
+ * Backoff schedule for retrying tracker writes across a self-deploy restart
+ * (SYD-66): every SYD delivery restarts the tracker for ~5-15s, and a
+ * worker/deliver write landing in that window used to be silently lost.
+ * These delays (3s/6s/12s/24s, ~45s total) span that window with margin.
+ */
+export const RETRY_BACKOFFS_MS = [3000, 6000, 12000, 24000];
+
+/**
+ * Only network failures (fetch throws a bare TypeError, e.g. "fetch failed",
+ * when the connection is refused or reset) and 5xx responses look like a
+ * tracker restart in progress — worth retrying. A 4xx is a real, permanent
+ * problem with the request that retrying won't fix.
+ */
+export function isRetryableError(err: unknown): boolean {
+  if (err instanceof HttpStatusError) return err.status >= 500;
+  return err instanceof TypeError;
+}
+
+/**
+ * Retries `fn` on retryable errors (network errors, 5xx — see
+ * isRetryableError) using `backoffsMs` as the sleep between attempts,
+ * calling `onRetry` before each sleep. A non-retryable error, or exhausting
+ * every backoff, rethrows the last error unchanged so callers' existing
+ * catch/log handling still applies. `sleep` is injectable so tests can run
+ * the full schedule without waiting on it.
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: {
+    backoffsMs?: number[];
+    onRetry?: (attempt: number, err: unknown, delayMs: number) => void;
+    sleep?: (ms: number) => Promise<void>;
+  } = {}
+): Promise<T> {
+  const backoffs = opts.backoffsMs ?? RETRY_BACKOFFS_MS;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= backoffs.length || !isRetryableError(err)) throw err;
+      opts.onRetry?.(attempt + 1, err, backoffs[attempt]);
+      await sleep(backoffs[attempt]);
+    }
+  }
+}
+
+/**
  * Builds the `docker run` argv for a containerized dispatch. Pure so it's
  * unit-testable without actually spawning docker. Secrets (SWITCHYARD_TOKEN,
  * CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY) are passed with the bare `-e

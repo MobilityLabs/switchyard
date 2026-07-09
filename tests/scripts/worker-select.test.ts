@@ -23,6 +23,10 @@ findResumeRefs,
   workerPidFileName,
   checkRoleLockConflict,
   DEFAULT_MAX_ANSWER_CONCURRENT,
+  HttpStatusError,
+  RETRY_BACKOFFS_MS,
+  isRetryableError,
+  withRetry,
   type WorkerConfig,
   type WorkerIssue,
   type WorkerProject,
@@ -649,5 +653,89 @@ describe("runGated / newTickGate", () => {
       ran = true;
     });
     expect(ran).toBe(true);
+  });
+});
+
+describe("isRetryableError", () => {
+  it("treats a 5xx HttpStatusError as retryable", () => {
+    expect(isRetryableError(new HttpStatusError(500, "boom"))).toBe(true);
+    expect(isRetryableError(new HttpStatusError(503, "boom"))).toBe(true);
+  });
+
+  it("treats a 4xx HttpStatusError as non-retryable", () => {
+    expect(isRetryableError(new HttpStatusError(400, "boom"))).toBe(false);
+    expect(isRetryableError(new HttpStatusError(404, "boom"))).toBe(false);
+  });
+
+  it("treats a bare TypeError (fetch's own network-failure shape) as retryable", () => {
+    expect(isRetryableError(new TypeError("fetch failed"))).toBe(true);
+  });
+
+  it("treats any other error as non-retryable", () => {
+    expect(isRetryableError(new Error("boom"))).toBe(false);
+    expect(isRetryableError("boom")).toBe(false);
+    expect(isRetryableError(undefined)).toBe(false);
+  });
+});
+
+describe("withRetry", () => {
+  it("returns the result on first success without sleeping", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fn = vi.fn().mockResolvedValue("ok");
+    await expect(withRetry(fn, { sleep })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("retries a retryable failure using the default backoff schedule, then succeeds", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const onRetry = vi.fn();
+    let calls = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      calls++;
+      if (calls < 3) throw new TypeError("fetch failed");
+      return "ok";
+    });
+
+    await expect(withRetry(fn, { sleep, onRetry })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual(RETRY_BACKOFFS_MS.slice(0, 2));
+    expect(onRetry).toHaveBeenCalledTimes(2);
+    expect(onRetry.mock.calls[0][0]).toBe(1);
+    expect(onRetry.mock.calls[0][2]).toBe(RETRY_BACKOFFS_MS[0]);
+    expect(onRetry.mock.calls[1][0]).toBe(2);
+    expect(onRetry.mock.calls[1][2]).toBe(RETRY_BACKOFFS_MS[1]);
+  });
+
+  it("throws a non-retryable error immediately without sleeping", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fn = vi.fn().mockRejectedValue(new HttpStatusError(400, "bad request"));
+    await expect(withRetry(fn, { sleep })).rejects.toThrow("bad request");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("exhausts every backoff and rethrows the last error", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const err = new HttpStatusError(503, "still down");
+    const fn = vi.fn().mockRejectedValue(err);
+
+    await expect(withRetry(fn, { sleep, backoffsMs: [10, 20] })).rejects.toThrow("still down");
+    // 1 initial attempt + 2 retries = 3 calls total, sleeping between each.
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([10, 20]);
+  });
+
+  it("uses a custom backoff schedule when given one", async () => {
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    let calls = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      calls++;
+      if (calls < 2) throw new TypeError("fetch failed");
+      return "ok";
+    });
+
+    await expect(withRetry(fn, { sleep, backoffsMs: [100] })).resolves.toBe("ok");
+    expect(sleep).toHaveBeenCalledWith(100);
   });
 });
