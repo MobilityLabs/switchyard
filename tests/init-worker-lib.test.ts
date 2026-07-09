@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProtectMainArgs,
+  DELIVER_LAUNCHD_LABEL,
   formatChecks,
   parseDotEnv,
+  parseGithubRemote,
+  renderDeliverPlist,
   renderWorkerPlist,
   validateWorkerConfig,
 } from "../scripts/init-worker-lib.js";
@@ -187,5 +191,104 @@ describe("formatChecks", () => {
       { name: "server", ok: false, note: "unreachable" },
     ]);
     expect(out).toBe("✓ node\n⚠ slack — SLACK_WEBHOOK_URL not set\n✗ server — unreachable");
+  });
+});
+
+describe("renderDeliverPlist", () => {
+  const plist = renderDeliverPlist({
+    repoRoot: "/Users/sean/sites/switchyard",
+    nodeBinDir: "/Users/sean/.nvm/versions/node/v24.13.0/bin",
+    home: "/Users/sean",
+  });
+
+  it("execs tsx against deliver.ts under its own label, distinct from the worker's", () => {
+    expect(plist).toContain(`<string>${DELIVER_LAUNCHD_LABEL}</string>`);
+    expect(DELIVER_LAUNCHD_LABEL).not.toBe("com.switchyard.worker");
+    expect(plist).toContain("<string>/Users/sean/sites/switchyard/node_modules/.bin/tsx</string>");
+    expect(plist).toContain("<string>/Users/sean/sites/switchyard/scripts/deliver.ts</string>");
+    expect(plist).not.toContain("agent-worker.ts");
+    expect(plist).not.toContain("/bin/bash");
+    expect(plist).not.toContain(".env");
+    expect(plist).not.toMatch(/syd_|sya_|sk-ant|OAUTH/);
+  });
+
+  it("restarts on crash only, same as the worker plist", () => {
+    expect(plist).toMatch(
+      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/
+    );
+  });
+
+  it("logs to its own deliver.{out,err}.log, not the worker's launchd.*.log", () => {
+    expect(plist).toContain("worker-logs/deliver.out.log");
+    expect(plist).toContain("worker-logs/deliver.err.log");
+    expect(plist).not.toContain("launchd.out.log");
+  });
+});
+
+describe("parseGithubRemote", () => {
+  it("parses the SSH form", () => {
+    expect(parseGithubRemote("git@github.com:seanperkins/nocturne.git")).toEqual({
+      owner: "seanperkins",
+      repo: "nocturne",
+    });
+  });
+
+  it("parses the SSH form without a .git suffix", () => {
+    expect(parseGithubRemote("git@github.com:seanperkins/nocturne")).toEqual({
+      owner: "seanperkins",
+      repo: "nocturne",
+    });
+  });
+
+  it("parses the https form, with and without .git", () => {
+    expect(parseGithubRemote("https://github.com/seanperkins/nocturne.git")).toEqual({
+      owner: "seanperkins",
+      repo: "nocturne",
+    });
+    expect(parseGithubRemote("https://github.com/seanperkins/nocturne")).toEqual({
+      owner: "seanperkins",
+      repo: "nocturne",
+    });
+  });
+
+  it("parses the ssh:// form", () => {
+    expect(parseGithubRemote("ssh://git@github.com/seanperkins/nocturne.git")).toEqual({
+      owner: "seanperkins",
+      repo: "nocturne",
+    });
+  });
+
+  it("returns null for a local path or a non-GitHub host", () => {
+    expect(parseGithubRemote("/origin")).toBeNull();
+    expect(parseGithubRemote("/Users/sean/sites/piano-game")).toBeNull();
+    expect(parseGithubRemote("git@gitlab.com:seanperkins/nocturne.git")).toBeNull();
+    expect(parseGithubRemote("https://example.com/seanperkins/nocturne")).toBeNull();
+  });
+});
+
+describe("buildProtectMainArgs", () => {
+  it("targets the right repo's branches/main/protection endpoint via PUT", () => {
+    const { args } = buildProtectMainArgs("seanperkins", "nocturne");
+    expect(args).toEqual([
+      "api",
+      "-X",
+      "PUT",
+      "repos/seanperkins/nocturne/branches/main/protection",
+      "--input",
+      "-",
+    ]);
+  });
+
+  it("blocks force-push and deletion, leaves required reviews off", () => {
+    const { input } = buildProtectMainArgs("seanperkins", "nocturne");
+    const body = JSON.parse(input);
+    expect(body).toEqual({
+      required_status_checks: null,
+      enforce_admins: false,
+      required_pull_request_reviews: null,
+      restrictions: null,
+      allow_force_pushes: false,
+      allow_deletions: false,
+    });
   });
 });

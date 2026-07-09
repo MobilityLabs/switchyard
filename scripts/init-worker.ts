@@ -1,8 +1,11 @@
 // Setup + health-check flow for the local agent worker (SYD-44).
 //
-//   npm run init-worker                       # doctor: check everything, change nothing
-//   npm run init-worker -- --install-launchd  # doctor, then install the KeepAlive LaunchAgent
-//   npm run init-worker -- --self-test        # doctor, then one dry-run worker tick
+//   npm run init-worker                                # doctor: check everything, change nothing
+//   npm run init-worker -- --install-launchd           # doctor, then install the worker's KeepAlive LaunchAgent
+//   npm run init-worker -- --install-launchd-deliver   # doctor, then install deliver.ts's KeepAlive LaunchAgent
+//   npm run init-worker -- --self-test                 # doctor, then one dry-run worker tick
+//   npm run init-worker -- --protect-main [KEY]        # doctor, then apply branch protection to main
+//                                                       # (all configured projects, or just KEY)
 //
 // Decision of record (SYD-44): the runner stays basic — `claude -p` headless
 // sessions authenticated by CLAUDE_CODE_OAUTH_TOKEN, no Agent SDK. This script
@@ -15,11 +18,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerConfig } from "./worker-select.js";
+import { isLocked } from "./pidfile.js";
 import {
+  buildProtectMainArgs,
   formatChecks,
   parseDotEnv,
+  parseGithubRemote,
+  renderDeliverPlist,
   renderWorkerPlist,
   validateWorkerConfig,
+  DELIVER_LAUNCHD_LABEL,
   WORKER_LAUNCHD_LABEL,
   type CheckResult,
 } from "./init-worker-lib.js";
@@ -184,6 +192,43 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     note: env.SLACK_WEBHOOK_URL ? "SLACK_WEBHOOK_URL set" : "SLACK_WEBHOOK_URL not set — notifier skipped",
   });
 
+  // Delivery gate (SYD-49) prerequisites — deliver.ts shells out to `gh` for
+  // every project, so these only matter (and are only checked) once a
+  // `delivery` block is configured. `switchyard-worker.json` validity above
+  // already covers the block's own shape; this covers what it can't see from
+  // the config alone: whether `gh` is actually installed and authenticated,
+  // and whether each project repo actually has a GitHub `origin` to open PRs
+  // and merge against.
+  if (config?.delivery) {
+    const hasGh = commandExists("gh");
+    results.push({
+      name: "gh CLI",
+      ok: hasGh,
+      note: hasGh ? undefined : "required for the delivery gate — https://cli.github.com",
+    });
+    if (hasGh) {
+      const auth = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
+      results.push({
+        name: "gh authenticated",
+        ok: auth.status === 0,
+        note: auth.status === 0 ? undefined : "run: gh auth login",
+      });
+    }
+    for (const [key, project] of Object.entries(config.projects)) {
+      const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], { encoding: "utf8" });
+      if (remote.status !== 0) {
+        results.push({ name: `projects.${key} GitHub origin`, ok: false, note: "no `origin` remote configured" });
+        continue;
+      }
+      const parsed = parseGithubRemote(remote.stdout.trim());
+      results.push({
+        name: `projects.${key} GitHub origin`,
+        ok: parsed !== null,
+        note: parsed ? `${parsed.owner}/${parsed.repo}` : `origin is not a GitHub remote: ${remote.stdout.trim()}`,
+      });
+    }
+  }
+
   return { results, config };
 }
 
@@ -192,31 +237,22 @@ function workerAlreadyRunning(): boolean {
   return out.status === 0 && out.stdout.trim() !== "";
 }
 
-function installLaunchd(config: WorkerConfig | null): void {
-  // Bare-host mode shells out to `claude`, which launchd won't find on its
-  // minimal PATH (often ~/.local/bin) — resolve it now and pin it in.
-  const extraPathDirs: string[] = [];
-  if (config && !config.containerized) {
-    const which = spawnSync("which", ["claude"], { encoding: "utf8" });
-    if (which.status === 0) extraPathDirs.push(path.dirname(which.stdout.trim()));
-  }
+function deliverAlreadyRunning(): boolean {
+  return isLocked(path.join(repoRoot, ".superpowers", "deliver.pid"));
+}
 
-  const plist = renderWorkerPlist({
-    repoRoot,
-    nodeBinDir: path.dirname(process.execPath),
-    home: os.homedir(),
-    extraPathDirs,
-  });
-  const dest = path.join(os.homedir(), "Library", "LaunchAgents", `${WORKER_LAUNCHD_LABEL}.plist`);
+/** Shared write-plist / launchctl-load flow for the worker and deliver LaunchAgents. */
+function installPlist(opts: { label: string; plist: string; alreadyRunning: () => boolean; noun: string }): void {
+  const dest = path.join(os.homedir(), "Library", "LaunchAgents", `${opts.label}.plist`);
   mkdirSync(path.dirname(dest), { recursive: true });
   mkdirSync(path.join(repoRoot, ".superpowers", "worker-logs"), { recursive: true });
-  writeFileSync(dest, plist);
+  writeFileSync(dest, opts.plist);
   console.log(`wrote ${dest}`);
 
-  if (workerAlreadyRunning()) {
+  if (opts.alreadyRunning()) {
     console.log(
-      "\nA worker process is already running — NOT loading the LaunchAgent now\n" +
-      "(two workers would double-dispatch). If it's a previous LaunchAgent install:\n" +
+      `\nA ${opts.noun} process is already running — NOT loading the LaunchAgent now\n` +
+      `(two would double-run). If it's a previous LaunchAgent install:\n` +
       `  launchctl unload ${dest} && launchctl load ${dest}\n` +
       "If it's a hand-started loop, kill it, then:\n" +
       `  launchctl load ${dest}`
@@ -236,9 +272,95 @@ function installLaunchd(config: WorkerConfig | null): void {
     );
     process.exit(1);
   }
-  console.log(`loaded ${WORKER_LAUNCHD_LABEL} — worker starts now, restarts on crash, survives reboot`);
+  console.log(`loaded ${opts.label} — ${opts.noun} starts now, restarts on crash, survives reboot`);
   console.log(`stop it with: launchctl unload ${dest}`);
+}
+
+function installLaunchd(config: WorkerConfig | null): void {
+  // Bare-host mode shells out to `claude`, which launchd won't find on its
+  // minimal PATH (often ~/.local/bin) — resolve it now and pin it in.
+  const extraPathDirs: string[] = [];
+  if (config && !config.containerized) {
+    const which = spawnSync("which", ["claude"], { encoding: "utf8" });
+    if (which.status === 0) extraPathDirs.push(path.dirname(which.stdout.trim()));
+  }
+
+  const plist = renderWorkerPlist({
+    repoRoot,
+    nodeBinDir: path.dirname(process.execPath),
+    home: os.homedir(),
+    extraPathDirs,
+  });
+  installPlist({ label: WORKER_LAUNCHD_LABEL, plist, alreadyRunning: workerAlreadyRunning, noun: "worker" });
   console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "launchd.out.log")}`);
+}
+
+/** Sibling of installLaunchd for the delivery gate loop (SYD-53) — otherwise deliver.ts has to be started by hand and dies with the terminal. */
+function installLaunchdDeliver(config: WorkerConfig | null): void {
+  if (!config?.delivery) {
+    console.error(
+      "switchyard-worker.json has no `delivery` block — nothing to install. " +
+      "Add one (see docs/onboarding-a-project.md) before running --install-launchd-deliver."
+    );
+    process.exit(1);
+  }
+
+  const plist = renderDeliverPlist({
+    repoRoot,
+    nodeBinDir: path.dirname(process.execPath),
+    home: os.homedir(),
+  });
+  installPlist({
+    label: DELIVER_LAUNCHD_LABEL,
+    plist,
+    alreadyRunning: deliverAlreadyRunning,
+    noun: "delivery worker",
+  });
+  console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "deliver.out.log")}`);
+}
+
+/**
+ * Applies the standard force-push/deletion branch protection (see
+ * docs/onboarding-a-project.md step 4) to `main` on each configured
+ * project's repo, or just `onlyKey` if given. Resolves owner/repo from each
+ * project's `origin` remote rather than trusting hand-entered values.
+ */
+function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): void {
+  if (!config) {
+    console.error("switchyard-worker.json is missing or invalid — fix it before running --protect-main.");
+    process.exit(1);
+  }
+  const keys = onlyKey ? [onlyKey] : Object.keys(config.projects);
+  let failures = 0;
+  for (const key of keys) {
+    const project = config.projects[key];
+    if (!project) {
+      console.error(`✗ ${key}: not in switchyard-worker.json projects`);
+      failures++;
+      continue;
+    }
+    const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], { encoding: "utf8" });
+    if (remote.status !== 0) {
+      console.error(`✗ ${key}: no \`origin\` remote in ${project.repo}`);
+      failures++;
+      continue;
+    }
+    const parsed = parseGithubRemote(remote.stdout.trim());
+    if (!parsed) {
+      console.error(`✗ ${key}: origin is not a GitHub remote (${remote.stdout.trim()})`);
+      failures++;
+      continue;
+    }
+    const { args, input } = buildProtectMainArgs(parsed.owner, parsed.repo);
+    const res = spawnSync("gh", args, { input, encoding: "utf8" });
+    if (res.status !== 0) {
+      console.error(`✗ ${key}: gh api failed — ${(res.stderr || res.stdout || "").trim()}`);
+      failures++;
+      continue;
+    }
+    console.log(`✓ ${key}: main branch protected on ${parsed.owner}/${parsed.repo} (force-push + deletion blocked)`);
+  }
+  if (failures > 0) process.exit(1);
 }
 
 function selfTest(): void {
@@ -270,6 +392,14 @@ async function main(): Promise<void> {
 
   if (args.includes("--self-test")) selfTest();
   if (args.includes("--install-launchd")) installLaunchd(config);
+  if (args.includes("--install-launchd-deliver")) installLaunchdDeliver(config);
+
+  const protectIdx = args.indexOf("--protect-main");
+  if (protectIdx !== -1) {
+    const next = args[protectIdx + 1];
+    const key = next && !next.startsWith("-") ? next : undefined;
+    protectMain(config, key);
+  }
 }
 
 main().catch((err) => {
