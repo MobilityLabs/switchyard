@@ -389,6 +389,12 @@ describe("buildAnswerPrompt", () => {
     expect(prompt).not.toMatch(/claim_issue|in_review/i);
     expect(prompt).toMatch(/read-only|do not claim|do not.*edit/i);
   });
+
+  it("tells the session to file tracked work with file_issue", () => {
+    const prompt = buildAnswerPrompt("SYD-7");
+    expect(prompt).toMatch(/file_issue/);
+    expect(prompt).toMatch(/triage/i);
+  });
 });
 
 describe("ANSWER_ALLOWED_TOOLS", () => {
@@ -399,6 +405,10 @@ describe("ANSWER_ALLOWED_TOOLS", () => {
     expect(ANSWER_ALLOWED_TOOLS).not.toContain("mcp__switchyard__update_issue");
     expect(ANSWER_ALLOWED_TOOLS).not.toContain("mcp__switchyard__claim_issue");
     expect(ANSWER_ALLOWED_TOOLS).toContain("mcp__switchyard__comment");
+  });
+
+  it("allows filing new issues", () => {
+    expect(ANSWER_ALLOWED_TOOLS).toContain("mcp__switchyard__file_issue");
   });
 });
 

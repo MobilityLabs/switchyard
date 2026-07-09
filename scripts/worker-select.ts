@@ -306,15 +306,20 @@ export function selectAnswerable(
 /**
  * Read-only allowlist for answerer-mode sessions (SYD-56): no Edit/Write/Bash
  * and no MCP tools that could claim, transition, or otherwise mutate an
- * issue — only enough to read context and post the answer as a comment. This
- * is enforced here (not just in the prompt) since the worker fully controls
- * the tool allowlist it hands to a headless session.
+ * existing issue — only enough to read context, post the answer as a
+ * comment, and file new issues (SYD-79: `file_issue` is the most-governed
+ * write in the system — agent filings land in `triage` with required
+ * provenance and only a human can move them out, so it feeds the human gate
+ * rather than bypassing it). This is enforced here (not just in the prompt)
+ * since the worker fully controls the tool allowlist it hands to a headless
+ * session.
  */
 export const ANSWER_ALLOWED_TOOLS = [
   "mcp__switchyard__get_issue",
   "mcp__switchyard__search_issues",
   "mcp__switchyard__list_projects",
   "mcp__switchyard__comment",
+  "mcp__switchyard__file_issue",
   "Read",
   "Grep",
   "Glob",
@@ -324,7 +329,8 @@ export const ANSWER_ALLOWED_TOOLS = [
  * Prompt for an answerer-mode session (SYD-56): a human addressed a question
  * to agents on `ref` (a comment leading with `@agent`); the session reads the
  * issue + activity + repo and answers in a comment, with no write powers
- * beyond that comment — it never claims, transitions, or edits anything.
+ * beyond that comment and filing new issues — it never claims, transitions,
+ * or edits anything.
  */
 export function buildAnswerPrompt(ref: string): string {
   return (
@@ -332,8 +338,11 @@ export function buildAnswerPrompt(ref: string): string {
     `(a comment leading with @agent). Call get_issue first and read the activity ` +
     `feed to find that question, then read whatever repo context you need to answer ` +
     `it accurately. Post your answer as a comment on ${ref} using the comment tool. ` +
-    `This is a read-only, answer-only session: do not claim the issue, change its ` +
-    `status, or edit any files — just answer the question in a comment.`
+    `If the question asks for work to be tracked, file it with file_issue (it lands ` +
+    `in triage for human review) and cite the refs in your answer. This is a ` +
+    `read-only, answer-only session otherwise: do not claim the issue, change its ` +
+    `status, or edit any files — just answer the question in a comment, filing new ` +
+    `issues as needed.`
   );
 }
 
