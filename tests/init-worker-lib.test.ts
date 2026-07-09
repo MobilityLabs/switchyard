@@ -8,6 +8,7 @@ import {
   formatChecks,
   parseDotEnv,
   parseGithubRemote,
+  parsePlistPath,
   renderDeliverPlist,
   renderWorkerPlist,
   summarizeRoleStatus,
@@ -224,6 +225,29 @@ describe("renderWorkerPlist", () => {
     it("role: all is byte-identical to the no-role-passed default", () => {
       expect(renderWorkerPlist({ ...base, role: "all" })).toBe(renderWorkerPlist(base));
     });
+  });
+});
+
+describe("parsePlistPath", () => {
+  it("extracts the colon-joined PATH dirs from a rendered plist (SYD-74)", () => {
+    const plist = renderWorkerPlist({
+      repoRoot: "/r",
+      nodeBinDir: "/n",
+      home: "/h",
+      extraPathDirs: ["/Users/sean/.local/bin"],
+    });
+    expect(parsePlistPath(plist)).toEqual([
+      "/n", "/Users/sean/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+    ]);
+  });
+
+  it("omits extraPathDirs entirely when none were given, matching the pre-SYD-74 default", () => {
+    const plist = renderWorkerPlist({ repoRoot: "/r", nodeBinDir: "/n", home: "/h" });
+    expect(parsePlistPath(plist)).toEqual(["/n", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]);
+  });
+
+  it("returns an empty list for XML with no PATH key", () => {
+    expect(parsePlistPath("<plist><dict></dict></plist>")).toEqual([]);
   });
 });
 
