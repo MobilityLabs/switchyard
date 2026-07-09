@@ -5,8 +5,10 @@ import { events } from "../../src/db/schema.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
+import { addComment } from "../../src/services/comments.js";
 import {
   listRecentEvents,
+  listUnansweredQuestions,
   DEFAULT_RECENT_EVENTS_LIMIT,
   MAX_RECENT_EVENTS_LIMIT,
 } from "../../src/services/events.js";
@@ -65,5 +67,68 @@ describe("listRecentEvents", () => {
     updateIssue(db, human, "SYD-1", { status: "todo" });
     updateIssue(db, human, "SYD-1", { status: "in_progress" });
     expect(listRecentEvents(db, { limit: 1 })).toHaveLength(1);
+  });
+});
+
+describe("listUnansweredQuestions", () => {
+  function setup() {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    return { db, human, agent };
+  }
+
+  it("returns an issue whose @agent question has no later agent comment", () => {
+    const { db, human } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    addComment(db, human, "SYD-1", "@agent what's blocking this?");
+
+    expect(listUnansweredQuestions(db).map((q) => q.ref)).toEqual(["SYD-1"]);
+  });
+
+  it("drops an issue once an agent actor comments after the question", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    addComment(db, human, "SYD-1", "@agent what's blocking this?");
+    addComment(db, agent, "SYD-1", "Nothing — it's ready for review.");
+
+    expect(listUnansweredQuestions(db)).toEqual([]);
+  });
+
+  it("still an unanswered question if a human replies but no agent answers", () => {
+    const { db, human } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    addComment(db, human, "SYD-1", "@agent what's blocking this?");
+    addComment(db, human, "SYD-1", "bump");
+
+    expect(listUnansweredQuestions(db).map((q) => q.ref)).toEqual(["SYD-1"]);
+  });
+
+  it("coalesces two unanswered questions on the same issue into a single result", () => {
+    const { db, human } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    addComment(db, human, "SYD-1", "@agent first question?");
+    addComment(db, human, "SYD-1", "@agent second question?");
+
+    expect(listUnansweredQuestions(db).map((q) => q.ref)).toEqual(["SYD-1"]);
+  });
+
+  it("becomes unanswered again if a second question follows an answered one", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    addComment(db, human, "SYD-1", "@agent first question?");
+    addComment(db, agent, "SYD-1", "Answered the first one.");
+    addComment(db, human, "SYD-1", "@agent a follow-up question?");
+
+    expect(listUnansweredQuestions(db).map((q) => q.ref)).toEqual(["SYD-1"]);
+  });
+
+  it("ignores issues with no agent_question events", () => {
+    const { db, human } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    addComment(db, human, "SYD-1", "just a regular comment");
+
+    expect(listUnansweredQuestions(db)).toEqual([]);
   });
 });

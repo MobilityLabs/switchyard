@@ -1,4 +1,4 @@
-import { asc, desc, eq, gt } from "drizzle-orm";
+import { asc, desc, eq, gt, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { events, actors, issues, projects } from "../db/schema.js";
 
@@ -62,4 +62,39 @@ export function listRecentEvents(db: Db, filters: RecentEventsFilters = {}) {
     projectKey: r.p.key,
     actorName: r.a.name,
   }));
+}
+
+export type UnansweredQuestion = {
+  ref: string;
+  questionEventId: number;
+};
+
+/**
+ * Issues whose latest `agent_question` event (SYD-56) has no later
+ * agent-actor `comment` event on the same issue — derived from the event log
+ * (not the worker's in-memory state) so it survives worker restarts and
+ * naturally coalesces repeated questions on one issue into a single result
+ * (SYD-60). Ordered oldest-question-first.
+ */
+export function listUnansweredQuestions(db: Db): UnansweredQuestion[] {
+  return db.all<UnansweredQuestion>(sql`
+    SELECT p.key || '-' || i.number AS ref, q.questionEventId AS questionEventId
+    FROM (
+      SELECT issue_id, MAX(id) AS questionEventId
+      FROM events
+      WHERE type = 'agent_question'
+      GROUP BY issue_id
+    ) q
+    JOIN issues i ON i.id = q.issue_id
+    JOIN projects p ON p.id = i.project_id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM events e2
+      JOIN actors a ON a.id = e2.actor_id
+      WHERE e2.issue_id = q.issue_id
+        AND e2.type = 'comment'
+        AND a.type = 'agent'
+        AND e2.id > q.questionEventId
+    )
+    ORDER BY q.questionEventId ASC
+  `);
 }

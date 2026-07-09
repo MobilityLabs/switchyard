@@ -13,7 +13,7 @@ import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issu
 import { addDependency, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
-import { listRecentEvents } from "../services/events.js";
+import { listRecentEvents, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
@@ -208,6 +208,8 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       })
     );
   });
+
+  app.get("/unanswered-questions", (c) => c.json(listUnansweredQuestions(db)));
 
   // Redact secret from webhook objects for safe API responses
   const redact = ({ secret, ...rest }: Webhook) => ({ ...rest, hasSecret: secret !== null });

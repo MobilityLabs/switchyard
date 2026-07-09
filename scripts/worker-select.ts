@@ -179,6 +179,38 @@ export function recordAnswerAttempt(answerState: AnswerState, ref: string): void
   answerState.set(ref, (answerState.get(ref) ?? 0) + 1);
 }
 
+/** Distinct `active` map key for an answer session, so it never collides with a work dispatch on the same ref. */
+export function answerKey(ref: string): string {
+  return `${ref}#answer`;
+}
+
+/**
+ * Filters unanswered-question refs (SYD-60: derived from the event log by
+ * GET /api/unanswered-questions, a restart-proof backstop for questions
+ * deferred at capacity or asked while the worker was down) down to the ones
+ * the worker should dispatch an answer session for right now: belongs to a
+ * configured project, doesn't already have an answer session running,
+ * hasn't hit `maxAnswersPerIssue`, and fits within remaining `maxConcurrent`
+ * capacity. `activeKeys` is every key currently in the worker's `active`
+ * map — work dispatches and answer sessions alike, since they share one
+ * capacity pool.
+ */
+export function selectAnswerable(
+  refs: string[],
+  config: WorkerConfig,
+  activeKeys: Iterable<string>,
+  answerState: ReadonlyMap<string, number>
+): string[] {
+  const active = new Set(activeKeys);
+  const capacity = config.maxConcurrent - active.size;
+  if (capacity <= 0) return [];
+
+  const eligible = refs.filter(
+    (ref) => projectKeyOf(ref) in config.projects && !active.has(answerKey(ref))
+  );
+  return filterAnswerCapped(eligible, answerState, config.maxAnswersPerIssue).slice(0, capacity);
+}
+
 /**
  * Read-only allowlist for answerer-mode sessions (SYD-56): no Edit/Write/Bash
  * and no MCP tools that could claim, transition, or otherwise mutate an
