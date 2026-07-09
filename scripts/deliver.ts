@@ -20,6 +20,7 @@ import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import { projectKeyOf, newTickGate, runGated, type WorkerConfig } from "./worker-select.js";
 import {
   findDeliverableRefs,
+  feedGap,
   parseCursorText,
   deliveryComment,
   deliveryFailureComment,
@@ -113,6 +114,7 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
   } catch (err) {
     const message = (err as Error).message;
     console.error(`delivery failed for ${ref}: ${message}`);
+    if (dryRun) return;
     await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
       console.error(`could not comment the failure on ${ref}: ${e.message}`)
     );
@@ -121,12 +123,19 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
 
 async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof newTickGate>, dryRun: boolean): Promise<void> {
   await runGated(gate, async () => {
-    const url = `${config.url.replace(/\/$/, "")}/api/events?limit=200`;
+    const url = `${config.url.replace(/\/$/, "")}/api/events?limit=500`;
     const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`GET /api/events failed: ${res.status} ${await res.text()}`);
     const feed = (await res.json()) as DeliveryFeedEvent[];
 
     const cursor = readCursor();
+    const gap = feedGap(feed, cursor);
+    if (gap) {
+      console.error(
+        `WARNING: event feed window no longer reaches the cursor — events ${gap.from}..${gap.to} were missed. ` +
+        `Any done-stamps in that range were NOT delivered; check the board for stamped-but-unmerged issues.`
+      );
+    }
     const { refs, lastEventId } = findDeliverableRefs(feed, Object.keys(config.projects), cursor);
     for (const ref of refs) {
       // Sequential on purpose: deliveries deploy; two at once would race the clone.
@@ -134,7 +143,9 @@ async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof
     }
     // Written after delivery so a crash mid-batch re-runs the refs — safe,
     // because a merged PR is no longer open and gets skipped on the retry.
-    if (lastEventId !== null && lastEventId !== cursor) writeCursor(lastEventId);
+    // Skipped under --dry-run: dry runs must be non-mutating, so a dry run
+    // never consumes a real approval out from under the next real tick.
+    if (!dryRun && lastEventId !== null && lastEventId !== cursor) writeCursor(lastEventId);
   });
 }
 

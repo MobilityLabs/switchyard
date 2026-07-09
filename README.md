@@ -241,7 +241,12 @@ the issue `done`. Three pieces (SYD-49):
    merge SHA + deploy result on the issue. Issues without an open agent PR
    (interactive work) are skipped: interactive sessions keep direct merges.
    The event cursor persists in `.superpowers/deliver-cursor`, so approvals
-   stamped while the worker was down are delivered on restart.
+   stamped while the worker was down are delivered on restart. A crash or
+   shutdown between the merge and the deploy leaves the PR merged but not
+   deployed and not commented — on restart the ref is skipped (its PR is no
+   longer open), so if an issue is stamped done and its PR shows merged but no
+   delivery comment ever lands, re-run the deploy manually (`npm run deploy`)
+   or re-deliver by hand.
 3. **Branch protection on `main`** blocks force-pushes and deletion. Required
    PR reviews stay off for now: all pushes authenticate as one GitHub identity
    and GitHub forbids self-approval — full can't-push-to-main enforcement is

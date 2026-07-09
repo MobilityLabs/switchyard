@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   agentBranch,
   findDeliverableRefs,
+  feedGap,
   buildPushArgs,
   buildPrListArgs,
   buildPrCreateArgs,
@@ -60,6 +61,28 @@ describe("findDeliverableRefs", () => {
 
   it("never moves the cursor backwards", () => {
     expect(findDeliverableRefs([ev({ id: 3 })], keys, 9).lastEventId).toBe(9);
+  });
+});
+
+describe("feedGap", () => {
+  it("null cursor ⇒ null", () => {
+    expect(feedGap([ev({ id: 9 })], null)).toBeNull();
+  });
+
+  it("empty feed ⇒ null", () => {
+    expect(feedGap([], 5)).toBeNull();
+  });
+
+  it("contiguous window (oldest === cursor + 1) ⇒ null", () => {
+    expect(feedGap([ev({ id: 6 }), ev({ id: 10 })], 5)).toBeNull();
+  });
+
+  it("overlapping window (oldest <= cursor) ⇒ null", () => {
+    expect(feedGap([ev({ id: 3 }), ev({ id: 10 })], 5)).toBeNull();
+  });
+
+  it("gap between cursor and window's oldest id", () => {
+    expect(feedGap([ev({ id: 9 }), ev({ id: 15 })], 5)).toEqual({ from: 6, to: 8 });
   });
 });
 

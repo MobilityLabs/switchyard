@@ -48,6 +48,22 @@ export function findDeliverableRefs(
   return { refs: [...refs], lastEventId: Math.max(newestId, lastEventId) };
 }
 
+/**
+ * Detects a gap between the persisted cursor and the oldest event the feed
+ * window still contains: events in (lastEventId, oldest) are gone from the
+ * window and any done-stamps among them will never fire. Returns the missed
+ * id range, or null when the window still overlaps the cursor (or there is
+ * nothing to compare).
+ */
+export function feedGap(
+  feed: DeliveryFeedEvent[],
+  lastEventId: number | null
+): { from: number; to: number } | null {
+  if (lastEventId === null || feed.length === 0) return null;
+  const oldest = Math.min(...feed.map((e) => e.id));
+  return oldest > lastEventId + 1 ? { from: lastEventId + 1, to: oldest - 1 } : null;
+}
+
 export function buildPrTitle(ref: string, issueTitle: string): string {
   return `${ref}: ${issueTitle}`;
 }
