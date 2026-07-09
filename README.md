@@ -215,6 +215,38 @@ commits. The container gets no host filesystem beyond that one mount, and can
 only ever push that one branch name — merging stays a human decision, same
 as bare mode.
 
+## Delivery gate
+
+Unattended agent work never lands on `main` (or the NAS) until a human stamps
+the issue `done`. Three pieces (SYD-49):
+
+1. **Workers open PRs.** When a containerized session exits having pushed
+   `agent/<ref>` into the host repo, the worker pushes that branch to GitHub
+   and opens a PR titled with the ref — host-side, so containers never hold
+   GitHub credentials. Controlled by `delivery.openPrs` (default true when the
+   `delivery` block exists).
+2. **A delivery worker merges + deploys on the done-stamp.**
+
+   ```bash
+   SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts            # loop forever
+   SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts --once     # single scan
+   SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts --dry-run  # print, don't merge
+   ```
+
+   It polls `GET /api/events` (every `delivery.pollSeconds`, default 30s) for
+   `status_changed → done` — a transition only humans can make, server-enforced
+   — merges the open `agent/<ref>` PR, deploys via `npm run deploy` from a
+   dedicated clean clone (`delivery.cloneDir`, default
+   `~/.switchyard/deliver-clones` — never a working tree), and comments the
+   merge SHA + deploy result on the issue. Issues without an open agent PR
+   (interactive work) are skipped: interactive sessions keep direct merges.
+   The event cursor persists in `.superpowers/deliver-cursor`, so approvals
+   stamped while the worker was down are delivered on restart.
+3. **Branch protection on `main`** blocks force-pushes and deletion. Required
+   PR reviews stay off for now: all pushes authenticate as one GitHub identity
+   and GitHub forbids self-approval — full can't-push-to-main enforcement is
+   the SYD-19 (second identity) upgrade path.
+
 Escalations resume fast: when a session calls `request_human_input`, the issue
 parks (`needsInput`) until a human answers with a comment. The answer releases
 the claim server-side (back to `todo`, unassigned), and the worker's event-feed

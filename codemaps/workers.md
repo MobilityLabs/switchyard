@@ -36,6 +36,18 @@ Host repo mounted at `/origin` (rw) → container clones to `/work`, checks out 
 
 `npm run init-worker` — checks config, repos, docker image, tokens, server reachability, and that the token is an *agent* actor. `--self-test` dry-run tick; `--install-launchd` writes + loads `~/Library/LaunchAgents/com.switchyard.worker.plist` (KeepAlive, no secrets in plist).
 
+## Delivery worker (`scripts/deliver.ts`)
+
+Merges + deploys agent work when a human stamps the issue done (SYD-49).
+Polls `/api/events` (`delivery.pollSeconds`, 30s) for `status_changed→done`
+(human-only, server-enforced) → merges open `agent/<ref>` PR via `gh` →
+deploys `npm run deploy` from a clean clone (`delivery.cloneDir`, default
+`~/.switchyard/deliver-clones/<KEY>`) → comments merge SHA + deploy result.
+No open agent PR ⇒ skip (interactive work merges directly). Cursor persists in
+`.superpowers/deliver-cursor`; lock `.superpowers/deliver.pid`. Pure logic in
+`scripts/delivery-lib.ts`, exec in `scripts/delivery-exec.ts`. The dispatch
+worker publishes `agent/<ref>` → PR on container exit (`delivery.openPrs`).
+
 ## Webhook consumers
 
 - Dispatcher (in-server): `services/webhook-dispatcher.ts`, 2s poll from `webhookCursor`, best-effort POST, HMAC header when secret set.
