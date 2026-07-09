@@ -75,6 +75,12 @@ export function validateWorkerConfig(raw: unknown): string[] {
       }
     }
   }
+  if (
+    c.maxAnswersPerIssue !== undefined &&
+    (typeof c.maxAnswersPerIssue !== "number" || !Number.isInteger(c.maxAnswersPerIssue) || c.maxAnswersPerIssue < 1)
+  ) {
+    problems.push("`maxAnswersPerIssue` must be an integer >= 1");
+  }
   if (c.delivery !== undefined) {
     if (typeof c.delivery !== "object" || c.delivery === null || Array.isArray(c.delivery)) {
       problems.push("`delivery` must be an object");

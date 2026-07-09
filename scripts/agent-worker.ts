@@ -8,13 +8,19 @@
 // Besides the main issue poll (intervalSeconds), a lightweight event-feed poll
 // (eventPollSeconds, default 15s) watches for needs_input_cleared — a human
 // answering an escalation — and re-dispatches that issue within seconds instead
-// of waiting for the next full tick.
+// of waiting for the next full tick. The same poll also watches for
+// agent_question (SYD-56: a human comment leading with `@agent`) and dispatches
+// a read-only answerer-mode session — it reads the issue/repo and posts a
+// comment, never claims or transitions the issue, and runs on any status
+// (including triage, since answering doesn't bypass the triage gate).
 //
 // Config: switchyard-worker.json at the repo root (copy switchyard-worker.example.json).
 // Safety model: the "auto" label (or whatever `label` is set to) is the human control
 // point — nothing is dispatched unless a human labels the issue. maxConcurrent caps
-// how many headless sessions can be running at once. Dispatched sessions still go
-// through claim -> in_review -> human review; they can never reach `done` themselves.
+// how many headless sessions can be running at once (shared with answerer-mode
+// sessions); maxAnswersPerIssue additionally caps answer sessions per issue.
+// Dispatched sessions still go through claim -> in_review -> human review; they
+// can never reach `done` themselves.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import {
@@ -28,6 +34,11 @@ import {
   filterRetryCapped,
   recordAttempt,
   findResumeRefs,
+  findAnswerRefs,
+  filterAnswerCapped,
+  recordAnswerAttempt,
+  buildAnswerPrompt,
+  ANSWER_ALLOWED_TOOLS,
   projectKeyOf,
   buildDockerArgs,
   newTickGate,
@@ -36,6 +47,7 @@ import {
   type WorkerIssue,
   type RetryState,
   type FeedEvent,
+  type AnswerState,
 } from "./worker-select.js";
 import { acquirePidLock } from "./pidfile.js";
 import { publishAgentBranch } from "./delivery-exec.js";
@@ -54,6 +66,10 @@ const retryState = new Map<string, RetryState>();
 const resumeRefs = new Set<string>();
 let eventCursor: number | null = null;
 const tickGate = newTickGate();
+// Answerer mode (SYD-56): count of answer sessions dispatched per ref, kept
+// separate from `active`'s work-session key so an answer and a work session
+// can run concurrently on the same issue.
+const answerState: AnswerState = new Map();
 
 function repoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -263,6 +279,123 @@ function dispatchSdk(
     .finally(() => active.delete(issue.ref));
 }
 
+/** Distinct `active` map key for an answer session, so it never collides with a work dispatch on the same ref. */
+function answerKey(ref: string): string {
+  return `${ref}#answer`;
+}
+
+/**
+ * Dispatches a read-only answerer-mode session (SYD-56) for `ref`: same
+ * maxConcurrent pool as work dispatch (shared cost control) plus a
+ * per-issue answer cap, restricted to ANSWER_ALLOWED_TOOLS so it cannot
+ * claim, transition, or edit anything — it can only read and post a
+ * comment. Runs bare-host (never containerized): read-only work doesn't
+ * need the branch/push sandbox containerized mode exists for.
+ */
+function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: { dryRun: boolean }): void {
+  const key = answerKey(ref);
+  if (active.has(key)) return;
+  if (active.size >= config.maxConcurrent) {
+    console.log(`answer session for ${ref} deferred: at maxConcurrent capacity`);
+    return;
+  }
+  if (filterAnswerCapped([ref], answerState, config.maxAnswersPerIssue).length === 0) {
+    console.log(`answer session for ${ref} skipped: answers-per-issue cap reached`);
+    return;
+  }
+
+  const project = config.projects[projectKeyOf(ref)];
+  if (!project) return; // findAnswerRefs already filters to configured projects
+
+  if (opts.dryRun) {
+    console.log(`[dry-run] would dispatch answer session for ${ref}`);
+    return;
+  }
+
+  recordAnswerAttempt(answerState, ref);
+  const logDir = path.join(project.repo, ".superpowers", "worker-logs");
+  mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(logDir, `${ref}.answer.log`);
+
+  if ((config.runner ?? "cli") === "sdk") {
+    dispatchAnswerSdk(ref, project.repo, config, token, logPath);
+    return;
+  }
+
+  const fd = openSync(logPath, "a");
+  let child: ChildProcess;
+  try {
+    child = spawn(
+      "claude",
+      ["-p", buildAnswerPrompt(ref), "--allowedTools", ANSWER_ALLOWED_TOOLS.join(",")],
+      { cwd: project.repo, detached: true, stdio: ["ignore", fd, fd] },
+    );
+  } catch (err) {
+    console.error(`failed to dispatch answer session for ${ref}: ${(err as Error).message}`);
+    return;
+  } finally {
+    closeSync(fd);
+  }
+
+  active.set(key, child);
+  console.log(`dispatched answer session for ${ref} (pid ${child.pid}) -> ${logPath}`);
+
+  child.on("exit", (code) => {
+    active.delete(key);
+    console.log(`answer session for ${ref} exited with code ${code}`);
+  });
+  child.on("error", (err) => {
+    active.delete(key);
+    console.error(`failed to spawn answer session for ${ref}: ${err.message}`);
+  });
+}
+
+/** In-process SDK dispatch for answerer mode — mirrors `dispatchSdk`, restricted to ANSWER_ALLOWED_TOOLS. */
+function dispatchAnswerSdk(
+  ref: string,
+  repo: string,
+  config: WorkerConfig,
+  token: string,
+  logPath: string,
+): void {
+  const key = answerKey(ref);
+  const safeAppend = (text: string) => {
+    try {
+      appendFileSync(logPath, text);
+    } catch (err) {
+      console.error(`could not write ${logPath}: ${(err as Error).message}`);
+    }
+  };
+  active.set(key, "sdk");
+  console.log(`dispatched answer session for ${ref} (sdk session) -> ${logPath}`);
+  safeAppend(`[worker] sdk answer session starting for ${ref}\n`);
+
+  const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
+  import(runnerPath)
+    .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
+      mod.runSdkSession({
+        prompt: buildAnswerPrompt(ref),
+        cwd: repo,
+        switchyardUrl: config.url,
+        switchyardToken: token,
+        allowedTools: ANSWER_ALLOWED_TOOLS,
+        logPath,
+      }),
+    )
+    .then(
+      (code) => {
+        console.log(`answer session for ${ref} finished with code ${code}`);
+        safeAppend(`[worker] exited with code ${code}\n`);
+      },
+      (err: Error) => {
+        console.error(`sdk answer dispatch failed for ${ref}: ${err.message}`);
+        safeAppend(`[worker] sdk answer dispatch failed: ${err.message}\n`);
+      },
+    )
+    .catch((err: Error) => console.error(`sdk answer dispatch cleanup error for ${ref}: ${err.message}`))
+    .finally(() => active.delete(key));
+}
+
 async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
   // The event poll can trigger a tick while the interval tick is mid-fetch;
   // never let two ticks select (and double-dispatch) concurrently. runGated
@@ -296,10 +429,14 @@ async function tick(config: WorkerConfig, token: string, opts: { dryRun: boolean
 
 /**
  * Fast, cheap scan of the global event feed for answered escalations
- * (needs_input_cleared). The server releases the claim when the answer lands,
- * so the issue is already back in `todo` — this poll just collapses the wait
+ * (needs_input_cleared) and questions addressed to agents (agent_question,
+ * SYD-56). The server releases the claim when an escalation is answered, so
+ * that issue is already back in `todo` — this poll just collapses the wait
  * for the next full tick from `intervalSeconds` down to `eventPollSeconds`,
- * and primes the resumed session's prompt to read the answer.
+ * and primes the resumed session's prompt to read the answer. An
+ * agent_question dispatches a read-only answerer-mode session immediately,
+ * independent of the issue's status (answering doesn't touch the triage
+ * gate — see dispatchAnswer).
  */
 async function pollEvents(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/events?limit=100`;
@@ -309,9 +446,15 @@ async function pollEvents(config: WorkerConfig, token: string, opts: { dryRun: b
   }
   const feed = (await res.json()) as FeedEvent[];
   const { refs, lastEventId } = findResumeRefs(feed, config, eventCursor);
+  const { refs: answerRefs } = findAnswerRefs(feed, config, eventCursor);
   eventCursor = lastEventId;
-  if (refs.length === 0) return;
 
+  for (const ref of answerRefs) {
+    console.log(`question addressed to an agent on ${ref} — dispatching an answer session`);
+    dispatchAnswer(ref, config, token, opts);
+  }
+
+  if (refs.length === 0) return;
   for (const ref of refs) resumeRefs.add(ref);
   console.log(`escalation answered on ${refs.join(", ")} — dispatching now`);
   await tick(config, token, opts);

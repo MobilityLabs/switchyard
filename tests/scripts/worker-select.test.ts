@@ -4,6 +4,11 @@ import {
   filterRetryCapped,
   recordAttempt,
 findResumeRefs,
+  findAnswerRefs,
+  filterAnswerCapped,
+  recordAnswerAttempt,
+  buildAnswerPrompt,
+  ANSWER_ALLOWED_TOOLS,
   buildDockerArgs,
   buildContainerizedPrompt,
   newTickGate,
@@ -13,6 +18,7 @@ findResumeRefs,
   type WorkerProject,
   type RetryState,
   type FeedEvent,
+  type AnswerState,
 } from "../../scripts/worker-select.js";
 
 /** A promise plus its resolve/reject, for controlling when async work settles in tests. */
@@ -154,6 +160,91 @@ describe("findResumeRefs", () => {
   it("dedupes repeated refs", () => {
     const feed = [ev({ id: 5 }), ev({ id: 4 }), ev({ id: 3, issue: "SYD-2" })];
     expect(findResumeRefs(feed, config, 2)).toEqual({ refs: ["SYD-1", "SYD-2"], lastEventId: 5 });
+  });
+});
+
+describe("findAnswerRefs", () => {
+  const ev = (overrides: Partial<FeedEvent>): FeedEvent => ({
+    id: 1,
+    type: "agent_question",
+    issue: "SYD-1",
+    ...overrides,
+  });
+
+  it("initializes a null cursor to the newest feed id without triggering on history", () => {
+    const feed = [ev({ id: 9 }), ev({ id: 3 })];
+    expect(findAnswerRefs(feed, config, null)).toEqual({ refs: [], lastEventId: 9 });
+  });
+
+  it("returns refs of agent_question events newer than the cursor", () => {
+    const feed = [ev({ id: 12, issue: "SYD-4" }), ev({ id: 10, issue: "SYD-2" })];
+    expect(findAnswerRefs(feed, config, 10)).toEqual({ refs: ["SYD-4"], lastEventId: 12 });
+  });
+
+  it("ignores needs_input_cleared and other event types but still advances the cursor", () => {
+    const feed = [ev({ id: 8, type: "needs_input_cleared" }), ev({ id: 7, type: "comment" })];
+    expect(findAnswerRefs(feed, config, 5)).toEqual({ refs: [], lastEventId: 8 });
+  });
+
+  it("ignores events for projects the worker is not configured for", () => {
+    const feed = [ev({ id: 6, issue: "AIPI-3" })];
+    expect(findAnswerRefs(feed, config, 2)).toEqual({ refs: [], lastEventId: 6 });
+  });
+
+  it("dedupes repeated refs", () => {
+    const feed = [ev({ id: 5 }), ev({ id: 4 }), ev({ id: 3, issue: "SYD-2" })];
+    expect(findAnswerRefs(feed, config, 2)).toEqual({ refs: ["SYD-1", "SYD-2"], lastEventId: 5 });
+  });
+});
+
+describe("filterAnswerCapped / recordAnswerAttempt", () => {
+  it("passes through refs with no recorded answers", () => {
+    expect(filterAnswerCapped(["SYD-1"], new Map())).toEqual(["SYD-1"]);
+  });
+
+  it("caps at the default of 3 answers per issue", () => {
+    const state: AnswerState = new Map([["SYD-1", 3]]);
+    expect(filterAnswerCapped(["SYD-1"], state)).toEqual([]);
+  });
+
+  it("does not cap below the default", () => {
+    const state: AnswerState = new Map([["SYD-1", 2]]);
+    expect(filterAnswerCapped(["SYD-1"], state)).toEqual(["SYD-1"]);
+  });
+
+  it("respects a custom maxAnswers", () => {
+    const state: AnswerState = new Map([["SYD-1", 1]]);
+    expect(filterAnswerCapped(["SYD-1"], state, 1)).toEqual([]);
+  });
+
+  it("recordAnswerAttempt increments a fresh or existing ref", () => {
+    const state: AnswerState = new Map();
+    recordAnswerAttempt(state, "SYD-1");
+    recordAnswerAttempt(state, "SYD-1");
+    expect(state.get("SYD-1")).toBe(2);
+  });
+});
+
+describe("buildAnswerPrompt", () => {
+  it("names the issue, points at the activity feed, and forbids claiming/transitioning/editing", () => {
+    const prompt = buildAnswerPrompt("SYD-7");
+    expect(prompt).toContain("SYD-7");
+    expect(prompt).toMatch(/@agent/);
+    expect(prompt).toMatch(/get_issue|activity/i);
+    expect(prompt).toMatch(/comment/i);
+    expect(prompt).not.toMatch(/claim_issue|in_review/i);
+    expect(prompt).toMatch(/read-only|do not claim|do not.*edit/i);
+  });
+});
+
+describe("ANSWER_ALLOWED_TOOLS", () => {
+  it("excludes write-capable tools", () => {
+    expect(ANSWER_ALLOWED_TOOLS).not.toContain("Edit");
+    expect(ANSWER_ALLOWED_TOOLS).not.toContain("Write");
+    expect(ANSWER_ALLOWED_TOOLS).not.toContain("Bash");
+    expect(ANSWER_ALLOWED_TOOLS).not.toContain("mcp__switchyard__update_issue");
+    expect(ANSWER_ALLOWED_TOOLS).not.toContain("mcp__switchyard__claim_issue");
+    expect(ANSWER_ALLOWED_TOOLS).toContain("mcp__switchyard__comment");
   });
 });
 
