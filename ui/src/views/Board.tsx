@@ -25,7 +25,7 @@ export default function Board({ project }: { project: string }) {
     );
 
   return (
-    <section>
+    <section className="board-view">
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
@@ -45,7 +45,9 @@ export default function Board({ project }: { project: string }) {
               }}
             >
               <h3>{LABELS[col]} <span className="badge">{cards.length}</span></h3>
-              {cards.map((issue) => <Card key={issue.ref} issue={issue} />)}
+              <div className="column-cards">
+                {cards.map((issue) => <Card key={issue.ref} issue={issue} />)}
+              </div>
             </div>
           );
         })}
