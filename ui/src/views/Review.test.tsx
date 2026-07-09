@@ -13,12 +13,13 @@
 // the top instantly (no smooth-scroll). Ported onto the ref-keyed selection
 // model from SYD-75/77: the scroll reset now lives in a single effect keyed
 // on currentRef (see Review.tsx), so it fires for every navigation path.
+// SYD-77: Review is also project-scoped like Board, with a null project
+// meaning "All projects" — the in_review queue poll must respect the
+// current scope, and switching scope must reset which item is showing.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Issue, IssueDetail } from "../types";
-
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock("../api", () => ({
   addComment: vi.fn(() => Promise.resolve()),
@@ -31,11 +32,13 @@ vi.mock("../api", () => ({
 
 import { listIssues } from "../api";
 import Review from "./Review";
-import { useRoute } from "../router";
+import { navigate, useRoute } from "../router";
 
-function issue(ref: string, title: string): Issue {
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+function issue(ref: string, title = `Title for ${ref}`): Issue {
   return {
-    id: Number(ref.split("-")[1]), ref, title, description: "",
+    id: Number(ref.split("-")[1]), ref, title, description: "", summary: null,
     status: "in_review", priority: "none",
     assigneeId: null, creatorId: 1, labels: [],
     sourceType: null, sourceDetail: null, sourceUrl: null,
@@ -48,13 +51,13 @@ function detailOf(i: Issue): IssueDetail {
   return { ...i, activity: [], dependencies: { blockedBy: [], blocks: [] }, attachments: [] };
 }
 
-// Mirrors how App.tsx wires the route ref into Review, so a redirect the
-// component fires (bare /review -> /review/:ref) is observed the same way
-// a real page would observe it.
+// Mirrors how App.tsx wires the route's project/ref into Review, so a
+// redirect the component fires (bare /review -> /review/:ref) is observed
+// the same way a real page would observe it.
 function ReviewRoute() {
   const route = useRoute();
   if (route.view !== "review") return null;
-  return <Review currentRef={route.ref} />;
+  return <Review project={route.project} currentRef={route.ref} />;
 }
 
 async function flush(): Promise<void> {
@@ -211,5 +214,55 @@ describe("Review scroll-to-top (SYD-70)", () => {
     (contentDiv.scrollTo as ReturnType<typeof vi.fn>).mockClear();
     await click(findButton(container, "Send back"));
     expect(contentDiv.scrollTo).toHaveBeenCalledWith(0, 0);
+  });
+});
+
+describe("Review project scoping", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(listIssues).mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("passes the project filter through to the in_review poll", async () => {
+    vi.mocked(listIssues).mockResolvedValue([]);
+    await mountReviewRoute("/review/SYD");
+    expect(listIssues).toHaveBeenCalledWith({ project: "SYD", status: "in_review" });
+  });
+
+  it("omits the project filter for All projects", async () => {
+    vi.mocked(listIssues).mockResolvedValue([]);
+    await mountReviewRoute("/review");
+    expect(listIssues).toHaveBeenCalledWith({ project: undefined, status: "in_review" });
+  });
+
+  it("resets to the first item when the project scope changes", async () => {
+    vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First"), issue("SYD-2", "Second")]);
+    const container = await mountReviewRoute("/review/SYD");
+    expect(location.pathname).toBe("/review/SYD-1");
+    expect(refText(container)).toBe("SYD-1");
+
+    vi.mocked(listIssues).mockResolvedValue([issue("ACME-1", "First"), issue("ACME-2", "Second")]);
+    await act(async () => {
+      navigate({ view: "review", project: "ACME", ref: null });
+    });
+    await flush();
+
+    expect(location.pathname).toBe("/review/ACME-1");
+    expect(refText(container)).toBe("ACME-1");
+  });
+
+  it("a bare project path (e.g. /review/SYD) scopes the queue, distinct from a specific ref", async () => {
+    vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First"), issue("SYD-2", "Second")]);
+    const projectContainer = await mountReviewRoute("/review/SYD");
+    expect(refText(projectContainer)).toBe("SYD-1");
+
+    vi.mocked(listIssues).mockReset();
+    vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First"), issue("SYD-2", "Second")]);
+    const refContainer = await mountReviewRoute("/review/SYD-2");
+    expect(refText(refContainer)).toBe("SYD-2");
+    expect(listIssues).toHaveBeenCalledWith({ project: "SYD", status: "in_review" });
   });
 });

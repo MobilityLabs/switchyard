@@ -34,6 +34,18 @@ function boardHref(container: HTMLElement): string | null {
   return boardLink?.getAttribute("href") ?? null;
 }
 
+function navLink(container: HTMLElement, label: string): HTMLAnchorElement {
+  const links = [...container.querySelectorAll<HTMLAnchorElement>("nav a")];
+  // Review's label has a count badge appended as a text node sibling.
+  const link = links.find((a) => a.textContent?.startsWith(label));
+  if (!link) throw new Error(`no nav link labeled "${label}"`);
+  return link;
+}
+
+function projectSelect(container: HTMLElement): HTMLSelectElement | null {
+  return container.querySelector(".topbar > select");
+}
+
 function findButton(container: HTMLElement, label: string): HTMLButtonElement {
   const button = [...container.querySelectorAll("button")].find((b) => b.textContent === label);
   if (!button) throw new Error(`no button labeled "${label}"`);
@@ -71,7 +83,7 @@ describe("Shell board link", () => {
     expect(boardHref(container)).toBe("/board/SYD");
 
     await act(async () => {
-      navigate({ view: "triage" });
+      navigate({ view: "triage", project: null });
     });
     await act(async () => {}); // flush effects from the route change
     expect(boardHref(container)).toBe("/board/SYD");
@@ -82,10 +94,124 @@ describe("Shell board link", () => {
       navigate({ view: "board", project: "GONE" });
     });
     await act(async () => {
-      navigate({ view: "triage" });
+      navigate({ view: "triage", project: null });
     });
     const container = await renderShell();
     expect(boardHref(container)).toBe("/board/ACME");
+  });
+});
+
+// SYD-77: Triage and Review are project-scoped like Board, with an "All
+// projects" option, and the Board nav-link pattern (default to the SYD-55
+// remembered project) is mirrored for the Triage/Review tabs too.
+describe("Shell triage/review project scoping", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    history.replaceState(null, "", "/");
+  });
+
+  it("Triage/Review tabs point at All projects when nothing has been visited yet", async () => {
+    const container = await renderShell();
+    expect(navLink(container, "Triage").getAttribute("href")).toBe("/");
+    expect(navLink(container, "Review").getAttribute("href")).toBe("/review");
+  });
+
+  it("Triage/Review tabs point at the last-visited board project once one is remembered", async () => {
+    await act(async () => {
+      navigate({ view: "board", project: "SYD" });
+    });
+    const container = await renderShell();
+    expect(navLink(container, "Triage").getAttribute("href")).toBe("/triage/SYD");
+    expect(navLink(container, "Review").getAttribute("href")).toBe("/review/SYD");
+  });
+
+  it("the active tab keeps its own project selection instead of the remembered one", async () => {
+    await act(async () => {
+      navigate({ view: "board", project: "SYD" });
+    });
+    await act(async () => {
+      navigate({ view: "triage", project: "ACME" });
+    });
+    const container = await renderShell();
+    // Triage is active on ACME (its own URL), Review is inactive and falls
+    // back to the last-remembered board project (SYD).
+    expect(navLink(container, "Triage").getAttribute("href")).toBe("/triage/ACME");
+    expect(navLink(container, "Review").getAttribute("href")).toBe("/review/SYD");
+  });
+
+  it("shows a project selector with an All projects option on Triage and Review, but not on Board", async () => {
+    await act(async () => {
+      navigate({ view: "board", project: "SYD" });
+    });
+    const boardContainer = await renderShell();
+    const boardSelect = projectSelect(boardContainer);
+    expect(boardSelect).not.toBeNull();
+    expect([...boardSelect!.options].some((o) => o.value === "")).toBe(false);
+
+    await act(async () => {
+      navigate({ view: "triage", project: null });
+    });
+    const triageContainer = await renderShell();
+    const triageSelect = projectSelect(triageContainer);
+    expect(triageSelect).not.toBeNull();
+    expect(triageSelect!.value).toBe("");
+    expect([...triageSelect!.options].map((o) => o.textContent)).toContain("All projects");
+
+    await act(async () => {
+      navigate({ view: "review", project: "SYD", ref: null });
+    });
+    const reviewContainer = await renderShell();
+    const reviewSelect = projectSelect(reviewContainer);
+    expect(reviewSelect).not.toBeNull();
+    expect(reviewSelect!.value).toBe("SYD");
+  });
+
+  it("choosing a project in the selector navigates to that project scope on the current view", async () => {
+    await act(async () => {
+      navigate({ view: "triage", project: null });
+    });
+    const container = await renderShell();
+    const select = projectSelect(container)!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+    await act(async () => {
+      nativeSetter.call(select, "SYD");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(location.pathname).toBe("/triage/SYD");
+  });
+
+  it("choosing All projects in the selector navigates back to the bare route", async () => {
+    await act(async () => {
+      navigate({ view: "review", project: "SYD", ref: null });
+    });
+    const container = await renderShell();
+    const select = projectSelect(container)!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+    await act(async () => {
+      nativeSetter.call(select, "");
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(location.pathname).toBe("/review");
+  });
+
+  it("scopes the Review nav badge query to the active project selection", async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      calls.push(url);
+      return { ok: true, json: async () => [] } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await act(async () => {
+        navigate({ view: "triage", project: "SYD" });
+      });
+      await renderShell();
+      await act(async () => {});
+      const issuesCalls = calls.filter((u) => u.startsWith("/api/issues?"));
+      expect(issuesCalls.some((u) => u.includes("status=in_review") && u.includes("project=SYD"))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
