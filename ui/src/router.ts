@@ -11,6 +11,28 @@ export type Route =
 // re-render without a real `popstate` (which only fires on back/forward).
 const NAVIGATE_EVENT = "switchyard:navigate";
 
+// Remembers the last project key seen on the board route, so leaving the
+// board (e.g. for triage) and clicking back on "Board" returns to the same
+// project instead of falling back to whatever project happens to be first
+// in the list. Persisted so it also survives a page reload.
+const LAST_PROJECT_STORAGE_KEY = "switchyard:last-project";
+
+export function getLastProject(): string | null {
+  try {
+    return localStorage.getItem(LAST_PROJECT_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setLastProject(key: string): void {
+  try {
+    localStorage.setItem(LAST_PROJECT_STORAGE_KEY, key);
+  } catch {
+    // Storage disabled (e.g. private browsing) — falls back to no memory.
+  }
+}
+
 // Matches a pathname against a known route, or returns null for anything
 // the client router doesn't own (used both to parse and to decide whether
 // an internal anchor click should be intercepted).
@@ -77,5 +99,8 @@ export function useRoute(): Route {
       window.removeEventListener(NAVIGATE_EVENT, onChange);
     };
   }, []);
+  useEffect(() => {
+    if (route.view === "board") setLastProject(route.project);
+  }, [route]);
   return route;
 }

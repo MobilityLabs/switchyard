@@ -1,13 +1,15 @@
 import type { ReactNode } from "react";
 import type { Actor, Project } from "./types";
-import { href, navigate, useRoute } from "./router";
+import { getLastProject, href, navigate, useRoute } from "./router";
 import { logout, listIssues } from "./api";
 import { usePoll } from "./usePoll";
 
 export default function Shell(props: { me: Actor; projects: Project[]; children: ReactNode }) {
   const route = useRoute();
+  const lastProject = getLastProject();
+  const rememberedProject = props.projects.some((p) => p.key === lastProject) ? lastProject : null;
   const currentProject =
-    route.view === "board" ? route.project : props.projects[0]?.key ?? "";
+    route.view === "board" ? route.project : rememberedProject ?? props.projects[0]?.key ?? "";
   const inReview = usePoll(() => listIssues({ status: "in_review" }), [], 30000);
 
   return (
