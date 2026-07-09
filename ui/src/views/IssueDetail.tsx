@@ -103,7 +103,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
         <textarea
           ref={textareaRef}
           value={draft}
-          placeholder="Write a comment… (paste an image or video to attach it)"
+          placeholder="Write a comment… (paste an image or video to attach it, or lead with @agent to ask an agent)"
           onChange={(e) => setDraft(e.target.value)}
           onPaste={onPaste}
         />

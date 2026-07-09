@@ -88,6 +88,14 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, runner: "sdk", containerized: true })).toHaveLength(1);
   });
 
+  it("accepts an absent maxAnswersPerIssue and rejects a non-positive-integer one", () => {
+    expect(validateWorkerConfig(good)).toEqual([]);
+    expect(validateWorkerConfig({ ...good, maxAnswersPerIssue: 5 })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, maxAnswersPerIssue: 0 })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, maxAnswersPerIssue: 1.5 })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, maxAnswersPerIssue: "3" })).toHaveLength(1);
+  });
+
   describe("validateWorkerConfig delivery block", () => {
     const base = {
       url: "http://localhost:3300",

@@ -19,4 +19,49 @@ describe("comments and activity", () => {
     expect(activity[1].payload.body).toMatch(/12 tests pass/);
     expect(() => addComment(db, agent, "AIPI-1", "  ")).toThrowError(/empty/i);
   });
+
+  it("emits agent_question when a human leads a comment with @agent", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    createProject(db, { key: "AIPI", name: "aipi" });
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+
+    addComment(db, human, "AIPI-1", "@agent what's blocking this?");
+    const activity = getActivity(db, "AIPI-1");
+    expect(activity.map((a) => a.type)).toEqual(["created", "comment", "agent_question"]);
+    expect(activity[2].payload.body).toMatch(/what's blocking/);
+    expect(activity[2].actorName).toBe("sean");
+  });
+
+  it("matches @agent case-insensitively and tolerates leading whitespace", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    createProject(db, { key: "AIPI", name: "aipi" });
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+
+    addComment(db, human, "AIPI-1", "  @AGENT any update?");
+    expect(getActivity(db, "AIPI-1").map((a) => a.type)).toEqual(["created", "comment", "agent_question"]);
+  });
+
+  it("does not emit agent_question for an ordinary comment or a mid-sentence mention", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    createProject(db, { key: "AIPI", name: "aipi" });
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+
+    addComment(db, human, "AIPI-1", "looks good to me");
+    addComment(db, human, "AIPI-1", "ping @agent later");
+    expect(getActivity(db, "AIPI-1").map((a) => a.type)).toEqual(["created", "comment", "comment"]);
+  });
+
+  it("does not emit agent_question when an agent actor writes the comment", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const agentActor = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "AIPI", name: "aipi" });
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+
+    addComment(db, agentActor, "AIPI-1", "@agent can someone else confirm?");
+    expect(getActivity(db, "AIPI-1").map((a) => a.type)).toEqual(["created", "comment"]);
+  });
 });

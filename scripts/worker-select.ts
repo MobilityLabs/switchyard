@@ -45,6 +45,8 @@ export type WorkerConfig = {
   runner?: "cli" | "sdk";
   /** Delivery gate (SYD-49): worker-side PR publishing + deliver.ts settings. */
   delivery?: DeliveryConfig;
+  /** Answerer mode (SYD-56): max answer sessions dispatched per issue ref, ever (default 3). */
+  maxAnswersPerIssue?: number;
 };
 
 const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
@@ -97,18 +99,17 @@ export type FeedEvent = {
 };
 
 /**
- * Scans the global event feed for `needs_input_cleared` events newer than
- * `lastEventId` on configured projects — each one means a human just answered
- * an escalation and the issue should be re-dispatched without waiting for the
- * next full poll. Returns the distinct refs to resume plus the advanced
+ * Scans a feed of events newer than `lastEventId` on configured projects for
+ * one `eventType`, returning the distinct issue refs plus the advanced
  * cursor. A null cursor means "first look at the feed": it initializes to the
  * newest event id without triggering on history, so a worker restart never
- * re-fires old answers.
+ * re-fires old events. Shared by `findResumeRefs` and `findAnswerRefs`.
  */
-export function findResumeRefs(
+function findRefsByEventType(
   feed: FeedEvent[],
   config: WorkerConfig,
-  lastEventId: number | null
+  lastEventId: number | null,
+  eventType: string
 ): { refs: string[]; lastEventId: number | null } {
   if (feed.length === 0) return { refs: [], lastEventId };
   const newestId = Math.max(...feed.map((e) => e.id));
@@ -117,11 +118,99 @@ export function findResumeRefs(
   const refs = new Set<string>();
   for (const e of feed) {
     if (e.id <= lastEventId) continue;
-    if (e.type !== "needs_input_cleared") continue;
+    if (e.type !== eventType) continue;
     if (!(projectKeyOf(e.issue) in config.projects)) continue;
     refs.add(e.issue);
   }
   return { refs: [...refs], lastEventId: Math.max(newestId, lastEventId) };
+}
+
+/**
+ * Scans the global event feed for `needs_input_cleared` events newer than
+ * `lastEventId` on configured projects — each one means a human just answered
+ * an escalation and the issue should be re-dispatched without waiting for the
+ * next full poll.
+ */
+export function findResumeRefs(
+  feed: FeedEvent[],
+  config: WorkerConfig,
+  lastEventId: number | null
+): { refs: string[]; lastEventId: number | null } {
+  return findRefsByEventType(feed, config, lastEventId, "needs_input_cleared");
+}
+
+/**
+ * Scans the global event feed for `agent_question` events (SYD-56: a human
+ * comment addressed to agents via a leading `@agent`) newer than
+ * `lastEventId` on configured projects — each one is a signal to dispatch a
+ * read-only answer session on that issue, regardless of its status.
+ */
+export function findAnswerRefs(
+  feed: FeedEvent[],
+  config: WorkerConfig,
+  lastEventId: number | null
+): { refs: string[]; lastEventId: number | null } {
+  return findRefsByEventType(feed, config, lastEventId, "agent_question");
+}
+
+/** Per-ref count of answer sessions dispatched, kept in memory by the polling loop. */
+export type AnswerState = Map<string, number>;
+
+const DEFAULT_MAX_ANSWERS_PER_ISSUE = 3;
+
+/**
+ * Filters out refs that have already hit `maxAnswers` dispatched answer
+ * sessions — a cost/rate control so a chatty or looping `@agent` thread can't
+ * spin up unbounded sessions on one issue. Unlike `filterRetryCapped`, this
+ * count never resets (it isn't tied to the issue's `updatedAt`): each
+ * dispatched answer is a real session cost regardless of whether the issue
+ * changed since.
+ */
+export function filterAnswerCapped(
+  refs: string[],
+  answerState: ReadonlyMap<string, number>,
+  maxAnswers = DEFAULT_MAX_ANSWERS_PER_ISSUE
+): string[] {
+  return refs.filter((ref) => (answerState.get(ref) ?? 0) < maxAnswers);
+}
+
+/** Records a dispatched answer session for `ref`. Mutates `answerState` in place. */
+export function recordAnswerAttempt(answerState: AnswerState, ref: string): void {
+  answerState.set(ref, (answerState.get(ref) ?? 0) + 1);
+}
+
+/**
+ * Read-only allowlist for answerer-mode sessions (SYD-56): no Edit/Write/Bash
+ * and no MCP tools that could claim, transition, or otherwise mutate an
+ * issue — only enough to read context and post the answer as a comment. This
+ * is enforced here (not just in the prompt) since the worker fully controls
+ * the tool allowlist it hands to a headless session.
+ */
+export const ANSWER_ALLOWED_TOOLS = [
+  "mcp__switchyard__get_issue",
+  "mcp__switchyard__search_issues",
+  "mcp__switchyard__list_projects",
+  "mcp__switchyard__comment",
+  "Read",
+  "Grep",
+  "Glob",
+];
+
+/**
+ * Prompt for an answerer-mode session (SYD-56): a human addressed a question
+ * to agents on `ref` (a comment leading with `@agent`); the session reads the
+ * issue + activity + repo and answers in a comment, with no write powers
+ * beyond that comment — it never claims, transitions, or edits anything.
+ */
+export function buildAnswerPrompt(ref: string): string {
+  return (
+    `A human asked a question addressed to an agent on Switchyard issue ${ref} ` +
+    `(a comment leading with @agent). Call get_issue first and read the activity ` +
+    `feed to find that question, then read whatever repo context you need to answer ` +
+    `it accurately. Post your answer as a comment on ${ref} using the comment tool. ` +
+    `This is a read-only, answer-only session: do not claim the issue, change its ` +
+    `status, or edit any files — just answer the question in a comment.`
+  );
 }
 
 /**
