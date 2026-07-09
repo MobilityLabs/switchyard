@@ -10,6 +10,17 @@
 # single call instead of a two-layer fanout: strip per-call bloat (hooks,
 # skills, MCP, CLAUDE.md auto-load) while keeping subscription/OAuth auth.
 #
+# Runs are launchd-scheduled hourly from 04:30 to 11:30 (see
+# launchd/com.switchyard.dreamer.plist) so a laptop that's offline or a
+# session that hangs at 04:30 gets retried instead of silently losing the
+# whole night (SYD-61). A run is skipped once today's digest has already
+# succeeded (tracked via an .ok marker next to the digest), so the hourly
+# retries are a no-op once one run gets through. The claude invocation itself
+# is wrapped in a timeout so a hung session (ConnectionRefused etc.) doesn't
+# burn hours before the next scheduled retry, and any failed/timed-out run
+# appends a FAILED note to the digest file itself, not just the log, so the
+# miss is visible where a human actually looks.
+#
 # Usage:
 #   sh scripts/dreamer.sh
 #   DREAMER_DRY_RUN=1 sh scripts/dreamer.sh   # write the digest, file nothing
@@ -19,9 +30,10 @@
 #   SWITCHYARD_TOKEN   bearer token for an actor registered via add-actor
 #
 # Optional env:
-#   CLAUDE_BIN         path to claude CLI                  default: $HOME/.local/bin/claude
-#   DREAMS_DIR         where the dated digest is written    default: $HOME/.claude/dreams
-#   DREAMER_DRY_RUN    set 1 to skip filing issues           default: unset (files findings)
+#   CLAUDE_BIN               path to claude CLI                default: $HOME/.local/bin/claude
+#   DREAMS_DIR                where the dated digest is written default: $HOME/.claude/dreams
+#   DREAMER_DRY_RUN           set 1 to skip filing issues       default: unset (files findings)
+#   DREAMER_TIMEOUT_SECONDS   kill a hung claude session        default: 1800 (30 min)
 
 set -u
 
@@ -55,6 +67,28 @@ DREAMER_DATE=$(date +%Y-%m-%d)
 export DREAMER_SINCE
 DREAMER_SINCE=$(date -v-24H +%s 2>/dev/null || date -d '24 hours ago' +%s)
 
+DIGEST_FILE="$DREAMS_DIR/switchyard-$DREAMER_DATE.md"
+OK_MARKER="$DREAMS_DIR/.switchyard-$DREAMER_DATE.ok"
+TIMEOUT_MARKER="$DREAMS_DIR/.dreamer-timeout-marker"
+DREAMER_TIMEOUT_SECONDS="${DREAMER_TIMEOUT_SECONDS:-1800}"
+
+if [ -f "$OK_MARKER" ]; then
+  log "already succeeded for $DREAMER_DATE, skipping (hourly retry no-op)"
+  exit 0
+fi
+
+append_failure_note() {
+  note_rc=$1
+  note_kind=$2
+  ts=$(date '+%Y-%m-%d %H:%M:%S')
+  note="**FAILED** — dreamer run for $DREAMER_DATE did not complete ($note_kind, exit $note_rc) at $ts. No digest was generated this run. See $LOG_FILE for details."
+  if [ ! -f "$DIGEST_FILE" ]; then
+    printf '# Switchyard dreamer — %s\n\n%s\n' "$DREAMER_DATE" "$note" > "$DIGEST_FILE"
+  else
+    printf '\n%s\n' "$note" >> "$DIGEST_FILE"
+  fi
+}
+
 PROMPT=$(cat "$REPO_DIR/prompts/dreamer.md")
 if [ "${DREAMER_DRY_RUN:-0}" != "0" ]; then
   PROMPT="$PROMPT
@@ -69,6 +103,8 @@ log "starting dreamer run for $DREAMER_DATE (since=$DREAMER_SINCE, dry_run=${DRE
 # CLAUDE.md). bypassPermissions is required for an unattended Bash+Write session.
 export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1
 
+rm -f "$TIMEOUT_MARKER"
+
 "$CLAUDE_BIN" -p "$PROMPT" \
   --permission-mode bypassPermissions \
   --no-session-persistence \
@@ -77,13 +113,40 @@ export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORT
   --strict-mcp-config \
   --settings '{"disableAllHooks":true}' \
   --append-system-prompt "Headless nightly reflection worker for Switchyard. Read via Bash/curl against \$SWITCHYARD_URL with \$SWITCHYARD_TOKEN; write the digest via the Write tool to the literal path \$DREAMS_DIR/switchyard-\$DREAMER_DATE.md. Never call a route that mutates an existing issue — read and file only." \
-  >> "$LOG_FILE" 2>&1
+  >> "$LOG_FILE" 2>&1 &
+CLAUDE_PID=$!
+
+(
+  sleep "$DREAMER_TIMEOUT_SECONDS"
+  if kill -0 "$CLAUDE_PID" 2>/dev/null; then
+    touch "$TIMEOUT_MARKER"
+    kill "$CLAUDE_PID" 2>/dev/null
+    sleep 5
+    kill -9 "$CLAUDE_PID" 2>/dev/null
+  fi
+) </dev/null >/dev/null 2>&1 &
+WATCHER_PID=$!
+
+wait "$CLAUDE_PID"
 RC=$?
+
+# Watcher is done its job once the main process exits; reap it quietly.
+kill "$WATCHER_PID" 2>/dev/null
+wait "$WATCHER_PID" 2>/dev/null
+
+if [ -f "$TIMEOUT_MARKER" ]; then
+  rm -f "$TIMEOUT_MARKER"
+  log "dreamer run TIMED OUT after ${DREAMER_TIMEOUT_SECONDS}s (exit $RC)"
+  append_failure_note "$RC" "timed out after ${DREAMER_TIMEOUT_SECONDS}s"
+  exit 1
+fi
 
 if [ "$RC" -eq 0 ]; then
   log "dreamer run finished ok"
+  touch "$OK_MARKER"
 else
   log "dreamer run FAILED (exit $RC)"
+  append_failure_note "$RC" "non-zero exit"
 fi
 
 exit "$RC"

@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Schedule the Dreamer (SYD-28) to run nightly at 04:30 local time.
+  Schedule the Dreamer (SYD-28) to run hourly from 04:30 to 11:30 local
+  time (SYD-61): a laptop LaunchAgent has no guarantee of being online or
+  awake at any single fixed time, so instead of one 04:30 shot we fire
+  hourly and let scripts/dreamer.sh's .ok marker make every firing after
+  the first success a no-op. This gets the "retry until success-or-noon"
+  behavior for free from launchd's StartCalendarInterval array, with no
+  self-rescheduling logic needed in the script.
 
   Modeled on cc-autodream's launchd job (see
   ~/sites/cc-autodream/launchd/com.user.autodream.plist.example): a plain
@@ -18,10 +24,20 @@
     launchctl load ~/Library/LaunchAgents/com.switchyard.dreamer.plist
     launchctl start com.switchyard.dreamer    # run now to test
 
+  Verify it's actually loaded persistently (not just registered once):
+  `launchctl list | grep switchyard.dreamer` can come up empty between
+  runs even when the job is correctly loaded — that command only lists
+  jobs launchd currently has running or cached from this session. Use
+  `launchctl print gui/$(id -u)/com.switchyard.dreamer` instead; check its
+  `program` and `path` fields match this file, and after a run compare
+  `last exit code` there against switchyard-dreamer.log.
+
   Logs: ~/.claude/dreams/switchyard-dreamer.log (the run itself, written by
   scripts/dreamer.sh) and ~/.claude/dreams/launchd.{out,err}.log (launchd's
   own capture, mostly empty — dreamer.sh redirects the claude call's
-  stdout/stderr into its own log).
+  stdout/stderr into its own log). A failed or timed-out run also appends a
+  FAILED note directly into that day's digest file, so a miss is visible
+  without checking logs.
 -->
 <plist version="1.0">
 <dict>
@@ -36,12 +52,56 @@
     </array>
 
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>4</integer>
-        <key>Minute</key>
-        <integer>30</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>4</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>5</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>6</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>7</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>8</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>10</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>11</integer>
+            <key>Minute</key>
+            <integer>30</integer>
+        </dict>
+    </array>
 
     <key>RunAtLoad</key>
     <false/>
