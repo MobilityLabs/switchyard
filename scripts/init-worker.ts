@@ -23,6 +23,13 @@
 // --install-launchd keeps installing the combined "all" role — running "all"
 // alongside a single-role worker is refused at runtime (see
 // checkRoleLockConflict in worker-select.ts), not by this installer.
+//   npm run init-worker                       # doctor: check everything, change nothing
+//   npm run init-worker -- --install-launchd  # doctor, then install the KeepAlive LaunchAgent
+//   npm run init-worker -- --self-test        # doctor, then one dry-run worker tick
+//   npm run init-worker -- --add-project KEY /path/to/repo ["Display Name"]
+//                                              # onboard a new project (SYD-52): create it on the
+//                                              # server if new, add it to switchyard-worker.json,
+//                                              # re-run the doctor, print the CLAUDE.md snippet
 //
 // Decision of record (SYD-44): the runner stays basic — `claude -p` headless
 // sessions authenticated by CLAUDE_CODE_OAUTH_TOKEN, no Agent SDK. This script
@@ -41,10 +48,12 @@ import {
   buildProtectMainArgs,
   formatChecks,
   nodeVersionSatisfies,
+  insertProjectIntoConfigText,
   parseDotEnv,
   parseGithubRemote,
   parsePlistPath,
   renderDeliverPlist,
+  renderClaudeMdSnippet,
   renderWorkerPlist,
   summarizeRoleStatus,
   validateWorkerConfig,
@@ -553,6 +562,123 @@ function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): 
   if (failures > 0) process.exit(1);
 }
 
+/**
+ * `--add-project KEY /path/to/repo ["Display Name"]` (SYD-52): create the
+ * project on the server if the key is new, add it to switchyard-worker.json
+ * preserving formatting, re-run the doctor, and print the CLAUDE.md priming
+ * snippet — collapsing docs/onboarding-a-project.md steps 1-3/5 into one
+ * command.
+ */
+async function addProject(argv: string[]): Promise<void> {
+  const idx = argv.indexOf("--add-project");
+  const key = argv[idx + 1];
+  const repoArg = argv[idx + 2];
+  const displayName = argv[idx + 3] && !argv[idx + 3].startsWith("--") ? argv[idx + 3] : undefined;
+
+  if (!key || !repoArg) {
+    console.error('usage: npm run init-worker -- --add-project KEY /path/to/repo ["Display Name"]');
+    process.exit(1);
+  }
+  if (!/^[A-Z]{2,10}$/.test(key)) {
+    console.error(`project key "${key}" is invalid — use 2-10 uppercase letters, e.g. "NOC"`);
+    process.exit(1);
+  }
+
+  const repoPath = path.resolve(repoArg);
+  if (!existsSync(path.join(repoPath, ".git"))) {
+    console.error(`${repoPath} is not a git repo (no .git directory) — check the path`);
+    process.exit(1);
+  }
+
+  if (!existsSync(configPath)) {
+    console.error(`${configPath} missing — copy switchyard-worker.example.json and edit it first`);
+    process.exit(1);
+  }
+  const configText = readFileSync(configPath, "utf8");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(configText);
+  } catch (err) {
+    console.error(`${configPath} is not valid JSON: ${(err as Error).message}`);
+    process.exit(1);
+  }
+  const problems = validateWorkerConfig(parsed);
+  if (problems.length > 0) {
+    console.error(`${configPath} is currently invalid — fix it first:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+    process.exit(1);
+  }
+  const config = parsed as WorkerConfig;
+
+  const alreadyConfigured = Object.prototype.hasOwnProperty.call(config.projects, key);
+  if (alreadyConfigured) {
+    const existingRepo = path.resolve(config.projects[key].repo);
+    if (existingRepo !== repoPath) {
+      console.error(
+        `projects.${key} already points at ${existingRepo} (you asked for ${repoPath}) — edit ${configPath} by hand to change it`
+      );
+      process.exit(1);
+    }
+    console.log(`projects.${key} already points at ${repoPath} — switchyard-worker.json unchanged`);
+  }
+
+  const env = loadEnv();
+  const token = env.SWITCHYARD_TOKEN;
+  if (!token) {
+    console.error(`SWITCHYARD_TOKEN not set in ${envPath} / environment — needed to create the project on the server`);
+    process.exit(1);
+  }
+  const base = config.url.replace(/\/$/, "");
+  const name = displayName ?? key;
+  console.log(`\ncreating project ${key} ("${name}") on ${base}...`);
+  try {
+    const res = await fetch(`${base}/api/projects`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ key, name }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      console.log(`created project ${key}`);
+    } else {
+      const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+      const message = errBody.error ?? `HTTP ${res.status}`;
+      if (message.includes("already exists")) {
+        console.log(`project ${key} already exists on the server — continuing`);
+      } else {
+        console.error(`failed to create project: ${message}`);
+        process.exit(1);
+      }
+    }
+  } catch (err) {
+    console.error(`failed to reach ${base}: ${(err as Error).message}`);
+    process.exit(1);
+  }
+
+  if (!alreadyConfigured) {
+    const updatedText = insertProjectIntoConfigText(configText, key, repoPath);
+    const reparsed = JSON.parse(updatedText) as WorkerConfig;
+    if (reparsed.projects[key]?.repo !== repoPath) {
+      console.error("internal error: config edit did not produce the expected entry — not writing switchyard-worker.json");
+      process.exit(1);
+    }
+    writeFileSync(configPath, updatedText);
+    console.log(`added projects.${key} -> ${repoPath} to ${configPath}`);
+  }
+
+  console.log("\nre-running doctor with the new project...\n");
+  const { results } = await doctor();
+  console.log(formatChecks(results));
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length > 0) {
+    console.error(`\n${failed.length} check(s) failed.`);
+  } else {
+    console.log("\nall checks passed");
+  }
+
+  console.log(`\npaste this into ${repoPath}/CLAUDE.md (docs/agent-kit.md pattern):\n`);
+  console.log(renderClaudeMdSnippet(key));
+}
+
 function selfTest(): void {
   console.log("\nself-test: one dry-run worker tick (nothing is dispatched)\n");
   const env = loadEnv();
@@ -570,6 +696,12 @@ function selfTest(): void {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  if (args.includes("--add-project")) {
+    await addProject(args);
+    return;
+  }
+
   const { results, config } = await doctor();
   console.log(formatChecks(results));
 
