@@ -17,6 +17,8 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 export const getMe = () => api<Actor>("/api/me");
 export const listActors = () => api<Actor[]>("/api/actors");
 export const listProjects = () => api<Project[]>("/api/projects");
+export const createProject = (input: { key: string; name: string }) =>
+  api<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });
 export const listIssues = (
   filters: { project?: string; status?: Status; needsInput?: boolean; excludeSnoozed?: boolean } = {},
 ) => {
