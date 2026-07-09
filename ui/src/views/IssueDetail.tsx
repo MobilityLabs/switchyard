@@ -16,48 +16,62 @@ export function projectKeyFromRef(ref: string): string {
 export type DeliveryStatus = {
   prNumber: number | null;
   url: string | null;
-  state: "open" | "merged";
+  state: "open" | "merged" | "closed";
   mergeSha: string | null;
   deploy: DeployResult | null;
   failedMessage: string | null;
+  checks: "passed" | "failed" | null;
 };
 
 /**
- * Delivery strip (SYD-54): folds the structured pr_opened/delivered/
- * delivery_failed events deliver.ts and the worker record (over the activity
- * feed, oldest-first) into the latest known PR + delivery state. A
- * delivery_failed only surfaces if nothing has delivered successfully since
- * it fired — a later delivered event (e.g. a re-stamp after a fix) clears it.
+ * Delivery strip (SYD-54, extended by SYD-64): folds the structured
+ * pr_opened/delivered/delivery_failed events deliver.ts and the worker
+ * record, plus the gh_pr_opened/gh_pr_merged/gh_pr_closed/gh_checks_*
+ * events the GitHub webhook receiver records (src/services/github-webhook.ts),
+ * over the activity feed (oldest-first) into the latest known PR + delivery
+ * state. A delivery_failed only surfaces if nothing has delivered
+ * successfully since it fired — a later delivered/gh_pr_merged event (e.g. a
+ * re-stamp after a fix) clears it.
  */
 export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | null {
   let prNumber: number | null = null;
   let url: string | null = null;
-  let state: "open" | "merged" = "open";
+  let state: "open" | "merged" | "closed" = "open";
   let mergeSha: string | null = null;
   let deploy: DeployResult | null = null;
   let failedMessage: string | null = null;
+  let checks: "passed" | "failed" | null = null;
   let lastDeliveredAt = -Infinity;
   let lastFailedAt = -Infinity;
 
   for (const ev of activity) {
-    if (ev.type === "pr_opened") {
+    if (ev.type === "pr_opened" || ev.type === "gh_pr_opened") {
       prNumber = Number(ev.payload.prNumber);
-      url = String(ev.payload.url ?? "") || null;
+      url = String(ev.payload.url ?? "") || url;
       state = "open";
-    } else if (ev.type === "delivered") {
+    } else if (ev.type === "delivered" || ev.type === "gh_pr_merged") {
       prNumber = Number(ev.payload.prNumber);
-      mergeSha = String(ev.payload.mergeSha ?? "") || null;
-      deploy = (ev.payload.deploy as DeployResult | undefined) ?? null;
+      url = String(ev.payload.url ?? "") || url;
+      mergeSha = String(ev.payload.mergeSha ?? "") || mergeSha;
+      deploy = (ev.payload.deploy as DeployResult | undefined) ?? deploy;
       state = "merged";
       lastDeliveredAt = ev.createdAt;
+    } else if (ev.type === "gh_pr_closed") {
+      prNumber = Number(ev.payload.prNumber);
+      url = String(ev.payload.url ?? "") || url;
+      state = "closed";
     } else if (ev.type === "delivery_failed") {
       failedMessage = String(ev.payload.message ?? "delivery failed");
       lastFailedAt = ev.createdAt;
+    } else if (ev.type === "gh_checks_passed") {
+      checks = "passed";
+    } else if (ev.type === "gh_checks_failed") {
+      checks = "failed";
     }
   }
   if (prNumber === null && failedMessage === null) return null;
   return {
-    prNumber, url, state, mergeSha, deploy,
+    prNumber, url, state, mergeSha, deploy, checks,
     failedMessage: lastFailedAt > lastDeliveredAt ? failedMessage : null,
   };
 }
@@ -103,6 +117,11 @@ function DeliveryStrip({ status }: { status: DeliveryStatus }) {
       {status.deploy && (
         <span className={`badge delivery-deploy delivery-deploy-${status.deploy.ran ? (status.deploy.ok ? "ok" : "failed") : "skipped"}`}>
           {status.deploy.ran ? (status.deploy.ok ? "deploy ok" : "deploy FAILED") : "deploy skipped"}
+        </span>
+      )}
+      {status.checks && (
+        <span className={`badge delivery-checks delivery-checks-${status.checks}`}>
+          checks {status.checks}
         </span>
       )}
       {status.failedMessage && (
@@ -405,6 +424,25 @@ export function Event({
     return (
       <p className="event delivery-failed">
         <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")} <time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "gh_pr_opened" || ev.type === "gh_pr_merged" || ev.type === "gh_pr_closed") {
+    const url = String(ev.payload.url ?? "");
+    const verb = ev.type === "gh_pr_opened" ? "opened" : ev.type === "gh_pr_merged" ? "merged" : "closed";
+    return (
+      <p className="event">
+        GitHub: {verb}{" "}
+        {url ? <a href={url} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
+        {ev.type === "gh_pr_merged" && ev.payload.mergeSha ? <> at <code>{String(ev.payload.mergeSha).slice(0, 7)}</code></> : null}
+        {" "}<time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "gh_checks_passed" || ev.type === "gh_checks_failed") {
+    return (
+      <p className={`event ${ev.type === "gh_checks_failed" ? "delivery-failed" : ""}`}>
+        GitHub: checks {ev.type === "gh_checks_passed" ? "passed" : "failed"} <time>{when}</time>
       </p>
     );
   }

@@ -274,8 +274,11 @@ kbd {
 .delivery-strip { margin: 12px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .delivery-strip .delivery-pr { display: flex; align-items: center; gap: 6px; }
 .delivery-state.delivery-merged { color: var(--accent-2); border-color: var(--accent-2); }
+.delivery-state.delivery-closed { color: var(--danger); border-color: var(--danger); }
 .delivery-deploy-ok { color: var(--ok); border-color: var(--ok); }
 .delivery-deploy-failed { color: var(--danger); border-color: var(--danger); }
+.delivery-checks-passed { color: var(--ok); border-color: var(--ok); }
+.delivery-checks-failed { color: var(--danger); border-color: var(--danger); }
 .delivery-strip .delivery-failed { flex-basis: 100%; margin: 4px 0 0; }
 .dep-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .dep-list li { display: flex; align-items: center; gap: 6px; font-size: 14px; }

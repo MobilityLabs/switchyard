@@ -10,10 +10,11 @@ import { authenticate } from "./services/actors.js";
 import { buildMcpServer } from "./mcp/server.js";
 import { buildAuthRoutes } from "./rest/auth-routes.js";
 import { buildApiRoutes } from "./rest/api-routes.js";
+import { buildGithubWebhookRoutes } from "./rest/github-routes.js";
 
 // Paths the client-side router never owns — anything under these should 404
 // as JSON (or be handled by their own route) rather than fall back to the SPA shell.
-const SPA_EXCLUDED_PREFIXES = ["/api", "/auth", "/mcp", "/health", "/attachments"];
+const SPA_EXCLUDED_PREFIXES = ["/api", "/auth", "/mcp", "/health", "/attachments", "/webhooks"];
 
 // Cached lazily: undefined = not yet attempted, null = build missing.
 let cachedIndexHtml: string | null | undefined;
@@ -34,6 +35,7 @@ export function createApp(db: Db) {
   app.get("/health", (c) => c.json({ ok: true }));
 
   app.route("/", buildAuthRoutes(db));
+  app.route("/", buildGithubWebhookRoutes(db));
   app.route("/api", buildApiRoutes(db));
 
   app.post("/mcp", async (c) => {
