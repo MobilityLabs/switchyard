@@ -4,12 +4,88 @@ import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { href } from "../router";
-import { PRIORITIES, STATUSES, type Activity, type DependencyRef, type Priority, type Status } from "../types";
+import { PRIORITIES, STATUSES, type Activity, type DependencyRef, type DeployResult, type Priority, type Status } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 
 export function projectKeyFromRef(ref: string): string {
   return ref.split("-")[0] ?? "";
+}
+
+export type DeliveryStatus = {
+  prNumber: number | null;
+  url: string | null;
+  state: "open" | "merged";
+  mergeSha: string | null;
+  deploy: DeployResult | null;
+  failedMessage: string | null;
+};
+
+/**
+ * Delivery strip (SYD-54): folds the structured pr_opened/delivered/
+ * delivery_failed events deliver.ts and the worker record (over the activity
+ * feed, oldest-first) into the latest known PR + delivery state. A
+ * delivery_failed only surfaces if nothing has delivered successfully since
+ * it fired — a later delivered event (e.g. a re-stamp after a fix) clears it.
+ */
+export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | null {
+  let prNumber: number | null = null;
+  let url: string | null = null;
+  let state: "open" | "merged" = "open";
+  let mergeSha: string | null = null;
+  let deploy: DeployResult | null = null;
+  let failedMessage: string | null = null;
+  let lastDeliveredAt = -Infinity;
+  let lastFailedAt = -Infinity;
+
+  for (const ev of activity) {
+    if (ev.type === "pr_opened") {
+      prNumber = Number(ev.payload.prNumber);
+      url = String(ev.payload.url ?? "") || null;
+      state = "open";
+    } else if (ev.type === "delivered") {
+      prNumber = Number(ev.payload.prNumber);
+      mergeSha = String(ev.payload.mergeSha ?? "") || null;
+      deploy = (ev.payload.deploy as DeployResult | undefined) ?? null;
+      state = "merged";
+      lastDeliveredAt = ev.createdAt;
+    } else if (ev.type === "delivery_failed") {
+      failedMessage = String(ev.payload.message ?? "delivery failed");
+      lastFailedAt = ev.createdAt;
+    }
+  }
+  if (prNumber === null && failedMessage === null) return null;
+  return {
+    prNumber, url, state, mergeSha, deploy,
+    failedMessage: lastFailedAt > lastDeliveredAt ? failedMessage : null,
+  };
+}
+
+function DeliveryStrip({ status }: { status: DeliveryStatus }) {
+  return (
+    <div className="delivery-strip panel">
+      {status.prNumber !== null && (
+        <span className="delivery-pr">
+          {status.url
+            ? <a href={status.url} target="_blank" rel="noreferrer">PR #{status.prNumber}</a>
+            : `PR #${status.prNumber}`}
+          {" "}
+          <span className={`badge delivery-state delivery-${status.state}`}>{status.state}</span>
+        </span>
+      )}
+      {status.mergeSha && (
+        <span className="delivery-sha">merged <code>{status.mergeSha.slice(0, 7)}</code></span>
+      )}
+      {status.deploy && (
+        <span className={`badge delivery-deploy delivery-deploy-${status.deploy.ran ? (status.deploy.ok ? "ok" : "failed") : "skipped"}`}>
+          {status.deploy.ran ? (status.deploy.ok ? "deploy ok" : "deploy FAILED") : "deploy skipped"}
+        </span>
+      )}
+      {status.failedMessage && (
+        <p className="banner warn delivery-failed">⚠ delivery failed: {status.failedMessage}</p>
+      )}
+    </div>
+  );
 }
 
 export default function IssueDetail({ refId }: { refId: string }) {
@@ -22,6 +98,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
   if (!data) return <p>Loading…</p>;
 
   const projectKey = projectKeyFromRef(data.ref);
+  const delivery = computeDeliveryStatus(data.activity);
 
   const act = (fn: () => Promise<unknown>) =>
     fn().then(() => { setActionError(null); reload(); }, (e) => setActionError(e.message));
@@ -75,6 +152,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
       <PollErrorBar error={error} />
+      {delivery && <DeliveryStrip status={delivery} />}
       {data.sourceType && (
         <div className="provenance panel">
           Filed from: {data.sourceType} · {data.sourceDetail ?? ""}
@@ -234,6 +312,34 @@ export function Event({ ev, projectKey }: { ev: Activity; projectKey: string }) 
         <header><strong>{ev.actorName}</strong> <time>{when}</time></header>
         <Markdown text={String(ev.payload.body ?? "")} projectKey={projectKey} />
       </article>
+    );
+  }
+  if (ev.type === "pr_opened") {
+    const url = String(ev.payload.url ?? "");
+    return (
+      <p className="event">
+        <strong>{ev.actorName}</strong> opened{" "}
+        {url ? <a href={url} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
+        {" "}<time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "delivered") {
+    const sha = String(ev.payload.mergeSha ?? "");
+    const deploy = ev.payload.deploy as DeployResult | undefined;
+    const deployText = !deploy?.ran ? "deploy skipped" : deploy.ok ? "deploy succeeded" : "deploy FAILED";
+    return (
+      <p className="event">
+        <strong>{ev.actorName}</strong> delivered PR #{String(ev.payload.prNumber)} at <code>{sha.slice(0, 7)}</code> · {deployText}{" "}
+        <time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "delivery_failed") {
+    return (
+      <p className="event delivery-failed">
+        <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")} <time>{when}</time>
+      </p>
     );
   }
   const fromTo =

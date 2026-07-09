@@ -12,6 +12,7 @@ import type { Status } from "../db/schema.js";
 import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
 import { addDependency, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
+import { recordDeliveryEvent } from "../services/delivery-events.js";
 import { listRecentEvents } from "../services/events.js";
 import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
@@ -26,6 +27,7 @@ import {
   issueCreateBody,
   issueUpdateBody,
   commentBody,
+  deliveryEventBody,
   dependencyBody,
   webhookCreateBody,
   webhookPatchBody,
@@ -101,6 +103,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.post("/issues/:ref/comments", body(commentBody), (c) => {
     addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);
+    return c.json({ ok: true });
+  });
+
+  app.post("/issues/:ref/delivery-events", body(deliveryEventBody), (c) => {
+    recordDeliveryEvent(db, c.var.actor, c.req.param("ref"), c.req.valid("json"));
     return c.json({ ok: true });
   });
 

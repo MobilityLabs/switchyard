@@ -30,6 +30,20 @@ export const issueUpdateBody = z.object({
 });
 
 export const commentBody = z.object({ body: z.string() });
+const deployResult = z.union([
+  z.object({ ran: z.literal(false) }),
+  z.object({ ran: z.literal(true), ok: z.boolean(), tail: z.string() }),
+]);
+export const deliveryEventBody = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("pr_opened"), prNumber: z.number().int().positive(), url: z.string().url() }),
+  z.object({
+    type: z.literal("delivered"),
+    prNumber: z.number().int().positive(),
+    mergeSha: z.string().min(1),
+    deploy: deployResult,
+  }),
+  z.object({ type: z.literal("delivery_failed"), message: z.string().min(1) }),
+]);
 export const dependencyBody = z.object({ blockerRef: z.string(), blockedRef: z.string() });
 export const requestInputBody = z.object({ question: z.string() });
 export const snoozeBody = z.object({ until: z.number().int().positive() });

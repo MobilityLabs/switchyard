@@ -7,10 +7,13 @@ import {
   buildPrListArgs,
   buildPrCreateArgs,
   buildPrMergeArgs,
+  buildPrViewUrlArgs,
   buildPrTitle,
   buildPrBody,
   deliveryComment,
   deliveryFailureComment,
+  formatPublishOutcome,
+  parsePrNumberFromUrl,
   parseCursorText,
   tailOf,
   type DeliveryFeedEvent,
@@ -113,9 +116,36 @@ describe("argv builders", () => {
     expect(buildPrMergeArgs(41)).toEqual(["pr", "merge", "41", "--merge", "--delete-branch"]);
   });
 
+  it("buildPrViewUrlArgs", () => {
+    expect(buildPrViewUrlArgs(41)).toEqual(["pr", "view", "41", "--json", "url", "--jq", ".url"]);
+  });
+
   it("buildPrTitle / buildPrBody", () => {
     expect(buildPrTitle("SYD-9", "A title")).toBe("SYD-9: A title");
     expect(buildPrBody("SYD-9", "http://host:3300")).toContain("http://host:3300/issue/SYD-9");
+  });
+});
+
+describe("parsePrNumberFromUrl", () => {
+  it("extracts the number from a PR url", () => {
+    expect(parsePrNumberFromUrl("https://github.com/acme/widgets/pull/123")).toBe(123);
+  });
+
+  it("returns null for a non-PR url", () => {
+    expect(parsePrNumberFromUrl("https://github.com/acme/widgets")).toBeNull();
+  });
+});
+
+describe("formatPublishOutcome", () => {
+  it("formats each outcome status (SYD-54)", () => {
+    expect(formatPublishOutcome("agent/SYD-9", { status: "no-branch" }))
+      .toBe("no agent/SYD-9 branch — nothing to publish");
+    expect(formatPublishOutcome("agent/SYD-9", { status: "no-commits" }))
+      .toBe("agent/SYD-9 has no commits ahead of main — nothing to publish");
+    expect(formatPublishOutcome("agent/SYD-9", { status: "already-open", prNumber: 5, url: "https://x/pull/5" }))
+      .toBe("pushed agent/SYD-9; PR #5 already open");
+    expect(formatPublishOutcome("agent/SYD-9", { status: "opened", prNumber: 6, url: "https://x/pull/6" }))
+      .toBe("opened PR for agent/SYD-9: https://x/pull/6");
   });
 });
 
