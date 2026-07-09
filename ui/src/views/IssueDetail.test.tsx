@@ -28,7 +28,7 @@ describe("computeDeliveryStatus", () => {
     ]);
     expect(status).toEqual({
       prNumber: 7, url: "https://github.com/acme/widgets/pull/7", state: "open",
-      mergeSha: null, deploy: null, failedMessage: null,
+      mergeSha: null, deploy: null, failedMessage: null, checks: null,
     });
   });
 
@@ -44,6 +44,51 @@ describe("computeDeliveryStatus", () => {
       prNumber: 7, state: "merged", mergeSha: "abc123def",
       deploy: { ran: true, ok: true, tail: "done" }, failedMessage: null,
     });
+  });
+
+  it("reports an open PR from gh_pr_opened, matching the manual pr_opened shape", () => {
+    const status = computeDeliveryStatus([
+      ev({ type: "gh_pr_opened", payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9", branch: "agent/SYD-1" } }),
+    ]);
+    expect(status).toMatchObject({ prNumber: 9, url: "https://github.com/acme/widgets/pull/9", state: "open" });
+  });
+
+  it("reports merged from gh_pr_merged, preserving a deploy result from an earlier delivered event", () => {
+    const status = computeDeliveryStatus([
+      ev({ type: "pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+      ev({
+        type: "delivered", createdAt: 2,
+        payload: { prNumber: 7, mergeSha: "old", deploy: { ran: true, ok: true, tail: "done" } },
+      }),
+      ev({ type: "gh_pr_merged", createdAt: 3, payload: { prNumber: 7, url: "https://x/pull/7", mergeSha: "new123" } }),
+    ]);
+    expect(status).toMatchObject({
+      state: "merged", mergeSha: "new123", deploy: { ran: true, ok: true, tail: "done" },
+    });
+  });
+
+  it("reports closed (not merged) from gh_pr_closed", () => {
+    const status = computeDeliveryStatus([
+      ev({ type: "gh_pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+      ev({ type: "gh_pr_closed", createdAt: 2, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+    ]);
+    expect(status).toMatchObject({ state: "closed", mergeSha: null });
+  });
+
+  it("folds gh_checks_passed / gh_checks_failed into the checks field, latest wins", () => {
+    const passed = computeDeliveryStatus([
+      ev({ type: "gh_pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+      ev({ type: "gh_checks_failed", createdAt: 2, payload: { conclusion: "failure" } }),
+      ev({ type: "gh_checks_passed", createdAt: 3, payload: { conclusion: "success" } }),
+    ]);
+    expect(passed?.checks).toBe("passed");
+
+    const failed = computeDeliveryStatus([
+      ev({ type: "gh_pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+      ev({ type: "gh_checks_passed", createdAt: 2, payload: { conclusion: "success" } }),
+      ev({ type: "gh_checks_failed", createdAt: 3, payload: { conclusion: "failure" } }),
+    ]);
+    expect(failed?.checks).toBe("failed");
   });
 
   it("surfaces a delivery_failed banner when it is the most recent delivery event", () => {
@@ -132,6 +177,50 @@ describe("Event rendering for delivery events", () => {
     expect(container.textContent).toContain("PR #9");
     expect(container.textContent).toContain("abcdef1");
     expect(container.textContent).toContain("deploy FAILED");
+  });
+
+  it("links the PR in a gh_pr_merged event with its merge sha", async () => {
+    const container = await render(
+      ev({ type: "gh_pr_merged", payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9", mergeSha: "abcdef1234567" } })
+    );
+    const link = container.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/9");
+    expect(container.textContent).toContain("merged");
+    expect(container.textContent).toContain("abcdef1");
+  });
+
+  it("renders a gh_pr_closed event without a merge sha", async () => {
+    const container = await render(
+      ev({ type: "gh_pr_closed", payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9" } })
+    );
+    expect(container.textContent).toContain("closed");
+    expect(container.textContent).not.toContain("at ");
+  });
+
+  it("flags a gh_checks_failed event as a failure", async () => {
+    const container = await render(ev({ type: "gh_checks_failed", payload: { conclusion: "failure" } }));
+    expect(container.textContent).toContain("checks failed");
+    expect(container.querySelector(".delivery-failed")).not.toBeNull();
+  });
+
+  it("links a gh_pushed event to the compare view with commit count and short sha", async () => {
+    const container = await render(
+      ev({
+        type: "gh_pushed",
+        payload: { commitCount: 3, headSha: "deadbeefcafe", url: "https://github.com/acme/widgets/compare/a...b" },
+      })
+    );
+    const link = container.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/compare/a...b");
+    expect(link.textContent).toBe("3 commits");
+    expect(container.textContent).toContain("deadbee");
+  });
+
+  it("singularizes a gh_pushed event with one commit and renders without a link when there's no url", async () => {
+    const container = await render(ev({ type: "gh_pushed", payload: { commitCount: 1, headSha: null, url: null } }));
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("1 commit");
+    expect(container.textContent).not.toContain("1 commits");
   });
 
   it("renders an image attachment as a linked thumbnail", async () => {
