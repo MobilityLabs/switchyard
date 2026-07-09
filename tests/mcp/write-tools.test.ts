@@ -33,6 +33,12 @@ beforeEach(async () => {
 });
 
 describe("MCP write tools", () => {
+  it("file_issue's description tells agents to set a suggested priority (SYD-65)", async () => {
+    const { tools } = await client.listTools();
+    const fileIssue = tools.find((t) => t.name === "file_issue")!;
+    expect(fileIssue.description).toMatch(/priority/i);
+  });
+
   it("file_issue creates a triage issue with provenance", async () => {
     const r = await client.callTool({
       name: "file_issue",

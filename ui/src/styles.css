@@ -58,6 +58,15 @@ a { color: var(--accent-2); text-decoration: none; }
   background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 8px;
 }
+.accept-prompt { display: flex; gap: 8px; align-items: center; }
+.accept-prompt select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px;
+}
+.accept-labels {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px; width: 200px;
+}
 .error-bar {
   background: color-mix(in srgb, var(--danger) 15%, var(--panel)); border: 1px solid var(--danger);
   padding: 8px 12px; border-radius: var(--radius);
@@ -66,6 +75,8 @@ a { color: var(--accent-2); text-decoration: none; }
 .prio-urgent { color: var(--danger); border-color: var(--danger); }
 .prio-high { color: var(--warn); border-color: var(--warn); }
 .prio-medium { color: var(--accent-2); }
+/* Gaps stay visible instead of silent (SYD-65). */
+.prio-none { border-style: dashed; }
 h2 { display: flex; align-items: center; gap: 8px; }
 .board-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .board { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; align-items: stretch; flex: 1; min-height: 0; }
