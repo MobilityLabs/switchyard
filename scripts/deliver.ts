@@ -86,17 +86,20 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
   const project = config.projects[projectKeyOf(ref)];
   if (!project) return;
 
-  const prNumber = await findOpenAgentPr(project.repo, ref);
-  if (prNumber === null) {
-    console.log(`${ref} stamped done but has no open agent PR — interactive work, skipping`);
-    return;
-  }
-  if (dryRun) {
-    console.log(`[dry-run] would merge PR #${prNumber} for ${ref}, deploy from a clean clone, and comment`);
-    return;
-  }
-
+  // The whole per-ref flow (including the PR lookup, which shells out to gh
+  // and can throw on auth/network trouble) sits inside the guard so one
+  // failing ref never blocks its batch siblings or the cursor advance.
   try {
+    const prNumber = await findOpenAgentPr(project.repo, ref);
+    if (prNumber === null) {
+      console.log(`${ref} stamped done but has no open agent PR — interactive work, skipping`);
+      return;
+    }
+    if (dryRun) {
+      console.log(`[dry-run] would merge PR #${prNumber} for ${ref}, deploy from a clean clone, and comment`);
+      return;
+    }
+
     const mergeSha = await mergeAgentPr(project.repo, prNumber);
     console.log(`${ref}: merged PR #${prNumber} at ${mergeSha}`);
     let deploy: Awaited<ReturnType<typeof runDeploy>> = { ran: false };
