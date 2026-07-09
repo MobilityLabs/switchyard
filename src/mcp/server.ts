@@ -103,6 +103,8 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "Your description MUST be decision-grade — a human accepts or dismisses from it alone: " +
         "(1) what's wrong or needed, (2) why it matters and the impact if ignored, " +
         "(3) your suggested next action and rough effort. " +
+        "Always set priority to your best guess (urgent/high/medium/low) based on impact and " +
+        "urgency — don't leave it unset; a human can always correct it during triage. " +
         "Provenance: source_type is where this came from; source_detail is a file:line, session id, " +
         "or short note; source_url is a CI run or PR link.",
       inputSchema: {
