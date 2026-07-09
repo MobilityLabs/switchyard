@@ -56,13 +56,32 @@ describe("attachment routes", () => {
     expect(json.url).toBe(`/api/attachments/${json.id}/screenshot.png`);
     expect(json.markdown).toBe(`![screenshot.png](${json.url})`);
 
-    const detail = await body<{ activity: { type: string; payload: { filename: string; size: number } }[] }>(
-      await app.request(`/issues/${ref}`, { headers: agentH })
-    );
+    const detail = await body<{
+      activity: { type: string; payload: { id: number; filename: string; size: number; contentType: string } }[];
+      attachments: { id: number; filename: string; contentType: string; size: number; actorName: string }[];
+    }>(await app.request(`/issues/${ref}`, { headers: agentH }));
     const event = detail.activity.find((a) => a.type === "attachment_added");
     expect(event).toBeDefined();
+    expect(event!.payload.id).toBe(json.id);
     expect(event!.payload.filename).toBe("screenshot.png");
     expect(event!.payload.size).toBe(data.length);
+    expect(event!.payload.contentType).toBe("image/png");
+
+    expect(detail.attachments).toEqual([
+      { id: json.id, filename: "screenshot.png", contentType: "image/png", size: data.length, actorName: "claude/dev", createdAt: expect.any(Number) },
+    ]);
+  });
+
+  it("lists an issue's attachments via the dedicated list endpoint, oldest first", async () => {
+    const { ref } = await fileIssue();
+    const first = await body<{ id: number }>(await upload(ref, "one.png", Buffer.from([1, 2, 3])));
+    const second = await body<{ id: number }>(await upload(ref, "two.png", Buffer.from([4, 5, 6])));
+
+    const list = await body<{ id: number; filename: string }[]>(
+      await app.request(`/issues/${ref}/attachments`, { headers: agentH })
+    );
+    expect(list.map((a) => a.id)).toEqual([first.id, second.id]);
+    expect(list.map((a) => a.filename)).toEqual(["one.png", "two.png"]);
   });
 
   it("rejects svg attachments", async () => {

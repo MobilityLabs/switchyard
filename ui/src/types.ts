@@ -16,7 +16,11 @@ export type Issue = {
 export type Activity = { type: string; actorName: string; payload: Record<string, unknown>; createdAt: number };
 export type DeployResult = { ran: false } | { ran: true; ok: boolean; tail: string };
 export type DependencyRef = { ref: string; title: string; status: Status };
+export type Attachment = {
+  id: number; filename: string; contentType: string; size: number; actorName: string; createdAt: number;
+};
 export type IssueDetail = Issue & {
   activity: Activity[];
   dependencies: { blockedBy: DependencyRef[]; blocks: DependencyRef[] };
+  attachments: Attachment[];
 };

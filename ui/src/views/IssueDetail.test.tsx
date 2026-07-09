@@ -6,8 +6,8 @@
 // result, and a delivery-failure banner that clears once a later delivery
 // succeeds.
 import { describe, it, expect } from "vitest";
-import { computeDeliveryStatus, Event } from "./IssueDetail";
-import type { Activity } from "../types";
+import { computeDeliveryStatus, Event, withAttachmentIds } from "./IssueDetail";
+import type { Activity, Attachment } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -69,6 +69,39 @@ describe("computeDeliveryStatus", () => {
   });
 });
 
+describe("withAttachmentIds", () => {
+  const attachment = (o: Partial<Attachment>): Attachment => ({
+    id: 1, filename: "shot.png", contentType: "image/png", size: 10, actorName: "claude/dev", createdAt: 1, ...o,
+  });
+
+  it("leaves events that already carry an id untouched", () => {
+    const events = [ev({ type: "attachment_added", payload: { id: 5, filename: "a.png", contentType: "image/png" } })];
+    expect(withAttachmentIds(events, [])).toEqual(events);
+  });
+
+  it("backfills id + contentType for a historical event by matching filename", () => {
+    const events = [ev({ type: "attachment_added", payload: { filename: "shot.png", size: 10 } })];
+    const result = withAttachmentIds(events, [attachment({ id: 42 })]);
+    expect(result[0].payload).toMatchObject({ id: 42, contentType: "image/png", filename: "shot.png" });
+  });
+
+  it("consumes each attachment at most once so duplicate filenames map to distinct rows", () => {
+    const events = [
+      ev({ type: "attachment_added", payload: { filename: "shot.png" } }),
+      ev({ type: "attachment_added", payload: { filename: "shot.png" } }),
+    ];
+    const result = withAttachmentIds(events, [attachment({ id: 1 }), attachment({ id: 2 })]);
+    expect(result[0].payload.id).toBe(1);
+    expect(result[1].payload.id).toBe(2);
+  });
+
+  it("leaves the event unmatched (no id) when no attachment has that filename", () => {
+    const events = [ev({ type: "attachment_added", payload: { filename: "missing.png" } })];
+    const result = withAttachmentIds(events, [attachment({ id: 1, filename: "other.png" })]);
+    expect(result[0].payload.id).toBeUndefined();
+  });
+});
+
 describe("Event rendering for delivery events", () => {
   async function render(event: Activity): Promise<HTMLElement> {
     const container = document.createElement("div");
@@ -99,5 +132,34 @@ describe("Event rendering for delivery events", () => {
     expect(container.textContent).toContain("PR #9");
     expect(container.textContent).toContain("abcdef1");
     expect(container.textContent).toContain("deploy FAILED");
+  });
+
+  it("renders an image attachment as a linked thumbnail", async () => {
+    const container = await render(
+      ev({ type: "attachment_added", payload: { id: 7, filename: "shot.png", size: 10, contentType: "image/png" } })
+    );
+    const link = container.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("/api/attachments/7/shot.png");
+    const img = container.querySelector("img")!;
+    expect(img.getAttribute("src")).toBe("/api/attachments/7/shot.png");
+    expect(img.getAttribute("alt")).toBe("shot.png");
+  });
+
+  it("renders a non-image attachment as a filename link", async () => {
+    const container = await render(
+      ev({ type: "attachment_added", payload: { id: 8, filename: "clip.mp4", size: 10, contentType: "video/mp4" } })
+    );
+    const link = container.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("/api/attachments/8/clip.mp4");
+    expect(link.textContent).toBe("clip.mp4");
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("falls back to plain text for a historical event with no id and no match", async () => {
+    const container = await render(
+      ev({ type: "attachment_added", payload: { filename: "old.png", size: 10 } })
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("attached old.png");
   });
 });

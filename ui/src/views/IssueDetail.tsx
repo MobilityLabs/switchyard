@@ -4,7 +4,7 @@ import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { href } from "../router";
-import { PRIORITIES, STATUSES, type Activity, type DependencyRef, type DeployResult, type Priority, type Status } from "../types";
+import { PRIORITIES, STATUSES, type Activity, type Attachment, type DependencyRef, type DeployResult, type Priority, type Status } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
@@ -62,6 +62,29 @@ export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | nu
   };
 }
 
+export function attachmentUrl(id: number, filename: string): string {
+  return `/api/attachments/${id}/${filename}`;
+}
+
+/**
+ * attachment_added events recorded before SYD-63 have no `id` in their payload
+ * (just filename/size), so the activity row has nothing to link to. Backfill
+ * those by matching against the issue's attachment list — oldest event to
+ * oldest same-named attachment, consuming each match once so two events with
+ * the same filename don't both point at one row.
+ */
+export function withAttachmentIds(activity: Activity[], attachments: Attachment[]): Activity[] {
+  const remaining = [...attachments];
+  return activity.map((ev) => {
+    if (ev.type !== "attachment_added" || ev.payload.id !== undefined) return ev;
+    const filename = String(ev.payload.filename ?? "");
+    const idx = remaining.findIndex((a) => a.filename === filename);
+    if (idx === -1) return ev;
+    const [match] = remaining.splice(idx, 1);
+    return { ...ev, payload: { ...ev.payload, id: match.id, contentType: match.contentType } };
+  });
+}
+
 function DeliveryStrip({ status }: { status: DeliveryStatus }) {
   return (
     <div className="delivery-strip panel">
@@ -101,6 +124,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
 
   const projectKey = projectKeyFromRef(data.ref);
   const delivery = computeDeliveryStatus(data.activity);
+  const activity = withAttachmentIds(data.activity, data.attachments);
 
   const act = (fn: () => Promise<unknown>) =>
     fn().then(() => { setActionError(null); reload(); }, (e) => setActionError(e.message));
@@ -175,9 +199,11 @@ export default function IssueDetail({ refId }: { refId: string }) {
 
       <Dependencies refId={refId} deps={data.dependencies} act={act} />
 
+      {data.attachments.length > 0 && <AttachmentsStrip attachments={data.attachments} />}
+
       <h3>Activity</h3>
       <div className="activity">
-        {data.activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={actorNames} />)}
+        {activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={actorNames} />)}
       </div>
 
       {uploadError && (
@@ -201,6 +227,32 @@ export default function IssueDetail({ refId }: { refId: string }) {
         {uploading && <span className="uploading-note">uploading…</span>}
       </div>
     </section>
+  );
+}
+
+/** Every attachment on the issue, regardless of whether a comment embeds it —
+ * covers orphans (SYD-63), e.g. an agent's attach_file upload nobody linked. */
+function AttachmentsStrip({ attachments }: { attachments: Attachment[] }) {
+  return (
+    <div className="attachments-strip panel">
+      <h3>Attachments</h3>
+      <ul className="attachment-list">
+        {attachments.map((a) => {
+          const url = attachmentUrl(a.id, a.filename);
+          return (
+            <li key={a.id}>
+              {a.contentType.startsWith("image/")
+                ? (
+                  <a href={url} target="_blank" rel="noreferrer">
+                    <img src={url} alt={a.filename} className="attachment-thumb" />
+                  </a>
+                )
+                : <a href={url} target="_blank" rel="noreferrer">{a.filename}</a>}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -353,6 +405,34 @@ export function Event({
     return (
       <p className="event delivery-failed">
         <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")} <time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "attachment_added") {
+    const filename = String(ev.payload.filename ?? "");
+    const id = ev.payload.id;
+    const contentType = String(ev.payload.contentType ?? "");
+    if (typeof id !== "number") {
+      // No id to link to — pre-SYD-63 event with no matching attachment left
+      // to backfill from (e.g. the row was deleted). Don't break the row.
+      return (
+        <p className="event">
+          <strong>{ev.actorName}</strong> attached {filename || "a file"} <time>{when}</time>
+        </p>
+      );
+    }
+    const url = attachmentUrl(id, filename);
+    return (
+      <p className="event attachment-event">
+        <strong>{ev.actorName}</strong> attached{" "}
+        {contentType.startsWith("image/")
+          ? (
+            <a href={url} target="_blank" rel="noreferrer">
+              <img src={url} alt={filename} className="attachment-thumb" />
+            </a>
+          )
+          : <a href={url} target="_blank" rel="noreferrer">{filename}</a>}
+        {" "}<time>{when}</time>
       </p>
     );
   }

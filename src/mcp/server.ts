@@ -204,8 +204,9 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     {
       description:
         "Attach an image or short video to an issue as evidence (png/jpg/gif/webp/avif/mp4/webm/mov, " +
-        "≤20MB decoded). Returns a markdown snippet — include it in your next comment so humans " +
-        "see the media inline.",
+        "≤20MB decoded). The issue's activity feed shows a thumbnail/link for this automatically. " +
+        "Also include the returned markdown snippet in your next comment when you want to call out " +
+        "or discuss the attachment, not just record it.",
       inputSchema: {
         ref: z.string(),
         filename: z.string(),

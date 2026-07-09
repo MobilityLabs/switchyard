@@ -18,7 +18,13 @@ import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
-import { saveAttachment, getAttachment, defaultAttachmentsDir, MAX_ATTACHMENT_SIZE } from "../services/attachments.js";
+import {
+  saveAttachment,
+  getAttachment,
+  listAttachments,
+  defaultAttachmentsDir,
+  MAX_ATTACHMENT_SIZE,
+} from "../services/attachments.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
@@ -92,6 +98,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       ...getIssue(db, ref),
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
+      attachments: listAttachments(db, ref),
     });
   });
 
@@ -140,6 +147,8 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       return c.json({ id: attachment.id, url, markdown });
     }
   );
+
+  app.get("/issues/:ref/attachments", (c) => c.json(listAttachments(db, c.req.param("ref"))));
 
   app.get("/attachments/:id/:filename", async (c) => {
     const id = Number(c.req.param("id"));

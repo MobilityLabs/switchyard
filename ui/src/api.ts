@@ -1,4 +1,4 @@
-import type { Actor, Issue, IssueDetail, Priority, Project, Status } from "./types";
+import type { Actor, Attachment, Issue, IssueDetail, Priority, Project, Status } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -29,6 +29,7 @@ export const listIssues = (
   return api<Issue[]>(`/api/issues${qs ? `?${qs}` : ""}`);
 };
 export const getIssue = (ref: string) => api<IssueDetail>(`/api/issues/${ref}`);
+export const listAttachments = (ref: string) => api<Attachment[]>(`/api/issues/${ref}/attachments`);
 export const updateIssue = (
   ref: string,
   patch: Partial<{ status: Status; priority: Priority; title: string; description: string; assigneeName: string | null; labels: string[] }>,
