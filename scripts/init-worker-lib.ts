@@ -114,6 +114,16 @@ export function validateWorkerConfig(raw: unknown): string[] {
       }
     }
   }
+  if (c.githubPoll !== undefined) {
+    if (typeof c.githubPoll !== "object" || c.githubPoll === null || Array.isArray(c.githubPoll)) {
+      problems.push("`githubPoll` must be an object");
+    } else {
+      const g = c.githubPoll as Record<string, unknown>;
+      if (g.pollSeconds !== undefined && (typeof g.pollSeconds !== "number" || !(g.pollSeconds > 0))) {
+        problems.push("`githubPoll.pollSeconds` must be a positive number");
+      }
+    }
+  }
   return problems;
 }
 

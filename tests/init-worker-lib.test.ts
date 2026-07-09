@@ -245,6 +245,33 @@ describe("validateWorkerConfig", () => {
   });
 });
 
+describe("validateWorkerConfig githubPoll block (SYD-71)", () => {
+    const base = {
+      url: "http://localhost:3300",
+      label: "auto",
+      intervalSeconds: 300,
+      maxConcurrent: 1,
+      projects: { SYD: { repo: "/repo" } },
+    };
+
+    it("accepts a valid githubPoll block", () => {
+      expect(validateWorkerConfig({ ...base, githubPoll: { pollSeconds: 120 } })).toEqual([]);
+    });
+
+    it("accepts an absent githubPoll block", () => {
+      expect(validateWorkerConfig(base)).toEqual([]);
+    });
+
+    it("rejects a non-object githubPoll block", () => {
+      expect(validateWorkerConfig({ ...base, githubPoll: "yes" }).join()).toContain("githubPoll");
+    });
+
+    it("rejects a non-positive pollSeconds", () => {
+      const problems = validateWorkerConfig({ ...base, githubPoll: { pollSeconds: -5 } });
+      expect(problems.some((p) => p.includes("githubPoll.pollSeconds"))).toBe(true);
+    });
+  });
+
 describe("nodeVersionSatisfies", () => {
   it("accepts an actual version at or above the required major", () => {
     expect(nodeVersionSatisfies("20", "v20.0.0")).toBe(true);
