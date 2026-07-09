@@ -3,27 +3,40 @@ import { addComment, getIssue, listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
-import type { IssueDetail as IssueDetailType } from "../types";
+import type { Issue, IssueDetail as IssueDetailType } from "../types";
 import { Event, projectKeyFromRef } from "./IssueDetail";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
+import { navigate, redirect } from "../router";
+import { countNewArrivals, firstRef, pickAdjacentRef } from "./reviewQueue";
 
-export default function Review() {
+export default function Review({ currentRef }: { currentRef: string | null }) {
   const { data, error, reload } = usePoll(() => listIssues({ status: "in_review" }), []);
-  const [index, setIndex] = useState(0);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
   const actorNames = useActorNames();
 
-  const list = data ?? [];
-  const clampedIndex = list.length ? Math.min(index, list.length - 1) : 0;
+  // The reviewer's working order — a snapshot of refs, distinct from the
+  // live-polled `data`. It only catches up to `data` when the reviewer
+  // moves (next/prev/approve/send back/jump), so a new arrival or reorder
+  // mid-poll never swaps the item on screen out from under them.
+  const [queue, setQueue] = useState<Issue[]>([]);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
 
   useEffect(() => {
-    if (index !== clampedIndex) setIndex(clampedIndex);
-  }, [clampedIndex, index]);
+    if (data && queue.length === 0) setQueue(data);
+  }, [data, queue.length]);
 
-  const current = list[clampedIndex];
+  // Bare `/review` redirects to the first queued issue.
+  useEffect(() => {
+    if (currentRef === null && queue.length > 0) redirect({ view: "review", ref: firstRef(queue) });
+  }, [currentRef, queue]);
+
+  const list = data ?? [];
+  const current = list.find((i) => i.ref === currentRef) ?? null;
+  const leftReview = currentRef !== null && data !== null && !current;
+  const newArrivals = data ? countNewArrivals(data, queue) : 0;
+
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } =
     usePasteUpload(current?.ref ?? "", draft, setDraft);
 
@@ -32,16 +45,25 @@ export default function Review() {
     [current?.ref],
   );
 
+  function moveTo(ref: string | null) {
+    if (data) setQueue(data);
+    setDraft("");
+    navigate({ view: "review", ref });
+  }
   function next() {
-    setIndex((i) => (list.length ? Math.min(i + 1, list.length - 1) : 0));
+    moveTo(pickAdjacentRef(queue, currentRef, 1));
   }
   function prev() {
-    setIndex((i) => Math.max(i - 1, 0));
+    moveTo(pickAdjacentRef(queue, currentRef, -1));
+  }
+  function jumpToNext() {
+    moveTo(pickAdjacentRef(queue, currentRef, 1) ?? firstRef(list));
   }
   function approve() {
     if (!current) return;
+    const nextRef = pickAdjacentRef(queue, currentRef, 1);
     updateIssue(current.ref, { status: "done" }).then(
-      () => { setActionError(null); reload(); },
+      () => { setActionError(null); reload(); moveTo(nextRef); },
       (e) => setActionError(e.message),
     );
   }
@@ -49,10 +71,11 @@ export default function Review() {
     if (!current) return;
     const body = draft.trim();
     if (!body) { setActionError("A comment is required to send an issue back — write what needs to change."); return; }
+    const nextRef = pickAdjacentRef(queue, currentRef, 1);
     addComment(current.ref, body)
       .then(() => updateIssue(current.ref, { status: "todo" }))
       .then(
-        () => { setActionError(null); setDraft(""); reload(); },
+        () => { setActionError(null); reload(); moveTo(nextRef); },
         (e) => setActionError(e.message),
       );
   }
@@ -79,12 +102,12 @@ export default function Review() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, draft, list.length]);
+  }, [current, currentRef, draft, queue]);
 
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
 
-  if (list.length === 0) {
+  if (!currentRef && list.length === 0) {
     return (
       <section className="review">
         <PollErrorBar error={error} />
@@ -92,6 +115,8 @@ export default function Review() {
       </section>
     );
   }
+
+  const position = current ? queue.findIndex((i) => i.ref === current.ref) : -1;
 
   return (
     <section className="review">
@@ -104,12 +129,20 @@ export default function Review() {
       <PollErrorBar error={error} />
 
       <header className="review-head">
-        <h2>Reviewing {clampedIndex + 1} of {list.length}</h2>
+        <h2>{position >= 0 ? `Reviewing ${position + 1} of ${queue.length}` : "Reviewing"}</h2>
         <div className="review-nav">
-          <button onClick={prev} disabled={clampedIndex === 0}>‹ Prev</button>
-          <button onClick={next} disabled={clampedIndex === list.length - 1}>Next ›</button>
+          {newArrivals > 0 && <span className="badge warn review-new-arrivals">{newArrivals} new</span>}
+          <button onClick={prev} disabled={!pickAdjacentRef(queue, currentRef, -1)}>‹ Prev</button>
+          <button onClick={next} disabled={!pickAdjacentRef(queue, currentRef, 1)}>Next ›</button>
         </div>
       </header>
+
+      {leftReview && (
+        <div className="banner warn review-left">
+          <p>{currentRef} is no longer in review — someone else may have moved it.</p>
+          <button onClick={jumpToNext}>Jump to next</button>
+        </div>
+      )}
 
       {current && (
         <article className="review-issue panel">

@@ -81,7 +81,7 @@ function ShellRouter({ me }: { me: Actor }) {
       {route.view === "triage" && <Triage />}
       {route.view === "board" && <Board project={route.project} />}
       {route.view === "issue" && <IssueDetail refId={route.ref} />}
-      {route.view === "review" && <Review />}
+      {route.view === "review" && <Review currentRef={route.ref} />}
       {route.view === "new-issue" && <NewIssue />}
     </Shell>
   );

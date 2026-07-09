@@ -6,7 +6,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { getLastProject, navigate, useRoute } from "./router";
+import { getLastProject, href, navigate, parsePath, redirect, useRoute } from "./router";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -65,5 +65,56 @@ describe("last-project memory", () => {
       navigate({ view: "board", project: "ACME" });
     });
     expect(getLastProject()).toBe("ACME");
+  });
+});
+
+// SYD-75: the ref lives in the URL so reload/back/forward preserve the item
+// being reviewed instead of it drifting with the polled list's order.
+describe("review route", () => {
+  beforeEach(() => {
+    history.replaceState(null, "", "/");
+  });
+
+  it("parses bare /review with no ref", () => {
+    expect(parsePath("/review")).toEqual({ view: "review", ref: null });
+  });
+
+  it("parses /review/:ref", () => {
+    expect(parsePath("/review/SYD-66")).toEqual({ view: "review", ref: "SYD-66" });
+  });
+
+  it("builds hrefs with and without a ref", () => {
+    expect(href({ view: "review", ref: null })).toBe("/review");
+    expect(href({ view: "review", ref: "SYD-66" })).toBe("/review/SYD-66");
+  });
+
+  it("navigate pushes a new history entry per ref, so each is its own back-button stop", async () => {
+    await mountRoute();
+    const before = history.length;
+    await act(async () => {
+      navigate({ view: "review", ref: "SYD-1" });
+    });
+    expect(location.pathname).toBe("/review/SYD-1");
+    expect(history.length).toBe(before + 1);
+    await act(async () => {
+      navigate({ view: "review", ref: "SYD-2" });
+    });
+    expect(location.pathname).toBe("/review/SYD-2");
+    expect(history.length).toBe(before + 2);
+  });
+
+  it("redirect replaces the current entry instead of pushing a new one", async () => {
+    await mountRoute();
+    await act(async () => {
+      navigate({ view: "review", ref: null });
+    });
+    expect(location.pathname).toBe("/review");
+    const before = history.length;
+    await act(async () => {
+      redirect({ view: "review", ref: "SYD-1" });
+    });
+    expect(location.pathname).toBe("/review/SYD-1");
+    // Bare /review never became its own back-button stop.
+    expect(history.length).toBe(before);
   });
 });

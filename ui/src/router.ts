@@ -4,7 +4,7 @@ export type Route =
   | { view: "triage" }
   | { view: "board"; project: string }
   | { view: "issue"; ref: string }
-  | { view: "review" }
+  | { view: "review"; ref: string | null }
   | { view: "new-issue" };
 
 // Fired whenever `navigate()` pushes a new history entry, so `useRoute` can
@@ -41,7 +41,8 @@ function matchRoute(pathname: string): Route | null {
   if (parts.length === 0) return { view: "triage" };
   if (parts[0] === "board" && parts.length === 2 && parts[1]) return { view: "board", project: parts[1] };
   if (parts[0] === "issue" && parts.length === 2 && parts[1]) return { view: "issue", ref: parts[1] };
-  if (parts[0] === "review" && parts.length === 1) return { view: "review" };
+  if (parts[0] === "review" && parts.length === 1) return { view: "review", ref: null };
+  if (parts[0] === "review" && parts.length === 2 && parts[1]) return { view: "review", ref: parts[1] };
   if (parts[0] === "new" && parts.length === 1) return { view: "new-issue" };
   return null;
 }
@@ -57,7 +58,7 @@ export function isKnownPath(pathname: string): boolean {
 export function href(route: Route): string {
   if (route.view === "board") return `/board/${route.project}`;
   if (route.view === "issue") return `/issue/${route.ref}`;
-  if (route.view === "review") return `/review`;
+  if (route.view === "review") return route.ref ? `/review/${route.ref}` : `/review`;
   if (route.view === "new-issue") return `/new`;
   return "/";
 }
@@ -71,6 +72,17 @@ export function navigate(target: Route | string): void {
     history.pushState(null, "", path);
   }
   window.dispatchEvent(new Event(NAVIGATE_EVENT));
+}
+
+// Like `navigate`, but replaces the current history entry instead of pushing
+// a new one — for redirects (e.g. bare `/review` to `/review/:ref`) where the
+// bare path shouldn't become its own back-button stop.
+export function redirect(target: Route | string): void {
+  const path = typeof target === "string" ? target : href(target);
+  if (path !== `${location.pathname}${location.search}`) {
+    history.replaceState(null, "", path);
+    window.dispatchEvent(new Event(NAVIGATE_EVENT));
+  }
 }
 
 // Backward compat: old bookmarks/links use the `#/x/y` hash scheme. Rewrite

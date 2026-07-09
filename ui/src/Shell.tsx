@@ -99,7 +99,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
           >
             Board
           </a>
-          <a href={href({ view: "review" })} className={route.view === "review" ? "active" : ""}>
+          <a href={href({ view: "review", ref: null })} className={route.view === "review" ? "active" : ""}>
             Review{inReview.data && inReview.data.length > 0 && <span className="badge">{inReview.data.length}</span>}
           </a>
         </nav>
