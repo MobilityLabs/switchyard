@@ -75,6 +75,21 @@ describe("POST /webhooks/github", () => {
     expect(res.status).toBe(501);
   });
 
+  it("records a gh_pushed event for a validly signed push delivery", async () => {
+    const res = await post(
+      {
+        ref: "refs/heads/agent/SYD-1",
+        after: "deadbeefcafe",
+        compare: "https://github.com/acme/widgets/compare/a...b",
+        commits: [{ message: "wip" }],
+      },
+      { event: "push" }
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; handled: boolean; ref: string; type: string };
+    expect(body).toMatchObject({ ok: true, handled: true, ref: "SYD-1", type: "gh_pushed" });
+  });
+
   it("responds 200 with handled:false for an unmatched ref instead of erroring", async () => {
     const res = await post({
       action: "opened",

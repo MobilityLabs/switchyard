@@ -157,14 +157,70 @@ describe("handleGithubWebhook / check_suite", () => {
   });
 });
 
-describe("handleGithubWebhook / unhandled event types", () => {
-  it("accepts push without recording an event", () => {
+describe("handleGithubWebhook / push", () => {
+  it("records gh_pushed, matched by the agent/<ref> branch", () => {
     const db = setup();
-    const outcome = handleGithubWebhook(db, "push", { ref: "refs/heads/agent/SYD-1" });
-    expect(outcome).toEqual({ handled: false, reason: "push events are accepted but not processed yet" });
+    const outcome = handleGithubWebhook(db, "push", {
+      ref: "refs/heads/agent/SYD-1",
+      after: "deadbeefcafe",
+      compare: "https://github.com/acme/widgets/compare/abc...deadbeefcafe",
+      commits: [{ message: "wip" }, { message: "more wip" }],
+    });
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pushed" });
+    const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pushed")!;
+    expect(ev.payload).toEqual({
+      commitCount: 2,
+      headSha: "deadbeefcafe",
+      branch: "agent/SYD-1",
+      url: "https://github.com/acme/widgets/compare/abc...deadbeefcafe",
+    });
+    expect(ev.actorName).toBe("github");
+  });
+
+  it("falls back to a commit message when the branch isn't agent/<ref>", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "push", {
+      ref: "refs/heads/feature/manual-branch",
+      after: "sha1",
+      commits: [{ message: "unrelated" }, { message: "SYD-1: fix thing" }],
+    });
+    expect(outcome).toMatchObject({ handled: true, ref: "SYD-1", type: "gh_pushed" });
+  });
+
+  it("ignores a branch-deletion push", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "push", {
+      ref: "refs/heads/agent/SYD-1", deleted: true, after: "0".repeat(40), commits: [],
+    });
+    expect(outcome).toEqual({ handled: false, reason: "ignored branch-deletion push" });
     expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
   });
 
+  it("ignores a push with no commits", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "push", { ref: "refs/heads/agent/SYD-1", commits: [] });
+    expect(outcome).toEqual({ handled: false, reason: "push has no commits" });
+    expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
+  });
+
+  it("reports unhandled when no ref can be resolved", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "push", {
+      ref: "refs/heads/main", commits: [{ message: "no ref here" }],
+    });
+    expect(outcome).toEqual({ handled: false, reason: "no issue ref found in branch or commit messages" });
+  });
+
+  it("reports unhandled when the matched ref doesn't exist in Switchyard", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "push", {
+      ref: "refs/heads/agent/SYD-999", commits: [{ message: "wip" }],
+    });
+    expect(outcome).toEqual({ handled: false, reason: "no Switchyard issue matches ref SYD-999" });
+  });
+});
+
+describe("handleGithubWebhook / unhandled event types", () => {
   it("reports unsupported for anything else", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "issues", {});

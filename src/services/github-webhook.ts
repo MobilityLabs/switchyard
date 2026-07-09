@@ -1,14 +1,16 @@
-// Inbound GitHub webhook handling (SYD-64): turns pull_request/check_suite
+// Inbound GitHub webhook handling (SYD-64): turns pull_request/check_suite/push
 // deliveries into timeline events on the issue they belong to, so the SYD-54
-// delivery strip reflects GitHub's own state instead of relying on agents to
-// hand-write "merged PR #N" comments. Issues are matched by parsing the
-// `agent/<ref>` branch convention (scripts/delivery-lib.ts's agentBranch)
-// off the PR/check-suite branch first, falling back to scanning the PR
-// title/body for a bare ref — same two signals SYD-64 asked for.
+// delivery strip and activity feed reflect GitHub's own state instead of
+// relying on agents to hand-write "merged PR #N" comments. Issues are matched
+// by parsing the `agent/<ref>` branch convention (scripts/delivery-lib.ts's
+// agentBranch) off the PR/check-suite/push branch first, falling back to
+// scanning free text (PR title/body, or commit messages for push) for a bare
+// ref — same two signals SYD-64 asked for.
 //
-// `push` events are accepted (so GitHub's delivery doesn't show as failing)
-// but not turned into timeline events yet — there's no push-derived event
-// type in the SYD-54 status panel to drive. Filed as a follow-up.
+// push (SYD-73) records a gh_pushed event (commit count, head sha, compare
+// url) rather than folding into the SYD-54 delivery strip — a push isn't a
+// state transition like open/merged/closed, so it renders as a plain
+// activity-feed line instead of a strip badge.
 
 import type { Db } from "../db/index.js";
 import { getOrCreateActor } from "./actors.js";
@@ -78,6 +80,30 @@ function handlePullRequest(db: Db, payload: any): GithubWebhookOutcome {
   return { handled: false, reason: `ignored pull_request action "${payload.action}"` };
 }
 
+function branchFromGitRef(gitRef: unknown): string | null {
+  if (typeof gitRef !== "string" || !gitRef.startsWith("refs/heads/")) return null;
+  return gitRef.slice("refs/heads/".length);
+}
+
+function handlePush(db: Db, payload: any): GithubWebhookOutcome {
+  if (payload?.deleted) return { handled: false, reason: "ignored branch-deletion push" };
+
+  const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+  if (commits.length === 0) return { handled: false, reason: "push has no commits" };
+
+  const branch = branchFromGitRef(payload?.ref);
+  const messages = commits.map((c: any) => c?.message);
+  const ref = resolveRef([branch], messages);
+  if (!ref) return { handled: false, reason: "no issue ref found in branch or commit messages" };
+
+  return record(db, ref, "gh_pushed", {
+    commitCount: commits.length,
+    headSha: typeof payload.after === "string" ? payload.after : null,
+    branch,
+    url: typeof payload.compare === "string" ? payload.compare : null,
+  });
+}
+
 function handleCheckSuite(db: Db, payload: any): GithubWebhookOutcome {
   const suite = payload?.check_suite;
   if (!suite) return { handled: false, reason: "check_suite payload missing check_suite object" };
@@ -100,7 +126,7 @@ export function handleGithubWebhook(db: Db, githubEvent: string, payload: any): 
     case "check_suite":
       return handleCheckSuite(db, payload);
     case "push":
-      return { handled: false, reason: "push events are accepted but not processed yet" };
+      return handlePush(db, payload);
     default:
       return { handled: false, reason: `unsupported event type "${githubEvent}"` };
   }

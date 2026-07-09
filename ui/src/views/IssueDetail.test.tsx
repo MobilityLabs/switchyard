@@ -203,6 +203,26 @@ describe("Event rendering for delivery events", () => {
     expect(container.querySelector(".delivery-failed")).not.toBeNull();
   });
 
+  it("links a gh_pushed event to the compare view with commit count and short sha", async () => {
+    const container = await render(
+      ev({
+        type: "gh_pushed",
+        payload: { commitCount: 3, headSha: "deadbeefcafe", url: "https://github.com/acme/widgets/compare/a...b" },
+      })
+    );
+    const link = container.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/compare/a...b");
+    expect(link.textContent).toBe("3 commits");
+    expect(container.textContent).toContain("deadbee");
+  });
+
+  it("singularizes a gh_pushed event with one commit and renders without a link when there's no url", async () => {
+    const container = await render(ev({ type: "gh_pushed", payload: { commitCount: 1, headSha: null, url: null } }));
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("1 commit");
+    expect(container.textContent).not.toContain("1 commits");
+  });
+
   it("renders an image attachment as a linked thumbnail", async () => {
     const container = await render(
       ev({ type: "attachment_added", payload: { id: 7, filename: "shot.png", size: 10, contentType: "image/png" } })

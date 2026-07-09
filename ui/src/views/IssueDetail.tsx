@@ -446,6 +446,19 @@ export function Event({
       </p>
     );
   }
+  if (ev.type === "gh_pushed") {
+    const count = Number(ev.payload.commitCount ?? 0);
+    const url = String(ev.payload.url ?? "");
+    const sha = String(ev.payload.headSha ?? "");
+    const label = `${count} commit${count === 1 ? "" : "s"}`;
+    return (
+      <p className="event">
+        GitHub: pushed {url ? <a href={url} target="_blank" rel="noreferrer">{label}</a> : label}
+        {sha && <> (<code>{sha.slice(0, 7)}</code>)</>}
+        {" "}<time>{when}</time>
+      </p>
+    );
+  }
   if (ev.type === "attachment_added") {
     const filename = String(ev.payload.filename ?? "");
     const id = ev.payload.id;
