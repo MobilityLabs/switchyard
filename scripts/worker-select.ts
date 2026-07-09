@@ -21,6 +21,14 @@ export type DeliveryConfig = {
   cloneDir?: string;
   /** Run the merged project's `npm run deploy` after merging (default true). */
   deploy?: boolean;
+  /**
+   * After merging, run `npm run typecheck && npx vitest run` in the clean
+   * clone (i.e. against merged main, not just the reviewed branch) before
+   * deploying (default true). On failure, deploy is skipped and a loud
+   * `delivery_failed` event/comment is posted instead — main is red but
+   * visibly red, rather than silently shipped.
+   */
+  verify?: boolean;
 };
 
 export type WorkerConfig = {

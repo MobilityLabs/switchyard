@@ -24,10 +24,11 @@ import {
   parseCursorText,
   deliveryComment,
   deliveryFailureComment,
+  verificationFailureComment,
   type DeliveryEventInput,
   type DeliveryFeedEvent,
 } from "./delivery-lib.js";
-import { findOpenAgentPr, mergeAgentPr, ensureCleanClone, runDeploy } from "./delivery-exec.js";
+import { findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
 const DEFAULT_POLL_SECONDS = 30;
@@ -122,6 +123,20 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
     if (config.delivery?.deploy !== false) {
       const cloneDir = path.join(cloneRootOf(config), projectKeyOf(ref));
       await ensureCleanClone(project.repo, cloneDir);
+
+      if (config.delivery?.verify !== false) {
+        const verify = await runVerification(cloneDir);
+        if (!verify.ok) {
+          console.error(`${ref}: post-merge verification FAILED — main is red, deploy skipped`);
+          await postComment(config, token, ref, verificationFailureComment(prNumber, mergeSha, verify.tail));
+          await postDeliveryEvent(config, token, ref, {
+            type: "delivery_failed",
+            message: `post-merge verification failed after merging PR #${prNumber} at ${mergeSha} — deploy skipped:\n${verify.tail}`,
+          }).catch((e: Error) => console.error(`could not record delivery_failed event for ${ref}: ${e.message}`));
+          return;
+        }
+      }
+
       deploy = await runDeploy(cloneDir);
       console.log(`${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`);
     }

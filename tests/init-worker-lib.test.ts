@@ -125,7 +125,7 @@ describe("validateWorkerConfig", () => {
     it("accepts a valid delivery block", () => {
       expect(validateWorkerConfig({
         ...base,
-        delivery: { openPrs: true, pollSeconds: 30, cloneDir: "/tmp/clones", deploy: false },
+        delivery: { openPrs: true, pollSeconds: 30, cloneDir: "/tmp/clones", deploy: false, verify: false },
       })).toEqual([]);
     });
 
@@ -140,12 +140,13 @@ describe("validateWorkerConfig", () => {
     it("rejects bad field types", () => {
       const problems = validateWorkerConfig({
         ...base,
-        delivery: { openPrs: "true", pollSeconds: -5, cloneDir: "", deploy: 1 },
+        delivery: { openPrs: "true", pollSeconds: -5, cloneDir: "", deploy: 1, verify: "yes" },
       });
       expect(problems.some((p) => p.includes("delivery.openPrs"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.pollSeconds"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.cloneDir"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.deploy"))).toBe(true);
+      expect(problems.some((p) => p.includes("delivery.verify"))).toBe(true);
     });
   });
 });

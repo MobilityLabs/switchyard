@@ -93,6 +93,27 @@ export async function ensureCleanClone(sourceRepo: string, cloneDir: string): Pr
   await run("git", ["-C", cloneDir, "clean", "-fd"]);
 }
 
+/**
+ * Post-merge verification gate (SYD-78): a PR is reviewed and green in
+ * isolation, but nothing previously confirmed that main *after* the merge
+ * (i.e. this branch plus everything else landed since its clone) still
+ * typechecks and passes its tests — semantic conflicts between concurrently
+ * merged branches land silently. Runs in the clean clone, never the deploy
+ * caller's working tree. `npm install` first because ensureCleanClone's
+ * `git clean -fd` wipes the clone's (gitignored) node_modules every time.
+ */
+export async function runVerification(cloneDir: string): Promise<{ ok: boolean; tail: string }> {
+  try {
+    await run("npm", ["install"], { cwd: cloneDir });
+    const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir });
+    const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir });
+    return { ok: true, tail: tailOf(`${typecheck}\n${tests}`) };
+  } catch (err) {
+    const e = err as Error & { stdout?: string; stderr?: string };
+    return { ok: false, tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
+  }
+}
+
 /** Runs the project's `npm run deploy` from the clean clone, if it has one. */
 export async function runDeploy(
   cloneDir: string
