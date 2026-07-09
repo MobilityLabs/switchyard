@@ -18,6 +18,10 @@
 #   CLAUDE_CODE_OAUTH_TOKEN   OAuth token from `claude setup-token` -- or --
 #   ANTHROPIC_API_KEY         an Anthropic API key (one of the two is required)
 #
+# Optional env:
+#   STACK_CHECKS              JSON array of {name, check, install} (SYD-76) --
+#                             verified before claude -p runs; see stack-check.mjs
+#
 # Host repo mounted read-write at /origin.
 
 set -eu
@@ -50,6 +54,13 @@ git config user.email "worker@switchyard.local"
 
 if [ -f package.json ]; then
   npm ci || echo "WARNING: npm ci failed -- continuing without installed dependencies" >&2
+fi
+
+# Stack guarantee (SYD-76): fail fast with a clear message if this project
+# declared CLI tools (STACK_CHECKS) that this image doesn't have, instead of
+# the session discovering it mid-task.
+if [ -n "${STACK_CHECKS:-}" ] && [ -f scripts/stack-check.mjs ]; then
+  node scripts/stack-check.mjs || exit 1
 fi
 
 # Written as a file rather than `claude mcp add --header ...` so the bearer

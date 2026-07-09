@@ -8,6 +8,14 @@
 //   npm run init-worker -- --self-test                 # doctor, then one dry-run worker tick
 //   npm run init-worker -- --protect-main [KEY]        # doctor, then apply branch protection to main
 //                                                       # (all configured projects, or just KEY)
+//   npm run init-worker -- --repair-stack [KEY]        # install/repair a project's declared stack.cli
+//                                                       # (all configured projects, or just KEY)
+//
+// Per-project toolchain declarations (SYD-76): projects.<KEY>.stack in
+// switchyard-worker.json (node version, extra CLIs, ports) — the doctor
+// verifies it in whichever environment sessions actually run in (the built
+// image for containerized projects, the host otherwise); --repair-stack
+// installs what's missing. See switchyard-worker.example.json for the shape.
 //
 // Role split (SYD-67): --install-launchd-code and --install-launchd-answer
 // install independent LaunchAgents so code dispatch and answerer mode can be
@@ -26,12 +34,13 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WorkerConfig, WorkerRole } from "./worker-select.js";
+import type { WorkerConfig, WorkerProject, WorkerRole } from "./worker-select.js";
 import { workerPidFileName } from "./worker-select.js";
 import { isLocked } from "./pidfile.js";
 import {
   buildProtectMainArgs,
   formatChecks,
+  nodeVersionSatisfies,
   parseDotEnv,
   parseGithubRemote,
   renderDeliverPlist,
@@ -56,6 +65,64 @@ function loadEnv(): Record<string, string> {
   const fromFile = existsSync(envPath) ? parseDotEnv(readFileSync(envPath, "utf8")) : {};
   // Real environment wins over .env, matching how the worker itself runs.
   return { ...fromFile, ...(process.env as Record<string, string>) };
+}
+
+/**
+ * Runs `cmd` in whichever environment a project's dispatched sessions
+ * actually execute in (SYD-76): inside the built worker image for
+ * containerized projects, on the host otherwise (bare-host and sdk runners
+ * both execute directly on this machine). Checking the wrong environment
+ * would pass a doctor run on a host that happens to have the tool while the
+ * container that actually runs sessions doesn't.
+ */
+function runsOk(cmd: string, config: WorkerConfig): boolean {
+  if (config.containerized) {
+    const image = config.image ?? "switchyard-worker";
+    return spawnSync("docker", ["run", "--rm", image, "sh", "-c", cmd], { stdio: "ignore" }).status === 0;
+  }
+  return spawnSync("sh", ["-c", cmd], { stdio: "ignore" }).status === 0;
+}
+
+/** Doctor checks for a project's declared `stack` (SYD-76): Node version, extra CLIs, declared ports. */
+function checkProjectStack(key: string, project: WorkerProject, config: WorkerConfig): CheckResult[] {
+  const results: CheckResult[] = [];
+  const stack = project.stack;
+  if (!stack) return results;
+
+  if (stack.node) {
+    let actual: string | null;
+    if (config.containerized) {
+      const image = config.image ?? "switchyard-worker";
+      const out = spawnSync("docker", ["run", "--rm", image, "node", "--version"], { encoding: "utf8" });
+      actual = out.status === 0 ? out.stdout.trim() : null;
+    } else {
+      actual = process.version;
+    }
+    results.push({
+      name: `projects.${key} stack: node >= ${stack.node}`,
+      ok: actual !== null && nodeVersionSatisfies(stack.node, actual),
+      note: actual ? `found ${actual}` : "could not determine the session's node version",
+    });
+  }
+
+  for (const cli of stack.cli ?? []) {
+    const ok = runsOk(cli.check, config);
+    results.push({
+      name: `projects.${key} stack: ${cli.name}`,
+      ok,
+      note: ok ? undefined : cli.install ? `missing — run: ${cli.install}` : `missing — \`${cli.check}\` failed`,
+    });
+  }
+
+  if (stack.ports && stack.ports.length > 0) {
+    results.push({
+      name: `projects.${key} stack: ports`,
+      ok: true,
+      note: `declared: ${stack.ports.join(", ")} (informational — not port-mapped automatically yet)`,
+    });
+  }
+
+  return results;
 }
 
 async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig | null }> {
@@ -92,7 +159,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     }
   }
 
-  // Project repos
+  // Project repos + declared toolchain (stack, SYD-76)
   if (config) {
     for (const [key, project] of Object.entries(config.projects)) {
       const isRepo = existsSync(path.join(project.repo, ".git"));
@@ -101,6 +168,9 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         ok: isRepo,
         note: isRepo ? project.repo : `${project.repo} is not a git repo`,
       });
+      if (project.stack) {
+        results.push(...checkProjectStack(key, project, config));
+      }
     }
   }
 
@@ -404,6 +474,62 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
   if (failures > 0) process.exit(1);
 }
 
+/**
+ * Install+repair action for a failing `stack.cli` check (SYD-76 layer 3 — the
+ * doctor's "missing — run: ..." note points here). Bare-host/sdk projects run
+ * the declared `install` command directly; containerized projects can't be
+ * repaired in place (a `--rm` container throws the install away on exit), so
+ * this prints the Dockerfile.worker + rebuild guidance instead.
+ */
+function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): void {
+  if (!config) {
+    console.error("switchyard-worker.json is missing or invalid — fix it before running --repair-stack.");
+    process.exit(1);
+  }
+  const keys = onlyKey ? [onlyKey] : Object.keys(config.projects);
+  let failures = 0;
+  for (const key of keys) {
+    const project = config.projects[key];
+    if (!project) {
+      console.error(`✗ ${key}: not in switchyard-worker.json projects`);
+      failures++;
+      continue;
+    }
+    const cli = project.stack?.cli ?? [];
+    if (cli.length === 0) {
+      console.log(`${key}: no stack.cli declared, nothing to repair`);
+      continue;
+    }
+    if (config.containerized) {
+      console.log(
+        `${key}: containerized — add these to Dockerfile.worker and run \`npm run build:worker-image\`:\n` +
+        cli.map((c) => `  - ${c.name}: ${c.install ?? "(no install command declared)"}`).join("\n")
+      );
+      continue;
+    }
+    for (const c of cli) {
+      if (runsOk(c.check, config)) {
+        console.log(`✓ ${key}: ${c.name} already present`);
+        continue;
+      }
+      if (!c.install) {
+        console.error(`✗ ${key}: ${c.name} missing and no install command declared`);
+        failures++;
+        continue;
+      }
+      console.log(`${key}: installing ${c.name} — ${c.install}`);
+      spawnSync("sh", ["-c", c.install], { stdio: "inherit" });
+      if (runsOk(c.check, config)) {
+        console.log(`✓ ${key}: ${c.name} installed`);
+      } else {
+        console.error(`✗ ${key}: ${c.name} install failed or check still fails`);
+        failures++;
+      }
+    }
+  }
+  if (failures > 0) process.exit(1);
+}
+
 function selfTest(): void {
   console.log("\nself-test: one dry-run worker tick (nothing is dispatched)\n");
   const env = loadEnv();
@@ -423,6 +549,16 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const { results, config } = await doctor();
   console.log(formatChecks(results));
+
+  // Runs even when the stack checks above failed — that's the whole point:
+  // the doctor's "missing — run: ..." note points an operator here.
+  const repairIdx = args.indexOf("--repair-stack");
+  if (repairIdx !== -1) {
+    const next = args[repairIdx + 1];
+    const key = next && !next.startsWith("-") ? next : undefined;
+    repairStack(config, key);
+    return;
+  }
 
   const failed = results.filter((r) => !r.ok);
   if (failed.length > 0) {
