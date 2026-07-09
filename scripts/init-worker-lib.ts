@@ -73,6 +73,9 @@ export function validateWorkerConfig(raw: unknown): string[] {
       if (typeof project?.repo !== "string" || project.repo.trim() === "") {
         problems.push(`projects.${key}.repo must be a path to a local git repo`);
       }
+      if (project?.stack !== undefined) {
+        problems.push(...validateWorkerStack(key, project.stack));
+      }
     }
   }
   if (
@@ -106,6 +109,65 @@ export function validateWorkerConfig(raw: unknown): string[] {
     }
   }
   return problems;
+}
+
+/** Validates a project's `stack` declaration (SYD-76). See `validateWorkerConfig`. */
+function validateWorkerStack(projectKey: string, raw: unknown): string[] {
+  const problems: string[] = [];
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return [`projects.${projectKey}.stack must be an object`];
+  }
+  const stack = raw as Record<string, unknown>;
+
+  if (stack.node !== undefined && (typeof stack.node !== "string" || stack.node.trim() === "")) {
+    problems.push(`projects.${projectKey}.stack.node must be a non-empty string, e.g. "20"`);
+  }
+
+  if (stack.ports !== undefined) {
+    const ports = stack.ports;
+    const bad =
+      !Array.isArray(ports) || ports.some((p) => typeof p !== "number" || !Number.isInteger(p) || p <= 0);
+    if (bad) problems.push(`projects.${projectKey}.stack.ports must be an array of positive integers`);
+  }
+
+  if (stack.cli !== undefined) {
+    if (!Array.isArray(stack.cli)) {
+      problems.push(`projects.${projectKey}.stack.cli must be an array`);
+    } else {
+      stack.cli.forEach((entry, i) => {
+        if (typeof entry !== "object" || entry === null) {
+          problems.push(`projects.${projectKey}.stack.cli[${i}] must be an object`);
+          return;
+        }
+        const e = entry as Record<string, unknown>;
+        if (typeof e.name !== "string" || e.name.trim() === "") {
+          problems.push(`projects.${projectKey}.stack.cli[${i}].name must be a non-empty string`);
+        }
+        if (typeof e.check !== "string" || e.check.trim() === "") {
+          problems.push(`projects.${projectKey}.stack.cli[${i}].check must be a non-empty command string`);
+        }
+        if (e.install !== undefined && (typeof e.install !== "string" || e.install.trim() === "")) {
+          problems.push(`projects.${projectKey}.stack.cli[${i}].install must be a non-empty string if set`);
+        }
+      });
+    }
+  }
+
+  return problems;
+}
+
+/**
+ * Compares a declared minimum Node major version (e.g. "20") against an
+ * actual `process.version`-shaped string (e.g. "v24.1.0" or "24.1.0").
+ * Returns false if either side doesn't parse as a number, so a malformed
+ * `stack.node` or an unreadable `node --version` output fails the check
+ * rather than silently passing.
+ */
+export function nodeVersionSatisfies(required: string, actual: string): boolean {
+  const requiredMajor = parseInt(required, 10);
+  const actualMajor = parseInt(actual.replace(/^v/, ""), 10);
+  if (Number.isNaN(requiredMajor) || Number.isNaN(actualMajor)) return false;
+  return actualMajor >= requiredMajor;
 }
 
 function escapeXml(s: string): string {

@@ -10,7 +10,32 @@ export type WorkerIssue = {
   updatedAt: number;
 };
 
-export type WorkerProject = { repo: string };
+/** One extra CLI tool a project's dispatched sessions need beyond the baseline (git, node, claude). */
+export type WorkerStackCli = {
+  /** Human-readable name, shown in doctor output and session-start failures. */
+  name: string;
+  /** Shell command that exits 0 iff the tool is present, e.g. "codex --version". */
+  check: string;
+  /** Shell command that installs/repairs it — shown as a hint; run by `--repair-stack`. */
+  install?: string;
+};
+
+/**
+ * Per-project toolchain declaration (SYD-76): what dispatched sessions for
+ * this project need beyond the worker image's baseline, so gaps (missing
+ * CLI, wrong Node version) surface as a clear doctor/session-start failure
+ * instead of a mid-task ENOENT.
+ */
+export type WorkerStack = {
+  /** Minimum Node.js major version the session needs, e.g. "20". */
+  node?: string;
+  /** Extra CLIs the session needs beyond git/node/claude. */
+  cli?: WorkerStackCli[];
+  /** Ports the session may need to bind. Informational only — not yet enforced. */
+  ports?: number[];
+};
+
+export type WorkerProject = { repo: string; stack?: WorkerStack };
 
 export type DeliveryConfig = {
   /** Open a GitHub PR when a containerized session pushes agent/<ref> (default true). */
@@ -471,6 +496,7 @@ export function buildDockerArgs(
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   const prompt = buildContainerizedPrompt(issue.ref, opts);
   const image = config.image ?? DEFAULT_WORKER_IMAGE;
+  const stackChecks = stackChecksEnv(project.stack);
 
   return [
     "run",
@@ -484,6 +510,19 @@ export function buildDockerArgs(
     "-e", "ANTHROPIC_API_KEY",
     "-e", `WORKER_PROMPT=${prompt}`,
     "-e", `ALLOWED_TOOLS=${allowedTools.join(",")}`,
+    ...(stackChecks ? ["-e", `STACK_CHECKS=${stackChecks}`] : []),
     image,
   ];
+}
+
+/**
+ * Serializes a project's declared CLI checks (SYD-76) into the JSON payload
+ * scripts/stack-check.mjs reads from STACK_CHECKS before a containerized
+ * session starts — a session-start fast-fail instead of a mid-task ENOENT.
+ * Returns undefined when there's nothing to check, so buildDockerArgs omits
+ * the env var entirely rather than passing an empty array.
+ */
+export function stackChecksEnv(stack: WorkerStack | undefined): string | undefined {
+  if (!stack?.cli || stack.cli.length === 0) return undefined;
+  return JSON.stringify(stack.cli.map(({ name, check, install }) => ({ name, check, install })));
 }

@@ -6,6 +6,7 @@ import {
   WORKER_CODE_LAUNCHD_LABEL,
   WORKER_ANSWER_LAUNCHD_LABEL,
   formatChecks,
+  nodeVersionSatisfies,
   parseDotEnv,
   parseGithubRemote,
   parsePlistPath,
@@ -148,6 +149,98 @@ describe("validateWorkerConfig", () => {
       expect(problems.some((p) => p.includes("delivery.cloneDir"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.deploy"))).toBe(true);
     });
+  });
+
+  describe("validateWorkerConfig stack block (SYD-76)", () => {
+    const base = {
+      url: "http://localhost:3300",
+      label: "auto",
+      intervalSeconds: 300,
+      maxConcurrent: 1,
+    };
+
+    it("accepts a project with no stack declared", () => {
+      expect(validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo" } } })).toEqual([]);
+    });
+
+    it("accepts a fully-populated stack block", () => {
+      expect(validateWorkerConfig({
+        ...base,
+        projects: {
+          SYD: {
+            repo: "/repo",
+            stack: {
+              node: "20",
+              cli: [{ name: "gh", check: "gh --version", install: "brew install gh" }],
+              ports: [3300],
+            },
+          },
+        },
+      })).toEqual([]);
+    });
+
+    it("rejects a non-object stack", () => {
+      const problems = validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo", stack: "yes" } } });
+      expect(problems.some((p) => p.includes("stack"))).toBe(true);
+    });
+
+    it("rejects a non-string node", () => {
+      const problems = validateWorkerConfig({
+        ...base, projects: { SYD: { repo: "/repo", stack: { node: 20 } } },
+      });
+      expect(problems.some((p) => p.includes("stack.node"))).toBe(true);
+    });
+
+    it("rejects a non-array ports and non-positive-integer entries", () => {
+      expect(
+        validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo", stack: { ports: "3300" } } } })
+          .some((p) => p.includes("stack.ports"))
+      ).toBe(true);
+      expect(
+        validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo", stack: { ports: [0, -1, 1.5] } } } })
+          .some((p) => p.includes("stack.ports"))
+      ).toBe(true);
+    });
+
+    it("rejects a non-array cli", () => {
+      const problems = validateWorkerConfig({
+        ...base, projects: { SYD: { repo: "/repo", stack: { cli: "gh" } } },
+      });
+      expect(problems.some((p) => p.includes("stack.cli"))).toBe(true);
+    });
+
+    it("rejects a cli entry missing name or check", () => {
+      const problems = validateWorkerConfig({
+        ...base, projects: { SYD: { repo: "/repo", stack: { cli: [{ install: "brew install gh" }] } } },
+      });
+      expect(problems.some((p) => p.includes("stack.cli[0].name"))).toBe(true);
+      expect(problems.some((p) => p.includes("stack.cli[0].check"))).toBe(true);
+    });
+
+    it("rejects a blank install string", () => {
+      const problems = validateWorkerConfig({
+        ...base,
+        projects: { SYD: { repo: "/repo", stack: { cli: [{ name: "gh", check: "gh --version", install: "" }] } } },
+      });
+      expect(problems.some((p) => p.includes("stack.cli[0].install"))).toBe(true);
+    });
+  });
+});
+
+describe("nodeVersionSatisfies", () => {
+  it("accepts an actual version at or above the required major", () => {
+    expect(nodeVersionSatisfies("20", "v20.0.0")).toBe(true);
+    expect(nodeVersionSatisfies("20", "24.1.0")).toBe(true);
+    expect(nodeVersionSatisfies("20", "20.19.5")).toBe(true);
+  });
+
+  it("rejects an actual version below the required major", () => {
+    expect(nodeVersionSatisfies("20", "v18.20.0")).toBe(false);
+  });
+
+  it("rejects unparseable input on either side", () => {
+    expect(nodeVersionSatisfies("nope", "v20.0.0")).toBe(false);
+    expect(nodeVersionSatisfies("20", "not-a-version")).toBe(false);
   });
 });
 

@@ -11,6 +11,7 @@ findResumeRefs,
   ANSWER_ALLOWED_TOOLS,
   buildDockerArgs,
   buildContainerizedPrompt,
+  stackChecksEnv,
   newTickGate,
   runGated,
   answerKey,
@@ -470,6 +471,37 @@ describe("buildDockerArgs", () => {
     expect(() =>
       buildDockerArgs(issue({ ref: "SYD-1" }), project, config, { ANTHROPIC_API_KEY: "sk-ant-secret" })
     ).not.toThrow();
+  });
+
+  it("omits STACK_CHECKS when the project has no stack.cli declared (SYD-76)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    expect(args.some((a) => a.startsWith("STACK_CHECKS="))).toBe(false);
+  });
+
+  it("passes STACK_CHECKS derived from the project's declared stack.cli (SYD-76)", () => {
+    const stacked: WorkerProject = {
+      repo: "/repo/syd",
+      stack: { cli: [{ name: "gh", check: "gh --version", install: "brew install gh" }] },
+    };
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), stacked, config, oauthEnv);
+    const entry = args.find((a) => a.startsWith("STACK_CHECKS="));
+    expect(entry).toBeDefined();
+    expect(JSON.parse(entry!.slice("STACK_CHECKS=".length))).toEqual([
+      { name: "gh", check: "gh --version", install: "brew install gh" },
+    ]);
+  });
+});
+
+describe("stackChecksEnv", () => {
+  it("returns undefined when there is no stack or no cli entries", () => {
+    expect(stackChecksEnv(undefined)).toBeUndefined();
+    expect(stackChecksEnv({})).toBeUndefined();
+    expect(stackChecksEnv({ cli: [] })).toBeUndefined();
+  });
+
+  it("serializes cli entries to a JSON array, dropping unset install", () => {
+    const json = stackChecksEnv({ cli: [{ name: "gh", check: "gh --version" }] });
+    expect(JSON.parse(json!)).toEqual([{ name: "gh", check: "gh --version" }]);
   });
 });
 
