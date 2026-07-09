@@ -73,14 +73,34 @@ gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input - <<'JSON'
 JSON
 ```
 
-### 5. Prime the repo's CLAUDE.md
+### 5. Make sure the MCP registration is user-scoped
+
+`claude mcp add` defaults to **local scope** — private to the directory you
+ran it in. A registration made inside the switchyard repo is invisible to
+sessions in the new project's repo. Check and fix:
+
+```bash
+claude mcp get switchyard   # "Scope: Local config" means only one repo sees it
+claude mcp remove --scope local switchyard
+claude mcp add --scope user switchyard --transport http http://100.85.158.109:3300/mcp \
+  --header "Authorization: Bearer <agent token>"
+```
+
+Caveat: running `claude mcp add/remove` while Claude Code sessions are open
+can be silently reverted — a live session saving its state rewrites
+`~/.claude.json` from stale memory. Verify the scope change stuck
+(`claude mcp get switchyard`), and re-apply with sessions closed if not.
+Per-person actors (`claude/<name>-dev`) are the recommended token — see
+`docs/agent-kit.md`.
+
+### 6. Prime the repo's CLAUDE.md
 
 Add a short section so interactive Claude sessions in that repo actually use
 the tracker (pattern from `docs/agent-kit.md`): project key, "check
 `next_task` / file discovered work with `file_issue`", and the branch
 conventions (`agent/<ref>` is reserved for dispatched workers).
 
-### 6. Restart the loops so the new config loads
+### 7. Restart the loops so the new config loads
 
 The worker reads its config at start — a running loop won't see the new
 project. **[manual gap: deliver.ts has no launchd installer]**
@@ -93,7 +113,7 @@ SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts        # delivery gate loop
 (Both read the repo `.env` themselves; launchd covers only the dispatch
 worker via `npm run init-worker -- --install-launchd`.)
 
-### 7. Smoke-test the full gate
+### 8. Smoke-test the full gate
 
 1. File an issue in the new project (UI → New Issue, or `file_issue` via MCP —
    agent filings land in triage).
@@ -116,3 +136,4 @@ worker via `npm run init-worker -- --install-launchd`.)
 | Delivery-gate checks | not covered by doctor | doctor checks `gh` auth, remote, `delivery` block; `--protect-main` applies branch protection | SYD-53 |
 | deliver.ts as a service | run by hand | launchd installer alongside the worker's | SYD-53 |
 | Delivery visibility | merge/deploy results are issue comments only | PR link + delivery status surfaced in the UI issue view (pairs with SYD-43 live-sessions panel) | SYD-54 |
+| MCP scope check | local-scope registrations silently invisible from other repos; live sessions can revert `claude mcp` edits | doctor warns when the MCP registration isn't user-scoped (fold into SYD-52/53) | doc only (step 5) |
