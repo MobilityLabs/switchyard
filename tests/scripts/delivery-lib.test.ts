@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   agentBranch,
   findDeliverableRefs,
+  findRedeliverRefs,
   feedGap,
   buildPushArgs,
   buildPrListArgs,
@@ -91,6 +92,36 @@ describe("findDeliverableRefs", () => {
 
   it("never moves the cursor backwards", () => {
     expect(findDeliverableRefs([ev({ id: 3 })], keys, 9).lastEventId).toBe(9);
+  });
+});
+
+describe("findRedeliverRefs", () => {
+  const keys = ["SYD"];
+  const redeliver = (o: Partial<DeliveryFeedEvent>): DeliveryFeedEvent =>
+    ev({ type: "redeliver_requested", payload: {}, ...o });
+
+  it("null cursor initializes to newest id without firing on history", () => {
+    const feed = [redeliver({ id: 7 }), redeliver({ id: 3 })];
+    expect(findRedeliverRefs(feed, keys, null)).toEqual({ refs: [], lastEventId: 7 });
+  });
+
+  it("fires on redeliver_requested newer than the cursor", () => {
+    const feed = [redeliver({ id: 10 })];
+    expect(findRedeliverRefs(feed, keys, 5)).toEqual({ refs: ["SYD-9"], lastEventId: 10 });
+  });
+
+  it("ignores events at or below the cursor", () => {
+    expect(findRedeliverRefs([redeliver({ id: 5 })], keys, 5).refs).toEqual([]);
+  });
+
+  it("ignores a done-stamp (that's findDeliverableRefs's job, not this one's)", () => {
+    const feed = [ev({ id: 11, type: "status_changed", payload: { from: "in_review", to: "done" } })];
+    expect(findRedeliverRefs(feed, keys, 5).refs).toEqual([]);
+  });
+
+  it("ignores unconfigured projects and dedupes refs", () => {
+    const feed = [redeliver({ id: 11, issue: "OTHER-1" }), redeliver({ id: 12 }), redeliver({ id: 13 })];
+    expect(findRedeliverRefs(feed, keys, 5).refs).toEqual(["SYD-9"]);
   });
 });
 

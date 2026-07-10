@@ -20,17 +20,17 @@ export function agentBranch(ref: string): string {
 }
 
 /**
- * Scans the global event feed for done-stamps (status_changed → done) newer
- * than `lastEventId` on configured projects. Only human actors can move an
- * issue to done (server-enforced), so every match is a human approval — the
- * delivery gate's trigger. Same cursor semantics as findResumeRefs: a null
- * cursor initializes to the newest event id without firing on history, so a
- * fresh deliver.ts never replays old approvals.
+ * Shared cursor logic for scanning the global event feed for refs matching
+ * `matches`, newer than `lastEventId` on configured projects. A null cursor
+ * initializes to the newest event id without firing on history (same
+ * semantics as findResumeRefs), so a fresh deliver.ts never replays old
+ * events.
  */
-export function findDeliverableRefs(
+function findRefsMatching(
   feed: DeliveryFeedEvent[],
   projectKeys: Iterable<string>,
-  lastEventId: number | null
+  lastEventId: number | null,
+  matches: (e: DeliveryFeedEvent) => boolean
 ): { refs: string[]; lastEventId: number | null } {
   if (feed.length === 0) return { refs: [], lastEventId };
   const keys = new Set(projectKeys);
@@ -40,12 +40,42 @@ export function findDeliverableRefs(
   const refs = new Set<string>();
   for (const e of feed) {
     if (e.id <= lastEventId) continue;
-    if (e.type !== "status_changed") continue;
-    if (e.payload?.to !== "done") continue;
+    if (!matches(e)) continue;
     if (!keys.has(projectKeyOf(e.issue))) continue;
     refs.add(e.issue);
   }
   return { refs: [...refs], lastEventId: Math.max(newestId, lastEventId) };
+}
+
+/**
+ * Scans for done-stamps (status_changed → done) newer than `lastEventId`.
+ * Only human actors can move an issue to done (server-enforced), so every
+ * match is a human approval — the delivery gate's trigger.
+ */
+export function findDeliverableRefs(
+  feed: DeliveryFeedEvent[],
+  projectKeys: Iterable<string>,
+  lastEventId: number | null
+): { refs: string[]; lastEventId: number | null } {
+  return findRefsMatching(
+    feed, projectKeys, lastEventId,
+    (e) => e.type === "status_changed" && e.payload?.to === "done"
+  );
+}
+
+/**
+ * Scans for `redeliver_requested` events newer than `lastEventId` (SYD-102):
+ * the explicit "try this delivery again" trigger a human fires from the
+ * attention banner's Retry button, distinct from a fresh done-stamp so it
+ * works even though the issue is already `done` (a done→done re-stamp emits
+ * no event at all — see redeliverIssue in src/services/triage-actions.ts).
+ */
+export function findRedeliverRefs(
+  feed: DeliveryFeedEvent[],
+  projectKeys: Iterable<string>,
+  lastEventId: number | null
+): { refs: string[]; lastEventId: number | null } {
+  return findRefsMatching(feed, projectKeys, lastEventId, (e) => e.type === "redeliver_requested");
 }
 
 /**
@@ -297,7 +327,7 @@ export function deliveryFailureComment(ref: string, message: string): string {
   return (
     `Delivery FAILED for ${ref}: ${message}\n` +
     `The agent PR was not delivered — check scripts/deliver.ts logs, resolve, ` +
-    `and re-stamp the issue done (or merge manually).`
+    `and click Retry delivery on the attention banner (or merge manually).`
   );
 }
 
@@ -331,7 +361,7 @@ export function autoRebaseConflictComment(ref: string, mergeFailureMessage: stri
     `Delivery FAILED for ${ref}: merge failed (${mergeFailureMessage})\n` +
     `Attempted an automatic rebase of ${agentBranch(ref)} onto ${MAIN_BRANCH}, but it hit real conflicts:\n` +
     `${fileList}\n` +
-    `The agent PR was not delivered — resolve the conflicts, push, and re-stamp the issue done (or merge manually).`
+    `The agent PR was not delivered — resolve the conflicts, push, and click Retry delivery on the attention banner (or merge manually).`
   );
 }
 
@@ -343,7 +373,7 @@ export function autoRebaseVerifyFailedComment(ref: string, tail: string): string
     `Delivery FAILED for ${ref}: auto-rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} with no conflicts, ` +
     `but the post-rebase verify gate (typecheck + tests) failed — NOT pushed, NOT merged.\n` +
     `Output tail:\n\`\`\`\n${tail}\n\`\`\`\n` +
-    `The agent PR was not delivered — fix the failure, push, and re-stamp the issue done (or merge manually).`
+    `The agent PR was not delivered — fix the failure, push, and click Retry delivery on the attention banner (or merge manually).`
   );
 }
 
@@ -493,7 +523,7 @@ export function conflictResolutionFailedComment(
     `Dispatched a conflict-resolution worker session to resolve them, but it did not produce a mergeable branch. ` +
     `Output tail:\n\`\`\`\n${tail}\n\`\`\`\n` +
     `The agent PR was not delivered — check the session's own comment on this issue for its diagnosis, resolve ` +
-    `the conflicts, push, and re-stamp the issue done (or merge manually).`
+    `the conflicts, push, and click Retry delivery on the attention banner (or merge manually).`
   );
 }
 

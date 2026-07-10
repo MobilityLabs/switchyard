@@ -22,6 +22,7 @@ import {
 } from "./worker-select.js";
 import {
   findDeliverableRefs,
+  findRedeliverRefs,
   feedGap,
   parseCursorText,
   deliveryComment,
@@ -146,7 +147,7 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
   try {
     const prNumber = await findOpenAgentPr(project.repo, ref);
     if (prNumber === null) {
-      console.log(`${ref} stamped done but has no open agent PR — interactive work, skipping`);
+      console.log(`${ref} has no open agent PR — interactive work, skipping`);
       return;
     }
     if (dryRun) {
@@ -314,7 +315,9 @@ async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof
         `Any done-stamps in that range were NOT delivered; check the board for stamped-but-unmerged issues.`
       );
     }
-    const { refs, lastEventId } = findDeliverableRefs(feed, Object.keys(config.projects), cursor);
+    const { refs: doneRefs, lastEventId } = findDeliverableRefs(feed, Object.keys(config.projects), cursor);
+    const { refs: redeliverRefs } = findRedeliverRefs(feed, Object.keys(config.projects), cursor);
+    const refs = [...new Set([...doneRefs, ...redeliverRefs])];
     for (const ref of refs) {
       // Sequential on purpose: deliveries deploy; two at once would race the clone.
       await deliver(ref, config, token, dryRun);

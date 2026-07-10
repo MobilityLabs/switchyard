@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { addComment, addDependency, getIssue, removeDependency, updateIssue } from "../api";
+import { addComment, addDependency, getIssue, redeliverIssue, removeDependency, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
@@ -126,9 +126,21 @@ export function withAttachmentIds(activity: Activity[], attachments: Attachment[
   });
 }
 
-export function AttentionBanner({ attention }: { attention: Issue["attention"] }) {
+export function AttentionBanner({
+  attention, onRetry,
+}: {
+  attention: Issue["attention"];
+  onRetry?: () => void;
+}) {
   if (!attention) return null;
-  return <p className="banner danger issue-attention">⛔ {attention.message}</p>;
+  return (
+    <p className="banner danger issue-attention">
+      ⛔ {attention.message}
+      {onRetry && (
+        <button className="retry-delivery" onClick={onRetry}>Retry delivery</button>
+      )}
+    </p>
+  );
 }
 
 function DeliveryStrip({ status }: { status: DeliveryStatus }) {
@@ -210,7 +222,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
           🤖 auto
         </button>
       </header>
-      <AttentionBanner attention={data.attention} />
+      <AttentionBanner attention={data.attention} onRetry={() => act(() => redeliverIssue(refId))} />
       <div className="labels-row">
         {otherLabels.map((label) => (
           <span key={label} className="chip label-chip">
