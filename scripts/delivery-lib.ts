@@ -128,6 +128,43 @@ export function buildPrViewUrlArgs(prNumber: number, ownerRepo: string): string[
   return ["pr", "view", String(prNumber), "--json", "url", "--jq", ".url", "-R", ownerRepo];
 }
 
+// Auto-rebase-on-merge-failure argv builders (SYD-85): when `gh pr merge`
+// fails, delivery-exec.ts tries a mechanical `git rebase origin/main` of the
+// agent branch in the scratch clone before giving up. Kept pure/argv-only for
+// the same reason as the builders above — execFile, never a shell.
+
+export function buildFetchAgentBranchArgs(ref: string): string[] {
+  return ["fetch", "origin", agentBranch(ref)];
+}
+
+export function buildCheckoutRebaseBranchArgs(ref: string): string[] {
+  return ["checkout", "-B", agentBranch(ref), "FETCH_HEAD"];
+}
+
+export function buildRebaseOntoMainArgs(): string[] {
+  return ["rebase", `origin/${MAIN_BRANCH}`];
+}
+
+export function buildRebaseAbortArgs(): string[] {
+  return ["rebase", "--abort"];
+}
+
+export function buildConflictFilesArgs(): string[] {
+  return ["diff", "--name-only", "--diff-filter=U"];
+}
+
+export function buildForcePushWithLeaseArgs(ref: string): string[] {
+  return ["push", "--force-with-lease", "origin", agentBranch(ref)];
+}
+
+/** Outcome of an attemptAutoRebase call (delivery-exec.ts) — pure so the
+ * comment text for each branch is testable without shelling out. */
+export type RebaseOutcome =
+  | { status: "no-branch" }
+  | { status: "conflict"; files: string[] }
+  | { status: "verify-failed"; tail: string }
+  | { status: "rebased"; sha: string };
+
 /** Outcome of a publishAgentBranch call (delivery-exec.ts) — pure so the log-line
  * formatting and the decision to emit a pr_opened event are both testable. */
 export type PublishOutcome =
@@ -200,6 +237,41 @@ export function deliveryFailureComment(ref: string, message: string): string {
     `Delivery FAILED for ${ref}: ${message}\n` +
     `The agent PR was not delivered — check scripts/deliver.ts logs, resolve, ` +
     `and re-stamp the issue done (or merge manually).`
+  );
+}
+
+/** Prepended to deliveryComment's output when the merge only succeeded after
+ * an automatic rebase (SYD-85), so "Delivered" doesn't read as a clean
+ * first-try merge. */
+export function autoRebasedNote(ref: string): string {
+  return (
+    `Auto-rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} after the initial merge failed ` +
+    `(no conflicts; typecheck + tests passed post-rebase) — then merged.`
+  );
+}
+
+/** gh pr merge failed and the automatic rebase hit real conflict hunks
+ * (SYD-85) — never resolved automatically, always escalated with the
+ * conflicted file list so the human/coordinator starts with the diagnosis. */
+export function autoRebaseConflictComment(ref: string, mergeFailureMessage: string, conflictFiles: string[]): string {
+  const fileList = conflictFiles.length > 0 ? conflictFiles.map((f) => `- ${f}`).join("\n") : "(no conflicted files reported)";
+  return (
+    `Delivery FAILED for ${ref}: merge failed (${mergeFailureMessage})\n` +
+    `Attempted an automatic rebase of ${agentBranch(ref)} onto ${MAIN_BRANCH}, but it hit real conflicts:\n` +
+    `${fileList}\n` +
+    `The agent PR was not delivered — resolve the conflicts, push, and re-stamp the issue done (or merge manually).`
+  );
+}
+
+/** gh pr merge failed, the rebase applied cleanly, but the post-rebase verify
+ * gate (typecheck + tests) failed — the merged result was never tested, so
+ * the rebase is deliberately NOT pushed or retried (SYD-85). */
+export function autoRebaseVerifyFailedComment(ref: string, tail: string): string {
+  return (
+    `Delivery FAILED for ${ref}: auto-rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} with no conflicts, ` +
+    `but the post-rebase verify gate (typecheck + tests) failed — NOT pushed, NOT merged.\n` +
+    `Output tail:\n\`\`\`\n${tail}\n\`\`\`\n` +
+    `The agent PR was not delivered — fix the failure, push, and re-stamp the issue done (or merge manually).`
   );
 }
 

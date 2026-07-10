@@ -17,10 +17,17 @@ import {
   buildPrViewMergeShaArgs,
   buildPrViewUrlArgs,
   parseOwnerRepo,
+  buildFetchAgentBranchArgs,
+  buildCheckoutRebaseBranchArgs,
+  buildRebaseOntoMainArgs,
+  buildRebaseAbortArgs,
+  buildConflictFilesArgs,
+  buildForcePushWithLeaseArgs,
   parsePrNumberFromUrl,
   tailOf,
   MAIN_BRANCH,
   type PublishOutcome,
+  type RebaseOutcome,
 } from "./delivery-lib.js";
 
 const execFileP = promisify(execFile);
@@ -126,6 +133,41 @@ export async function runVerification(cloneDir: string): Promise<{ ok: boolean; 
     const e = err as Error & { stdout?: string; stderr?: string };
     return { ok: false, tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
   }
+}
+
+/**
+ * Mechanical recovery for a `gh pr merge` failure (SYD-85): rebases the agent
+ * branch onto origin/main in the scratch clone (reusing ensureCleanClone, the
+ * same machinery the deploy step uses). A clean rebase is verified (typecheck
+ * + tests — the merged combination was never tested) and force-pushed
+ * with-lease so the caller can retry the merge; a conflicted rebase is
+ * aborted and reported, never resolved automatically — that needs intent a
+ * script doesn't have. Force-push only ever targets `agent/<ref>` branches.
+ * Callers are expected to invoke this at most once per merge failure (a
+ * failed retry falls through to the normal failure path) so a stuck PR can't
+ * loop rebase attempts forever.
+ */
+export async function attemptAutoRebase(repo: string, cloneDir: string, ref: string): Promise<RebaseOutcome> {
+  await ensureCleanClone(repo, cloneDir);
+  try {
+    await run("git", ["-C", cloneDir, ...buildFetchAgentBranchArgs(ref)]);
+  } catch {
+    return { status: "no-branch" };
+  }
+  await run("git", ["-C", cloneDir, ...buildCheckoutRebaseBranchArgs(ref)]);
+  try {
+    await run("git", ["-C", cloneDir, ...buildRebaseOntoMainArgs()]);
+  } catch {
+    const filesOut = await run("git", ["-C", cloneDir, ...buildConflictFilesArgs()]).catch(() => "");
+    const files = filesOut.split("\n").map((f) => f.trim()).filter(Boolean);
+    await run("git", ["-C", cloneDir, ...buildRebaseAbortArgs()]).catch(() => {});
+    return { status: "conflict", files };
+  }
+  const verify = await runVerification(cloneDir);
+  if (!verify.ok) return { status: "verify-failed", tail: verify.tail };
+  await run("git", ["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
+  const sha = await run("git", ["-C", cloneDir, "rev-parse", "HEAD"]);
+  return { status: "rebased", sha };
 }
 
 /** Runs the project's `npm run deploy` from the clean clone, if it has one. */
