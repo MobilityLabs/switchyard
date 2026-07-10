@@ -7,7 +7,7 @@ import { href } from "../router";
 import { PRIORITIES, type Issue, type IssueDetail, type Priority } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
-import { DescriptionSection, Event, projectKeyFromRef, summaryText } from "./IssueDetail";
+import { ActivityFeed, DescriptionSection, projectKeyFromRef, summaryText } from "./IssueDetail";
 
 // Issues routinely leave triage with priority "none" (SYD-65) — default
 // accept-to-todo to "medium" unless a human already set something more
@@ -162,9 +162,7 @@ export function TriageRow({
           <h4>Activity</h4>
           <div className="activity triage-activity">
             {detail.data
-              ? detail.data.activity.map((ev, i) => (
-                <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={knownActorNames} />
-              ))
+              ? <ActivityFeed activity={detail.data.activity} projectKey={projectKey} knownActorNames={knownActorNames} />
               : <p className="empty">Loading activity…</p>}
           </div>
 

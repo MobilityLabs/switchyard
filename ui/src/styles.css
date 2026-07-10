@@ -389,3 +389,10 @@ kbd {
 .session-note { font-style: italic; opacity: 0.8; }
 .agent-session-strip { display: flex; flex-direction: column; gap: 0.25rem; }
 .progress-note { font-style: italic; opacity: 0.8; }
+
+/* Collapsed progress_note runs in the activity feed (SYD-104) */
+.progress-note-group { display: flex; flex-direction: column; gap: 4px; }
+.link-button {
+  align-self: flex-start; background: none; border: none; padding: 0;
+  color: var(--muted); font-size: 12px; text-decoration: underline; cursor: pointer;
+}

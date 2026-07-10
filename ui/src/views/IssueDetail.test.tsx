@@ -16,7 +16,7 @@ vi.mock("../api", () => ({
   listAgentSessions: vi.fn(() => Promise.resolve([])),
 }));
 
-import { AgentSessionStrip, AttentionBanner, computeDeliveryStatus, DescriptionSection, Event, withAttachmentIds } from "./IssueDetail";
+import { ActivityFeed, AgentSessionStrip, AttentionBanner, computeDeliveryStatus, DescriptionSection, Event, groupProgressNotes, withAttachmentIds } from "./IssueDetail";
 import { listAgentSessions } from "../api";
 import type { Activity, Attachment, Issue } from "../types";
 import { act } from "react";
@@ -361,6 +361,93 @@ describe("Event rendering for progress_note (SYD-43)", () => {
     });
     expect(container.textContent).toContain("compiling");
     expect(container.querySelector(".progress-note")).not.toBeNull();
+  });
+});
+
+// SYD-104: a chatty session posts 10-20 progress_note events per issue; the
+// activity feed collapses consecutive runs of them to one visible line
+// (latest note) with an expander, rather than drowning real comments.
+describe("groupProgressNotes (SYD-104)", () => {
+  it("keeps non-progress_note events as their own single-element groups", () => {
+    const a = ev({ type: "created" });
+    const b = ev({ type: "comment" });
+    expect(groupProgressNotes([a, b])).toEqual([[a], [b]]);
+  });
+
+  it("collapses a consecutive run of progress_note events into one group", () => {
+    const before = ev({ type: "comment" });
+    const n1 = ev({ type: "progress_note", payload: { note: "one" } });
+    const n2 = ev({ type: "progress_note", payload: { note: "two" } });
+    const n3 = ev({ type: "progress_note", payload: { note: "three" } });
+    const after = ev({ type: "comment" });
+    expect(groupProgressNotes([before, n1, n2, n3, after])).toEqual([
+      [before], [n1, n2, n3], [after],
+    ]);
+  });
+
+  it("starts a new group when a non-note event splits two note runs", () => {
+    const n1 = ev({ type: "progress_note", payload: { note: "one" } });
+    const mid = ev({ type: "comment" });
+    const n2 = ev({ type: "progress_note", payload: { note: "two" } });
+    expect(groupProgressNotes([n1, mid, n2])).toEqual([[n1], [mid], [n2]]);
+  });
+});
+
+describe("ActivityFeed (SYD-104)", () => {
+  async function render(activity: Activity[]): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<ActivityFeed activity={activity} projectKey="SYD" />);
+    });
+    return container;
+  }
+
+  it("renders a lone progress_note like any other event, with no expander", async () => {
+    const container = await render([ev({ type: "progress_note", payload: { note: "compiling" } })]);
+    expect(container.textContent).toContain("compiling");
+    expect(container.querySelector(".link-button")).toBeNull();
+  });
+
+  it("collapses a run of notes to the latest one plus an expander", async () => {
+    const container = await render([
+      ev({ type: "progress_note", payload: { note: "one" } }),
+      ev({ type: "progress_note", payload: { note: "two" } }),
+      ev({ type: "progress_note", payload: { note: "three" } }),
+    ]);
+    expect(container.textContent).toContain("three");
+    expect(container.textContent).not.toContain("one");
+    expect(container.textContent).not.toContain("two");
+    const toggle = container.querySelector(".link-button") as HTMLButtonElement | null;
+    expect(toggle).not.toBeNull();
+    expect(toggle?.textContent).toContain("2 earlier progress notes");
+  });
+
+  it("expands to show every note in the run when the toggle is clicked", async () => {
+    const container = await render([
+      ev({ type: "progress_note", payload: { note: "one" } }),
+      ev({ type: "progress_note", payload: { note: "two" } }),
+    ]);
+    const toggle = container.querySelector(".link-button") as HTMLButtonElement;
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(container.textContent).toContain("one");
+    expect(container.textContent).toContain("two");
+    expect(container.textContent).toContain("Show less");
+  });
+
+  it("does not collapse a comment sandwiched between progress_notes", async () => {
+    const container = await render([
+      ev({ type: "progress_note", payload: { note: "one" } }),
+      ev({ type: "comment", payload: { body: "hello" } }),
+      ev({ type: "progress_note", payload: { note: "two" } }),
+    ]);
+    expect(container.textContent).toContain("one");
+    expect(container.textContent).toContain("hello");
+    expect(container.textContent).toContain("two");
+    expect(container.querySelector(".link-button")).toBeNull();
   });
 });
 

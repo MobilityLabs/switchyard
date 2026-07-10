@@ -4,7 +4,7 @@ import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import type { Issue, IssueDetail as IssueDetailType } from "../types";
-import { Event, projectKeyFromRef } from "./IssueDetail";
+import { ActivityFeed, projectKeyFromRef } from "./IssueDetail";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
@@ -210,9 +210,7 @@ export default function Review({ project, currentRef }: { project: string | null
           <h4>Activity</h4>
           <div className="activity">
             {detail.data
-              ? detail.data.activity.map((ev, i) => (
-                <Event key={i} ev={ev} projectKey={projectKeyFromRef(current.ref)} knownActorNames={actorNames} />
-              ))
+              ? <ActivityFeed activity={detail.data.activity} projectKey={projectKeyFromRef(current.ref)} knownActorNames={actorNames} />
               : <p className="empty">Loading activity…</p>}
           </div>
 
