@@ -138,6 +138,30 @@ export function listAgentSessions(
   return queryViews(db, conditions);
 }
 
+/**
+ * Marks `running` sessions older than `staleSeconds` as `exited` (mirrors
+ * `releaseStaleClaims`). Covers the case where the worker process itself
+ * died or was restarted mid-session, so its own exit handler never PATCHed
+ * the session — without this, such a session stays "running" forever and
+ * only drops out of the *filtered* active lists once it crosses the same
+ * staleness cutoff (see `listAgentSessions`'s `active` filter); the
+ * unfiltered panel list would show it as a phantom live session
+ * indefinitely. exitCode is left null, same as any other exit whose code
+ * is unknown. Returns the number of sessions swept.
+ */
+export function sweepOrphanedAgentSessions(
+  db: Db, staleSeconds: number = AGENT_SESSION_STALE_SECONDS
+): number {
+  const cutoff = Math.floor(Date.now() / 1000) - staleSeconds;
+  const swept = db
+    .update(agentSessions)
+    .set({ status: "exited", exitCode: null, endedAt: sql`(unixepoch())` })
+    .where(and(eq(agentSessions.status, "running"), lt(agentSessions.startedAt, cutoff)))
+    .returning({ id: agentSessions.id })
+    .all();
+  return swept.length;
+}
+
 export function recordProgressNote(db: Db, actor: Actor, ref: string, note: string): void {
   requireAgent(actor, "record progress notes");
   const trimmed = note.trim();

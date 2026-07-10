@@ -3,6 +3,7 @@ import { asc, eq, gt } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, events, issues, projects, webhooks, webhookCursor } from "../db/schema.js";
 import { releaseStaleClaims } from "./stale-claims.js";
+import { sweepOrphanedAgentSessions } from "./agent-sessions.js";
 
 // progress_note events fire once per work step (buildPrompt prompts agents to
 // post them liberally) — a chatty session posts 10-20 per issue. Forwarding
@@ -94,6 +95,11 @@ export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
       releaseStaleClaims(db, staleSeconds);
     } catch (err) {
       console.error("stale claim release:", err);
+    }
+    try {
+      sweepOrphanedAgentSessions(db);
+    } catch (err) {
+      console.error("orphaned agent session sweep:", err);
     }
   }, intervalMs);
   timer.unref?.();
