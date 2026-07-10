@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
+import { createIssue, updateIssue, claimIssue, getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 
@@ -100,6 +100,16 @@ describe("updateIssue", () => {
     updateIssue(db, human, "AIPI-1", { labels: ["auto", "urgent"] });
     expect(updateIssue(db, agent, "AIPI-1", { labels: ["auto", "other"] }).labels.sort())
       .toEqual(["auto", "other"]);
+  });
+
+  it("sets, updates, and clears the summary; rejects one over the length cap", () => {
+    expect(updateIssue(db, human, "AIPI-1", { summary: "Ship v1 to prod." }).summary)
+      .toBe("Ship v1 to prod.");
+    expect(updateIssue(db, human, "AIPI-1", { summary: null }).summary).toBeNull();
+
+    const tooLong = "x".repeat(SUMMARY_MAX_LENGTH + 1);
+    expect(() => updateIssue(db, human, "AIPI-1", { summary: tooLong })).toThrowError(/summary/i);
+    expect(getIssue(db, "AIPI-1").summary).toBeNull();
   });
 
   it("needs_input clears only on a status change, not on unrelated field edits", () => {

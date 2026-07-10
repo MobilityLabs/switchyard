@@ -4,8 +4,9 @@ export const STATUSES = ["triage", "backlog", "todo", "in_progress", "in_review"
 export type Status = (typeof STATUSES)[number];
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
 export type Priority = (typeof PRIORITIES)[number];
+export const SUMMARY_MAX_LENGTH = 280;
 export type Issue = {
-  id: number; ref: string; title: string; description: string;
+  id: number; ref: string; title: string; description: string; summary: string | null;
   status: Status; priority: Priority;
   assigneeId: number | null; creatorId: number; labels: string[];
   sourceType: "session" | "todo" | "ci" | "manual" | null;

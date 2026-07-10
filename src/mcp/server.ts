@@ -6,7 +6,7 @@ import type { Actor } from "../services/actors.js";
 import { SwitchyardError } from "../services/errors.js";
 import { listProjects } from "../services/projects.js";
 import {
-  createIssue, getIssue, updateIssue, claimIssue,
+  createIssue, getIssue, updateIssue, claimIssue, SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
 import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
@@ -105,11 +105,15 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "(3) your suggested next action and rough effort. " +
         "Always set priority to your best guess (urgent/high/medium/low) based on impact and " +
         "urgency — don't leave it unset; a human can always correct it during triage. " +
+        `Your summary MUST be one or two sentences (${SUMMARY_MAX_LENGTH} chars max) a human can ` +
+        "triage from at a glance — it's what shows in the triage inbox row; the description stays " +
+        "the full decision-grade writeup behind a click. " +
         "Provenance: source_type is where this came from; source_detail is a file:line, session id, " +
         "or short note; source_url is a CI run or PR link.",
       inputSchema: {
         project_key: z.string(),
         title: z.string(),
+        summary: z.string().max(SUMMARY_MAX_LENGTH).optional(),
         description: z.string().optional(),
         priority: z.enum(PRIORITIES).optional(),
         labels: z.array(z.string()).optional(),
@@ -120,13 +124,13 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
       },
     },
     guard((a: {
-      project_key: string; title: string; description?: string;
+      project_key: string; title: string; summary?: string; description?: string;
       priority?: (typeof PRIORITIES)[number]; labels?: string[]; parent_ref?: string;
       source_type?: "session" | "todo" | "ci" | "manual";
       source_detail?: string; source_url?: string;
     }) =>
       createIssue(db, actor, {
-        projectKey: a.project_key, title: a.title, description: a.description,
+        projectKey: a.project_key, title: a.title, summary: a.summary, description: a.description,
         priority: a.priority, labels: a.labels, parentRef: a.parent_ref,
         provenance: a.source_type
           ? { sourceType: a.source_type, detail: a.source_detail, url: a.source_url }
@@ -159,6 +163,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         status: z.enum(STATUSES).optional(),
         priority: z.enum(PRIORITIES).optional(),
         title: z.string().optional(),
+        summary: z.string().max(SUMMARY_MAX_LENGTH).nullable().optional(),
         description: z.string().optional(),
         assignee: z.string().nullable().optional(),
         labels: z.array(z.string()).optional(),
@@ -166,11 +171,11 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     },
     guard((a: {
       ref: string; status?: (typeof STATUSES)[number]; priority?: (typeof PRIORITIES)[number];
-      title?: string; description?: string; assignee?: string | null; labels?: string[];
+      title?: string; summary?: string | null; description?: string; assignee?: string | null; labels?: string[];
     }) =>
       updateIssue(db, actor, a.ref, {
         status: a.status, priority: a.priority, title: a.title,
-        description: a.description, assigneeName: a.assignee, labels: a.labels,
+        summary: a.summary, description: a.description, assigneeName: a.assignee, labels: a.labels,
       })
     )
   );

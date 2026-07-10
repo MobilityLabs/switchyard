@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, getIssue } from "../../src/services/issues.js";
+import { createIssue, getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
 let db: Db, human: Actor, agent: Actor;
@@ -76,5 +76,26 @@ describe("createIssue", () => {
     expect(getIssue(db, "AIPI-1").title).toBe("One");
     expect(() => getIssue(db, "AIPI-99")).toThrowError(/AIPI-99 does not exist/);
     expect(() => getIssue(db, "banana")).toThrowError(/like "AIPI-42"/);
+  });
+
+  it("stores a summary when given one, and leaves it null when omitted", () => {
+    const withSummary = createIssue(db, human, {
+      projectKey: "AIPI", title: "Ship v1", summary: "Ship the first cut of v1.",
+    });
+    expect(withSummary.summary).toBe("Ship the first cut of v1.");
+
+    const withoutSummary = createIssue(db, human, { projectKey: "AIPI", title: "Ship v2" });
+    expect(withoutSummary.summary).toBeNull();
+  });
+
+  it("rejects a summary over the length cap", () => {
+    const tooLong = "x".repeat(SUMMARY_MAX_LENGTH + 1);
+    expect(() =>
+      createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", summary: tooLong })
+    ).toThrowError(/summary/i);
+
+    const atCap = "x".repeat(SUMMARY_MAX_LENGTH);
+    expect(createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", summary: atCap }).summary)
+      .toBe(atCap);
   });
 });

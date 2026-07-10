@@ -33,6 +33,7 @@ export const issues = sqliteTable("issues", {
   number: integer("number").notNull(),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
+  summary: text("summary"),
   status: text("status", { enum: STATUSES }).notNull(),
   priority: text("priority", { enum: PRIORITIES }).notNull().default("none"),
   assigneeId: integer("assignee_id").references(() => actors.id),
