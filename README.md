@@ -120,6 +120,12 @@ SWITCHYARD_TOKEN=... npx tsx scripts/github-poll.ts --once     # single scan
 SWITCHYARD_TOKEN=... npx tsx scripts/github-poll.ts --dry-run  # print, don't POST
 ```
 
+`SWITCHYARD_TOKEN` must belong to a human-type actor — `POST /api/github-events`
+rejects agent actors, since any dispatched agent holding a bearer token could
+otherwise forge `pull_request`/`check_suite` events. Provision a dedicated
+poller identity rather than reusing a person's login:
+`add-actor <name> human` + `mint-login <name>`.
+
 Polls every `githubPoll.pollSeconds` in `switchyard-worker.json` (default
 120s — kept well above `delivery.pollSeconds` since each tick spends GitHub
 API rate limit per linked repo). Per-repo/per-PR state persists in

@@ -334,7 +334,20 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // bearer-token authenticated rather than signature-verified, but running
   // through the exact same src/services/github-webhook.ts matching/recording
   // logic as the real webhook, so both paths converge on one place.
+  //
+  // Bearer auth alone isn't enough here (SYD-107): the same token type
+  // authenticates /mcp, so any dispatched agent could otherwise forge
+  // pull_request/check_suite events (e.g. a fake "closed" to clear the
+  // SYD-99 open-PR claim guard) attributed to the trusted "github" system
+  // actor. Restrict to human-authenticated callers — run
+  // scripts/github-poll.ts with a dedicated human-type actor's token, not an
+  // agent's.
   app.post("/github-events", body(githubEventBody), (c) => {
+    if (c.var.actor.type === "agent") {
+      throw new SwitchyardError(
+        "Only a trusted human-authenticated poller may post GitHub events — agents cannot call /github-events."
+      );
+    }
     const { event, payload } = c.req.valid("json");
     const outcome = handleGithubWebhook(db, event, payload);
     return c.json({ ok: true, ...outcome });

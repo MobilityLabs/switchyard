@@ -9,19 +9,20 @@ import { buildApiRoutes } from "../../src/rest/api-routes.js";
 function setup() {
   const db = openDb(":memory:");
   const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const humanToken = createActor(db, { name: "github-poller", type: "human" }).token;
   const agentToken = createActor(db, { name: "claude/dev", type: "agent" }).token;
   createProject(db, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Poll fallback target" });
   const app = buildApiRoutes(db);
-  return { db, app, agentToken };
+  return { db, app, humanToken, agentToken };
 }
 
 describe("POST /github-events", () => {
   it("records a gh_pr_opened event through the same matching/recording logic as the real webhook", async () => {
-    const { db, app, agentToken } = setup();
+    const { db, app, humanToken } = setup();
     const res = await app.request("/github-events", {
       method: "POST",
-      headers: { authorization: `Bearer ${agentToken}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${humanToken}`, "content-type": "application/json" },
       body: JSON.stringify({
         event: "pull_request",
         payload: {
@@ -40,10 +41,10 @@ describe("POST /github-events", () => {
   });
 
   it("records a gh_checks_failed event for a check_suite payload", async () => {
-    const { app, agentToken } = setup();
+    const { app, humanToken } = setup();
     const res = await app.request("/github-events", {
       method: "POST",
-      headers: { authorization: `Bearer ${agentToken}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${humanToken}`, "content-type": "application/json" },
       body: JSON.stringify({
         event: "check_suite",
         payload: {
@@ -57,10 +58,10 @@ describe("POST /github-events", () => {
   });
 
   it("returns handled:false without erroring when no ref matches", async () => {
-    const { app, agentToken } = setup();
+    const { app, humanToken } = setup();
     const res = await app.request("/github-events", {
       method: "POST",
-      headers: { authorization: `Bearer ${agentToken}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${humanToken}`, "content-type": "application/json" },
       body: JSON.stringify({
         event: "pull_request",
         payload: { action: "opened", pull_request: { number: 1, head: { ref: "main" }, title: "no ref", body: null } },
@@ -81,12 +82,32 @@ describe("POST /github-events", () => {
   });
 
   it("rejects an unsupported event value at the schema layer", async () => {
+    const { app, humanToken } = setup();
+    const res = await app.request("/github-events", {
+      method: "POST",
+      headers: { authorization: `Bearer ${humanToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ event: "push", payload: {} }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an agent actor — only a trusted human-authenticated poller may post GitHub events", async () => {
     const { app, agentToken } = setup();
     const res = await app.request("/github-events", {
       method: "POST",
       headers: { authorization: `Bearer ${agentToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ event: "push", payload: {} }),
+      body: JSON.stringify({
+        event: "pull_request",
+        payload: {
+          action: "closed",
+          pull_request: {
+            number: 5, html_url: "https://github.com/acme/widgets/pull/5", merged: true,
+            head: { ref: "agent/SYD-1" }, title: "unrelated", body: null,
+          },
+        },
+      }),
     });
     expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/agents cannot call/);
   });
 });
