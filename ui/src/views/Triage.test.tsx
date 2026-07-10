@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 //
-// SYD-65: priority/labels go almost entirely unused because nothing prompts
-// for them at the one moment a human is already making a judgment call —
-// accepting an issue out of triage. Covers the pure default-priority rule
-// and the "Accept → todo" prompt's wiring into a single updateIssue call.
+// SYD-91: Accept → todo is a single click applying a sane default priority —
+// no intermediate priority/labels prompt (that prompt was added by SYD-65
+// and reverted per direct feedback: it added gate latency without earning
+// its cost). Covers the pure default-priority rule and the button's wiring
+// into a single updateIssue call.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act as reactAct } from "react";
 import { createRoot } from "react-dom/client";
@@ -43,7 +44,7 @@ describe("defaultAcceptPriority", () => {
   });
 });
 
-describe("TriageRow accept → todo prompt", () => {
+describe("TriageRow accept → todo", () => {
   beforeEach(() => vi.mocked(updateIssue).mockClear());
 
   async function renderRow(issue: Issue): Promise<HTMLElement> {
@@ -64,58 +65,22 @@ describe("TriageRow accept → todo prompt", () => {
     return container;
   }
 
-  it("opens a priority/labels prompt defaulted to medium instead of accepting immediately", async () => {
+  it("accepts immediately with the default priority, leaving labels untouched", async () => {
     const container = await renderRow(ISSUE);
     const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
 
     await reactAct(async () => acceptButton.click());
 
-    expect(updateIssue).not.toHaveBeenCalled();
-    const select = container.querySelector(".accept-prompt select") as HTMLSelectElement;
-    expect(select.value).toBe("medium");
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", { status: "todo", priority: "medium" });
   });
 
-  it("pre-fills the prompt with an already-set priority and existing labels", async () => {
+  it("keeps an already-set priority instead of overriding it", async () => {
     const container = await renderRow({ ...ISSUE, priority: "high", labels: ["backend"] });
     const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
 
     await reactAct(async () => acceptButton.click());
 
-    const select = container.querySelector(".accept-prompt select") as HTMLSelectElement;
-    const labelsInput = container.querySelector(".accept-labels") as HTMLInputElement;
-    expect(select.value).toBe("high");
-    expect(labelsInput.value).toBe("backend");
-  });
-
-  it("confirms with a single status+priority+labels update", async () => {
-    const container = await renderRow(ISSUE);
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
-    await reactAct(async () => acceptButton.click());
-
-    const labelsInput = container.querySelector(".accept-labels") as HTMLInputElement;
-    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
-    await reactAct(async () => {
-      nativeSetter.call(labelsInput, "backend, urgent-fix");
-      labelsInput.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    const confirmButton = [...container.querySelectorAll<HTMLButtonElement>(".accept-prompt button")].find((b) => b.textContent === "Confirm")!;
-    await reactAct(async () => confirmButton.click());
-
-    expect(updateIssue).toHaveBeenCalledWith("SYD-1", {
-      status: "todo", priority: "medium", labels: ["backend", "urgent-fix"],
-    });
-  });
-
-  it("cancel closes the prompt without updating anything", async () => {
-    const container = await renderRow(ISSUE);
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
-    await reactAct(async () => acceptButton.click());
-
-    const cancelButton = [...container.querySelectorAll<HTMLButtonElement>(".accept-prompt button")].find((b) => b.textContent === "Cancel")!;
-    await reactAct(async () => cancelButton.click());
-
-    expect(updateIssue).not.toHaveBeenCalled();
-    expect([...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")).toBeTruthy();
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", { status: "todo", priority: "high" });
   });
 });
 

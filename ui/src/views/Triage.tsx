@@ -7,11 +7,10 @@ import { href } from "../router";
 import { PRIORITIES, type Issue, type IssueDetail, type Priority } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
-import { parseLabels } from "../labels";
 import { DescriptionSection, Event, projectKeyFromRef, summaryText } from "./IssueDetail";
 
-// Issues routinely leave triage with priority "none" (SYD-65) — default the
-// accept-to-todo prompt to "medium" unless a human already set something more
+// Issues routinely leave triage with priority "none" (SYD-65) — default
+// accept-to-todo to "medium" unless a human already set something more
 // specific while triaging.
 export function defaultAcceptPriority(current: Priority): Priority {
   return current === "none" ? "medium" : current;
@@ -103,24 +102,6 @@ export function TriageRow({
   const [commentError, setCommentError] = useState<string | null>(null);
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(issue.ref, draft, setDraft);
 
-  // Accept → todo prompt (SYD-65): one extra click gets a sane default
-  // (existing priority, or "medium" if unset) without forcing a form.
-  const [acceptOpen, setAcceptOpen] = useState(false);
-  const [acceptPriority, setAcceptPriority] = useState<Priority>(defaultAcceptPriority(issue.priority));
-  const [acceptLabelsInput, setAcceptLabelsInput] = useState(issue.labels.join(", "));
-
-  function openAccept() {
-    setAcceptPriority(defaultAcceptPriority(issue.priority));
-    setAcceptLabelsInput(issue.labels.join(", "));
-    setAcceptOpen(true);
-  }
-
-  function confirmAccept() {
-    const labels = parseLabels(acceptLabelsInput);
-    act(() => updateIssue(issue.ref, { status: "todo", priority: acceptPriority, labels }));
-    setAcceptOpen(false);
-  }
-
   // Only fetches while this row is the expanded one; collapsed rows resolve
   // to null immediately, same shape as Review's per-issue detail poll.
   const detail = usePoll<IssueDetail | null>(
@@ -208,23 +189,12 @@ export function TriageRow({
       )}
 
       <div className="triage-actions">
-        {acceptOpen ? (
-          <span className="accept-prompt">
-            <select value={acceptPriority} onChange={(e) => setAcceptPriority(e.target.value as Priority)}>
-              {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
-            <input
-              className="accept-labels"
-              value={acceptLabelsInput}
-              onChange={(e) => setAcceptLabelsInput(e.target.value)}
-              placeholder="labels (comma, separated)"
-            />
-            <button className="primary" onClick={confirmAccept}>Confirm</button>
-            <button onClick={() => setAcceptOpen(false)}>Cancel</button>
-          </span>
-        ) : (
-          <button className="primary" onClick={openAccept}>Accept → todo</button>
-        )}
+        <button
+          className="primary"
+          onClick={() => act(() => updateIssue(issue.ref, { status: "todo", priority: defaultAcceptPriority(issue.priority) }))}
+        >
+          Accept → todo
+        </button>
         <button onClick={() => act(() => updateIssue(issue.ref, { status: "backlog" }))}>
           Accept → backlog
         </button>
