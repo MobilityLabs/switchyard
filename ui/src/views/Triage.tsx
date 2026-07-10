@@ -101,7 +101,6 @@ export function TriageRow({
   const projectKey = projectKeyFromRef(issue.ref);
   const [draft, setDraft] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
-  const [showFullDescription, setShowFullDescription] = useState(false);
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(issue.ref, draft, setDraft);
 
   // Accept → todo prompt (SYD-65): one extra click gets a sane default
@@ -177,8 +176,6 @@ export function TriageRow({
             issue={issue}
             projectKey={projectKey}
             knownActorNames={knownActorNames}
-            showFull={showFullDescription}
-            onToggleFull={() => setShowFullDescription((v) => !v)}
           />
 
           <h4>Activity</h4>

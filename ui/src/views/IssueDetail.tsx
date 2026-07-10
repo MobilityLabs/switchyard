@@ -16,7 +16,7 @@ export function projectKeyFromRef(ref: string): string {
 const SUMMARY_FALLBACK_LENGTH = 200;
 
 // Old issues have no summary — fall back to a truncated description so
-// triage rows and the detail lede don't regress to a wall of text.
+// collapsed triage rows don't regress to a wall of text.
 export function summaryText(issue: { summary: string | null; description: string }): string {
   if (issue.summary) return issue.summary;
   const d = issue.description.trim();
@@ -24,46 +24,18 @@ export function summaryText(issue: { summary: string | null; description: string
   return `${d.slice(0, SUMMARY_FALLBACK_LENGTH).trimEnd()}…`;
 }
 
-// Whether there's more description content than the lede already shows —
-// i.e. whether a "show full description" toggle is worth rendering.
-export function hasHiddenDescription(issue: { summary: string | null; description: string }): boolean {
-  if (!issue.description.trim()) return false;
-  if (issue.summary) return true;
-  return issue.description.trim().length > SUMMARY_FALLBACK_LENGTH;
-}
-
 export function DescriptionSection({
-  issue, projectKey, knownActorNames, showFull, onToggleFull,
+  issue, projectKey, knownActorNames,
 }: {
   issue: { summary: string | null; description: string };
   projectKey: string;
   knownActorNames: readonly string[];
-  showFull: boolean;
-  onToggleFull: () => void;
 }) {
-  if (!hasHiddenDescription(issue)) {
-    return issue.description
-      ? (
-        <div className="description panel">
-          <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
-        </div>
-      )
-      : <p className="empty">No description.</p>;
-  }
+  if (!issue.description.trim()) return <p className="empty">No description.</p>;
   return (
-    <div className="issue-summary panel">
-      <p className="summary-lede">{summaryText(issue)}</p>
-      <button type="button" className="link-button" onClick={onToggleFull}>
-        {showFull ? "Hide full description" : "Show full description"}
-      </button>
-      {showFull && (
-        <>
-          <div className="description panel">
-            <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
-          </div>
-          <DesignEmbeds text={issue.description} />
-        </>
-      )}
+    <div className="description panel">
+      <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
+      <DesignEmbeds text={issue.description} />
     </div>
   );
 }
@@ -189,7 +161,6 @@ function DeliveryStrip({ status }: { status: DeliveryStatus }) {
 export default function IssueDetail({ refId }: { refId: string }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [showFullDescription, setShowFullDescription] = useState(false);
   const [draft, setDraft] = useState("");
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(refId, draft, setDraft);
   const actorNames = useActorNames();
@@ -267,8 +238,6 @@ export default function IssueDetail({ refId }: { refId: string }) {
         issue={data}
         projectKey={projectKey}
         knownActorNames={actorNames}
-        showFull={showFullDescription}
-        onToggleFull={() => setShowFullDescription((v) => !v)}
       />
 
       <Dependencies refId={refId} deps={data.dependencies} act={act} />
