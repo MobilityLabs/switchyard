@@ -161,6 +161,20 @@ export function deliveryComment(r: DeliveryResult): string {
   return lines.join("\n");
 }
 
+/** Posted when the post-merge verification gate (SYD-78) fails: the PR merged
+ * cleanly but merged main no longer typechecks/passes tests, so deploy was
+ * skipped. Distinct from deliveryFailureComment, which covers merge-time
+ * failures (the PR never landed) — here the merge already happened. */
+export function verificationFailureComment(prNumber: number, mergeSha: string, tail: string): string {
+  return [
+    `Merged PR #${prNumber} at \`${mergeSha}\`, but post-merge verification FAILED — deploy skipped.`,
+    "main is red; do not build on it until this is fixed. Output tail:",
+    "```",
+    tail,
+    "```",
+  ].join("\n");
+}
+
 export function deliveryFailureComment(ref: string, message: string): string {
   return (
     `Delivery FAILED for ${ref}: ${message}\n` +

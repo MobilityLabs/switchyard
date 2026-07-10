@@ -101,7 +101,7 @@ export function validateWorkerConfig(raw: unknown): string[] {
       if (d.cloneDir !== undefined && (typeof d.cloneDir !== "string" || d.cloneDir.trim() === "")) {
         problems.push("`delivery.cloneDir` must be a non-empty path");
       }
-      for (const key of ["openPrs", "deploy"] as const) {
+      for (const key of ["openPrs", "deploy", "verify"] as const) {
         if (d[key] !== undefined && typeof d[key] !== "boolean") {
           problems.push(`\`delivery.${key}\` must be true or false`);
         }

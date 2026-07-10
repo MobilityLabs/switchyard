@@ -24,6 +24,7 @@
   "delivery": {
     "openPrs": true,
     "pollSeconds": 30,
-    "deploy": true
+    "deploy": true,
+    "verify": true
   }
 }

@@ -12,7 +12,7 @@ import type { Actor, Project } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const ME: Actor = { id: 1, name: "sean", kind: "human" } as Actor;
+const ME: Actor = { id: 1, name: "sean", type: "human" };
 const PROJECTS: Project[] = [
   { key: "ACME", name: "Acme" } as Project,
   { key: "SYD", name: "Switchyard" } as Project,

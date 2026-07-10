@@ -12,6 +12,7 @@ import {
   buildPrBody,
   deliveryComment,
   deliveryFailureComment,
+  verificationFailureComment,
   formatPublishOutcome,
   parsePrNumberFromUrl,
   parseCursorText,
@@ -172,6 +173,15 @@ describe("comment bodies", () => {
     const body = deliveryFailureComment("SYD-9", "merge conflict");
     expect(body).toContain("SYD-9");
     expect(body).toContain("merge conflict");
+  });
+
+  it("verification failure comment names the merged PR/SHA, says deploy was skipped, and includes the tail (SYD-78)", () => {
+    const body = verificationFailureComment(41, "abc123", "Shell.test.tsx(15,19): error TS2352");
+    expect(body).toContain("PR #41");
+    expect(body).toContain("abc123");
+    expect(body).toContain("deploy skipped");
+    expect(body).toContain("main is red");
+    expect(body).toContain("Shell.test.tsx(15,19): error TS2352");
   });
 });
 
