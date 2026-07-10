@@ -60,6 +60,7 @@ import {
   formatChecks,
   formatUserStackCapture,
   nodeVersionSatisfies,
+  nodeVersionSatisfiesEngines,
   insertProjectIntoConfigText,
   parseDebateAcpxReviewers,
   parseDotEnv,
@@ -93,6 +94,52 @@ function loadEnv(): Record<string, string> {
   const fromFile = existsSync(envPath) ? parseDotEnv(readFileSync(envPath, "utf8")) : {};
   // Real environment wins over .env, matching how the worker itself runs.
   return { ...fromFile, ...(process.env as Record<string, string>) };
+}
+
+/** This repo's declared `engines.node` band (SYD-97), or null if package.json has none. */
+function readEnginesNode(): string | null {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    return typeof pkg?.engines?.node === "string" ? pkg.engines.node : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves the node binary a LaunchAgent's own PATH would find (SYD-97: a
+ * plist pins a concrete `nodeBinDir` first in PATH since launchd doesn't
+ * source shell profiles) and reports its version — distinct from this doctor
+ * process's own shell node, which launchd never sees. Returns null if no
+ * `node` executable is found in any pinned PATH dir.
+ */
+function pinnedNodeVersion(pathDirs: string[]): string | null {
+  const nodeDir = pathDirs.find((dir) => existsSync(path.join(dir, "node")));
+  if (!nodeDir) return null;
+  const out = spawnSync(path.join(nodeDir, "node"), ["--version"], { encoding: "utf8" });
+  return out.status === 0 ? out.stdout.trim() : null;
+}
+
+/** Doctor check: does an installed LaunchAgent's pinned PATH resolve a node inside `engines.node` (SYD-97)? */
+function checkPlistPinnedNode(opts: { noun: string; plistPath: string; enginesNode: string | null }): CheckResult {
+  const dirs = parsePlistPath(readFileSync(opts.plistPath, "utf8"));
+  const pinned = pinnedNodeVersion(dirs);
+  if (pinned === null) {
+    return {
+      name: `${opts.noun} LaunchAgent pins a resolvable node`,
+      ok: false,
+      note: `no node executable found in plist PATH (${dirs.join(":")}) — re-run the relevant --install-launchd flag`,
+    };
+  }
+  const inBand = opts.enginesNode === null || nodeVersionSatisfiesEngines(opts.enginesNode, pinned);
+  return {
+    name: `${opts.noun} LaunchAgent pins a supported node`,
+    ok: true,
+    warn: !inBand,
+    note: inBand
+      ? `found ${pinned}`
+      : `found ${pinned}, outside engines.node "${opts.enginesNode}" — re-run the relevant --install-launchd flag under a supported node`,
+  };
 }
 
 /**
@@ -220,12 +267,14 @@ function captureUserStack(home: string): UserStackCapture {
 async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig | null }> {
   const results: CheckResult[] = [];
   const env = loadEnv();
+  const enginesNode = readEnginesNode();
 
-  const nodeMajor = Number(process.versions.node.split(".")[0]);
   results.push({
-    name: "node >= 20",
-    ok: nodeMajor >= 20,
-    note: `running ${process.versions.node}`,
+    name: "node satisfies engines.node",
+    ok: enginesNode === null || nodeVersionSatisfiesEngines(enginesNode, process.version),
+    note: enginesNode === null
+      ? `running ${process.version} (package.json has no engines.node to check against)`
+      : `running ${process.version}, want ${enginesNode}`,
   });
 
   // Config file
@@ -459,6 +508,23 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         ? undefined
         : `claude not found in plist PATH (${dirs.join(":")}) — re-run --install-launchd${status.role === "all" ? "" : `-${status.role}`}`,
     });
+    results.push(
+      checkPlistPinnedNode({
+        noun: status.role === "all" ? "worker" : `worker (${status.role})`,
+        plistPath,
+        enginesNode,
+      })
+    );
+  }
+
+  // SYD-97: the deliver LaunchAgent (scripts/deliver.ts) runs `npm test` as
+  // part of post-merge verification — a plist pinned to an unsupported node
+  // (e.g. Node 25's jsdom-shadowing WebStorage globals) turns every good
+  // delivery into a false-negative `delivery_failed`, which is exactly what
+  // bit SYD-93. Checked the same way as the worker roles above.
+  const deliverPlistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${DELIVER_LAUNCHD_LABEL}.plist`);
+  if (existsSync(deliverPlistPath)) {
+    results.push(checkPlistPinnedNode({ noun: "deliver", plistPath: deliverPlistPath, enginesNode }));
   }
 
   return { results, config };

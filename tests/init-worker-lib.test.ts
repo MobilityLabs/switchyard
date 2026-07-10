@@ -8,6 +8,7 @@ import {
   formatChecks,
   formatUserStackCapture,
   nodeVersionSatisfies,
+  nodeVersionSatisfiesEngines,
   insertProjectIntoConfigText,
   parseDebateAcpxReviewers,
   parseDotEnv,
@@ -294,6 +295,35 @@ describe("nodeVersionSatisfies", () => {
   it("rejects unparseable input on either side", () => {
     expect(nodeVersionSatisfies("nope", "v20.0.0")).toBe(false);
     expect(nodeVersionSatisfies("20", "not-a-version")).toBe(false);
+  });
+});
+
+describe("nodeVersionSatisfiesEngines (SYD-97)", () => {
+  it("accepts a version inside a lower-bound-only range", () => {
+    expect(nodeVersionSatisfiesEngines(">=22", "v24.13.0")).toBe(true);
+    expect(nodeVersionSatisfiesEngines(">=22", "v20.0.0")).toBe(false);
+  });
+
+  it("accepts a version inside a two-sided range and rejects outside it", () => {
+    expect(nodeVersionSatisfiesEngines(">=22 <25", "v22.0.0")).toBe(true);
+    expect(nodeVersionSatisfiesEngines(">=22 <25", "v24.13.0")).toBe(true);
+    expect(nodeVersionSatisfiesEngines(">=22 <25", "v25.4.0")).toBe(false);
+    expect(nodeVersionSatisfiesEngines(">=22 <25", "v20.0.0")).toBe(false);
+  });
+
+  it("supports <=, >, < and bare = comparators", () => {
+    expect(nodeVersionSatisfiesEngines("<=24", "v24.13.0")).toBe(true);
+    expect(nodeVersionSatisfiesEngines("<=24", "v25.0.0")).toBe(false);
+    expect(nodeVersionSatisfiesEngines(">20", "v20.0.0")).toBe(false);
+    expect(nodeVersionSatisfiesEngines("<25", "v24.0.0")).toBe(true);
+    expect(nodeVersionSatisfiesEngines("24", "v24.13.0")).toBe(true);
+    expect(nodeVersionSatisfiesEngines("24", "v25.0.0")).toBe(false);
+  });
+
+  it("rejects unparseable input on either side", () => {
+    expect(nodeVersionSatisfiesEngines(">=22", "not-a-version")).toBe(false);
+    expect(nodeVersionSatisfiesEngines("not-a-range", "v24.0.0")).toBe(false);
+    expect(nodeVersionSatisfiesEngines("", "v24.0.0")).toBe(false);
   });
 });
 
