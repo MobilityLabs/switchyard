@@ -33,6 +33,10 @@ a { color: var(--accent-2); text-decoration: none; }
   background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 8px;
 }
+.search-box {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px; width: 220px; font-size: 13px;
+}
 .spacer { flex: 1; }
 .badge {
   font-size: 12px; padding: 2px 8px; border-radius: 999px;
@@ -303,6 +307,27 @@ kbd {
   border-radius: 6px; padding: 4px 8px; font-size: 13px;
 }
 .dep-add input { width: 110px; }
+
+.search-view h2 { gap: 10px; }
+.search-view h2 .hint { font-size: 13px; font-weight: 400; color: var(--muted); }
+.search-filters { display: flex; gap: 8px; margin-bottom: 14px; }
+.search-filters select, .search-filters input {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px; font-size: 13px;
+}
+.search-filters input { width: 140px; }
+.search-results { display: flex; flex-direction: column; gap: 8px; }
+.search-row {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+  cursor: pointer; text-decoration: none; color: inherit;
+}
+.search-row:hover { border-color: var(--accent-2); }
+.search-row .title { flex: 1; }
+.search-row .project-key, .search-row .updated-at { color: var(--muted); font-size: 12px; }
+.status-chip.status-done { color: var(--ok); border-color: var(--ok); }
+.status-chip.status-canceled { opacity: 0.55; }
+.status-chip.status-in_review { color: var(--accent-2); border-color: var(--accent-2); }
 
 .project-switcher-actions { position: relative; }
 .new-project-popover {
