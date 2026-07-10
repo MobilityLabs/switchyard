@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act as reactAct } from "react";
 import { createRoot } from "react-dom/client";
-import { defaultAcceptPriority, TriageRow } from "./Triage";
+import Triage, { defaultAcceptPriority, TriageRow } from "./Triage";
 import type { Issue } from "../types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -18,9 +18,11 @@ vi.mock("../api", () => ({
   markDuplicate: vi.fn(),
   snoozeIssue: vi.fn(),
   updateIssue: vi.fn(() => Promise.resolve({})),
+  listIssues: vi.fn(() => Promise.resolve([])),
+  listActors: vi.fn(() => Promise.resolve([])),
 }));
 
-import { updateIssue } from "../api";
+import { listIssues, updateIssue } from "../api";
 
 const ISSUE: Issue = {
   id: 1, ref: "SYD-1", title: "Do the thing", description: "", summary: null,
@@ -114,5 +116,33 @@ describe("TriageRow accept → todo prompt", () => {
 
     expect(updateIssue).not.toHaveBeenCalled();
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")).toBeTruthy();
+  });
+});
+
+// SYD-77: Triage is project-scoped like Board, with a null project meaning
+// "All projects" — both the main inbox poll and the needs-input lane must
+// respect the current scope.
+describe("Triage project scoping", () => {
+  beforeEach(() => vi.mocked(listIssues).mockClear());
+
+  async function renderTriage(project: string | null): Promise<void> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await reactAct(async () => {
+      root.render(<Triage project={project} />);
+    });
+  }
+
+  it("passes the project filter through to both the inbox and needs-input polls", async () => {
+    await renderTriage("SYD");
+    expect(listIssues).toHaveBeenCalledWith({ project: "SYD", status: "triage", excludeSnoozed: true });
+    expect(listIssues).toHaveBeenCalledWith({ project: "SYD", needsInput: true });
+  });
+
+  it("omits the project filter for All projects", async () => {
+    await renderTriage(null);
+    expect(listIssues).toHaveBeenCalledWith({ project: undefined, status: "triage", excludeSnoozed: true });
+    expect(listIssues).toHaveBeenCalledWith({ project: undefined, needsInput: true });
   });
 });

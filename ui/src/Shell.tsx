@@ -79,7 +79,17 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
   const rememberedProject = allProjects.some((p) => p.key === lastProject) ? lastProject : null;
   const currentProject =
     route.view === "board" ? route.project : rememberedProject ?? allProjects[0]?.key ?? "";
-  const inReview = usePoll(() => listIssues({ status: "in_review" }), [], 30000);
+
+  // Scopes the Review nav badge to whatever project context is active: the
+  // route's own project when it carries one, else the SYD-55 remembered
+  // project, else unscoped ("All projects").
+  const scopeProject: string | null =
+    route.view === "triage" || route.view === "review" ? route.project : rememberedProject;
+  const inReview = usePoll(
+    () => listIssues({ status: "in_review", project: scopeProject ?? undefined }),
+    [scopeProject],
+    30000,
+  );
 
   function onProjectCreated(project: Project) {
     setJustCreated(project);
@@ -87,27 +97,40 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
     navigate({ view: "board", project: project.key });
   }
 
+  // Triage/Review tabs default to the last project you were looking at
+  // (SYD-55) rather than always landing on "All projects" — but a bare
+  // /triage or /review URL (an old bookmark, a fresh link) still means
+  // "All projects", so this only shapes the nav link target, not routing.
+  const triageHref = route.view === "triage" ? href(route) : href({ view: "triage", project: rememberedProject });
+  const reviewHref =
+    route.view === "review" ? href(route) : href({ view: "review", project: rememberedProject, ref: null });
+
   return (
     <>
       <header className="topbar">
         <span className="logo">⧉ Switchyard</span>
         <nav>
-          <a href={href({ view: "triage" })} className={route.view === "triage" ? "active" : ""}>Triage</a>
+          <a href={triageHref} className={route.view === "triage" ? "active" : ""}>Triage</a>
           <a
-            href={currentProject ? href({ view: "board", project: currentProject }) : href({ view: "triage" })}
+            href={currentProject ? href({ view: "board", project: currentProject }) : href({ view: "triage", project: null })}
             className={route.view === "board" ? "active" : ""}
           >
             Board
           </a>
-          <a href={href({ view: "review", ref: null })} className={route.view === "review" ? "active" : ""}>
+          <a href={reviewHref} className={route.view === "review" ? "active" : ""}>
             Review{inReview.data && inReview.data.length > 0 && <span className="badge">{inReview.data.length}</span>}
           </a>
         </nav>
-        {route.view === "board" && (
+        {(route.view === "board" || route.view === "triage" || route.view === "review") && (
           <select
-            value={route.project}
-            onChange={(e) => navigate({ view: "board", project: e.target.value })}
+            value={route.view === "board" ? route.project : route.project ?? ""}
+            onChange={(e) => {
+              if (route.view === "board") navigate({ view: "board", project: e.target.value });
+              else if (route.view === "triage") navigate({ view: "triage", project: e.target.value || null });
+              else navigate({ view: "review", project: e.target.value || null, ref: null });
+            }}
           >
+            {route.view !== "board" && <option value="">All projects</option>}
             {allProjects.map((p) => <option key={p.key} value={p.key}>{p.key} — {p.name}</option>)}
           </select>
         )}

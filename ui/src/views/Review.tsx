@@ -11,8 +11,11 @@ import { useActorNames } from "../useActorNames";
 import { navigate, redirect } from "../router";
 import { countNewArrivals, firstRef, pickAdjacentRef } from "./reviewQueue";
 
-export default function Review({ currentRef }: { currentRef: string | null }) {
-  const { data, error, reload } = usePoll(() => listIssues({ status: "in_review" }), []);
+export default function Review({ project, currentRef }: { project: string | null; currentRef: string | null }) {
+  const { data, error, reload } = usePoll(
+    () => listIssues({ project: project ?? undefined, status: "in_review" }),
+    [project],
+  );
   const actorNames = useActorNames();
 
   // The reviewer's working order — a snapshot of refs, distinct from the
@@ -23,14 +26,34 @@ export default function Review({ currentRef }: { currentRef: string | null }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
-  useEffect(() => {
-    if (data && queue.length === 0) setQueue(data);
-  }, [data, queue.length]);
+  // Switching the project scope invalidates the snapshot so the reviewer
+  // starts fresh in the new scope instead of carrying over a queue whose
+  // refs may not even belong to the newly selected project. This resets
+  // synchronously during render (React's "adjusting state on prop change"
+  // pattern) rather than in an effect, so `queue` is already empty by the
+  // time the effects below run in this same commit — an effect-based reset
+  // would still leave those effects reading the stale, pre-reset queue.
+  const [scopeProject, setScopeProject] = useState(project);
+  if (project !== scopeProject) {
+    setScopeProject(project);
+    setQueue([]);
+  }
 
-  // Bare `/review` redirects to the first queued issue.
   useEffect(() => {
-    if (currentRef === null && queue.length > 0) redirect({ view: "review", ref: firstRef(queue) });
-  }, [currentRef, queue]);
+    if (!data || queue.length !== 0) return;
+    // `data` can still be the previous scope's response for a render or two
+    // after `project` changes (the poll hasn't caught up yet) — backfilling
+    // from it here would repopulate the just-cleared queue with the wrong
+    // project's issues. Only accept it once every item actually belongs to
+    // the current scope (vacuously true for "All" or an empty response).
+    const belongsToScope = project === null || data.every((i) => projectKeyFromRef(i.ref) === project);
+    if (belongsToScope) setQueue(data);
+  }, [data, queue.length, project]);
+
+  // Bare `/review` or `/review/:project` redirects to the first queued issue.
+  useEffect(() => {
+    if (currentRef === null && queue.length > 0) redirect({ view: "review", project, ref: firstRef(queue) });
+  }, [currentRef, project, queue]);
 
   const list = data ?? [];
   const current = list.find((i) => i.ref === currentRef) ?? null;
@@ -57,7 +80,7 @@ export default function Review({ currentRef }: { currentRef: string | null }) {
   function moveTo(ref: string | null) {
     if (data) setQueue(data);
     setDraft("");
-    navigate({ view: "review", ref });
+    navigate({ view: "review", project, ref });
   }
   function next() {
     moveTo(pickAdjacentRef(queue, currentRef, 1));

@@ -78,10 +78,10 @@ function ShellRouter({ me }: { me: Actor }) {
   const projects = usePoll(listProjects, []);
   return (
     <Shell me={me} projects={projects.data ?? []}>
-      {route.view === "triage" && <Triage />}
+      {route.view === "triage" && <Triage project={route.project} />}
       {route.view === "board" && <Board project={route.project} />}
       {route.view === "issue" && <IssueDetail refId={route.ref} />}
-      {route.view === "review" && <Review currentRef={route.ref} />}
+      {route.view === "review" && <Review project={route.project} currentRef={route.ref} />}
       {route.view === "new-issue" && <NewIssue />}
     </Shell>
   );

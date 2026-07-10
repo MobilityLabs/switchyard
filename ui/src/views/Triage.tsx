@@ -27,9 +27,12 @@ function age(unixSeconds: number): string {
   return `${days}d ago`;
 }
 
-export default function Triage() {
-  const { data, error, reload } = usePoll(() => listIssues({ status: "triage", excludeSnoozed: true }), []);
-  const needsInput = usePoll(() => listIssues({ needsInput: true }), []);
+export default function Triage({ project }: { project: string | null }) {
+  const { data, error, reload } = usePoll(
+    () => listIssues({ project: project ?? undefined, status: "triage", excludeSnoozed: true }),
+    [project],
+  );
+  const needsInput = usePoll(() => listIssues({ project: project ?? undefined, needsInput: true }), [project]);
   const actors = usePoll(listActors, [], 60000);
   const [actionError, setActionError] = useState<string | null>(null);
   // Single expanded row at a time; clicking the same ref again collapses it.

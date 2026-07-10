@@ -1,11 +1,33 @@
 import { useEffect, useState } from "react";
 
 export type Route =
-  | { view: "triage" }
+  | { view: "triage"; project: string | null }
   | { view: "board"; project: string }
   | { view: "issue"; ref: string }
-  | { view: "review"; ref: string | null }
+  | { view: "review"; project: string | null; ref: string | null }
   | { view: "new-issue" };
+
+// Matches a project key (e.g. "SYD"), as opposed to an issue ref like
+// "SYD-66" — lets /review/:project? disambiguate from /review/:ref
+// (per-issue selection keys off the "-NUMBER" suffix).
+const PROJECT_KEY_PATTERN = /^[A-Z]{2,10}$/;
+export function isProjectKey(value: string): boolean {
+  return PROJECT_KEY_PATTERN.test(value);
+}
+
+// Matches an issue ref like "SYD-66" — the other half of the /review/:x
+// disambiguation. A ref always implies its own project's scope: a single
+// path segment can't also encode "All projects, but currently on SYD-66",
+// so navigating straight to an issue narrows review's project scope to
+// that issue's project.
+const ISSUE_REF_PATTERN = /^[A-Z]{2,10}-\d+$/;
+export function isIssueRef(value: string): boolean {
+  return ISSUE_REF_PATTERN.test(value);
+}
+
+function projectKeyFromRef(ref: string): string {
+  return ref.split("-")[0] ?? "";
+}
 
 // Fired whenever `navigate()` pushes a new history entry, so `useRoute` can
 // re-render without a real `popstate` (which only fires on back/forward).
@@ -38,17 +60,28 @@ function setLastProject(key: string): void {
 // an internal anchor click should be intercepted).
 function matchRoute(pathname: string): Route | null {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts.length === 0) return { view: "triage" };
+  if (parts.length === 0) return { view: "triage", project: null };
   if (parts[0] === "board" && parts.length === 2 && parts[1]) return { view: "board", project: parts[1] };
   if (parts[0] === "issue" && parts.length === 2 && parts[1]) return { view: "issue", ref: parts[1] };
-  if (parts[0] === "review" && parts.length === 1) return { view: "review", ref: null };
-  if (parts[0] === "review" && parts.length === 2 && parts[1]) return { view: "review", ref: parts[1] };
+  if (parts[0] === "triage") {
+    if (parts.length === 1) return { view: "triage", project: null };
+    if (parts.length === 2 && isProjectKey(parts[1])) return { view: "triage", project: parts[1] };
+    return null;
+  }
+  if (parts[0] === "review") {
+    if (parts.length === 1) return { view: "review", project: null, ref: null };
+    if (parts.length === 2 && isProjectKey(parts[1])) return { view: "review", project: parts[1], ref: null };
+    if (parts.length === 2 && isIssueRef(parts[1])) {
+      return { view: "review", project: projectKeyFromRef(parts[1]), ref: parts[1] };
+    }
+    return null;
+  }
   if (parts[0] === "new" && parts.length === 1) return { view: "new-issue" };
   return null;
 }
 
 export function parsePath(pathname: string): Route {
-  return matchRoute(pathname) ?? { view: "triage" };
+  return matchRoute(pathname) ?? { view: "triage", project: null };
 }
 
 export function isKnownPath(pathname: string): boolean {
@@ -58,7 +91,11 @@ export function isKnownPath(pathname: string): boolean {
 export function href(route: Route): string {
   if (route.view === "board") return `/board/${route.project}`;
   if (route.view === "issue") return `/issue/${route.ref}`;
-  if (route.view === "review") return route.ref ? `/review/${route.ref}` : `/review`;
+  if (route.view === "triage") return route.project ? `/triage/${route.project}` : "/";
+  if (route.view === "review") {
+    if (route.ref) return `/review/${route.ref}`;
+    return route.project ? `/review/${route.project}` : "/review";
+  }
   if (route.view === "new-issue") return `/new`;
   return "/";
 }

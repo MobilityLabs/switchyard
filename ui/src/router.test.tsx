@@ -50,7 +50,7 @@ describe("last-project memory", () => {
     expect(getLastProject()).toBe("ACME");
 
     await act(async () => {
-      navigate({ view: "triage" });
+      navigate({ view: "triage", project: null });
     });
     // Still ACME: triage isn't a board route, so it must not clear the memory.
     expect(getLastProject()).toBe("ACME");
@@ -76,28 +76,28 @@ describe("review route", () => {
   });
 
   it("parses bare /review with no ref", () => {
-    expect(parsePath("/review")).toEqual({ view: "review", ref: null });
+    expect(parsePath("/review")).toEqual({ view: "review", project: null, ref: null });
   });
 
-  it("parses /review/:ref", () => {
-    expect(parsePath("/review/SYD-66")).toEqual({ view: "review", ref: "SYD-66" });
+  it("parses /review/:ref, implying the ref's own project as the scope", () => {
+    expect(parsePath("/review/SYD-66")).toEqual({ view: "review", project: "SYD", ref: "SYD-66" });
   });
 
   it("builds hrefs with and without a ref", () => {
-    expect(href({ view: "review", ref: null })).toBe("/review");
-    expect(href({ view: "review", ref: "SYD-66" })).toBe("/review/SYD-66");
+    expect(href({ view: "review", project: null, ref: null })).toBe("/review");
+    expect(href({ view: "review", project: "SYD", ref: "SYD-66" })).toBe("/review/SYD-66");
   });
 
   it("navigate pushes a new history entry per ref, so each is its own back-button stop", async () => {
     await mountRoute();
     const before = history.length;
     await act(async () => {
-      navigate({ view: "review", ref: "SYD-1" });
+      navigate({ view: "review", project: "SYD", ref: "SYD-1" });
     });
     expect(location.pathname).toBe("/review/SYD-1");
     expect(history.length).toBe(before + 1);
     await act(async () => {
-      navigate({ view: "review", ref: "SYD-2" });
+      navigate({ view: "review", project: "SYD", ref: "SYD-2" });
     });
     expect(location.pathname).toBe("/review/SYD-2");
     expect(history.length).toBe(before + 2);
@@ -106,15 +106,45 @@ describe("review route", () => {
   it("redirect replaces the current entry instead of pushing a new one", async () => {
     await mountRoute();
     await act(async () => {
-      navigate({ view: "review", ref: null });
+      navigate({ view: "review", project: null, ref: null });
     });
     expect(location.pathname).toBe("/review");
     const before = history.length;
     await act(async () => {
-      redirect({ view: "review", ref: "SYD-1" });
+      redirect({ view: "review", project: "SYD", ref: "SYD-1" });
     });
     expect(location.pathname).toBe("/review/SYD-1");
     // Bare /review never became its own back-button stop.
     expect(history.length).toBe(before);
+  });
+});
+
+// SYD-77: Triage and Review are project-scoped like Board, but a bare path
+// means "All projects" so existing links/bookmarks keep working.
+describe("triage/review project scoping", () => {
+  it("parses bare paths as All projects", () => {
+    expect(parsePath("/")).toEqual({ view: "triage", project: null });
+    expect(parsePath("/triage")).toEqual({ view: "triage", project: null });
+    expect(parsePath("/review")).toEqual({ view: "review", project: null, ref: null });
+  });
+
+  it("parses a project-scoped triage/review path", () => {
+    expect(parsePath("/triage/SYD")).toEqual({ view: "triage", project: "SYD" });
+    expect(parsePath("/review/SYD")).toEqual({ view: "review", project: "SYD", ref: null });
+  });
+
+  it("round-trips href for both bare and project-scoped routes", () => {
+    expect(href({ view: "triage", project: null })).toBe("/");
+    expect(href({ view: "triage", project: "SYD" })).toBe("/triage/SYD");
+    expect(href({ view: "review", project: null, ref: null })).toBe("/review");
+    expect(href({ view: "review", project: "SYD", ref: null })).toBe("/review/SYD");
+  });
+
+  it("treats an issue ref (with a -NUMBER suffix) as a specific selection, not a project key", () => {
+    // "SYD-66" isn't a bare project key (2-10 uppercase letters), so /review
+    // reads it as a ref and scopes to its project. Triage has no per-ref
+    // concept, so the same segment there falls through to the default.
+    expect(parsePath("/review/SYD-66")).toEqual({ view: "review", project: "SYD", ref: "SYD-66" });
+    expect(parsePath("/triage/SYD-66")).toEqual({ view: "triage", project: null });
   });
 });
