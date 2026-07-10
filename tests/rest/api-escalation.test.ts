@@ -166,7 +166,7 @@ describe("escalation, snooze, and duplicate routes", () => {
     expect((await body<{ error: string }>(noFailure)).error).toMatch(/no unresolved delivery failure/i);
 
     await app.request(`/issues/${filed.ref}/delivery-events`, {
-      method: "POST", headers: agentH, body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
+      method: "POST", headers: humanH, body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
     });
 
     const denied = await app.request(`/issues/${filed.ref}/redeliver`, { method: "POST", headers: agentH });

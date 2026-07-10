@@ -297,6 +297,14 @@ the issue `done`. Three pieces (SYD-49):
    SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts --dry-run  # print, don't merge
    ```
 
+   `SWITCHYARD_TOKEN` must belong to a human-type actor (SYD-108): `POST
+   /issues/:ref/delivery-events` rejects agent actors posting `delivered` or
+   `delivery_failed` — those clear the SYD-99 open-PR claim gate and resolve
+   attention flags, so any dispatched agent holding a bearer token could
+   otherwise forge them. Provision a dedicated delivery-worker identity
+   (`add-actor <name> human` + `mint-login <name>`) rather than reusing the
+   dispatch worker's agent token or a person's own login.
+
    It polls `GET /api/events` (every `delivery.pollSeconds`, default 30s) for
    `status_changed → done` — a transition only humans can make, server-enforced
    — merges the open `agent/<ref>` PR, deploys via `npm run deploy` from a

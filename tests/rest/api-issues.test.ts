@@ -65,7 +65,7 @@ describe("issue routes", () => {
   it("flags attention for an unresolved delivery_failed, over REST list and detail", async () => {
     await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title: "Ship it" }) });
     await app.request("/issues/SYD-1/delivery-events", {
-      method: "POST", headers: agentH, body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
+      method: "POST", headers: humanH, body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
     });
 
     const detail = await body<{ attention: { reason: string; message: string } | null }>(
@@ -80,7 +80,7 @@ describe("issue routes", () => {
 
     // Clears once delivered.
     await app.request("/issues/SYD-1/delivery-events", {
-      method: "POST", headers: agentH,
+      method: "POST", headers: humanH,
       body: JSON.stringify({ type: "delivered", prNumber: 1, mergeSha: "abc123", deploy: { ran: false } }),
     });
     const cleared = await body<{ attention: unknown }>(await app.request("/issues/SYD-1", { headers: humanH }));

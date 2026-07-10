@@ -44,8 +44,7 @@ describe("searchIssues", () => {
   });
 
   it("attention filter (SYD-94) restricts to issues with an unresolved delivery_failed", () => {
-    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
     expect(searchIssues(db, { attention: "delivery_failed" }).map((i) => i.ref)).toEqual(["AIPI-2"]);
   });
 
@@ -54,15 +53,13 @@ describe("searchIssues", () => {
   });
 
   it("attention filter clears once a later delivered event fires", () => {
-    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false } });
+    recordDeliveryEvent(db, human, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "AIPI-2", { type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false } });
     expect(searchIssues(db, { attention: "delivery_failed" })).toEqual([]);
   });
 
   it("attention filter combines (ANDed) with other filters", () => {
-    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
     expect(searchIssues(db, { attention: "delivery_failed", projectKey: "HAND" })).toEqual([]);
     expect(searchIssues(db, { attention: "delivery_failed", projectKey: "AIPI" }).map((i) => i.ref)).toEqual(["AIPI-2"]);
   });

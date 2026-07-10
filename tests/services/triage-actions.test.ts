@@ -83,7 +83,7 @@ describe("markDuplicate", () => {
 
 describe("redeliverIssue", () => {
   it("rejects agents legibly", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
     expect(() => redeliverIssue(db, agent, "AIPI-1")).toThrowError(/human/i);
   });
 
@@ -92,15 +92,15 @@ describe("redeliverIssue", () => {
   });
 
   it("rejects an issue whose delivery_failed was already resolved", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
-    recordDeliveryEvent(db, agent, "AIPI-1", {
+    recordDeliveryEvent(db, human, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
       type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false },
     });
     expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(/no unresolved delivery failure/i);
   });
 
   it("records a redeliver_requested event without changing issue status", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
     const before = getIssue(db, "AIPI-1");
     const updated = redeliverIssue(db, human, "AIPI-1");
     expect(updated.status).toBe(before.status);

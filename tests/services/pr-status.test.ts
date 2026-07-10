@@ -42,10 +42,10 @@ describe("getOpenPr", () => {
   });
 
   it("clears once delivered", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
     recordDeliveryEvent(db, agent, "SYD-1", { type: "pr_opened", prNumber: 41, url: "https://x/41" });
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered", prNumber: 41, mergeSha: "abc123", deploy: { ran: false },
     });
     expect(getOpenPr(db, issue.id)).toBeNull();
@@ -60,10 +60,10 @@ describe("getOpenPr", () => {
   });
 
   it("re-flags if a new PR opens after the previous one closed", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
     recordDeliveryEvent(db, agent, "SYD-1", { type: "pr_opened", prNumber: 41, url: "https://x/41" });
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered", prNumber: 41, mergeSha: "abc123", deploy: { ran: false },
     });
     recordDeliveryEvent(db, agent, "SYD-1", { type: "pr_opened", prNumber: 55, url: "https://x/55" });

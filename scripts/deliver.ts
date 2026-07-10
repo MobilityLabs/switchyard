@@ -8,6 +8,16 @@
 //   SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts --once     # single scan
 //   SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts --dry-run  # print, don't merge
 //
+// SWITCHYARD_TOKEN must belong to a human-type actor (SYD-108): POST
+// /issues/:ref/delivery-events rejects agent actors for `delivered` and
+// `delivery_failed` (not `pr_opened`, which the auto-dispatch worker posts
+// under its own agent-typed identity) — those two are load-bearing (a
+// `delivered` clears the SYD-99 open-PR claim gate, and resolves
+// delivery_failed attention flags) and any dispatched agent holding a bearer
+// token could otherwise forge them. `add-actor <name> human` + `mint-login
+// <name>` to provision a dedicated delivery-worker identity rather than
+// reusing a person's own login or the dispatch worker's agent token.
+//
 // Config: the `delivery` block of switchyard-worker.json (pollSeconds,
 // cloneDir, deploy). The event cursor persists in .superpowers/deliver-cursor
 // so approvals stamped while this worker is down are delivered on restart.

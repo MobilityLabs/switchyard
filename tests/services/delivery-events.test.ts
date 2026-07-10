@@ -7,17 +7,18 @@ import { getActivity } from "../../src/services/comments.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 describe("recordDeliveryEvent", () => {
-  it("appends pr_opened, delivered, and delivery_failed events to the activity feed", () => {
+  it("appends pr_opened (from the agent-typed dispatch worker) and delivered (from a human-typed delivery worker) to the activity feed", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    const deliverBot = createActor(db, { name: "deliver-bot", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
     recordDeliveryEvent(db, worker, "SYD-1", {
       type: "pr_opened", prNumber: 12, url: "https://github.com/acme/widgets/pull/12",
     });
-    recordDeliveryEvent(db, worker, "SYD-1", {
+    recordDeliveryEvent(db, deliverBot, "SYD-1", {
       type: "delivered", prNumber: 12, mergeSha: "abc123", deploy: { ran: true, ok: true, tail: "done" },
     });
 
@@ -25,6 +26,7 @@ describe("recordDeliveryEvent", () => {
     expect(activity.map((a) => a.type)).toEqual(["created", "pr_opened", "delivered"]);
     expect(activity[1].payload).toEqual({ prNumber: 12, url: "https://github.com/acme/widgets/pull/12" });
     expect(activity[1].actorName).toBe("claude/worker");
+    expect(activity[2].actorName).toBe("deliver-bot");
     expect(activity[2].payload).toEqual({
       prNumber: 12, mergeSha: "abc123", deploy: { ran: true, ok: true, tail: "done" },
     });
@@ -33,11 +35,11 @@ describe("recordDeliveryEvent", () => {
   it("records delivery_failed with just a message", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    const deliverBot = createActor(db, { name: "deliver-bot", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
-    recordDeliveryEvent(db, worker, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, deliverBot, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
 
     const activity = getActivity(db, "SYD-1");
     expect(activity[1]).toMatchObject({ type: "delivery_failed", payload: { message: "merge conflict" } });
@@ -45,10 +47,52 @@ describe("recordDeliveryEvent", () => {
 
   it("throws for an unknown issue ref", () => {
     const db = openDb(":memory:");
-    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    const deliverBot = createActor(db, { name: "deliver-bot", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     expect(() =>
-      recordDeliveryEvent(db, worker, "SYD-9", { type: "delivery_failed", message: "boom" })
+      recordDeliveryEvent(db, deliverBot, "SYD-9", { type: "delivery_failed", message: "boom" })
     ).toThrowError(/does not exist/);
+  });
+
+  it("rejects an agent actor forging a delivered event — the SYD-99 open-PR claim gate is load-bearing", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+
+    expect(() =>
+      recordDeliveryEvent(db, worker, "SYD-1", {
+        type: "delivered", prNumber: 12, mergeSha: "abc123", deploy: { ran: true, ok: true, tail: "done" },
+      })
+    ).toThrowError(/agents cannot/);
+
+    expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
+  });
+
+  it("rejects an agent actor forging a delivery_failed event — hiding a real failure from a human", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+
+    expect(() =>
+      recordDeliveryEvent(db, worker, "SYD-1", { type: "delivery_failed", message: "boom" })
+    ).toThrowError(/agents cannot/);
+  });
+
+  it("still allows an agent actor to record pr_opened — posted by the dispatch worker's own agent-typed identity", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+
+    expect(() =>
+      recordDeliveryEvent(db, worker, "SYD-1", {
+        type: "pr_opened", prNumber: 12, url: "https://github.com/acme/widgets/pull/12",
+      })
+    ).not.toThrow();
   });
 });

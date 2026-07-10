@@ -7,13 +7,16 @@ import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
 let workerH: Record<string, string>;
+let agentH: Record<string, string>;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  const worker = createActor(db, { name: "claude/worker", type: "agent" });
-  workerH = { authorization: `Bearer ${worker.token}`, "content-type": "application/json" };
+  const deliverBot = createActor(db, { name: "deliver-bot", type: "human" });
+  const agent = createActor(db, { name: "claude/worker", type: "agent" });
+  workerH = { authorization: `Bearer ${deliverBot.token}`, "content-type": "application/json" };
+  agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
   createProject(db, { key: "SYD", name: "Switchyard" });
-  createIssue(db, worker.actor, {
+  createIssue(db, agent.actor, {
     projectKey: "SYD", title: "Ship v1",
     provenance: { sourceType: "session" }, description: "x",
   });
@@ -78,5 +81,34 @@ describe("POST /issues/:ref/delivery-events", () => {
       body: JSON.stringify({ type: "delivery_failed", message: "boom" }),
     });
     expect(res.status).toBe(401);
+  });
+
+  it("rejects an agent actor forging a delivered event — only a human-authenticated delivery worker may post one", async () => {
+    const res = await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({
+        type: "delivered", prNumber: 7, mergeSha: "deadbeef",
+        deploy: { ran: true, ok: true, tail: "done" },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/agents cannot/);
+  });
+
+  it("rejects an agent actor forging a delivery_failed event", async () => {
+    const res = await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({ type: "delivery_failed", message: "hidden failure" }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/agents cannot/);
+  });
+
+  it("still allows an agent actor to record pr_opened — posted by the dispatch worker's own agent-typed identity", async () => {
+    const res = await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({ type: "pr_opened", prNumber: 7, url: "https://github.com/acme/widgets/pull/7" }),
+    });
+    expect(res.status).toBe(200);
   });
 });

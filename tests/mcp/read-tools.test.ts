@@ -52,7 +52,7 @@ describe("MCP read tools", () => {
   });
 
   it("get_issue and search_issues surface an attention flag for an unresolved delivery_failed", async () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
 
     const got = await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } });
     expect(JSON.parse(text(got)).attention).toEqual({ reason: "delivery_failed", message: "merge conflict" });
