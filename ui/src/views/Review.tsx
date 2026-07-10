@@ -150,6 +150,9 @@ export default function Review({ currentRef }: { currentRef: string | null }) {
             <span className="ref">{current.ref}</span>
             <h3>{current.title}</h3>
             <span className={`badge prio prio-${current.priority}`}>{current.priority}</span>
+            {current.attention && (
+              <span className="badge danger" title={current.attention.message}>⛔ {current.attention.message}</span>
+            )}
           </div>
 
           {current.sourceType && (

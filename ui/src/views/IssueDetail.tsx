@@ -125,7 +125,7 @@ function DeliveryStrip({ status }: { status: DeliveryStatus }) {
         </span>
       )}
       {status.failedMessage && (
-        <p className="banner warn delivery-failed">⚠ delivery failed: {status.failedMessage}</p>
+        <p className="banner danger delivery-failed">⛔ delivery failed: {status.failedMessage}</p>
       )}
     </div>
   );

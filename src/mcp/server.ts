@@ -11,6 +11,7 @@ import {
 import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
+import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
 
@@ -51,10 +52,14 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
       description: "Get one issue by ref (e.g. AIPI-42), including its full activity history.",
       inputSchema: { ref: z.string() },
     },
-    guard(({ ref }: { ref: string }) => ({
-      ...getIssue(db, ref),
-      activity: getActivity(db, ref),
-    }))
+    guard(({ ref }: { ref: string }) => {
+      const issue = getIssue(db, ref);
+      return {
+        ...issue,
+        attention: getAttention(db, issue.id),
+        activity: getActivity(db, ref),
+      };
+    })
   );
 
   server.registerTool(
@@ -74,11 +79,15 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
       project_key?: string; status?: (typeof STATUSES)[number]; assignee?: string;
       label?: string; text?: string; needs_input?: boolean;
     }) =>
-      searchIssues(db, {
-        projectKey: a.project_key, status: a.status,
-        assigneeName: a.assignee, label: a.label, text: a.text,
-        needsInput: a.needs_input,
-      })
+      {
+        const results = searchIssues(db, {
+          projectKey: a.project_key, status: a.status,
+          assigneeName: a.assignee, label: a.label, text: a.text,
+          needsInput: a.needs_input,
+        });
+        const attention = listAttentionByIssueId(db);
+        return results.map((r) => ({ ...r, attention: attention.get(r.id) ?? null }));
+      }
     )
   );
 

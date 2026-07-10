@@ -28,7 +28,7 @@ const ISSUE: Issue = {
   assigneeId: null, creatorId: 1, labels: [],
   sourceType: null, sourceDetail: null, sourceUrl: null,
   needsInput: false, snoozedUntil: null,
-  createdAt: 0, updatedAt: 0,
+  createdAt: 0, updatedAt: 0, attention: null,
 };
 
 describe("defaultAcceptPriority", () => {

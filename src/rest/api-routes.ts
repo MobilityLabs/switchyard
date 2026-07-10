@@ -13,6 +13,7 @@ import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issu
 import { addDependency, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
+import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { listRecentEvents, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
@@ -76,8 +77,8 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   app.get("/actors", (c) => c.json(listActors(db)));
   app.get("/me", (c) => c.json(c.var.actor));
 
-  app.get("/issues", (c) =>
-    c.json(searchIssues(db, {
+  app.get("/issues", (c) => {
+    const results = searchIssues(db, {
       projectKey: c.req.query("project") || undefined,
       status: (c.req.query("status") as Status | undefined) || undefined,
       assigneeName: c.req.query("assignee") || undefined,
@@ -85,8 +86,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       text: c.req.query("text") || undefined,
       needsInput: c.req.query("needs_input") === "true" ? true : undefined,
       excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
-    }))
-  );
+    });
+    const attention = listAttentionByIssueId(db);
+    return c.json(results.map((r) => ({ ...r, attention: attention.get(r.id) ?? null })));
+  });
 
   app.post("/issues", body(issueCreateBody), (c) =>
     c.json(createIssue(db, c.var.actor, c.req.valid("json")))
@@ -94,8 +97,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/issues/:ref", (c) => {
     const ref = c.req.param("ref");
+    const issue = getIssue(db, ref);
     return c.json({
-      ...getIssue(db, ref),
+      ...issue,
+      attention: getAttention(db, issue.id),
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),
