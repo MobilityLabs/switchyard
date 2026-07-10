@@ -169,17 +169,30 @@ export async function ensureCleanClone(sourceRepo: string, cloneDir: string): Pr
 }
 
 /**
+ * Installs dependencies in the clean clone via `npm ci`. `npm ci` deletes
+ * node_modules wholesale before installing from the lockfile, unlike `npm
+ * install` (which leaves already-installed packages alone) -- needed
+ * because ensureCleanClone's `git clean -fd` does NOT remove node_modules
+ * (it's gitignored; -fd only clears untracked files git isn't told to
+ * ignore), so a persistent clone can carry native modules (e.g.
+ * better-sqlite3) compiled for a node version the gate no longer runs
+ * (SYD-101).
+ */
+export async function installDeps(cloneDir: string): Promise<string> {
+  return run("npm", ["ci"], { cwd: cloneDir });
+}
+
+/**
  * Post-merge verification gate (SYD-78): a PR is reviewed and green in
  * isolation, but nothing previously confirmed that main *after* the merge
  * (i.e. this branch plus everything else landed since its clone) still
  * typechecks and passes its tests — semantic conflicts between concurrently
  * merged branches land silently. Runs in the clean clone, never the deploy
- * caller's working tree. `npm install` first because ensureCleanClone's
- * `git clean -fd` wipes the clone's (gitignored) node_modules every time.
+ * caller's working tree.
  */
 export async function runVerification(cloneDir: string): Promise<{ ok: boolean; tail: string }> {
   try {
-    await run("npm", ["install"], { cwd: cloneDir });
+    await installDeps(cloneDir);
     const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir });
     const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir });
     return { ok: true, tail: tailOf(`${typecheck}\n${tests}`) };
