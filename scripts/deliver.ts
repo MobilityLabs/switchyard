@@ -27,10 +27,13 @@ import {
   deliveryComment,
   deliveryFailureComment,
   verificationFailureComment,
+  autoRebasedNote,
+  autoRebaseConflictComment,
+  autoRebaseVerifyFailedComment,
   type DeliveryEventInput,
   type DeliveryFeedEvent,
 } from "./delivery-lib.js";
-import { findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy } from "./delivery-exec.js";
+import { findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy, attemptAutoRebase } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
 const DEFAULT_POLL_SECONDS = 30;
@@ -140,11 +143,46 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
       return;
     }
 
-    const mergeSha = await mergeAgentPr(project.repo, prNumber);
-    console.log(`${ref}: merged PR #${prNumber} at ${mergeSha}`);
+    const cloneDir = path.join(cloneRootOf(config), projectKeyOf(ref));
+    let mergeSha: string;
+    let rebased = false;
+    try {
+      mergeSha = await mergeAgentPr(project.repo, prNumber);
+    } catch (mergeErr) {
+      // Merge-failure is the steady state under batch stamping (N parallel
+      // agent branches, aging main) — try one mechanical rebase before
+      // escalating. Any conflict hunks or a failed post-rebase verify gate
+      // stop here and get reported; only a clean, verified rebase retries
+      // the merge, and only once (attemptAutoRebase never loops).
+      if (config.delivery?.autoRebase === false) throw mergeErr;
+      const originalMessage = (mergeErr as Error).message;
+      console.log(`${ref}: merge failed (${originalMessage}); attempting auto-rebase onto main`);
+      const rebase = await attemptAutoRebase(project.repo, cloneDir, ref);
+      if (rebase.status === "no-branch") throw mergeErr;
+      if (rebase.status === "conflict") {
+        console.log(`${ref}: auto-rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`);
+        await postComment(config, token, ref, autoRebaseConflictComment(ref, originalMessage, rebase.files));
+        await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message: originalMessage }).catch(
+          (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`)
+        );
+        return;
+      }
+      if (rebase.status === "verify-failed") {
+        console.log(`${ref}: auto-rebase applied cleanly but the post-rebase verify gate failed`);
+        await postComment(config, token, ref, autoRebaseVerifyFailedComment(ref, rebase.tail));
+        await postDeliveryEvent(config, token, ref, {
+          type: "delivery_failed",
+          message: "auto-rebase applied cleanly but the post-rebase verify gate failed",
+        }).catch((e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`));
+        return;
+      }
+      console.log(`${ref}: auto-rebased onto main at ${rebase.sha}, retrying merge`);
+      mergeSha = await mergeAgentPr(project.repo, prNumber);
+      rebased = true;
+    }
+    console.log(`${ref}: merged PR #${prNumber} at ${mergeSha}${rebased ? " (after auto-rebase)" : ""}`);
     let deploy: Awaited<ReturnType<typeof runDeploy>> = { ran: false };
     if (config.delivery?.deploy !== false) {
-      const cloneDir = path.join(cloneRootOf(config), projectKeyOf(ref));
       await ensureCleanClone(project.repo, cloneDir);
 
       if (config.delivery?.verify !== false) {
@@ -163,7 +201,8 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
       deploy = await runDeploy(cloneDir);
       console.log(`${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`);
     }
-    await postComment(config, token, ref, deliveryComment({ prNumber, mergeSha, deploy }));
+    const commentBody = deliveryComment({ prNumber, mergeSha, deploy });
+    await postComment(config, token, ref, rebased ? `${autoRebasedNote(ref)}\n\n${commentBody}` : commentBody);
     await postDeliveryEvent(config, token, ref, { type: "delivered", prNumber, mergeSha, deploy }).catch((e: Error) =>
       console.error(`could not record delivered event for ${ref}: ${e.message}`)
     );

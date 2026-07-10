@@ -59,6 +59,9 @@ export type DeliveryConfig = {
    * visibly red, rather than silently shipped.
    */
   verify?: boolean;
+  /** On merge failure, try a mechanical rebase-onto-main + verify + retry
+   * before escalating to a human (default true). SYD-85. */
+  autoRebase?: boolean;
 };
 
 export type GithubPollConfig = {

@@ -12,9 +12,18 @@ import {
   parseOwnerRepo,
   buildPrTitle,
   buildPrBody,
+  buildFetchAgentBranchArgs,
+  buildCheckoutRebaseBranchArgs,
+  buildRebaseOntoMainArgs,
+  buildRebaseAbortArgs,
+  buildConflictFilesArgs,
+  buildForcePushWithLeaseArgs,
   deliveryComment,
   deliveryFailureComment,
   verificationFailureComment,
+  autoRebasedNote,
+  autoRebaseConflictComment,
+  autoRebaseVerifyFailedComment,
   formatPublishOutcome,
   parsePrNumberFromUrl,
   parseCursorText,
@@ -134,6 +143,63 @@ describe("argv builders", () => {
   it("buildPrTitle / buildPrBody", () => {
     expect(buildPrTitle("SYD-9", "A title")).toBe("SYD-9: A title");
     expect(buildPrBody("SYD-9", "http://host:3300")).toContain("http://host:3300/issue/SYD-9");
+  });
+});
+
+describe("auto-rebase argv builders (SYD-85)", () => {
+  it("buildFetchAgentBranchArgs", () => {
+    expect(buildFetchAgentBranchArgs("SYD-9")).toEqual(["fetch", "origin", "agent/SYD-9"]);
+  });
+
+  it("buildCheckoutRebaseBranchArgs", () => {
+    expect(buildCheckoutRebaseBranchArgs("SYD-9")).toEqual(["checkout", "-B", "agent/SYD-9", "FETCH_HEAD"]);
+  });
+
+  it("buildRebaseOntoMainArgs", () => {
+    expect(buildRebaseOntoMainArgs()).toEqual(["rebase", "origin/main"]);
+  });
+
+  it("buildRebaseAbortArgs", () => {
+    expect(buildRebaseAbortArgs()).toEqual(["rebase", "--abort"]);
+  });
+
+  it("buildConflictFilesArgs", () => {
+    expect(buildConflictFilesArgs()).toEqual(["diff", "--name-only", "--diff-filter=U"]);
+  });
+
+  it("buildForcePushWithLeaseArgs — only ever targets the agent/<ref> branch", () => {
+    expect(buildForcePushWithLeaseArgs("SYD-9")).toEqual(["push", "--force-with-lease", "origin", "agent/SYD-9"]);
+  });
+});
+
+describe("auto-rebase comment bodies (SYD-85)", () => {
+  it("autoRebasedNote names the branch and main", () => {
+    const note = autoRebasedNote("SYD-9");
+    expect(note).toContain("agent/SYD-9");
+    expect(note).toContain("main");
+  });
+
+  it("autoRebaseConflictComment lists conflicted files and the original failure", () => {
+    const body = autoRebaseConflictComment("SYD-9", "gh: not mergeable", ["src/a.ts", "src/b.ts"]);
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("not mergeable");
+    expect(body).toContain("agent/SYD-9");
+    expect(body).toContain("- src/a.ts");
+    expect(body).toContain("- src/b.ts");
+    expect(body).toContain("resolve the conflicts");
+  });
+
+  it("autoRebaseConflictComment handles an empty file list", () => {
+    const body = autoRebaseConflictComment("SYD-9", "gh: not mergeable", []);
+    expect(body).toContain("no conflicted files reported");
+  });
+
+  it("autoRebaseVerifyFailedComment includes the output tail and says NOT pushed/merged", () => {
+    const body = autoRebaseVerifyFailedComment("SYD-9", "TypeError: boom");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("agent/SYD-9");
+    expect(body).toContain("TypeError: boom");
+    expect(body).toContain("NOT pushed, NOT merged");
   });
 });
 
