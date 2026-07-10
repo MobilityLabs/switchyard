@@ -120,4 +120,11 @@ describe("POST /issues/:ref/progress-note", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("rejects human actors", async () => {
+    const res = await app.request("/issues/SYD-1/progress-note", {
+      method: "POST", headers: humanH, body: JSON.stringify({ note: "hi" }),
+    });
+    expect(res.status).toBe(400);
+  });
 });

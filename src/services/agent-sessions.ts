@@ -129,6 +129,7 @@ export function listAgentSessions(
 }
 
 export function recordProgressNote(db: Db, actor: Actor, ref: string, note: string): void {
+  requireAgent(actor);
   const trimmed = note.trim();
   if (!trimmed) throw new SwitchyardError("A progress note must not be empty.");
   const issue = getIssue(db, ref);

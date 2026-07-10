@@ -383,3 +383,4 @@ kbd {
 .session-live { background: #1a7f37; color: #fff; }
 .session-note { font-style: italic; opacity: 0.8; }
 .agent-session-strip { display: flex; flex-direction: column; gap: 0.25rem; }
+.progress-note { font-style: italic; opacity: 0.8; }

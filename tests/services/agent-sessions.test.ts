@@ -118,4 +118,8 @@ describe("recordProgressNote", () => {
     const firstView = listAgentSessions(db, { ref: "SYD-1" }).find((s) => s.id === first.id);
     expect(firstView?.lastNote).toBeNull();
   });
+
+  it("rejects human actors — progress notes are agent session status", () => {
+    expect(() => recordProgressNote(db, human, "SYD-1", "hi")).toThrow(/agent actors/i);
+  });
 });
