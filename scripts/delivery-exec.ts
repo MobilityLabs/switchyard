@@ -27,12 +27,16 @@ import {
   buildConflictResolutionDockerArgs,
   buildDetachOntoMainArgs,
   buildSyncLocalMainArgs,
+  buildPrViewMergeableArgs,
+  shouldRetryMergePoll,
   parsePrNumberFromUrl,
   tailOf,
   MAIN_BRANCH,
+  MERGE_POLL_INTERVAL_MS,
   type PublishOutcome,
   type RebaseOutcome,
   type ConflictResolutionOutcome,
+  type MergeableState,
 } from "./delivery-lib.js";
 import type { WorkerConfig, WorkerProject } from "./worker-select.js";
 
@@ -117,6 +121,36 @@ export async function mergeAgentPr(repo: string, prNumber: number): Promise<stri
   const ownerRepo = await originOwnerRepo(repo);
   await run("gh", buildPrMergeArgs(prNumber, ownerRepo), { cwd: GH_CWD });
   return run("gh", buildPrViewMergeShaArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readMergeableState(prNumber: number, ownerRepo: string): Promise<MergeableState> {
+  const out = await run("gh", buildPrViewMergeableArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+  return out as MergeableState;
+}
+
+/**
+ * Polls `gh pr view --json mergeable` after a force-push (SYD-103) until it
+ * leaves UNKNOWN or MERGE_POLL_TIMEOUT_MS elapses, so the merge retry that
+ * follows a rebase/conflict-resolution force-push doesn't race GitHub's
+ * asynchronous mergeability recompute. Returns whatever state was last
+ * observed — including a still-UNKNOWN timeout — and never throws on
+ * CONFLICTING or timeout: the caller retries the merge through its normal
+ * path regardless, so a real conflict or a slow recompute just fails the
+ * same way delivery already handles a merge failure.
+ */
+export async function pollUntilMergeable(repo: string, prNumber: number): Promise<MergeableState> {
+  const ownerRepo = await originOwnerRepo(repo);
+  const start = Date.now();
+  let state = await readMergeableState(prNumber, ownerRepo);
+  while (shouldRetryMergePoll(state, Date.now() - start)) {
+    await sleep(MERGE_POLL_INTERVAL_MS);
+    state = await readMergeableState(prNumber, ownerRepo);
+  }
+  return state;
 }
 
 /**

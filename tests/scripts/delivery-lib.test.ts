@@ -19,6 +19,9 @@ import {
   buildRebaseAbortArgs,
   buildConflictFilesArgs,
   buildForcePushWithLeaseArgs,
+  buildPrViewMergeableArgs,
+  shouldRetryMergePoll,
+  MERGE_POLL_TIMEOUT_MS,
   deliveryComment,
   deliveryFailureComment,
   verificationFailureComment,
@@ -148,6 +151,12 @@ describe("argv builders", () => {
     ]);
   });
 
+  it("buildPrViewMergeableArgs", () => {
+    expect(buildPrViewMergeableArgs(41, "MobilityLabs/switchyard")).toEqual([
+      "pr", "view", "41", "-R", "MobilityLabs/switchyard", "--json", "mergeable", "--jq", ".mergeable",
+    ]);
+  });
+
   it("buildPrViewUrlArgs", () => {
     expect(buildPrViewUrlArgs(41, "acme/widgets")).toEqual(["pr", "view", "41", "--json", "url", "--jq", ".url", "-R", "acme/widgets"]);
   });
@@ -181,6 +190,31 @@ describe("auto-rebase argv builders (SYD-85)", () => {
 
   it("buildForcePushWithLeaseArgs — only ever targets the agent/<ref> branch", () => {
     expect(buildForcePushWithLeaseArgs("SYD-9")).toEqual(["push", "--force-with-lease", "origin", "agent/SYD-9"]);
+  });
+});
+
+describe("shouldRetryMergePoll (SYD-103)", () => {
+  it("keeps polling while UNKNOWN and under the timeout", () => {
+    expect(shouldRetryMergePoll("UNKNOWN", 0, 60000)).toBe(true);
+    expect(shouldRetryMergePoll("UNKNOWN", 59999, 60000)).toBe(true);
+  });
+
+  it("stops once the timeout elapses, even if still UNKNOWN", () => {
+    expect(shouldRetryMergePoll("UNKNOWN", 60000, 60000)).toBe(false);
+    expect(shouldRetryMergePoll("UNKNOWN", 70000, 60000)).toBe(false);
+  });
+
+  it("stops immediately on a definitive MERGEABLE answer", () => {
+    expect(shouldRetryMergePoll("MERGEABLE", 0, 60000)).toBe(false);
+  });
+
+  it("stops immediately on a definitive CONFLICTING answer", () => {
+    expect(shouldRetryMergePoll("CONFLICTING", 0, 60000)).toBe(false);
+  });
+
+  it("defaults the timeout to MERGE_POLL_TIMEOUT_MS", () => {
+    expect(shouldRetryMergePoll("UNKNOWN", MERGE_POLL_TIMEOUT_MS - 1)).toBe(true);
+    expect(shouldRetryMergePoll("UNKNOWN", MERGE_POLL_TIMEOUT_MS)).toBe(false);
   });
 });
 
