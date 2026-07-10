@@ -326,3 +326,53 @@ kbd {
 .new-project-popover .hint { margin: -4px 0 0; font-size: 12px; color: var(--warn); }
 .new-project-popover .banner.warn { font-size: 12px; padding: 6px 10px; }
 .popover-actions { display: flex; gap: 8px; }
+
+/* Mobile layout (SYD-90): styles.css had zero @media queries — every view
+   rendered its desktop layout scaled down on phones. Breakpoint matches the
+   design sketch's ~720px cutoff. */
+@media (max-width: 720px) {
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 8px;
+    padding: 8px 12px;
+  }
+  .topbar nav { flex-wrap: wrap; gap: 6px; }
+  .content { padding: 12px; }
+
+  /* Board: five equal columns side by side is unreadable at phone width, so
+     switch to horizontally swipeable full-width panes with scroll-snap
+     instead of shrinking every column. */
+  .board {
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x mandatory;
+  }
+  .column {
+    flex: 0 0 88vw;
+    scroll-snap-align: start;
+  }
+
+  .issue-head, .review-head { flex-wrap: wrap; }
+
+  .triage-main { flex-wrap: wrap; }
+  .triage-actions, .accept-prompt { flex-wrap: wrap; }
+  .triage-actions > *, .accept-prompt > * {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+
+  .review-verdicts { flex-direction: column; align-items: stretch; }
+  .review-verdicts button { min-height: 44px; }
+
+  .composer { flex-direction: column; align-items: stretch; }
+  .composer button { min-height: 44px; }
+
+  /* Inputs at <16px trigger iOS Safari's auto-zoom on focus. */
+  input, select, textarea { font-size: 16px; }
+
+  .markdown table { display: block; overflow-x: auto; max-width: 100%; }
+
+  .new-project-popover { width: calc(100vw - 48px); }
+  .design-embed-frame { height: 260px; }
+}
