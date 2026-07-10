@@ -155,8 +155,8 @@ describe("validateWorkerConfig", () => {
       expect(validateWorkerConfig({
         ...base,
         delivery: {
-          openPrs: true, pollSeconds: 30, cloneDir: "/tmp/clones",
-          deploy: false, verify: false, autoRebase: true, reconcile: true,
+          openPrs: true, pollSeconds: 30, cloneDir: "/tmp/clones", deploy: false, verify: false,
+          autoRebase: true, reconcile: true, conflictResolution: true,
         },
       })).toEqual([]);
     });
@@ -174,7 +174,7 @@ describe("validateWorkerConfig", () => {
         ...base,
         delivery: {
           openPrs: "true", pollSeconds: -5, cloneDir: "", deploy: 1, verify: "yes",
-          autoRebase: "nope", reconcile: "nope",
+          autoRebase: "nope", reconcile: "nope", conflictResolution: "nope",
         },
       });
       expect(problems.some((p) => p.includes("delivery.openPrs"))).toBe(true);
@@ -184,6 +184,7 @@ describe("validateWorkerConfig", () => {
       expect(problems.some((p) => p.includes("delivery.verify"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.autoRebase"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.reconcile"))).toBe(true);
+      expect(problems.some((p) => p.includes("delivery.conflictResolution"))).toBe(true);
     });
   });
 

@@ -24,12 +24,17 @@ import {
   buildRebaseAbortArgs,
   buildConflictFilesArgs,
   buildForcePushWithLeaseArgs,
+  buildConflictResolutionDockerArgs,
+  buildDetachOntoMainArgs,
+  buildSyncLocalMainArgs,
   parsePrNumberFromUrl,
   tailOf,
   MAIN_BRANCH,
   type PublishOutcome,
   type RebaseOutcome,
+  type ConflictResolutionOutcome,
 } from "./delivery-lib.js";
+import type { WorkerConfig, WorkerProject } from "./worker-select.js";
 
 const execFileP = promisify(execFile);
 
@@ -183,6 +188,68 @@ export async function attemptAutoRebase(repo: string, cloneDir: string, ref: str
   await run("git", ["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
   const sha = await run("git", ["-C", cloneDir, "rev-parse", "HEAD"]);
   return { status: "rebased", sha };
+}
+
+/**
+ * Dispatches a one-shot conflict-resolution worker session (SYD-100) against
+ * `cloneDir` — the same scratch clone attemptAutoRebase just left checked out
+ * on agent/<ref> at its pre-rebase commit, having aborted its own mechanical
+ * rebase on hitting real conflicts. Syncs the clone's own local main branch
+ * to its origin/main (the container's "origin" is this clone, so its local
+ * main is otherwise frozen at whatever commit it had the first time the
+ * clone was ever created — see buildSyncLocalMainArgs), then detaches HEAD
+ * onto it (git refuses to push into a checked-out branch) so the container's
+ * own `git push` into the /origin bind mount can update agent/<ref>.
+ *
+ * A session is free to decline resolving (see buildConflictResolutionPrompt)
+ * without the container itself failing, so success is judged by whether
+ * agent/<ref> actually moved, not by the container's exit code alone: once
+ * the container exits cleanly, this pushes the resolved branch on to GitHub
+ * with the host's own credentials (the container never sees them) and
+ * returns the merge-ready sha — unless the branch is unchanged, which is
+ * reported as a failure so the caller escalates instead of retrying a merge
+ * that will just hit the same conflict again. The resolver session never
+ * merges; the caller (deliver.ts) re-verifies and retries the merge through
+ * its normal path.
+ */
+export async function dispatchConflictResolution(
+  cloneDir: string,
+  ref: string,
+  conflictFiles: string[],
+  project: WorkerProject,
+  config: WorkerConfig
+): Promise<ConflictResolutionOutcome> {
+  const originalSha = await run("git", ["-C", cloneDir, "rev-parse", agentBranch(ref)]);
+
+  await run("git", ["-C", cloneDir, ...buildSyncLocalMainArgs()]);
+  await run("git", ["-C", cloneDir, ...buildDetachOntoMainArgs()]);
+
+  const dockerArgs = buildConflictResolutionDockerArgs(ref, conflictFiles, cloneDir, project, config, process.env);
+  let dockerOutput: string;
+  try {
+    dockerOutput = await run("docker", dockerArgs);
+  } catch (err) {
+    const e = err as Error & { stdout?: string; stderr?: string };
+    return { status: "failed", tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
+  }
+
+  const resolvedSha = await run("git", ["-C", cloneDir, "rev-parse", agentBranch(ref)]);
+  if (resolvedSha === originalSha) {
+    return {
+      status: "failed",
+      tail: tailOf(`${dockerOutput}\nthe session left ${agentBranch(ref)} unchanged — see its own comment on the issue for why`),
+    };
+  }
+
+  try {
+    await run("git", ["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
+  } catch (err) {
+    return {
+      status: "failed",
+      tail: tailOf(`${dockerOutput}\ncould not push the resolved branch to GitHub: ${(err as Error).message}`),
+    };
+  }
+  return { status: "resolved", sha: resolvedSha };
 }
 
 /** Runs the project's `npm run deploy` from the clean clone, if it has one. */
