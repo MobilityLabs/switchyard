@@ -13,6 +13,7 @@ import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issu
 import { addDependency, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
+import { startAgentSession, endAgentSession, listAgentSessions, recordProgressNote } from "../services/agent-sessions.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { getOpenPr, listOpenPrByIssueId } from "../services/pr-status.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
@@ -38,6 +39,9 @@ import {
   issueUpdateBody,
   commentBody,
   deliveryEventBody,
+  agentSessionCreateBody,
+  agentSessionEndBody,
+  progressNoteBody,
   dependencyBody,
   webhookCreateBody,
   webhookPatchBody,
@@ -130,6 +134,26 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.post("/issues/:ref/delivery-events", body(deliveryEventBody), (c) => {
     recordDeliveryEvent(db, c.var.actor, c.req.param("ref"), c.req.valid("json"));
+    return c.json({ ok: true });
+  });
+
+  app.get("/agent-sessions", (c) =>
+    c.json(listAgentSessions(db, {
+      active: c.req.query("active") === "true" ? true : undefined,
+      ref: c.req.query("ref") || undefined,
+    }))
+  );
+
+  app.post("/agent-sessions", body(agentSessionCreateBody), (c) =>
+    c.json(startAgentSession(db, c.var.actor, c.req.valid("json")))
+  );
+
+  app.patch("/agent-sessions/:id", body(agentSessionEndBody), (c) =>
+    c.json(endAgentSession(db, c.var.actor, Number(c.req.param("id")), c.req.valid("json").exitCode))
+  );
+
+  app.post("/issues/:ref/progress-note", body(progressNoteBody), (c) => {
+    recordProgressNote(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note);
     return c.json({ ok: true });
   });
 

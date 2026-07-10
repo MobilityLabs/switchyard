@@ -2,6 +2,7 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { STATUSES, PRIORITIES } from "../db/schema.js";
 import { SUMMARY_MAX_LENGTH } from "../services/issues.js";
+import { AGENT_SESSION_MODES } from "../services/agent-sessions.js";
 
 export const projectBody = z.object({ key: z.string(), name: z.string() });
 
@@ -47,6 +48,13 @@ export const deliveryEventBody = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("delivery_failed"), message: z.string().min(1) }),
 ]);
+export const agentSessionCreateBody = z.object({
+  ref: z.string(),
+  mode: z.enum(AGENT_SESSION_MODES),
+  pid: z.number().int().positive().nullable().optional(),
+});
+export const agentSessionEndBody = z.object({ exitCode: z.number().int().nullable() });
+export const progressNoteBody = z.object({ note: z.string().min(1) });
 export const dependencyBody = z.object({ blockerRef: z.string(), blockedRef: z.string() });
 export const requestInputBody = z.object({ question: z.string() });
 export const snoozeBody = z.object({ until: z.number().int().positive() });
