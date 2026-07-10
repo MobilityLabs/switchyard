@@ -315,3 +315,67 @@ describe("Shell new project form", () => {
     }
   });
 });
+
+// SYD-86: the topbar search box is reachable from every view. Enter either
+// jumps straight to a well-formed issue ref or opens the /search results
+// route; "/" focuses the box unless the user is already typing elsewhere.
+describe("Shell search box", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    history.replaceState(null, "", "/");
+  });
+
+  function searchInput(container: HTMLElement): HTMLInputElement {
+    const input = container.querySelector(".search-box");
+    if (!input) throw new Error("no .search-box input");
+    return input as HTMLInputElement;
+  }
+
+  it("jumps straight to the issue for a well-formed ref (case-insensitive)", async () => {
+    const container = await renderShell();
+    const input = searchInput(container);
+    await type(input, "syd-52");
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(location.pathname).toBe("/issue/SYD-52");
+  });
+
+  it("opens /search?q=… for a plain-text query", async () => {
+    const container = await renderShell();
+    const input = searchInput(container);
+    await type(input, "auth bug");
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(location.pathname).toBe("/search");
+    expect(location.search).toBe("?q=auth%20bug");
+  });
+
+  it("does nothing for an empty query", async () => {
+    const container = await renderShell();
+    const input = searchInput(container);
+    const before = location.pathname;
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(location.pathname).toBe(before);
+  });
+
+  it("focuses the search box on '/' unless already typing in a field", async () => {
+    const container = await renderShell();
+    const input = searchInput(container);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
+    });
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("keeps the search box in sync with the URL's query on the /search route", async () => {
+    await act(async () => {
+      navigate({ view: "search", query: "widgets" });
+    });
+    const container = await renderShell();
+    expect(searchInput(container).value).toBe("widgets");
+  });
+});

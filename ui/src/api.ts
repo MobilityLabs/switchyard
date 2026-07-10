@@ -20,11 +20,13 @@ export const listProjects = () => api<Project[]>("/api/projects");
 export const createProject = (input: { key: string; name: string }) =>
   api<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });
 export const listIssues = (
-  filters: { project?: string; status?: Status; needsInput?: boolean; excludeSnoozed?: boolean } = {},
+  filters: { project?: string; status?: Status; label?: string; text?: string; needsInput?: boolean; excludeSnoozed?: boolean } = {},
 ) => {
   const q = new URLSearchParams();
   if (filters.project) q.set("project", filters.project);
   if (filters.status) q.set("status", filters.status);
+  if (filters.label) q.set("label", filters.label);
+  if (filters.text) q.set("text", filters.text);
   if (filters.needsInput) q.set("needs_input", "true");
   if (filters.excludeSnoozed) q.set("exclude_snoozed", "true");
   const qs = q.toString();

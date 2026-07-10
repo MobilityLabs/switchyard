@@ -5,7 +5,8 @@ export type Route =
   | { view: "board"; project: string }
   | { view: "issue"; ref: string }
   | { view: "review"; project: string | null; ref: string | null }
-  | { view: "new-issue" };
+  | { view: "new-issue" }
+  | { view: "search"; query: string };
 
 // Matches a project key (e.g. "SYD"), as opposed to an issue ref like
 // "SYD-66" — lets /review/:project? disambiguate from /review/:ref
@@ -55,10 +56,11 @@ function setLastProject(key: string): void {
   }
 }
 
-// Matches a pathname against a known route, or returns null for anything
-// the client router doesn't own (used both to parse and to decide whether
-// an internal anchor click should be intercepted).
-function matchRoute(pathname: string): Route | null {
+// Matches a pathname (plus its query string, needed only by /search) against
+// a known route, or returns null for anything the client router doesn't own
+// (used both to parse and to decide whether an internal anchor click should
+// be intercepted).
+function matchRoute(pathname: string, search: string): Route | null {
   const parts = pathname.split("/").filter(Boolean);
   if (parts.length === 0) return { view: "triage", project: null };
   if (parts[0] === "board" && parts.length === 2 && parts[1]) return { view: "board", project: parts[1] };
@@ -76,16 +78,19 @@ function matchRoute(pathname: string): Route | null {
     }
     return null;
   }
+  if (parts[0] === "search" && parts.length === 1) {
+    return { view: "search", query: new URLSearchParams(search).get("q") ?? "" };
+  }
   if (parts[0] === "new" && parts.length === 1) return { view: "new-issue" };
   return null;
 }
 
-export function parsePath(pathname: string): Route {
-  return matchRoute(pathname) ?? { view: "triage", project: null };
+export function parsePath(pathname: string, search = ""): Route {
+  return matchRoute(pathname, search) ?? { view: "triage", project: null };
 }
 
 export function isKnownPath(pathname: string): boolean {
-  return matchRoute(pathname) !== null;
+  return matchRoute(pathname, "") !== null;
 }
 
 export function href(route: Route): string {
@@ -97,6 +102,7 @@ export function href(route: Route): string {
     return route.project ? `/review/${route.project}` : "/review";
   }
   if (route.view === "new-issue") return `/new`;
+  if (route.view === "search") return route.query ? `/search?q=${encodeURIComponent(route.query)}` : "/search";
   return "/";
 }
 
@@ -137,10 +143,10 @@ function migrateHashRoute(): void {
 export function useRoute(): Route {
   const [route, setRoute] = useState<Route>(() => {
     migrateHashRoute();
-    return parsePath(location.pathname);
+    return parsePath(location.pathname, location.search);
   });
   useEffect(() => {
-    const onChange = () => setRoute(parsePath(location.pathname));
+    const onChange = () => setRoute(parsePath(location.pathname, location.search));
     window.addEventListener("popstate", onChange);
     window.addEventListener(NAVIGATE_EVENT, onChange);
     return () => {

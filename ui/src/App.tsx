@@ -9,6 +9,7 @@ import Board from "./views/Board";
 import IssueDetail from "./views/IssueDetail";
 import Review from "./views/Review";
 import NewIssue from "./views/NewIssue";
+import Search from "./views/Search";
 
 // Intercepts clicks on same-origin anchors that point at a known client
 // route and hands them to the History-API router instead of a full page
@@ -29,7 +30,7 @@ function useInternalLinkInterceptor() {
       if (url.origin !== location.origin) return;
       if (!isKnownPath(url.pathname)) return;
       e.preventDefault();
-      navigate(url.pathname);
+      navigate(url.pathname + url.search);
     }
     document.addEventListener("click", onClick, true);
     return () => document.removeEventListener("click", onClick, true);
@@ -83,6 +84,7 @@ function ShellRouter({ me }: { me: Actor }) {
       {route.view === "issue" && <IssueDetail refId={route.ref} />}
       {route.view === "review" && <Review project={route.project} currentRef={route.ref} />}
       {route.view === "new-issue" && <NewIssue />}
+      {route.view === "search" && <Search query={route.query} />}
     </Shell>
   );
 }

@@ -6,7 +6,7 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { getLastProject, href, navigate, parsePath, redirect, useRoute } from "./router";
+import { getLastProject, href, isIssueRef, isKnownPath, navigate, parsePath, redirect, useRoute } from "./router";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -146,5 +146,49 @@ describe("triage/review project scoping", () => {
     // concept, so the same segment there falls through to the default.
     expect(parsePath("/review/SYD-66")).toEqual({ view: "review", project: "SYD", ref: "SYD-66" });
     expect(parsePath("/triage/SYD-66")).toEqual({ view: "triage", project: null });
+  });
+});
+
+// SYD-86: /search?q=… is the shareable/back-navigable results route; the
+// query lives in the search string, not the path, so parsePath needs both.
+describe("search route", () => {
+  it("parses /search with no query as an empty search", () => {
+    expect(parsePath("/search")).toEqual({ view: "search", query: "" });
+  });
+
+  it("parses /search?q=… into the query", () => {
+    expect(parsePath("/search", "?q=auth%20bug")).toEqual({ view: "search", query: "auth bug" });
+  });
+
+  it("builds hrefs with and without a query, encoding special characters", () => {
+    expect(href({ view: "search", query: "" })).toBe("/search");
+    expect(href({ view: "search", query: "auth bug" })).toBe("/search?q=auth%20bug");
+  });
+
+  it("round-trips a query through href and parsePath", () => {
+    const route = { view: "search" as const, query: "SYD-1 & friends" };
+    const url = new URL(href(route), "http://localhost");
+    expect(parsePath(url.pathname, url.search)).toEqual(route);
+  });
+
+  it("is a known path so the anchor interceptor and popstate handling pick it up", () => {
+    expect(isKnownPath("/search")).toBe(true);
+  });
+});
+
+// SYD-86: the ref fast-path — typing a ref like "SYD-52" into the search box
+// jumps straight to the issue instead of showing a one-row results list.
+describe("issue ref fast-path", () => {
+  it("recognizes a well-formed ref", () => {
+    expect(isIssueRef("SYD-52")).toBe(true);
+    expect(isIssueRef("ACME-1")).toBe(true);
+  });
+
+  it("rejects plain words, bare project keys, and malformed refs", () => {
+    expect(isIssueRef("search")).toBe(false);
+    expect(isIssueRef("SYD")).toBe(false);
+    expect(isIssueRef("SYD-")).toBe(false);
+    expect(isIssueRef("syd-52")).toBe(false);
+    expect(isIssueRef("SYD-52x")).toBe(false);
   });
 });

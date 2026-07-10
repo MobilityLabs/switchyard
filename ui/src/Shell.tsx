@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Actor, Project } from "./types";
-import { getLastProject, href, navigate, useRoute } from "./router";
+import { getLastProject, href, isIssueRef, navigate, useRoute, type Route } from "./router";
 import { logout, listIssues, createProject, ApiError } from "./api";
 import { usePoll } from "./usePoll";
 
@@ -59,6 +59,51 @@ function NewProjectForm(props: { projects: Project[]; onCreated: (p: Project) =>
         </div>
       </form>
     </div>
+  );
+}
+
+// Search box lives in the topbar so it's reachable from every view (SYD-86).
+// "/" focuses it unless the user is already typing somewhere else; Enter
+// either jumps straight to an issue ref (fast-path) or opens /search?q=.
+function SearchBox({ route }: { route: Route }) {
+  const [query, setQuery] = useState(route.view === "search" ? route.query : "");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Keeps the box in sync with the URL on back/forward navigation to /search,
+  // without clobbering what the user is typing on every other view.
+  useEffect(() => {
+    if (route.view === "search") setQuery(route.query);
+  }, [route]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      e.preventDefault();
+      inputRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  function submit() {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    const upper = trimmed.toUpperCase();
+    if (isIssueRef(upper)) navigate({ view: "issue", ref: upper });
+    else navigate({ view: "search", query: trimmed });
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      className="search-box"
+      value={query}
+      onChange={(e) => setQuery(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+      placeholder="Search… (SYD-52, or a word) — press /"
+    />
   );
 }
 
@@ -121,6 +166,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
             Review{inReview.data && inReview.data.length > 0 && <span className="badge">{inReview.data.length}</span>}
           </a>
         </nav>
+        <SearchBox route={route} />
         {(route.view === "board" || route.view === "triage" || route.view === "review") && (
           <select
             value={route.view === "board" ? route.project : route.project ?? ""}
