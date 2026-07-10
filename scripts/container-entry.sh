@@ -44,6 +44,15 @@ git config --global --add safe.directory /origin
 git clone /origin /work
 cd /work
 
+# Pre-trust the workspace (SYD-80): otherwise Claude Code treats /work as
+# untrusted, ignores the repo's own checked-in .claude/settings.json
+# permissions.allow entries, and gates protected-path writes (.claude/agents/,
+# .claude/settings.json) behind an interactive approval prompt a headless
+# session can never answer -- it just stalls and exits with nothing. The
+# container is already the sandbox boundary (see the allowedTools note
+# below), so there's no separate trust boundary left to enforce here.
+node /prime-workspace-trust.mjs /work
+
 # Recorded before any work happens, so we can tell afterwards whether the
 # session produced commits worth pushing.
 INITIAL_HEAD=$(git rev-parse HEAD)

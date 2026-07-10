@@ -550,6 +550,13 @@ describe("buildContainerizedPrompt", () => {
     expect(prompt).not.toMatch(/escalat/i);
   });
 
+  it("tells a blocked session to escalate a permission prompt instead of exiting silently (SYD-80)", () => {
+    const prompt = buildContainerizedPrompt("SYD-7");
+    expect(prompt).toMatch(/permission prompt/i);
+    expect(prompt).toMatch(/request_human_input/);
+    expect(prompt).toMatch(/never exit silently/i);
+  });
+
   it("primes a resumed session to read the human's answer in the activity feed", () => {
     const prompt = buildContainerizedPrompt("SYD-7", { resumed: true });
     expect(prompt).toContain("SYD-7");

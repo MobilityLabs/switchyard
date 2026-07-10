@@ -10,6 +10,7 @@ RUN apt-get update \
 RUN npm install -g @anthropic-ai/claude-code
 
 COPY scripts/container-entry.sh /entry.sh
+COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
 RUN chmod +x /entry.sh
 
 ENTRYPOINT ["/bin/sh", "/entry.sh"]

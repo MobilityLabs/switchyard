@@ -454,7 +454,12 @@ export function recordAttempt(retryState: Map<string, RetryState>, ref: string, 
  * prompt, plus the branch/push contract the container's entrypoint enforces
  * (see scripts/container-entry.sh) — the session must commit its work so the
  * entrypoint has something to push, and must name the branch in its comment
- * since the human reviewing has no other way to find it.
+ * since the human reviewing has no other way to find it. Also spells out the
+ * permission-prompt escalation explicitly (SYD-80): NOC-7 stalled and exited
+ * silently asking for a permission grant into a headless session that could
+ * never answer it, leaving the board showing in_progress with no trace of
+ * why. The container pre-trusts the workspace so this shouldn't recur, but
+ * the instruction stands as a backstop for whatever prompt slips through.
  */
 export function buildContainerizedPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
   const resumedPreamble = opts.resumed
@@ -469,9 +474,10 @@ export function buildContainerizedPrompt(ref: string, opts: { resumed?: boolean 
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
-    `with your question and stop. You are in a disposable clone on branch agent/${ref}; ` +
-    `commit your work — it will be pushed for review. The issue comment MUST include ` +
-    `the branch name.`
+    `with your question and stop. If a permission prompt blocks you, call ` +
+    `request_human_input with what you need and stop — never exit silently. ` +
+    `You are in a disposable clone on branch agent/${ref}; commit your work — it ` +
+    `will be pushed for review. The issue comment MUST include the branch name.`
   );
 }
 
