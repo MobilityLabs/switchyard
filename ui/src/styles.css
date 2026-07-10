@@ -108,14 +108,6 @@ h2 { display: flex; align-items: center; gap: 8px; }
   border-radius: 6px; padding: 4px 8px;
 }
 .description { margin: 12px 0; }
-.issue-summary { margin: 12px 0; }
-.summary-lede { margin: 0 0 8px; font-size: 14px; line-height: 1.5; }
-.link-button {
-  background: none; border: none; padding: 0; color: var(--accent-2);
-  font-size: 12px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px;
-}
-.link-button:hover { border-color: transparent; color: var(--accent); }
-.issue-summary .description { margin: 10px 0 0; }
 
 .markdown { font-size: 14px; line-height: 1.6; }
 .markdown > *:first-child { margin-top: 0; }

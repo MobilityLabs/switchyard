@@ -6,7 +6,7 @@
 // result, and a delivery-failure banner that clears once a later delivery
 // succeeds.
 import { describe, it, expect } from "vitest";
-import { computeDeliveryStatus, Event, withAttachmentIds } from "./IssueDetail";
+import { computeDeliveryStatus, DescriptionSection, Event, withAttachmentIds } from "./IssueDetail";
 import type { Activity, Attachment } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -15,6 +15,39 @@ import { createRoot } from "react-dom/client";
 
 const ev = (o: Partial<Activity>): Activity => ({
   type: "comment", actorName: "claude/worker", payload: {}, createdAt: 1000, ...o,
+});
+
+// SYD-92: the full description is always visible on the detail view and the
+// expanded triage row — no more "Show full description" click-to-reveal.
+describe("DescriptionSection", () => {
+  async function render(issue: { summary: string | null; description: string }): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<DescriptionSection issue={issue} projectKey="SYD" knownActorNames={[]} />);
+    });
+    return container;
+  }
+
+  it("renders the full description unconditionally, with no toggle button", async () => {
+    const longDescription = "x".repeat(500);
+    const container = await render({ summary: "a short summary", description: longDescription });
+    expect(container.textContent).toContain(longDescription);
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).not.toContain("Show full description");
+  });
+
+  it("renders a short description without a summary lede or toggle", async () => {
+    const container = await render({ summary: null, description: "just a short one" });
+    expect(container.textContent).toContain("just a short one");
+    expect(container.querySelector("button")).toBeNull();
+  });
+
+  it("falls back to 'No description.' when the description is empty", async () => {
+    const container = await render({ summary: null, description: "" });
+    expect(container.textContent).toBe("No description.");
+  });
 });
 
 describe("computeDeliveryStatus", () => {
