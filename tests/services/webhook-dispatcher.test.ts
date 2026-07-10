@@ -7,6 +7,7 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { addWebhook } from "../../src/services/webhooks.js";
+import { recordProgressNote } from "../../src/services/agent-sessions.js";
 import { dispatchPending, resolveStaleClaimSeconds } from "../../src/services/webhook-dispatcher.js";
 
 describe("webhook dispatcher", () => {
@@ -50,6 +51,37 @@ describe("webhook dispatcher", () => {
     addWebhook(db, { url: "http://127.0.0.1:1/dead", projectKey: "AIPI" }); // scoped elsewhere + dead
     createIssue(db, human, { projectKey: "SYD", title: "One" });
     expect(await dispatchPending(db)).toBe(0); // no matching hook, no throw
+  });
+
+  it("suppresses progress_note events by default: never POSTed, cursor still advances", async () => {
+    const received: string[] = [];
+    const receiver = new Hono().post("/hook", async (c) => {
+      received.push(await c.req.text());
+      return c.json({ ok: true });
+    });
+    let port = 0;
+    const server: ServerType = await new Promise((resolve) => {
+      const s = serve({ fetch: receiver.fetch, port: 0 }, (i) => { port = i.port; resolve(s); });
+    });
+
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    addWebhook(db, { url: `http://127.0.0.1:${port}/hook` });
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event: created
+    recordProgressNote(db, agent, "SYD-1", "compiling");             // 1 event: progress_note
+    updateIssue(db, human, "SYD-1", { status: "todo" });              // 1 event: status_changed
+
+    expect(await dispatchPending(db)).toBe(2); // only created + status_changed delivered
+    expect(received).toHaveLength(2);
+    expect(received.map((b) => JSON.parse(b).event)).toEqual(["created", "status_changed"]);
+
+    // cursor advanced past the suppressed event too: nothing left to redeliver
+    expect(await dispatchPending(db)).toBe(0);
+    expect(received).toHaveLength(2);
+
+    server.close();
   });
 
   it("does not count non-2xx responses as delivered, and still advances the cursor", async () => {

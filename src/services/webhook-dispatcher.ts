@@ -4,6 +4,13 @@ import type { Db } from "../db/index.js";
 import { actors, events, issues, projects, webhooks, webhookCursor } from "../db/schema.js";
 import { releaseStaleClaims } from "./stale-claims.js";
 
+// progress_note events fire once per work step (buildPrompt prompts agents to
+// post them liberally) — a chatty session posts 10-20 per issue. Forwarding
+// every one to every active webhook floods generic consumers (e.g. Slack)
+// within the ~2s dispatch interval, so they're suppressed by default. Every
+// other event type still fans out unchanged. (SYD-104)
+const SUPPRESSED_WEBHOOK_EVENT_TYPES: ReadonlySet<string> = new Set(["progress_note"]);
+
 export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Promise<number> {
   let cursor = db.select().from(webhookCursor).where(eq(webhookCursor.id, 1)).get();
   if (!cursor) {
@@ -25,6 +32,10 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
   const hooks = db.select().from(webhooks).where(eq(webhooks.active, true)).all();
   let delivered = 0;
   for (const r of rows) {
+    if (SUPPRESSED_WEBHOOK_EVENT_TYPES.has(r.e.type)) {
+      db.update(webhookCursor).set({ lastEventId: r.e.id }).where(eq(webhookCursor.id, 1)).run();
+      continue;
+    }
     const body = JSON.stringify({
       event: r.e.type,
       payload: r.e.payload,

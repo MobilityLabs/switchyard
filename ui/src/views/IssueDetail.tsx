@@ -127,6 +127,71 @@ export function withAttachmentIds(activity: Activity[], attachments: Attachment[
   });
 }
 
+/**
+ * Groups consecutive progress_note events (SYD-104) — a chatty session posts
+ * 10-20 of them per issue, and rendering each as its own line drowns the
+ * actual comments in the feed. Non-progress_note events, and progress_notes
+ * separated by another event type, each stay their own single-element group.
+ */
+export function groupProgressNotes(activity: Activity[]): Activity[][] {
+  const groups: Activity[][] = [];
+  for (const ev of activity) {
+    const current = groups[groups.length - 1];
+    if (ev.type === "progress_note" && current?.[0]?.type === "progress_note") {
+      current.push(ev);
+    } else {
+      groups.push([ev]);
+    }
+  }
+  return groups;
+}
+
+function ProgressNoteGroup({
+  notes, projectKey, knownActorNames,
+}: {
+  notes: Activity[];
+  projectKey: string;
+  knownActorNames: readonly string[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (expanded) {
+    return (
+      <div className="progress-note-group expanded">
+        {notes.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={knownActorNames} />)}
+        <button className="link-button" onClick={() => setExpanded(false)}>Show less</button>
+      </div>
+    );
+  }
+  const hiddenCount = notes.length - 1;
+  return (
+    <div className="progress-note-group">
+      <Event ev={notes[notes.length - 1]} projectKey={projectKey} knownActorNames={knownActorNames} />
+      <button className="link-button" onClick={() => setExpanded(true)}>
+        + {hiddenCount} earlier progress note{hiddenCount === 1 ? "" : "s"}
+      </button>
+    </div>
+  );
+}
+
+/** Activity feed shared by IssueDetail/Triage/Review — collapses runs of progress_note events. */
+export function ActivityFeed({
+  activity, projectKey, knownActorNames = [],
+}: {
+  activity: Activity[];
+  projectKey: string;
+  knownActorNames?: readonly string[];
+}) {
+  return (
+    <>
+      {groupProgressNotes(activity).map((group, i) =>
+        group.length > 1
+          ? <ProgressNoteGroup key={i} notes={group} projectKey={projectKey} knownActorNames={knownActorNames} />
+          : <Event key={i} ev={group[0]} projectKey={projectKey} knownActorNames={knownActorNames} />
+      )}
+    </>
+  );
+}
+
 export function AttentionBanner({
   attention, onRetry,
 }: {
@@ -285,7 +350,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
 
       <h3>Activity</h3>
       <div className="activity">
-        {activity.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={actorNames} />)}
+        <ActivityFeed activity={activity} projectKey={projectKey} knownActorNames={actorNames} />
       </div>
 
       {uploadError && (
