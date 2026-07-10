@@ -16,7 +16,34 @@ export type WorkerIssue = {
    * PR is still unmerged — dispatching again would just race the open PR.
    */
   openPr?: { prNumber: number; url: string } | null;
+  /**
+   * True when the issue has at least one open (not done/canceled) blocker
+   * (SYD-160: the /api/issues feed computes this via listBlockedIssueIds).
+   * Dispatch must skip these — claimIssue would refuse a blocked issue anyway,
+   * so dispatching one only burns a session that discovers the blocker and
+   * escalates. Optional so older feeds (and test fixtures) default to unblocked.
+   */
+  blocked?: boolean;
+  /**
+   * The issue's priority, used to order candidates so dispatch honors priority
+   * (SYD-160) — mirrors next_task's PRIORITY_RANK. Optional/unknown values sort
+   * last (see priorityRank).
+   */
+  priority?: string;
+  /** Creation timestamp, the oldest-first tiebreak within a priority (SYD-160). */
+  createdAt?: number;
 };
+
+/**
+ * Priority ordering for dispatch selection (SYD-160), mirroring the SQL
+ * PRIORITY_RANK in src/services/dependencies.ts: urgent first, then high,
+ * medium, low, and anything unset/unknown last.
+ */
+const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
+
+function priorityRank(priority: string | undefined): number {
+  return priority !== undefined && priority in PRIORITY_RANK ? PRIORITY_RANK[priority] : 4;
+}
 
 /** One extra CLI tool a project's dispatched sessions need beyond the baseline (git, node, claude). */
 export type WorkerStackCli = {
@@ -188,11 +215,14 @@ export function checkRoleLockConflict(
 /**
  * Filter a list of `todo` issues down to the ones the worker should dispatch this
  * tick: carries the configured label, belongs to a configured project, is
- * unassigned, doesn't need human input, doesn't already have an open agent PR
- * (SYD-99 — belt-and-suspenders alongside claimIssue's own check, for a claim
- * that was released back to todo while its PR is still open), isn't already
- * running, and fits within remaining maxConcurrent capacity (existing active
- * dispatches + newly selected <= maxConcurrent).
+ * unassigned, doesn't need human input, isn't blocked by an open dependency
+ * (SYD-160), doesn't already have an open agent PR (SYD-99 — belt-and-suspenders
+ * alongside claimIssue's own check, for a claim that was released back to todo
+ * while its PR is still open), isn't already running, and fits within remaining
+ * maxConcurrent capacity (existing active dispatches + newly selected <=
+ * maxConcurrent). Candidates are considered highest-priority-first, then
+ * oldest-first within a priority (SYD-160), so capacity is filled by priority
+ * rather than by the feed's arrival order.
  */
 export function selectDispatchable<T extends WorkerIssue>(
   issues: T[],
@@ -206,8 +236,17 @@ export function selectDispatchable<T extends WorkerIssue>(
   const capacity = config.maxConcurrent - countWorkActive(active);
   if (capacity <= 0) return [];
 
+  // Mirror next_task's (PRIORITY_RANK, createdAt) ordering so dispatch honors
+  // priority regardless of the order /api/issues returned rows in (desc(id),
+  // i.e. newest-first). Array.sort is stable, so equal keys keep feed order.
+  const ordered = [...issues].sort((a, b) => {
+    const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
+    if (byPriority !== 0) return byPriority;
+    return (a.createdAt ?? 0) - (b.createdAt ?? 0);
+  });
+
   const selected: T[] = [];
-  for (const issue of issues) {
+  for (const issue of ordered) {
     if (selected.length >= capacity) break;
     if ((config.dispatchPolicy ?? "labeled") === "labeled") {
       // Opt-in: only issues a human explicitly labeled for dispatch.
@@ -219,6 +258,7 @@ export function selectDispatchable<T extends WorkerIssue>(
     if (!(projectKeyOf(issue.ref) in config.projects)) continue;
     if (issue.assigneeId !== null) continue;
     if (issue.needsInput) continue;
+    if (issue.blocked) continue; // SYD-160: an open dependency; claimIssue would refuse it anyway.
     if (issue.openPr) {
       console.log(`skipping ${issue.ref}: open PR (#${issue.openPr.prNumber}) already in flight`);
       continue;

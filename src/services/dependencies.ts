@@ -116,6 +116,22 @@ function isReachable(db: Db, fromId: number, toId: number): boolean {
   return false;
 }
 
+/**
+ * The set of issue ids that currently have at least one open (not done/canceled)
+ * blocker — the batched form of getOpenBlockers, so the `todo` feed the dispatch
+ * worker reads can flag blocked issues in one query instead of N (SYD-160). The
+ * Set collapses issues with several open blockers to a single id.
+ */
+export function listBlockedIssueIds(db: Db): Set<number> {
+  const rows = db
+    .select({ blockedId: dependencies.blockedId })
+    .from(dependencies)
+    .innerJoin(issues, eq(dependencies.blockerId, issues.id))
+    .where(notInArray(issues.status, [...CLOSED]))
+    .all();
+  return new Set(rows.map((r) => r.blockedId));
+}
+
 export function getOpenBlockers(db: Db, issueId: number): IssueView[] {
   const rows = db
     .select({ issue: issues })

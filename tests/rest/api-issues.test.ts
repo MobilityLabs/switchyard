@@ -114,6 +114,23 @@ describe("issue routes", () => {
     expect((await body<{ error: string }>(denied)).error).toMatch(/already claimed by claude\/dev/i);
   });
 
+  it("flags a blocked issue in the todo list feed the dispatcher reads (SYD-160)", async () => {
+    for (const title of ["Schema", "API"]) {
+      await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title }) });
+    }
+    for (const ref of ["SYD-1", "SYD-2"]) {
+      await app.request(`/issues/${ref}`, { method: "PATCH", headers: humanH, body: JSON.stringify({ status: "todo" }) });
+    }
+    await app.request("/dependencies", {
+      method: "POST", headers: humanH, body: JSON.stringify({ blockerRef: "SYD-1", blockedRef: "SYD-2" }),
+    });
+    const list = await body<{ ref: string; blocked: boolean }[]>(
+      await app.request("/issues?project=SYD&status=todo", { headers: humanH })
+    );
+    expect(list.find((i) => i.ref === "SYD-1")?.blocked).toBe(false);
+    expect(list.find((i) => i.ref === "SYD-2")?.blocked).toBe(true);
+  });
+
   it("dependencies block claims over REST", async () => {
     for (const title of ["Schema", "API"]) {
       await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title }) });
