@@ -10,12 +10,23 @@
 //                                                       # (all configured projects, or just KEY)
 //   npm run init-worker -- --repair-stack [KEY]        # install/repair a project's declared stack.cli
 //                                                       # (all configured projects, or just KEY)
+//   npm run init-worker -- --capture-stack [KEY]       # print a paste-ready stack.cli snippet for whatever
+//                                                       # this machine's own environment expects but KEY (or
+//                                                       # every project) hasn't declared
 //
 // Per-project toolchain declarations (SYD-76): projects.<KEY>.stack in
 // switchyard-worker.json (node version, extra CLIs, ports) — the doctor
 // verifies it in whichever environment sessions actually run in (the built
 // image for containerized projects, the host otherwise); --repair-stack
 // installs what's missing. See switchyard-worker.example.json for the shape.
+//
+// User-stack capture + parity (SYD-82): the doctor also does a best-effort
+// read of this machine's own per-user config (~/.claude/debate-acpx.json,
+// ~/.claude/settings.json, ~/.claude.json) for CLIs/plugins/MCP servers the
+// operating human actually works with, and warns when a project's stack.cli
+// doesn't cover a captured CLI. Purely additive: no user config found means
+// this check is skipped and the hand-authored stack.cli alone governs, same
+// as before SYD-82. --capture-stack turns a gap into a paste-ready snippet.
 //
 // Role split (SYD-67): --install-launchd-code and --install-launchd-answer
 // install independent LaunchAgents so code dispatch and answerer mode can be
@@ -47,20 +58,27 @@ import { isLocked } from "./pidfile.js";
 import {
   buildProtectMainArgs,
   formatChecks,
+  formatUserStackCapture,
   nodeVersionSatisfies,
   insertProjectIntoConfigText,
+  parseDebateAcpxReviewers,
   parseDotEnv,
+  parseEnabledPlugins,
   parseGithubRemote,
+  parseMcpServerNames,
   parsePlistPath,
   renderDeliverPlist,
   renderClaudeMdSnippet,
   renderWorkerPlist,
+  stackParityGaps,
+  suggestStackCli,
   summarizeRoleStatus,
   validateWorkerConfig,
   workerLaunchdLabel,
   DELIVER_LAUNCHD_LABEL,
   type CheckResult,
   type RoleStatus,
+  type UserStackCapture,
 } from "./init-worker-lib.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -135,6 +153,70 @@ function checkProjectStack(key: string, project: WorkerProject, config: WorkerCo
   return results;
 }
 
+/**
+ * Best-effort capture of what the operating human's own environment expects
+ * (SYD-82): CLIs referenced by known per-user config files, enabled Claude
+ * Code plugins, and configured MCP servers. Each source is read
+ * independently and wrapped in try/catch — a missing or malformed file just
+ * contributes nothing, never a doctor crash. When nothing is captured at
+ * all, `cli` comes back empty and callers skip the parity check entirely
+ * (SYD-82 point 4): a project's hand-authored stack.cli stays the sole
+ * source of truth, exactly as SYD-76 already works.
+ */
+function captureUserStack(home: string): UserStackCapture {
+  const cli: string[] = [];
+  const plugins: string[] = [];
+  const mcpServers: string[] = [];
+  const sources = new Set<string>();
+
+  const debatePath = path.join(home, ".claude", "debate-acpx.json");
+  if (existsSync(debatePath)) {
+    try {
+      const found = parseDebateAcpxReviewers(JSON.parse(readFileSync(debatePath, "utf8")));
+      if (found.length > 0) {
+        cli.push(...found);
+        sources.add("~/.claude/debate-acpx.json");
+      }
+    } catch {
+      // malformed file — contributes nothing, doesn't fail the doctor run
+    }
+  }
+
+  const settingsPath = path.join(home, ".claude", "settings.json");
+  if (existsSync(settingsPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(settingsPath, "utf8"));
+      const foundPlugins = parseEnabledPlugins(raw);
+      const foundServers = parseMcpServerNames(raw);
+      if (foundPlugins.length > 0 || foundServers.length > 0) sources.add("~/.claude/settings.json");
+      plugins.push(...foundPlugins);
+      mcpServers.push(...foundServers);
+    } catch {
+      // malformed file — contributes nothing
+    }
+  }
+
+  const claudeJsonPath = path.join(home, ".claude.json");
+  if (existsSync(claudeJsonPath)) {
+    try {
+      const found = parseMcpServerNames(JSON.parse(readFileSync(claudeJsonPath, "utf8")));
+      if (found.length > 0) {
+        mcpServers.push(...found);
+        sources.add("~/.claude.json");
+      }
+    } catch {
+      // malformed file — contributes nothing
+    }
+  }
+
+  return {
+    cli: [...new Set(cli)],
+    plugins: [...new Set(plugins)],
+    mcpServers: [...new Set(mcpServers)],
+    sources: [...sources],
+  };
+}
+
 async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig | null }> {
   const results: CheckResult[] = [];
   const env = loadEnv();
@@ -180,6 +262,28 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
       });
       if (project.stack) {
         results.push(...checkProjectStack(key, project, config));
+      }
+    }
+
+    // User-stack capture + parity audit (SYD-82): a check on top of the
+    // hand-authored `stack` declaration, not a replacement for it — an
+    // empty capture (no known per-user config found) means this whole
+    // block is skipped and stack.cli alone governs, as before.
+    const userStack = captureUserStack(os.homedir());
+    if (userStack.cli.length > 0 || userStack.plugins.length > 0 || userStack.mcpServers.length > 0) {
+      results.push({ name: "user-stack capture", ok: true, note: formatUserStackCapture(userStack) });
+      for (const [key, project] of Object.entries(config.projects)) {
+        const gaps = stackParityGaps(userStack.cli, project.stack?.cli);
+        if (gaps.length === 0) continue;
+        results.push({
+          name: `projects.${key} user-stack parity`,
+          ok: true,
+          warn: true,
+          note:
+            `your environment expects ${gaps.join(", ")} (from ${userStack.sources.join(", ")}) but ` +
+            `projects.${key}.stack.cli doesn't declare them — run \`npm run init-worker -- --capture-stack ${key}\` ` +
+            "for a paste-ready snippet, or ignore if this project doesn't need them",
+        });
       }
     }
   }
@@ -679,6 +783,45 @@ async function addProject(argv: string[]): Promise<void> {
   console.log(renderClaudeMdSnippet(key));
 }
 
+/**
+ * Prints a paste-ready `stack.cli` snippet for whatever this machine's own
+ * environment expects but a project hasn't declared (SYD-82 point 2 — the
+ * doctor's "user-stack parity" warning points here). Never installs
+ * anything itself: unlike --repair-stack, there's no `install` command to
+ * run for a captured-but-undeclared tool, only a name to surface.
+ */
+function captureStack(config: WorkerConfig | null, onlyKey: string | undefined): void {
+  const home = os.homedir();
+  const userStack = captureUserStack(home);
+  if (userStack.cli.length === 0) {
+    console.log(
+      `no user-scope stack expectations captured from ${home} ` +
+      "(looked for .claude/debate-acpx.json, .claude/settings.json, .claude.json) — " +
+      "each project's hand-authored stack.cli remains the sole source of truth."
+    );
+    return;
+  }
+
+  const keys = onlyKey ? [onlyKey] : Object.keys(config?.projects ?? {});
+  if (keys.length === 0) {
+    console.log(`captured cli: ${userStack.cli.join(", ")} (from ${userStack.sources.join(", ")}) — no projects configured to compare against`);
+    return;
+  }
+  for (const key of keys) {
+    const declared = config?.projects[key]?.stack?.cli;
+    const gaps = stackParityGaps(userStack.cli, declared);
+    if (gaps.length === 0) {
+      console.log(`${key}: stack.cli already covers everything captured from ${userStack.sources.join(", ")}`);
+      continue;
+    }
+    console.log(
+      `${key}: captured from ${userStack.sources.join(", ")} — paste into projects.${key}.stack.cli ` +
+      "(install commands unknown; fill them in, or --repair-stack will report them as unrepairable):\n" +
+      JSON.stringify(suggestStackCli(gaps), null, 2)
+    );
+  }
+}
+
 function selfTest(): void {
   console.log("\nself-test: one dry-run worker tick (nothing is dispatched)\n");
   const env = loadEnv();
@@ -712,6 +855,14 @@ async function main(): Promise<void> {
     const next = args[repairIdx + 1];
     const key = next && !next.startsWith("-") ? next : undefined;
     repairStack(config, key);
+    return;
+  }
+
+  const captureIdx = args.indexOf("--capture-stack");
+  if (captureIdx !== -1) {
+    const next = args[captureIdx + 1];
+    const key = next && !next.startsWith("-") ? next : undefined;
+    captureStack(config, key);
     return;
   }
 

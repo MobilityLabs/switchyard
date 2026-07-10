@@ -2,7 +2,7 @@
 // Kept separate from the CLI so parsing, validation, and plist rendering are
 // trivially unit-testable without touching the filesystem or network.
 
-import type { WorkerConfig, WorkerRole } from "./worker-select.js";
+import type { WorkerConfig, WorkerRole, WorkerStackCli } from "./worker-select.js";
 
 /**
  * Minimal .env parser: KEY=VALUE lines, optional `export ` prefix, optional
@@ -495,6 +495,129 @@ export function parseGithubRemote(url: string): { owner: string; repo: string } 
     if (m) return { owner: m[1], repo: m[2] };
   }
   return null;
+}
+
+/**
+ * What was captured from the operating human's own environment (SYD-82):
+ * CLIs their configs reference (even when not installed locally — the
+ * config is the expectation), enabled Claude Code plugins, and configured
+ * MCP server names. `sources` lists which files actually contributed
+ * something, for doctor notes and --capture-stack output. Every field can be
+ * empty — an empty `cli` means no user expectation was captured at all, in
+ * which case a project's hand-authored `stack.cli` (SYD-76) stays the sole
+ * source of truth, per point 4 of SYD-82: this is a check on top of the
+ * declaration, not a replacement for it.
+ */
+export type UserStackCapture = {
+  cli: string[];
+  plugins: string[];
+  mcpServers: string[];
+  sources: string[];
+};
+
+/**
+ * Extracts CLI tool names from a `~/.claude/debate-acpx.json`-shaped file
+ * (SYD-82): a per-user config declaring reviewer CLIs (e.g. codex, gemini)
+ * the human's own debate/review tooling expects, regardless of whether
+ * they're installed on this machine. Tolerant of several shapes so a
+ * hand-authored file doesn't have to match one exact schema: a bare array of
+ * names, an array of `{ name | cli | command }` objects, or either wrapped
+ * in a top-level `reviewers`/`agents`/`cli` array property. Anything else
+ * (missing file, unrecognized shape) yields no names — this is a best-effort
+ * capture, not a validated config format.
+ */
+export function parseDebateAcpxReviewers(raw: unknown): string[] {
+  const entries = extractReviewerList(raw);
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (typeof entry === "string") {
+      if (entry.trim() !== "") names.push(entry.trim());
+      continue;
+    }
+    if (typeof entry === "object" && entry !== null) {
+      const e = entry as Record<string, unknown>;
+      const name = e.cli ?? e.command ?? e.name;
+      if (typeof name === "string" && name.trim() !== "") names.push(name.trim());
+    }
+  }
+  return [...new Set(names)];
+}
+
+function extractReviewerList(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "object" && raw !== null) {
+    const r = raw as Record<string, unknown>;
+    for (const key of ["reviewers", "agents", "cli"]) {
+      if (Array.isArray(r[key])) return r[key] as unknown[];
+    }
+  }
+  return [];
+}
+
+/**
+ * Extracts enabled Claude Code plugin names from a `~/.claude/settings.json`-
+ * shaped object's `enabledPlugins` field (SYD-82): either the marketplace
+ * map form (`{ "name@marketplace": true }`, only `true` entries kept) or a
+ * bare array of names. Missing/malformed input yields an empty list.
+ */
+export function parseEnabledPlugins(raw: unknown): string[] {
+  if (typeof raw !== "object" || raw === null) return [];
+  const value = (raw as Record<string, unknown>).enabledPlugins;
+  if (Array.isArray(value)) {
+    return value.filter((v): v is string => typeof v === "string" && v.trim() !== "");
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.entries(value as Record<string, unknown>)
+      .filter(([, enabled]) => enabled === true)
+      .map(([name]) => name);
+  }
+  return [];
+}
+
+/**
+ * Extracts configured MCP server names from a `~/.claude/settings.json` or
+ * `~/.claude.json`-shaped object's top-level `mcpServers` map (SYD-82) — the
+ * keys are the server names (e.g. "switchyard"), regardless of their
+ * transport/config details. Missing/malformed input yields an empty list.
+ */
+export function parseMcpServerNames(raw: unknown): string[] {
+  if (typeof raw !== "object" || raw === null) return [];
+  const servers = (raw as Record<string, unknown>).mcpServers;
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) return [];
+  return Object.keys(servers as Record<string, unknown>);
+}
+
+/**
+ * Diffs a captured list of CLI names the user's own environment expects
+ * against a project's declared `stack.cli` (SYD-76), case-insensitively by
+ * name. The result is what the doctor/--capture-stack surface as a parity
+ * gap: tools the human works with that this project's workers wouldn't get.
+ * An undeclared `stack.cli` (undefined) means everything captured is a gap.
+ */
+export function stackParityGaps(capturedCli: string[], declared: WorkerStackCli[] | undefined): string[] {
+  const declaredNames = new Set((declared ?? []).map((c) => c.name.toLowerCase()));
+  return capturedCli.filter((name) => !declaredNames.has(name.toLowerCase()));
+}
+
+/** One-line summary of a capture for doctor output — omits any field that captured nothing. */
+export function formatUserStackCapture(capture: UserStackCapture): string {
+  const parts: string[] = [];
+  if (capture.cli.length > 0) parts.push(`cli: ${capture.cli.join(", ")}`);
+  if (capture.plugins.length > 0) parts.push(`plugins: ${capture.plugins.join(", ")}`);
+  if (capture.mcpServers.length > 0) parts.push(`mcp: ${capture.mcpServers.join(", ")}`);
+  return `${parts.join("; ")} (from ${capture.sources.join(", ")})`;
+}
+
+/**
+ * Turns captured CLI names into paste-ready `stack.cli` entries (SYD-82
+ * point 2/3, `--capture-stack`). `install` is deliberately left unset —
+ * there's no reliable way to infer an install command from a bare tool name,
+ * and a wrong guess is worse than an honest gap: an operator fills it in, or
+ * `--repair-stack` reports it as unrepairable rather than running something
+ * unintended.
+ */
+export function suggestStackCli(names: string[]): WorkerStackCli[] {
+  return names.map((name) => ({ name, check: `${name} --version` }));
 }
 
 /**
