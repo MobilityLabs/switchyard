@@ -6,17 +6,24 @@ import {
   WORKER_CODE_LAUNCHD_LABEL,
   WORKER_ANSWER_LAUNCHD_LABEL,
   formatChecks,
+  formatUserStackCapture,
   nodeVersionSatisfies,
   insertProjectIntoConfigText,
+  parseDebateAcpxReviewers,
   parseDotEnv,
+  parseEnabledPlugins,
   parseGithubRemote,
+  parseMcpServerNames,
   parsePlistPath,
   renderDeliverPlist,
   renderClaudeMdSnippet,
   renderWorkerPlist,
+  stackParityGaps,
+  suggestStackCli,
   summarizeRoleStatus,
   validateWorkerConfig,
   workerLaunchdLabel,
+  type UserStackCapture,
 } from "../scripts/init-worker-lib.js";
 
 describe("parseDotEnv", () => {
@@ -647,5 +654,115 @@ describe("buildProtectMainArgs", () => {
       allow_force_pushes: false,
       allow_deletions: false,
     });
+  });
+});
+
+describe("parseDebateAcpxReviewers (SYD-82)", () => {
+  it("accepts a bare array of string names", () => {
+    expect(parseDebateAcpxReviewers(["codex", "gemini"])).toEqual(["codex", "gemini"]);
+  });
+
+  it("accepts an array of objects using name, cli, or command", () => {
+    expect(
+      parseDebateAcpxReviewers([{ name: "codex" }, { cli: "gemini" }, { command: "claude" }])
+    ).toEqual(["codex", "gemini", "claude"]);
+  });
+
+  it("accepts reviewers/agents/cli wrapper properties", () => {
+    expect(parseDebateAcpxReviewers({ reviewers: ["codex", "gemini"] })).toEqual(["codex", "gemini"]);
+    expect(parseDebateAcpxReviewers({ agents: [{ name: "codex" }] })).toEqual(["codex"]);
+    expect(parseDebateAcpxReviewers({ cli: ["gemini"] })).toEqual(["gemini"]);
+  });
+
+  it("dedupes and trims, and drops blank/unnamed entries", () => {
+    expect(parseDebateAcpxReviewers([" codex ", "codex", "", {}, { name: "  " }])).toEqual(["codex"]);
+  });
+
+  it("returns an empty list for missing files, null, or an unrecognized shape", () => {
+    expect(parseDebateAcpxReviewers(null)).toEqual([]);
+    expect(parseDebateAcpxReviewers(undefined)).toEqual([]);
+    expect(parseDebateAcpxReviewers({ unrelated: true })).toEqual([]);
+    expect(parseDebateAcpxReviewers("codex")).toEqual([]);
+  });
+});
+
+describe("parseEnabledPlugins (SYD-82)", () => {
+  it("keeps only true entries from the marketplace map form", () => {
+    expect(
+      parseEnabledPlugins({ enabledPlugins: { "superpowers@marketplace": true, "old@marketplace": false } })
+    ).toEqual(["superpowers@marketplace"]);
+  });
+
+  it("accepts a bare array of plugin names", () => {
+    expect(parseEnabledPlugins({ enabledPlugins: ["superpowers", "debate"] })).toEqual(["superpowers", "debate"]);
+  });
+
+  it("returns an empty list when enabledPlugins is absent or the input is malformed", () => {
+    expect(parseEnabledPlugins({})).toEqual([]);
+    expect(parseEnabledPlugins(null)).toEqual([]);
+    expect(parseEnabledPlugins({ enabledPlugins: "yes" })).toEqual([]);
+  });
+});
+
+describe("parseMcpServerNames (SYD-82)", () => {
+  it("returns the keys of a top-level mcpServers map", () => {
+    expect(parseMcpServerNames({ mcpServers: { switchyard: { type: "http" }, github: {} } })).toEqual([
+      "switchyard",
+      "github",
+    ]);
+  });
+
+  it("returns an empty list when mcpServers is absent, an array, or the input is malformed", () => {
+    expect(parseMcpServerNames({})).toEqual([]);
+    expect(parseMcpServerNames(null)).toEqual([]);
+    expect(parseMcpServerNames({ mcpServers: [] })).toEqual([]);
+  });
+});
+
+describe("stackParityGaps (SYD-82)", () => {
+  it("returns captured names not covered by the declared stack.cli", () => {
+    expect(stackParityGaps(["codex", "gemini"], [{ name: "gh", check: "gh --version" }])).toEqual([
+      "codex",
+      "gemini",
+    ]);
+  });
+
+  it("matches declared names case-insensitively", () => {
+    expect(stackParityGaps(["Codex"], [{ name: "codex", check: "codex --version" }])).toEqual([]);
+  });
+
+  it("treats an undeclared stack.cli as covering nothing", () => {
+    expect(stackParityGaps(["codex"], undefined)).toEqual(["codex"]);
+  });
+
+  it("returns an empty list when nothing was captured", () => {
+    expect(stackParityGaps([], [{ name: "gh", check: "gh --version" }])).toEqual([]);
+  });
+});
+
+describe("formatUserStackCapture (SYD-82)", () => {
+  it("lists only the fields that captured something, plus sources", () => {
+    const capture: UserStackCapture = {
+      cli: ["codex", "gemini"],
+      plugins: [],
+      mcpServers: ["switchyard"],
+      sources: ["~/.claude/debate-acpx.json", "~/.claude/settings.json"],
+    };
+    expect(formatUserStackCapture(capture)).toBe(
+      "cli: codex, gemini; mcp: switchyard (from ~/.claude/debate-acpx.json, ~/.claude/settings.json)"
+    );
+  });
+});
+
+describe("suggestStackCli (SYD-82)", () => {
+  it("builds a --version check per name and leaves install unset", () => {
+    expect(suggestStackCli(["codex", "gemini"])).toEqual([
+      { name: "codex", check: "codex --version" },
+      { name: "gemini", check: "gemini --version" },
+    ]);
+  });
+
+  it("returns an empty list for no names", () => {
+    expect(suggestStackCli([])).toEqual([]);
   });
 });
