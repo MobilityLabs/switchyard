@@ -381,6 +381,9 @@ function dispatch(
 
   child.on("error", (err) => {
     active.delete(issue.ref);
+    // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
+    // close the session (no-op when spawn never happened: sessionId is null).
+    void reportSessionEnd(config, token, sessionId, null);
     console.error(`failed to spawn claude for ${issue.ref}: ${err.message}`);
   });
 }
