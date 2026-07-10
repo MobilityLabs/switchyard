@@ -19,6 +19,11 @@ export type AgentSessionMode = (typeof AGENT_SESSION_MODES)[number];
 // showing a zombie "live" strip forever.
 export const AGENT_SESSION_STALE_SECONDS = 12 * 60 * 60;
 
+// Flat LIMIT, no cursor: the panel only ever shows "active + recent," never
+// paged history, so silent truncation past the 50th row is a non-issue today.
+// If the panel grows a "load more" / history view, adopt the before_id
+// cursor + truncated/nextCursor pattern from listRecentEventsPage (SYD-89)
+// rather than raising this number.
 const LIST_LIMIT = 50;
 
 export type AgentSessionView = {
@@ -34,21 +39,26 @@ export type AgentSessionView = {
   lastNote: { note: string; createdAt: number } | null;
 };
 
-function requireAgent(actor: Actor): void {
+function requireAgent(actor: Actor, action: string): void {
   if (actor.type !== "agent") {
-    throw new SwitchyardError("Only agent actors report agent sessions.");
+    throw new SwitchyardError(`Only agent actors ${action}.`);
   }
 }
 
-// Notes are per-issue events; scoping to the session's [startedAt, endedAt)
-// window attributes them to this session. The upper bound is strict: a note
-// landing in the same second the session exits is dropped rather than risk
-// attributing a later session's note to this one (unixepoch granularity).
+// Notes are per-issue events; scoping to the session's actor and its
+// [startedAt, endedAt) window attributes them to this session. The actorId
+// scope matters once two agent actors can be active on the same issue at
+// once (e.g. a work session and an answerer session) — without it a note
+// from the other actor inside the same window would display as this
+// session's status. The upper bound is strict: a note landing in the same
+// second the session exits is dropped rather than risk attributing a later
+// session's note to this one (unixepoch granularity).
 function lastNoteFor(
-  db: Db, issueId: number, startedAt: number, endedAt: number | null
+  db: Db, issueId: number, actorId: number, startedAt: number, endedAt: number | null
 ): AgentSessionView["lastNote"] {
   const conditions = [
     eq(events.issueId, issueId),
+    eq(events.actorId, actorId),
     eq(events.type, "progress_note"),
     gte(events.createdAt, startedAt),
   ];
@@ -84,7 +94,7 @@ function queryViews(db: Db, conditions: SQL[]): AgentSessionView[] {
     exitCode: r.s.exitCode,
     startedAt: r.s.startedAt,
     endedAt: r.s.endedAt,
-    lastNote: lastNoteFor(db, r.s.issueId, r.s.startedAt, r.s.endedAt),
+    lastNote: lastNoteFor(db, r.s.issueId, r.s.actorId, r.s.startedAt, r.s.endedAt),
   }));
 }
 
@@ -93,7 +103,7 @@ export function startAgentSession(
   actor: Actor,
   input: { ref: string; mode: AgentSessionMode; pid?: number | null }
 ): AgentSessionView {
-  requireAgent(actor);
+  requireAgent(actor, "report agent sessions");
   const issue = getIssue(db, input.ref);
   const row = db
     .insert(agentSessions)
@@ -104,7 +114,7 @@ export function startAgentSession(
 }
 
 export function endAgentSession(db: Db, actor: Actor, id: number, exitCode: number | null): AgentSessionView {
-  requireAgent(actor);
+  requireAgent(actor, "report agent sessions");
   const existing = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get();
   if (!existing) throw new SwitchyardError(`Agent session ${id} does not exist.`);
   db.update(agentSessions)
@@ -129,7 +139,7 @@ export function listAgentSessions(
 }
 
 export function recordProgressNote(db: Db, actor: Actor, ref: string, note: string): void {
-  requireAgent(actor);
+  requireAgent(actor, "record progress notes");
   const trimmed = note.trim();
   if (!trimmed) throw new SwitchyardError("A progress note must not be empty.");
   const issue = getIssue(db, ref);

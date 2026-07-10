@@ -83,6 +83,14 @@ describe("PATCH /agent-sessions/:id", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("reports the non-numeric id verbatim instead of NaN (SYD-105)", async () => {
+    const res = await app.request("/agent-sessions/abc", {
+      method: "PATCH", headers: workerH, body: JSON.stringify({ exitCode: 0 }),
+    });
+    expect(res.status).toBe(400);
+    expect(await body<{ error: string }>(res)).toEqual({ error: "Agent session abc does not exist." });
+  });
 });
 
 describe("GET /agent-sessions", () => {
