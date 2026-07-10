@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { answerKey, type WorkerConfig } from "../../scripts/worker-select.js";
 
@@ -19,7 +19,8 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-const { buildPrompt, dispatchAnswer, active, answerState } = await import("../../scripts/agent-worker.js");
+const { buildPrompt, dispatchAnswer, active, answerState, reportSessionStart, reportSessionEnd } =
+  await import("../../scripts/agent-worker.js");
 
 describe("buildPrompt", () => {
   it("builds the standard work prompt", () => {
@@ -97,5 +98,60 @@ describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
 
     logSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+});
+
+describe("buildPrompt progress-note convention (SYD-43)", () => {
+  it("tells the session to record progress notes as it works", () => {
+    expect(buildPrompt("SYD-7")).toContain("progress_note");
+  });
+});
+
+describe("session lifecycle reporting (SYD-43)", () => {
+  const config: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 2,
+    projects: { SYD: { repo: "/repo/syd" } },
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("POSTs the session start and resolves the new id", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ id: 12 }), text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const id = await reportSessionStart(config, "tok", { ref: "SYD-7", mode: "cli", pid: 4242 });
+    expect(id).toBe(12);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3300/api/agent-sessions",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("resolves null instead of throwing when the server rejects the report", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({}), text: async () => "no" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const id = await reportSessionStart(config, "tok", { ref: "SYD-7", mode: "cli", pid: null });
+    expect(id).toBeNull();
+    errorSpy.mockRestore();
+  });
+
+  it("PATCHes the exit code once the session id resolves", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await reportSessionEnd(config, "tok", Promise.resolve(12), 0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3300/api/agent-sessions/12",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ exitCode: 0 }) }),
+    );
+  });
+
+  it("skips the PATCH entirely when the start was never recorded", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await reportSessionEnd(config, "tok", Promise.resolve(null), 0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
