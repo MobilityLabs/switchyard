@@ -186,6 +186,34 @@ export function nodeVersionSatisfies(required: string, actual: string): boolean 
   return actualMajor >= requiredMajor;
 }
 
+/**
+ * Checks an actual `process.version`-shaped string (e.g. "v24.1.0") against a
+ * package.json `engines.node`-style range: space-separated comparators on the
+ * major version (">=22", "<25", ">=22 <25"). Used by the doctor (SYD-97) to
+ * check a *plist-pinned* node — not just the doctor process's own shell node
+ * — against the band declared in package.json, since a LaunchAgent PATH can
+ * silently drift to whatever node happened to install it. Unparseable input
+ * on either side fails closed (returns false) rather than silently passing.
+ */
+export function nodeVersionSatisfiesEngines(range: string, actual: string): boolean {
+  const actualMajor = parseInt(actual.replace(/^v/, ""), 10);
+  if (Number.isNaN(actualMajor)) return false;
+  const comparators = range.trim().split(/\s+/).filter(Boolean);
+  if (comparators.length === 0) return false;
+  for (const comparator of comparators) {
+    const m = /^(>=|<=|>|<|=)?(\d+)$/.exec(comparator);
+    if (!m) return false;
+    const op = m[1] ?? "=";
+    const bound = parseInt(m[2], 10);
+    if (op === ">=" && !(actualMajor >= bound)) return false;
+    if (op === "<=" && !(actualMajor <= bound)) return false;
+    if (op === ">" && !(actualMajor > bound)) return false;
+    if (op === "<" && !(actualMajor < bound)) return false;
+    if (op === "=" && !(actualMajor === bound)) return false;
+  }
+  return true;
+}
+
 function escapeXml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
