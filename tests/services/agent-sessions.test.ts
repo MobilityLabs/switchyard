@@ -1,15 +1,20 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
-import { events } from "../../src/db/schema.js";
+import { events, agentSessions } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
 import {
   startAgentSession, endAgentSession, listAgentSessions, recordProgressNote,
-  AGENT_SESSION_STALE_SECONDS,
+  sweepOrphanedAgentSessions, AGENT_SESSION_STALE_SECONDS,
 } from "../../src/services/agent-sessions.js";
+
+function ageSession(db: Db, id: number, secondsAgo: number) {
+  const startedAt = Math.floor(Date.now() / 1000) - secondsAgo;
+  db.update(agentSessions).set({ startedAt }).where(eq(agentSessions.id, id)).run();
+}
 
 let db: Db, human: Actor, agent: Actor;
 
@@ -143,5 +148,53 @@ describe("recordProgressNote", () => {
     const [view] = listAgentSessions(db, { ref: "SYD-1" });
     expect(view.id).toBe(s.id);
     expect(view.lastNote).toBeNull();
+  });
+});
+
+describe("sweepOrphanedAgentSessions", () => {
+  it("marks a running session older than the stale window as exited with a null exit code", () => {
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "container" });
+    ageSession(db, s.id, AGENT_SESSION_STALE_SECONDS + 60);
+
+    const swept = sweepOrphanedAgentSessions(db);
+    expect(swept).toBe(1);
+
+    const [view] = listAgentSessions(db, { ref: "SYD-1" });
+    expect(view.status).toBe("exited");
+    expect(view.exitCode).toBeNull();
+    expect(view.endedAt).toBeGreaterThan(0);
+  });
+
+  it("leaves a fresh running session untouched", () => {
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "container" });
+
+    const swept = sweepOrphanedAgentSessions(db);
+    expect(swept).toBe(0);
+
+    const [view] = listAgentSessions(db, { ref: "SYD-1" });
+    expect(view.id).toBe(s.id);
+    expect(view.status).toBe("running");
+  });
+
+  it("leaves an already-exited session untouched", () => {
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "container" });
+    endAgentSession(db, agent, s.id, 0);
+    ageSession(db, s.id, AGENT_SESSION_STALE_SECONDS + 60);
+
+    const swept = sweepOrphanedAgentSessions(db);
+    expect(swept).toBe(0);
+
+    const [view] = listAgentSessions(db, { ref: "SYD-1" });
+    expect(view.exitCode).toBe(0); // untouched by the sweep
+  });
+
+  it("respects a custom staleSeconds", () => {
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "container" });
+    ageSession(db, s.id, 30);
+
+    expect(sweepOrphanedAgentSessions(db, 3600)).toBe(0);
+    expect(sweepOrphanedAgentSessions(db, 10)).toBe(1);
+    const [view] = listAgentSessions(db, { ref: "SYD-1" });
+    expect(view.status).toBe("exited");
   });
 });
