@@ -27,7 +27,8 @@
     "deploy": true,
     "verify": true,
     "autoRebase": true,
-    "reconcile": true
+    "reconcile": true,
+    "conflictResolution": true
   },
   "githubPoll": {
     "pollSeconds": 120

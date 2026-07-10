@@ -22,16 +22,31 @@
 #   STACK_CHECKS              JSON array of {name, check, install} (SYD-76) --
 #                             verified before claude -p runs; see stack-check.mjs
 #   BASE_BRANCH               integration branch to base agent/<ref> on (default "main")
+#   MODE                      "work" (default) or "resolve-conflict" (SYD-100)
+#
+# MODE=resolve-conflict (SYD-100): dispatched by scripts/deliver.ts when a
+# mechanical rebase-onto-main hits real conflict hunks, instead of a fresh
+# branch cut from BASE_BRANCH the session continues an EXISTING agent/<ref>
+# branch (AGENT_BRANCH, required in this mode) so it can rebase and resolve
+# the conflicts itself -- a script has no intent to resolve them with, only a
+# session does. The session pushes its own resolution (no commit-count gate);
+# the entrypoint's only job afterward is to fail loudly if a rebase was left
+# unresolved.
 #
 # Host repo mounted read-write at /origin.
 
 set -eu
+
+MODE="${MODE:-work}"
 
 : "${ISSUE_REF:?ISSUE_REF is required}"
 : "${SWITCHYARD_URL:?SWITCHYARD_URL is required}"
 : "${SWITCHYARD_TOKEN:?SWITCHYARD_TOKEN is required}"
 : "${WORKER_PROMPT:?WORKER_PROMPT is required}"
 : "${ALLOWED_TOOLS:?ALLOWED_TOOLS is required}"
+if [ "$MODE" = "resolve-conflict" ]; then
+  : "${AGENT_BRANCH:?AGENT_BRANCH is required when MODE=resolve-conflict}"
+fi
 
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   echo "FATAL: one of CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY must be set" >&2
@@ -54,16 +69,27 @@ cd /work
 # below), so there's no separate trust boundary left to enforce here.
 node /prime-workspace-trust.mjs /work
 
-# Explicitly base the work branch on BASE_BRANCH (default "main") rather than
-# the clone's checked-out HEAD -- a plain `git clone` of a local repo hands
-# back whatever branch the host happened to have checked out at clone time,
-# which is nondeterministic from the container's point of view.
 BASE_BRANCH="${BASE_BRANCH:-main}"
-git fetch origin "$BASE_BRANCH"
-git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+if [ "$MODE" = "resolve-conflict" ]; then
+  # Continue the EXISTING agent branch instead of cutting a fresh one -- it
+  # already carries the reviewed work; only the conflict resolution is new.
+  git fetch origin "$AGENT_BRANCH"
+  git checkout -B "$AGENT_BRANCH" FETCH_HEAD
+  # Fetched (not rebased here) so origin/$BASE_BRANCH exists for the session
+  # to rebase onto itself -- resolving the conflict needs intent a script
+  # doesn't have.
+  git fetch origin "$BASE_BRANCH"
+else
+  # Explicitly base the work branch on BASE_BRANCH (default "main") rather than
+  # the clone's checked-out HEAD -- a plain `git clone` of a local repo hands
+  # back whatever branch the host happened to have checked out at clone time,
+  # which is nondeterministic from the container's point of view.
+  git fetch origin "$BASE_BRANCH"
+  git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+fi
 
-# Recorded after the branch is cut from BASE_BRANCH, so the commit count below
-# reflects only what the session itself produced.
+# Recorded after the branch is set up, so the commit count below (work mode
+# only) reflects only what the session itself produced.
 INITIAL_HEAD=$(git rev-parse HEAD)
 
 git config user.name "switchyard-worker"
@@ -101,6 +127,20 @@ set +e
 claude -p "$WORKER_PROMPT" --mcp-config /tmp/switchyard-mcp.json --permission-mode acceptEdits --allowedTools "$ALLOWED_TOOLS"
 CLAUDE_EXIT=$?
 set -e
+
+if [ "$MODE" = "resolve-conflict" ]; then
+  # The prompt has the session push its own resolution (a force-push-with-lease
+  # of a rebased branch, not a fast-forward the commit-count gate below could
+  # detect) -- the entrypoint's only remaining job is to fail loudly if a
+  # rebase was left mid-flight, so a stalled/misbehaving session can never be
+  # mistaken for a resolved one.
+  if [ -d .git/rebase-merge ] || [ -d .git/rebase-apply ]; then
+    echo "conflict-resolution session left the rebase unresolved -- aborting" >&2
+    git rebase --abort || true
+    exit 1
+  fi
+  exit "$CLAUDE_EXIT"
+fi
 
 COMMIT_COUNT=$(git rev-list "$INITIAL_HEAD"..HEAD --count)
 if [ "$COMMIT_COUNT" -gt 0 ]; then

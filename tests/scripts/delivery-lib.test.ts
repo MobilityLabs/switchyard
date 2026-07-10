@@ -27,12 +27,21 @@ import {
   autoRebaseVerifyFailedComment,
   reconciledComment,
   selectReconcilableRefs,
+  shouldDispatchConflictResolution,
+  buildConflictResolutionPrompt,
+  buildConflictResolutionDockerArgs,
+  buildDetachOntoMainArgs,
+  buildSyncLocalMainArgs,
+  conflictResolutionFailedComment,
+  conflictResolvedNote,
+  CONFLICT_RESOLUTION_ALLOWED_TOOLS,
   formatPublishOutcome,
   parsePrNumberFromUrl,
   parseCursorText,
   tailOf,
   type DeliveryFeedEvent,
 } from "../../scripts/delivery-lib.js";
+import type { WorkerConfig, WorkerProject } from "../../scripts/worker-select.js";
 
 const ev = (o: Partial<DeliveryFeedEvent>): DeliveryFeedEvent => ({
   id: 1,
@@ -251,6 +260,139 @@ describe("selectReconcilableRefs (SYD-94)", () => {
 
   it("empty input yields no candidates", () => {
     expect(selectReconcilableRefs([], keys)).toEqual([]);
+  });
+});
+
+describe("conflict-resolution dispatch (SYD-100)", () => {
+  const baseConfig: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 1,
+    projects: { SYD: { repo: "/repo/syd" } },
+  };
+  const project: WorkerProject = { repo: "/repo/syd" };
+  const oauthEnv = { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret" };
+
+  describe("shouldDispatchConflictResolution", () => {
+    it("is false when not containerized, regardless of the conflictResolution flag", () => {
+      expect(shouldDispatchConflictResolution(baseConfig)).toBe(false);
+      expect(shouldDispatchConflictResolution({ ...baseConfig, delivery: { conflictResolution: true } })).toBe(false);
+    });
+
+    it("defaults to true when containerized", () => {
+      expect(shouldDispatchConflictResolution({ ...baseConfig, containerized: true })).toBe(true);
+    });
+
+    it("respects an explicit opt-out", () => {
+      expect(
+        shouldDispatchConflictResolution({ ...baseConfig, containerized: true, delivery: { conflictResolution: false } })
+      ).toBe(false);
+    });
+  });
+
+  describe("buildConflictResolutionPrompt", () => {
+    it("names the branch, main, and the listed conflict files", () => {
+      const prompt = buildConflictResolutionPrompt("SYD-9", ["src/a.ts", "src/b.ts"]);
+      expect(prompt).toContain("agent/SYD-9");
+      expect(prompt).toContain("main");
+      expect(prompt).toContain("- src/a.ts");
+      expect(prompt).toContain("- src/b.ts");
+    });
+
+    it("instructs never git add -A, run typecheck+tests, and push with lease", () => {
+      const prompt = buildConflictResolutionPrompt("SYD-9", ["src/a.ts"]);
+      expect(prompt).toContain("never");
+      expect(prompt).toContain("git add -A");
+      expect(prompt).toContain("npm run typecheck");
+      expect(prompt).toContain("npx vitest run");
+      expect(prompt).toContain("--force-with-lease");
+    });
+
+    it("scopes the session to conflict resolution only — never merge or change status", () => {
+      const prompt = buildConflictResolutionPrompt("SYD-9", ["src/a.ts"]);
+      expect(prompt).toContain("never merge");
+      expect(prompt).toMatch(/never change the issue's status/);
+    });
+
+    it("handles an empty file list", () => {
+      const prompt = buildConflictResolutionPrompt("SYD-9", []);
+      expect(prompt).toContain("no conflicted files reported");
+    });
+  });
+
+  describe("buildConflictResolutionDockerArgs", () => {
+    it("mounts the scratch clone (not the human's live checkout)", () => {
+      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
+      const vIndex = args.indexOf("-v");
+      expect(args[vIndex + 1]).toBe("/tmp/clones/SYD:/origin");
+    });
+
+    it("sets MODE=resolve-conflict and AGENT_BRANCH", () => {
+      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
+      expect(args).toContain("MODE=resolve-conflict");
+      expect(args).toContain("AGENT_BRANCH=agent/SYD-9");
+    });
+
+    it("scopes ALLOWED_TOOLS to the conflict-resolution allowlist, not the full work allowlist", () => {
+      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
+      const allowedToolsArg = args.find((a) => a.startsWith("ALLOWED_TOOLS="));
+      expect(allowedToolsArg).toBe(`ALLOWED_TOOLS=${CONFLICT_RESOLUTION_ALLOWED_TOOLS.join(",")}`);
+      expect(CONFLICT_RESOLUTION_ALLOWED_TOOLS).not.toContain("mcp__switchyard__claim_issue");
+      expect(CONFLICT_RESOLUTION_ALLOWED_TOOLS).not.toContain("mcp__switchyard__update_issue");
+    });
+
+    it("passes secret vars using the bare -e form, never embedding their values", () => {
+      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
+      for (const secretVar of ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]) {
+        expect(args).toContain(secretVar);
+        expect(args.some((a) => a.startsWith(`${secretVar}=`))).toBe(false);
+      }
+      expect(args.join(" ")).not.toContain("oauth-secret");
+    });
+
+    it("throws without an auth env var, the same as buildDockerArgs", () => {
+      expect(() =>
+        buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, {})
+      ).toThrow(/CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/);
+    });
+
+    it("respects a custom image", () => {
+      const args = buildConflictResolutionDockerArgs(
+        "SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, { ...baseConfig, image: "custom/worker-image" }, oauthEnv
+      );
+      expect(args[args.length - 1]).toBe("custom/worker-image");
+    });
+  });
+
+  it("buildDetachOntoMainArgs detaches HEAD onto origin/main", () => {
+    expect(buildDetachOntoMainArgs()).toEqual(["checkout", "--detach", "origin/main"]);
+  });
+
+  it("buildSyncLocalMainArgs force-updates local main to origin/main without requiring a checkout", () => {
+    expect(buildSyncLocalMainArgs()).toEqual(["branch", "-f", "main", "origin/main"]);
+  });
+
+  it("conflictResolutionFailedComment lists conflicted files, the original failure, and the session's output tail", () => {
+    const body = conflictResolutionFailedComment("SYD-9", "gh: not mergeable", ["src/a.ts"], "TypeError: boom");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("not mergeable");
+    expect(body).toContain("agent/SYD-9");
+    expect(body).toContain("- src/a.ts");
+    expect(body).toContain("TypeError: boom");
+    expect(body).toContain("conflict-resolution worker session");
+  });
+
+  it("conflictResolutionFailedComment handles an empty file list", () => {
+    const body = conflictResolutionFailedComment("SYD-9", "gh: not mergeable", [], "boom");
+    expect(body).toContain("no conflicted files reported");
+  });
+
+  it("conflictResolvedNote names the branch and main and says it resolved real conflicts", () => {
+    const note = conflictResolvedNote("SYD-9");
+    expect(note).toContain("agent/SYD-9");
+    expect(note).toContain("main");
+    expect(note).toContain("conflicts");
   });
 });
 

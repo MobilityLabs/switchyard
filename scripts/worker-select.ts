@@ -74,6 +74,14 @@ export type DeliveryConfig = {
    * actually merged manually and clear the stale attention flag (default
    * true). SYD-94. */
   reconcile?: boolean;
+  /**
+   * When autoRebase hits real conflict hunks, dispatch a one-shot
+   * conflict-resolution worker session (same container image as code
+   * dispatch) instead of escalating straight to a human (default true).
+   * SYD-100. Only takes effect when `containerized` is also set — resolution
+   * needs the same clone-in/branch-out sandbox as ordinary work dispatch.
+   */
+  conflictResolution?: boolean;
 };
 
 export type GithubPollConfig = {
