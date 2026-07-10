@@ -56,7 +56,7 @@ export default function Board({ project }: { project: string }) {
   );
 }
 
-function Card({ issue }: { issue: Issue }) {
+export function Card({ issue }: { issue: Issue }) {
   return (
     <article
       className="card"
@@ -72,6 +72,9 @@ function Card({ issue }: { issue: Issue }) {
       <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
       <p>{issue.title}</p>
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
+      {issue.attention && (
+        <span className="badge danger" title={issue.attention.message}>⛔ {issue.attention.message}</span>
+      )}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
       {issue.labels.length > 0 && (
         <div className="label-chips-ro">

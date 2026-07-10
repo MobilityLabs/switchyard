@@ -62,6 +62,31 @@ describe("issue routes", () => {
     expect(search).toHaveLength(1);
   });
 
+  it("flags attention for an unresolved delivery_failed, over REST list and detail", async () => {
+    await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title: "Ship it" }) });
+    await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST", headers: agentH, body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
+    });
+
+    const detail = await body<{ attention: { reason: string; message: string } | null }>(
+      await app.request("/issues/SYD-1", { headers: humanH })
+    );
+    expect(detail.attention).toEqual({ reason: "delivery_failed", message: "merge conflict" });
+
+    const list = await body<{ ref: string; attention: unknown }[]>(
+      await app.request("/issues?project=SYD", { headers: humanH })
+    );
+    expect(list.find((i) => i.ref === "SYD-1")?.attention).toEqual({ reason: "delivery_failed", message: "merge conflict" });
+
+    // Clears once delivered.
+    await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({ type: "delivered", prNumber: 1, mergeSha: "abc123", deploy: { ran: false } }),
+    });
+    const cleared = await body<{ attention: unknown }>(await app.request("/issues/SYD-1", { headers: humanH }));
+    expect(cleared.attention).toBeNull();
+  });
+
   it("dependencies block claims over REST", async () => {
     for (const title of ["Schema", "API"]) {
       await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title }) });
