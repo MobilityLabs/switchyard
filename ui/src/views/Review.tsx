@@ -45,6 +45,15 @@ export default function Review({ currentRef }: { currentRef: string | null }) {
     [current?.ref],
   );
 
+  // Every issue switch — prev/next, approve, send back, or a direct
+  // /review/:ref navigation — starts the reviewer at the top of the panel
+  // rather than wherever the previous issue's scroll position landed
+  // (SYD-70). Keyed on currentRef so it covers every path that changes it,
+  // including router-driven navigation, without patching each call site.
+  useEffect(() => {
+    document.querySelector(".content")?.scrollTo(0, 0);
+  }, [currentRef]);
+
   function moveTo(ref: string | null) {
     if (data) setQueue(data);
     setDraft("");
