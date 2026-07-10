@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: must also match a node_modules symlink (a dir-only
+# pattern let a scratch symlink get committed and clobber real installs).
+node_modules
 *.db
 *.db-*
 .DS_Store
