@@ -4,7 +4,7 @@ import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { href } from "../router";
-import { PRIORITIES, STATUSES, type Activity, type Attachment, type DependencyRef, type DeployResult, type Priority, type Status } from "../types";
+import { PRIORITIES, STATUSES, type Activity, type Attachment, type DependencyRef, type DeployResult, type Issue, type Priority, type Status } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
@@ -126,6 +126,11 @@ export function withAttachmentIds(activity: Activity[], attachments: Attachment[
   });
 }
 
+export function AttentionBanner({ attention }: { attention: Issue["attention"] }) {
+  if (!attention) return null;
+  return <p className="banner danger issue-attention">⛔ {attention.message}</p>;
+}
+
 function DeliveryStrip({ status }: { status: DeliveryStatus }) {
   return (
     <div className="delivery-strip panel">
@@ -205,6 +210,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
           🤖 auto
         </button>
       </header>
+      <AttentionBanner attention={data.attention} />
       <div className="labels-row">
         {otherLabels.map((label) => (
           <span key={label} className="chip label-chip">

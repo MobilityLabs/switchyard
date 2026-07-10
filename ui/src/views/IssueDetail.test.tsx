@@ -6,8 +6,8 @@
 // result, and a delivery-failure banner that clears once a later delivery
 // succeeds.
 import { describe, it, expect } from "vitest";
-import { computeDeliveryStatus, DescriptionSection, Event, withAttachmentIds } from "./IssueDetail";
-import type { Activity, Attachment } from "../types";
+import { AttentionBanner, computeDeliveryStatus, DescriptionSection, Event, withAttachmentIds } from "./IssueDetail";
+import type { Activity, Attachment, Issue } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -47,6 +47,33 @@ describe("DescriptionSection", () => {
   it("falls back to 'No description.' when the description is empty", async () => {
     const container = await render({ summary: null, description: "" });
     expect(container.textContent).toBe("No description.");
+  });
+});
+
+// SYD-96: SYD-84's badge renders on Board/Review but IssueDetail never
+// rendered `attention` — a delivery_failed issue looked clean on its own
+// page, which is where a human goes to investigate.
+describe("AttentionBanner", () => {
+  async function render(attention: Issue["attention"]): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<AttentionBanner attention={attention} />);
+    });
+    return container;
+  }
+
+  it("renders nothing when the issue is clean", async () => {
+    const container = await render(null);
+    expect(container.querySelector(".banner.danger")).toBeNull();
+  });
+
+  it("renders a full-width danger banner with the failure message for an unresolved delivery_failed", async () => {
+    const container = await render({ reason: "delivery_failed", message: "merge conflict" });
+    const banner = container.querySelector(".banner.danger");
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain("merge conflict");
   });
 });
 
