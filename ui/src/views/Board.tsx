@@ -73,7 +73,7 @@ export function Card({ issue }: { issue: Issue }) {
       <p>{issue.title}</p>
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
       {issue.attention && (
-        <span className="badge danger" title={issue.attention.message}>⛔ {issue.attention.message}</span>
+        <span className="badge danger" title={issue.attention.message}>⛔ delivery failed</span>
       )}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
       {issue.labels.length > 0 && (

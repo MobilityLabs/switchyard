@@ -39,13 +39,14 @@ describe("Board Card attention badge", () => {
     expect(container.querySelector(".badge.danger")).toBeNull();
   });
 
-  it("renders a red badge with the failure message for an unresolved delivery_failed", async () => {
+  it("renders an icon-only badge for an unresolved delivery_failed, with the message as a hover title", async () => {
     const container = await render(
       issue({ status: "in_review", attention: { reason: "delivery_failed", message: "merge conflict" } })
     );
     const badge = container.querySelector(".badge.danger");
     expect(badge).not.toBeNull();
-    expect(badge?.textContent).toContain("merge conflict");
+    expect(badge?.textContent).not.toContain("merge conflict");
+    expect(badge?.textContent).toBe("⛔ delivery failed");
     expect(badge?.getAttribute("title")).toBe("merge conflict");
   });
 });
