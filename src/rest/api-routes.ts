@@ -15,7 +15,7 @@ import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { getOpenPr, listOpenPrByIssueId } from "../services/pr-status.js";
-import { listRecentEvents, listUnansweredQuestions } from "../services/events.js";
+import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
@@ -225,12 +225,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   app.get("/events", (c) => {
     const since = c.req.query("since");
     const limit = c.req.query("limit");
-    return c.json(
-      listRecentEvents(db, {
-        since: since !== undefined ? Number(since) : undefined,
-        limit: limit !== undefined ? Number(limit) : undefined,
-      })
-    );
+    const beforeId = c.req.query("before_id");
+    const page = listRecentEventsPage(db, {
+      since: since !== undefined ? Number(since) : undefined,
+      limit: limit !== undefined ? Number(limit) : undefined,
+      beforeId: beforeId !== undefined ? Number(beforeId) : undefined,
+    });
+    c.header("X-Truncated", String(page.truncated));
+    if (page.nextCursor !== null) c.header("X-Next-Cursor", String(page.nextCursor));
+    return c.json(page.events);
   });
 
   app.get("/unanswered-questions", (c) => c.json(listUnansweredQuestions(db)));
