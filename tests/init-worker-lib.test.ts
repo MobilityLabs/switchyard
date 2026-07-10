@@ -7,10 +7,12 @@ import {
   WORKER_ANSWER_LAUNCHD_LABEL,
   formatChecks,
   nodeVersionSatisfies,
+  insertProjectIntoConfigText,
   parseDotEnv,
   parseGithubRemote,
   parsePlistPath,
   renderDeliverPlist,
+  renderClaudeMdSnippet,
   renderWorkerPlist,
   summarizeRoleStatus,
   validateWorkerConfig,
@@ -386,6 +388,113 @@ describe("summarizeRoleStatus", () => {
     expect(check.note).toContain("all: not installed");
     expect(check.note).toContain("code: installed, not running");
     expect(check.note).toContain("answer: running");
+  });
+});
+
+describe("insertProjectIntoConfigText", () => {
+  it("appends a project after a single-line entry, matching its indent", () => {
+    const text = [
+      "{",
+      '  "url": "http://x:3300",',
+      '  "projects": {',
+      '    "SYD": { "repo": "/Users/sean/sites/switchyard" }',
+      "  },",
+      '  "maxConcurrent": 1',
+      "}",
+      "",
+    ].join("\n");
+
+    const updated = insertProjectIntoConfigText(text, "NOC", "/Users/sean/sites/piano-game");
+    const parsed = JSON.parse(updated);
+
+    expect(parsed.projects).toEqual({
+      SYD: { repo: "/Users/sean/sites/switchyard" },
+      NOC: { repo: "/Users/sean/sites/piano-game" },
+    });
+    expect(updated).toContain(
+      '    "SYD": { "repo": "/Users/sean/sites/switchyard" },\n    "NOC": { "repo": "/Users/sean/sites/piano-game" }'
+    );
+    // Everything outside the projects block is untouched, character for character.
+    expect(updated).toContain('  "url": "http://x:3300",');
+    expect(updated).toContain('  "maxConcurrent": 1');
+  });
+
+  it("appends after a multi-line entry, ignoring the nested `repo` key's indent", () => {
+    const text = [
+      "{",
+      '  "projects": {',
+      '    "SYD": {',
+      '      "repo": "/Users/sean/sites/switchyard"',
+      "    }",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+
+    const updated = insertProjectIntoConfigText(text, "NOC", "/repo/noc");
+    const parsed = JSON.parse(updated);
+
+    expect(parsed.projects.NOC).toEqual({ repo: "/repo/noc" });
+    // The new entry's indent matches the top-level "SYD" entry (4 spaces),
+    // not the nested "repo" line (6 spaces).
+    expect(updated).toContain('\n    "NOC": { "repo": "/repo/noc" }');
+  });
+
+  it("handles an object with multiple existing projects, inserting after the last", () => {
+    const text = '{\n  "projects": {\n    "A": { "repo": "/a" },\n    "B": { "repo": "/b" }\n  }\n}\n';
+    const updated = insertProjectIntoConfigText(text, "C", "/c");
+    const parsed = JSON.parse(updated);
+    expect(Object.keys(parsed.projects)).toEqual(["A", "B", "C"]);
+  });
+
+  it("handles an empty projects object", () => {
+    const text = '{\n  "projects": {}\n}\n';
+    const updated = insertProjectIntoConfigText(text, "NOC", "/repo/noc");
+    const parsed = JSON.parse(updated);
+    expect(parsed.projects).toEqual({ NOC: { repo: "/repo/noc" } });
+  });
+
+  it("throws when there is no projects block", () => {
+    expect(() => insertProjectIntoConfigText("{}", "NOC", "/repo/noc")).toThrow(/no `"projects"/);
+  });
+
+  it("round-trips through JSON.parse without corrupting other top-level keys", () => {
+    const text = JSON.stringify(
+      {
+        url: "http://x:3300",
+        label: "auto",
+        intervalSeconds: 300,
+        maxConcurrent: 1,
+        projects: { SYD: { repo: "/repo/syd" } },
+        dispatchPolicy: "all-todo",
+        delivery: { openPrs: true },
+      },
+      null,
+      2
+    );
+    const updated = insertProjectIntoConfigText(text, "NOC", "/repo/noc");
+    const parsed = JSON.parse(updated);
+    expect(parsed).toEqual({
+      url: "http://x:3300",
+      label: "auto",
+      intervalSeconds: 300,
+      maxConcurrent: 1,
+      projects: { SYD: { repo: "/repo/syd" }, NOC: { repo: "/repo/noc" } },
+      dispatchPolicy: "all-todo",
+      delivery: { openPrs: true },
+    });
+  });
+});
+
+describe("renderClaudeMdSnippet", () => {
+  it("includes the project key, house rules, and branch convention", () => {
+    const snippet = renderClaudeMdSnippet("NOC");
+    expect(snippet).toContain("project key `NOC`");
+    expect(snippet).toContain("`NOC-1`");
+    expect(snippet).toContain("next_task");
+    expect(snippet).toContain("claim_issue");
+    expect(snippet).toContain("NEVER move an issue to `done`");
+    expect(snippet).toContain("agent/<ref>");
   });
 });
 

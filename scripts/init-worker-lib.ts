@@ -328,6 +328,105 @@ export function parsePlistPath(plistXml: string): string[] {
   return m ? m[1].split(":").filter(Boolean) : [];
 }
 
+/**
+ * Insert a new `"KEY": { "repo": "..." }` entry into the `"projects"` block
+ * of a switchyard-worker.json text, preserving the file's existing
+ * formatting (indentation, line endings, everything outside that block)
+ * instead of round-tripping through JSON.parse/stringify. Callers should
+ * already have confirmed `key` is not present (see `validateWorkerConfig` /
+ * a plain `key in config.projects` check) — this always appends.
+ */
+export function insertProjectIntoConfigText(text: string, key: string, repoPath: string): string {
+  const keyMatch = /"projects"\s*:\s*\{/.exec(text);
+  if (!keyMatch) {
+    throw new Error('config has no `"projects": { ... }` block to insert into');
+  }
+
+  const openBraceIdx = keyMatch.index + keyMatch[0].length - 1;
+  let depth = 0;
+  let closeBraceIdx = -1;
+  for (let i = openBraceIdx; i < text.length; i++) {
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      depth--;
+      if (depth === 0) {
+        closeBraceIdx = i;
+        break;
+      }
+    }
+  }
+  if (closeBraceIdx === -1) {
+    throw new Error('unbalanced braces in the `"projects"` block');
+  }
+
+  const body = text.slice(openBraceIdx + 1, closeBraceIdx);
+  const entryValue = `{ "repo": ${JSON.stringify(repoPath)} }`;
+  const lastEntryEnd = body.lastIndexOf("}");
+
+  let newBody: string;
+  if (lastEntryEnd === -1) {
+    // No existing entries to model formatting on — derive an indent one
+    // level deeper than the "projects" line itself.
+    const lineStart = text.lastIndexOf("\n", keyMatch.index) + 1;
+    const outerIndent = text.slice(lineStart, keyMatch.index);
+    const indent = `${outerIndent}  `;
+    newBody = `\n${indent}"${key}": ${entryValue}\n${outerIndent}`;
+  } else {
+    const indent = topLevelEntryIndent(body) ?? "  ";
+    newBody =
+      body.slice(0, lastEntryEnd + 1) +
+      `,\n${indent}"${key}": ${entryValue}` +
+      body.slice(lastEntryEnd + 1);
+  }
+
+  return text.slice(0, openBraceIdx + 1) + newBody + text.slice(closeBraceIdx);
+}
+
+/** Indentation of the last top-level (depth-0) `"key":` line in a JSON object body. */
+function topLevelEntryIndent(body: string): string | null {
+  let depth = 0;
+  let indent: string | null = null;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") depth--;
+    else if (ch === '"' && depth === 0) {
+      const lineStart = body.lastIndexOf("\n", i) + 1;
+      const candidate = body.slice(lineStart, i);
+      if (/^[ \t]*$/.test(candidate)) indent = candidate;
+    }
+  }
+  return indent;
+}
+
+/**
+ * The docs/agent-kit.md CLAUDE.md snippet, parameterized with the project
+ * key, to paste into a newly-onboarded repo so interactive sessions there
+ * pick up Switchyard conventions immediately (see docs/onboarding-a-project.md
+ * step 5).
+ */
+export function renderClaudeMdSnippet(key: string): string {
+  return `## Switchyard conventions
+
+This repo is tracked in Switchyard under the project key \`${key}\` (issue refs look like \`${key}-1\`).
+
+- When asked "what should I work on" or when idle between tasks, call
+  \`next_task\` before doing anything else.
+- File ANY discovered work — bugs noticed, TODOs, follow-ups, flaky tests —
+  with \`file_issue\`, even if it's not what you were asked to do. Write a
+  decision-grade description: what's wrong or needed, why it matters (impact
+  if ignored), and your suggested next action.
+- Call \`claim_issue\` before starting work on an issue.
+- Comment progress as you go (\`comment\`) — don't go silent on a claimed issue.
+- If you're blocked on a decision only a human can make, use
+  \`request_human_input\` instead of guessing.
+- Before moving an issue to \`in_review\`, comment the verification evidence:
+  what you did and how you verified it.
+- NEVER move an issue to \`done\`. That's a human or review-step call, always.
+- Branches: \`agent/<ref>\` is reserved for dispatched worker sessions.
+`;
+}
+
 export type CheckResult = { name: string; ok: boolean; note?: string; warn?: boolean };
 
 export type RoleStatus = { role: WorkerRole; running: boolean; installed: boolean };
