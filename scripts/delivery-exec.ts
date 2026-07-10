@@ -16,6 +16,7 @@ import {
   buildPrMergeArgs,
   buildPrViewMergeShaArgs,
   buildPrViewUrlArgs,
+  buildMergedPrForBranchArgs,
   parseOwnerRepo,
   buildFetchAgentBranchArgs,
   buildCheckoutRebaseBranchArgs,
@@ -90,6 +91,20 @@ export async function findOpenAgentPr(repo: string, ref: string): Promise<number
   const ownerRepo = await originOwnerRepo(repo);
   const open = JSON.parse(await run("gh", buildPrListArgs(ref, ownerRepo), { cwd: GH_CWD })) as { number: number }[];
   return open.length > 0 ? open[0].number : null;
+}
+
+/** Reconciliation lookup (SYD-94): unlike findOpenAgentPr, this also finds
+ * agent/<ref> PRs that were merged outside the gate (manual merge after a
+ * delivery_failed) so the stale attention flag can be cleared. Returns null
+ * if no merged PR exists for the branch (still open, or closed unmerged). */
+export async function findMergedAgentPr(repo: string, ref: string): Promise<{ prNumber: number; mergeSha: string } | null> {
+  const ownerRepo = await originOwnerRepo(repo);
+  const merged = JSON.parse(
+    await run("gh", buildMergedPrForBranchArgs(ref, ownerRepo), { cwd: GH_CWD })
+  ) as { number: number; mergeCommit: { oid: string } | null }[];
+  const hit = merged[0];
+  if (!hit || !hit.mergeCommit) return null;
+  return { prNumber: hit.number, mergeSha: hit.mergeCommit.oid };
 }
 
 /** Merges the PR (merge commit, deletes the remote branch) and returns the merge SHA. */

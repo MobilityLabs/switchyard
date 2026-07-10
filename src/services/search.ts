@@ -1,9 +1,10 @@
-import { and, desc, eq, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, issues, type Status } from "../db/schema.js";
 import { toView, type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
 import { SwitchyardError } from "./errors.js";
+import { listAttentionByIssueId, type AttentionFlag } from "./attention.js";
 
 export type SearchFilters = {
   projectKey?: string;
@@ -13,6 +14,10 @@ export type SearchFilters = {
   text?: string;
   needsInput?: boolean;
   excludeSnoozed?: boolean;
+  /** Restrict to issues currently carrying this attention flag (SYD-94) —
+   * lets callers like deliver.ts's reconciliation pass fetch just the
+   * handful of flagged issues instead of paging through everything. */
+  attention?: AttentionFlag["reason"];
 };
 
 export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
@@ -33,6 +38,13 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
   if (filters.excludeSnoozed) {
     const now = Math.floor(Date.now() / 1000);
     conditions.push(or(isNull(issues.snoozedUntil), sql`${issues.snoozedUntil} <= ${now}`)!);
+  }
+  if (filters.attention) {
+    const flagged = [...listAttentionByIssueId(db).entries()]
+      .filter(([, flag]) => flag.reason === filters.attention)
+      .map(([issueId]) => issueId);
+    if (flagged.length === 0) return [];
+    conditions.push(inArray(issues.id, flagged));
   }
   if (filters.text) {
     // Escape SQL wildcard characters (%, _, and ~) so they're treated as literals

@@ -26,7 +26,8 @@
     "pollSeconds": 30,
     "deploy": true,
     "verify": true,
-    "autoRebase": true
+    "autoRebase": true,
+    "reconcile": true
   },
   "githubPoll": {
     "pollSeconds": 120

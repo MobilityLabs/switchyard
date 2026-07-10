@@ -30,10 +30,16 @@ import {
   autoRebasedNote,
   autoRebaseConflictComment,
   autoRebaseVerifyFailedComment,
+  selectReconcilableRefs,
+  reconciledComment,
   type DeliveryEventInput,
   type DeliveryFeedEvent,
+  type AttentionIssueRow,
 } from "./delivery-lib.js";
-import { findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy, attemptAutoRebase } from "./delivery-exec.js";
+import {
+  findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy, attemptAutoRebase,
+  findMergedAgentPr,
+} from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
 const DEFAULT_POLL_SECONDS = 30;
@@ -219,6 +225,46 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
   }
 }
 
+/** Fetches the issues currently flagged `delivery_failed` (SYD-84's attention
+ * derivation), restricted server-side via `?attention=` so this stays cheap
+ * in steady state (zero flagged issues ⇒ one small response, no gh calls). */
+async function fetchAttentionFlaggedIssues(config: WorkerConfig, token: string): Promise<AttentionIssueRow[]> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues?attention=delivery_failed`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`GET /api/issues?attention=delivery_failed failed: ${res.status} ${await res.text()}`);
+  return (await res.json()) as AttentionIssueRow[];
+}
+
+/**
+ * Reconciliation pass (SYD-94): a delivery_failed issue's badge stays red
+ * forever if a human merges the agent PR by hand instead of re-stamping done
+ * (deliver.ts only ever records `delivered` from its own merge). For each
+ * flagged ref, ask GitHub whether agent/<ref> was actually merged; if so,
+ * record a `delivered` event (deploy never runs here — reconciliation only
+ * clears the stale flag, it never ships anything) so the badge clears.
+ * Left alone if the PR is still open or was closed unmerged — those are
+ * genuinely unresolved.
+ */
+async function reconcile(ref: string, config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {
+  const project = config.projects[projectKeyOf(ref)];
+  if (!project) return;
+  try {
+    const merged = await findMergedAgentPr(project.repo, ref);
+    if (!merged) return;
+    if (dryRun) {
+      console.log(`[dry-run] would reconcile ${ref}: PR #${merged.prNumber} merged manually at ${merged.mergeSha}`);
+      return;
+    }
+    console.log(`${ref}: reconciling — PR #${merged.prNumber} was merged manually at ${merged.mergeSha}`);
+    await postComment(config, token, ref, reconciledComment(merged.prNumber, merged.mergeSha));
+    await postDeliveryEvent(config, token, ref, {
+      type: "delivered", prNumber: merged.prNumber, mergeSha: merged.mergeSha, deploy: { ran: false },
+    });
+  } catch (err) {
+    console.error(`reconciliation failed for ${ref}: ${(err as Error).message}`);
+  }
+}
+
 async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof newTickGate>, dryRun: boolean): Promise<void> {
   await runGated(gate, async () => {
     const url = `${config.url.replace(/\/$/, "")}/api/events?limit=500`;
@@ -244,6 +290,14 @@ async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof
     // Skipped under --dry-run: dry runs must be non-mutating, so a dry run
     // never consumes a real approval out from under the next real tick.
     if (!dryRun && lastEventId !== null && lastEventId !== cursor) writeCursor(lastEventId);
+
+    if (config.delivery?.reconcile !== false) {
+      const flagged = await fetchAttentionFlaggedIssues(config, token);
+      const reconcilable = selectReconcilableRefs(flagged, Object.keys(config.projects));
+      for (const ref of reconcilable) {
+        await reconcile(ref, config, token, dryRun);
+      }
+    }
   });
 }
 
