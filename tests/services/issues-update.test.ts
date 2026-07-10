@@ -5,6 +5,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
+import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -143,5 +144,53 @@ describe("claimIssue", () => {
     expect(claimed.assigneeId).toBe(agent.id);
     expect(claimed.status).toBe("in_progress");
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
+  });
+
+  it("re-claiming your own issue is a no-op success, not a collision", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    expect(claimIssue(db, agent, "AIPI-1").assigneeId).toBe(agent.id);
+  });
+
+  // SYD-99: SYD-93 got fixed twice in parallel (worker PR #41 vs a
+  // coordinating session's PR #42) because nothing stopped a second claim on
+  // an issue already spoken for. These are the regression tests for the fix.
+  it("refuses to claim an issue already claimed by a different actor", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    claimIssue(db, agent, "AIPI-1");
+    expect(() => claimIssue(db, other, "AIPI-1")).toThrowError(/already claimed by claude\/worker/i);
+    expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
+  });
+
+  it("refuses to claim an issue with an open PR, even after the claim was released back to todo", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    recordDeliveryEvent(db, agent, "AIPI-1", {
+      type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41",
+    });
+    // Simulate a stale-claim release: back to todo, assignee cleared, PR still open.
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: null });
+
+    const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    expect(() => claimIssue(db, other, "AIPI-1")).toThrowError(/open PR \(#41/i);
+    expect(getIssue(db, "AIPI-1").status).toBe("todo");
+  });
+
+  it("a direct PATCH to in_progress by an agent is refused the same way claim_issue is", () => {
+    // Assigned but still `todo` — e.g. a human pre-assigned it directly — so
+    // the in_progress transition below is what actually exercises the gate.
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: "claude/worker" });
+    const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" }))
+      .toThrowError(/already claimed by claude\/worker/i);
+    expect(getIssue(db, "AIPI-1").status).toBe("todo");
+  });
+
+  it("a human PATCHing straight to in_progress can still deliberately override an existing claim", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: "claude/worker" });
+    const moved = updateIssue(db, human, "AIPI-1", { status: "in_progress" });
+    expect(moved.status).toBe("in_progress");
+    expect(moved.assigneeId).toBe(agent.id); // human overrode the gate, didn't reassign
   });
 });

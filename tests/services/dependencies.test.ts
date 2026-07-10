@@ -11,6 +11,7 @@ import {
   removeDependency,
 } from "../../src/services/dependencies.js";
 import { listIssueEvents } from "../../src/services/events.js";
+import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -46,6 +47,13 @@ describe("dependencies", () => {
 
   it("nextTask skips issues assigned to someone else", () => {
     updateIssue(db, human, "AIPI-2", { assigneeName: "sean" });
+    expect(nextTask(db, agent)?.ref).toBe("AIPI-1");
+  });
+
+  it("nextTask skips a todo issue with an open PR from a released prior claim (SYD-99)", () => {
+    claimIssue(db, agent, "AIPI-2"); // urgent, would otherwise win
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://x/41" });
+    updateIssue(db, human, "AIPI-2", { status: "todo", assigneeName: null }); // stale-claim release
     expect(nextTask(db, agent)?.ref).toBe("AIPI-1");
   });
 

@@ -153,7 +153,8 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     {
       description:
         "Assign yourself to an issue and move it to in_progress. Fails with guidance if the issue " +
-        "is blocked. Prefer next_task to pick what to claim.",
+        "is blocked, already claimed by someone else, or already has an open PR from a prior claim. " +
+        "Prefer next_task to pick what to claim.",
       inputSchema: { ref: z.string() },
     },
     guard(({ ref }: { ref: string }) => claimIssue(db, actor, ref))

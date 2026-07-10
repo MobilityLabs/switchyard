@@ -14,6 +14,7 @@ import { addDependency, listDependencies, nextTask, removeDependency } from "../
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
+import { getOpenPr, listOpenPrByIssueId } from "../services/pr-status.js";
 import { listRecentEvents, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
@@ -92,7 +93,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
     });
     const attention = listAttentionByIssueId(db);
-    return c.json(results.map((r) => ({ ...r, attention: attention.get(r.id) ?? null })));
+    const openPrs = listOpenPrByIssueId(db);
+    return c.json(
+      results.map((r) => ({ ...r, attention: attention.get(r.id) ?? null, openPr: openPrs.get(r.id) ?? null }))
+    );
   });
 
   app.post("/issues", body(issueCreateBody), (c) =>
@@ -105,6 +109,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     return c.json({
       ...issue,
       attention: getAttention(db, issue.id),
+      openPr: getOpenPr(db, issue.id),
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),
