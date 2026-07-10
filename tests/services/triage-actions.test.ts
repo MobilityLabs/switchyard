@@ -7,7 +7,8 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { searchIssues } from "../../src/services/search.js";
-import { snoozeIssue, markDuplicate } from "../../src/services/triage-actions.js";
+import { snoozeIssue, markDuplicate, redeliverIssue } from "../../src/services/triage-actions.js";
+import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -77,5 +78,35 @@ describe("markDuplicate", () => {
     const dup = listIssueEvents(db, updated.id).find((e) => e.type === "marked_duplicate")!;
     expect(dup.payload).toMatchObject({ of: "AIPI-2" });
     expect(getIssue(db, "AIPI-1").status).toBe("canceled");
+  });
+});
+
+describe("redeliverIssue", () => {
+  it("rejects agents legibly", () => {
+    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    expect(() => redeliverIssue(db, agent, "AIPI-1")).toThrowError(/human/i);
+  });
+
+  it("rejects an issue with no unresolved delivery failure", () => {
+    expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(/no unresolved delivery failure/i);
+  });
+
+  it("rejects an issue whose delivery_failed was already resolved", () => {
+    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, agent, "AIPI-1", {
+      type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false },
+    });
+    expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(/no unresolved delivery failure/i);
+  });
+
+  it("records a redeliver_requested event without changing issue status", () => {
+    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    const before = getIssue(db, "AIPI-1");
+    const updated = redeliverIssue(db, human, "AIPI-1");
+    expect(updated.status).toBe(before.status);
+    const events = listIssueEvents(db, updated.id);
+    const requested = events.at(-1)!;
+    expect(requested.type).toBe("redeliver_requested");
+    expect(requested.actorName).toBe(human.name);
   });
 });

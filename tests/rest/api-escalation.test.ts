@@ -154,4 +154,31 @@ describe("escalation, snooze, and duplicate routes", () => {
     expect(marked.status).toBe("canceled");
     expect(marked.activity.some((a) => a.type === "marked_duplicate" && a.payload.of === original.ref)).toBe(true);
   });
+
+  it("redeliver is human-only and requires an unresolved delivery failure", async () => {
+    const filed = await body<{ ref: string }>(await app.request("/issues", {
+      method: "POST", headers: humanH,
+      body: JSON.stringify({ projectKey: "SYD", title: "Ship it" }),
+    }));
+
+    const noFailure = await app.request(`/issues/${filed.ref}/redeliver`, { method: "POST", headers: humanH });
+    expect(noFailure.status).toBe(400);
+    expect((await body<{ error: string }>(noFailure)).error).toMatch(/no unresolved delivery failure/i);
+
+    await app.request(`/issues/${filed.ref}/delivery-events`, {
+      method: "POST", headers: agentH, body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
+    });
+
+    const denied = await app.request(`/issues/${filed.ref}/redeliver`, { method: "POST", headers: agentH });
+    expect(denied.status).toBe(400);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+
+    const retried = await app.request(`/issues/${filed.ref}/redeliver`, { method: "POST", headers: humanH });
+    expect(retried.status).toBe(200);
+
+    const detail = await body<{ activity: { type: string }[] }>(
+      await app.request(`/issues/${filed.ref}`, { headers: humanH })
+    );
+    expect(detail.activity.some((a) => a.type === "redeliver_requested")).toBe(true);
+  });
 });

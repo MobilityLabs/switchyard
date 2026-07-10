@@ -18,7 +18,7 @@ import { getOpenPr, listOpenPrByIssueId } from "../services/pr-status.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
-import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
+import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-actions.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo, type GithubRepo } from "../services/github-repos.js";
 import { handleGithubWebhook } from "../services/github-webhook.js";
@@ -203,6 +203,8 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   app.post("/issues/:ref/duplicate", body(duplicateBody), (c) =>
     c.json(markDuplicate(db, c.var.actor, c.req.param("ref"), c.req.valid("json").of))
   );
+
+  app.post("/issues/:ref/redeliver", (c) => c.json(redeliverIssue(db, c.var.actor, c.req.param("ref"))));
 
   app.get("/next-task", (c) => c.json(nextTask(db, c.var.actor, c.req.query("project") || undefined)));
 
