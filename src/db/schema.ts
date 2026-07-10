@@ -115,3 +115,18 @@ export const githubRepos = sqliteTable("github_repos", {
   secret: text("secret"),
   createdAt: integer("created_at").notNull().default(now()),
 });
+
+// Live agent-session lifecycle (SYD-43): worker-process state (pid, exit
+// code), not issue history — hence a table, unlike progress notes which ride
+// the events table.
+export const agentSessions = sqliteTable("agent_sessions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  issueId: integer("issue_id").notNull().references(() => issues.id),
+  actorId: integer("actor_id").notNull().references(() => actors.id),
+  mode: text("mode", { enum: ["cli", "container", "sdk"] }).notNull(),
+  pid: integer("pid"),
+  status: text("status", { enum: ["running", "exited"] }).notNull().default("running"),
+  exitCode: integer("exit_code"),
+  startedAt: integer("started_at").notNull().default(now()),
+  endedAt: integer("ended_at"),
+});
