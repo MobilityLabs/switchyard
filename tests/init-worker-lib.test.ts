@@ -6,6 +6,7 @@ import {
   WORKER_CODE_LAUNCHD_LABEL,
   WORKER_ANSWER_LAUNCHD_LABEL,
   formatChecks,
+  formatDockerfileStackGuidance,
   formatUserStackCapture,
   nodeVersionSatisfies,
   insertProjectIntoConfigText,
@@ -22,6 +23,7 @@ import {
   suggestStackCli,
   summarizeRoleStatus,
   validateWorkerConfig,
+  wellKnownCliInstall,
   workerLaunchdLabel,
   type UserStackCapture,
 } from "../scripts/init-worker-lib.js";
@@ -755,15 +757,53 @@ describe("formatUserStackCapture (SYD-82)", () => {
   });
 });
 
-describe("suggestStackCli (SYD-82)", () => {
-  it("builds a --version check per name and leaves install unset", () => {
-    expect(suggestStackCli(["codex", "gemini"])).toEqual([
-      { name: "codex", check: "codex --version" },
-      { name: "gemini", check: "gemini --version" },
+describe("wellKnownCliInstall (SYD-87)", () => {
+  it("returns an install command for well-known reviewer CLIs, case-insensitively", () => {
+    expect(wellKnownCliInstall("gh")).toBe("brew install gh");
+    expect(wellKnownCliInstall("Codex")).toBe("npm install -g @openai/codex");
+    expect(wellKnownCliInstall("GEMINI")).toBe("npm install -g @google/gemini-cli");
+  });
+
+  it("returns undefined for an unrecognized CLI", () => {
+    expect(wellKnownCliInstall("some-internal-tool")).toBeUndefined();
+  });
+});
+
+describe("suggestStackCli (SYD-82, SYD-87)", () => {
+  it("builds a --version check per name and pre-fills install for well-known CLIs only", () => {
+    expect(suggestStackCli(["codex", "gemini", "some-internal-tool"])).toEqual([
+      { name: "codex", check: "codex --version", install: "npm install -g @openai/codex" },
+      { name: "gemini", check: "gemini --version", install: "npm install -g @google/gemini-cli" },
+      { name: "some-internal-tool", check: "some-internal-tool --version" },
     ]);
   });
 
   it("returns an empty list for no names", () => {
     expect(suggestStackCli([])).toEqual([]);
+  });
+});
+
+describe("formatDockerfileStackGuidance (SYD-87)", () => {
+  it("lists declared entries and labels captured-but-undeclared gaps separately", () => {
+    expect(
+      formatDockerfileStackGuidance(
+        [{ name: "gh", check: "gh --version", install: "brew install gh" }],
+        ["codex", "some-internal-tool"]
+      )
+    ).toEqual([
+      "  - gh: brew install gh",
+      "  - codex (captured, not yet in stack.cli): npm install -g @openai/codex",
+      "  - some-internal-tool (captured, not yet in stack.cli): (no install command known)",
+    ]);
+  });
+
+  it("notes a missing declared install command", () => {
+    expect(formatDockerfileStackGuidance([{ name: "foo", check: "foo --version" }], [])).toEqual([
+      "  - foo: (no install command declared)",
+    ]);
+  });
+
+  it("returns an empty list when nothing is declared or captured", () => {
+    expect(formatDockerfileStackGuidance([], [])).toEqual([]);
   });
 });

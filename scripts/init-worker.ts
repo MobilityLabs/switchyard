@@ -8,8 +8,10 @@
 //   npm run init-worker -- --self-test                 # doctor, then one dry-run worker tick
 //   npm run init-worker -- --protect-main [KEY]        # doctor, then apply branch protection to main
 //                                                       # (all configured projects, or just KEY)
-//   npm run init-worker -- --repair-stack [KEY]        # install/repair a project's declared stack.cli
-//                                                       # (all configured projects, or just KEY)
+//   npm run init-worker -- --repair-stack [KEY]        # install/repair a project's declared stack.cli, and
+//                                                       # attempt any captured-but-undeclared gap we have a
+//                                                       # well-known install command for (all configured
+//                                                       # projects, or just KEY)
 //   npm run init-worker -- --capture-stack [KEY]       # print a paste-ready stack.cli snippet for whatever
 //                                                       # this machine's own environment expects but KEY (or
 //                                                       # every project) hasn't declared
@@ -26,7 +28,10 @@
 // operating human actually works with, and warns when a project's stack.cli
 // doesn't cover a captured CLI. Purely additive: no user config found means
 // this check is skipped and the hand-authored stack.cli alone governs, same
-// as before SYD-82. --capture-stack turns a gap into a paste-ready snippet.
+// as before SYD-82. --capture-stack turns a gap into a paste-ready snippet;
+// --repair-stack additionally installs the gap outright for a small set of
+// well-known CLIs (codex, gemini, gh — SYD-87), and for containerized
+// projects folds it into the Dockerfile.worker guidance.
 //
 // Role split (SYD-67): --install-launchd-code and --install-launchd-answer
 // install independent LaunchAgents so code dispatch and answerer mode can be
@@ -58,6 +63,7 @@ import { isLocked } from "./pidfile.js";
 import {
   buildProtectMainArgs,
   formatChecks,
+  formatDockerfileStackGuidance,
   formatUserStackCapture,
   nodeVersionSatisfies,
   insertProjectIntoConfigText,
@@ -616,6 +622,14 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
  * the declared `install` command directly; containerized projects can't be
  * repaired in place (a `--rm` container throws the install away on exit), so
  * this prints the Dockerfile.worker + rebuild guidance instead.
+ *
+ * Also attempts captured-but-undeclared gaps from the user-stack parity audit
+ * (SYD-87): a project's `stack.cli` stays the source of truth, but a tool the
+ * operator's own environment expects and that we have a well-known install
+ * command for (`suggestStackCli`/`wellKnownCliInstall`, SYD-87 point 3) is
+ * safe enough to install unattended, closing the gap without waiting for it
+ * to be declared by hand first. Anything without a known install command is
+ * only reported, never guessed at.
  */
 function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): void {
   if (!config) {
@@ -624,6 +638,7 @@ function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): 
   }
   const keys = onlyKey ? [onlyKey] : Object.keys(config.projects);
   let failures = 0;
+  const userStack = captureUserStack(os.homedir());
   for (const key of keys) {
     const project = config.projects[key];
     if (!project) {
@@ -632,14 +647,15 @@ function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): 
       continue;
     }
     const cli = project.stack?.cli ?? [];
-    if (cli.length === 0) {
+    const capturedGaps = stackParityGaps(userStack.cli, project.stack?.cli);
+    if (cli.length === 0 && capturedGaps.length === 0) {
       console.log(`${key}: no stack.cli declared, nothing to repair`);
       continue;
     }
     if (config.containerized) {
       console.log(
         `${key}: containerized — add these to Dockerfile.worker and run \`npm run build:worker-image\`:\n` +
-        cli.map((c) => `  - ${c.name}: ${c.install ?? "(no install command declared)"}`).join("\n")
+        formatDockerfileStackGuidance(cli, capturedGaps).join("\n")
       );
       continue;
     }
@@ -657,6 +673,27 @@ function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): 
       spawnSync("sh", ["-c", c.install], { stdio: "inherit" });
       if (runsOk(c.check, config)) {
         console.log(`✓ ${key}: ${c.name} installed`);
+      } else {
+        console.error(`✗ ${key}: ${c.name} install failed or check still fails`);
+        failures++;
+      }
+    }
+    for (const c of suggestStackCli(capturedGaps)) {
+      if (runsOk(c.check, config)) {
+        console.log(`✓ ${key}: ${c.name} already present (captured, undeclared — add it to stack.cli to stop seeing this)`);
+        continue;
+      }
+      if (!c.install) {
+        console.log(
+          `${key}: ${c.name} captured but undeclared, and no well-known install command — ` +
+          `run \`npm run init-worker -- --capture-stack ${key}\` for a paste-ready stack.cli snippet`
+        );
+        continue;
+      }
+      console.log(`${key}: installing ${c.name} (captured, undeclared) — ${c.install}`);
+      spawnSync("sh", ["-c", c.install], { stdio: "inherit" });
+      if (runsOk(c.check, config)) {
+        console.log(`✓ ${key}: ${c.name} installed — add it to projects.${key}.stack.cli to declare it permanently`);
       } else {
         console.error(`✗ ${key}: ${c.name} install failed or check still fails`);
         failures++;
@@ -816,7 +853,8 @@ function captureStack(config: WorkerConfig | null, onlyKey: string | undefined):
     }
     console.log(
       `${key}: captured from ${userStack.sources.join(", ")} — paste into projects.${key}.stack.cli ` +
-      "(install commands unknown; fill them in, or --repair-stack will report them as unrepairable):\n" +
+      "(well-known CLIs get `install` pre-filled; fill in the rest by hand, or --repair-stack will " +
+      "report them as unrepairable):\n" +
       JSON.stringify(suggestStackCli(gaps), null, 2)
     );
   }

@@ -609,15 +609,54 @@ export function formatUserStackCapture(capture: UserStackCapture): string {
 }
 
 /**
+ * Install commands for a small set of common reviewer CLIs we're confident
+ * enough about to pre-fill and let `--repair-stack` run unattended (SYD-87
+ * point 3) — narrow and hand-curated on purpose. Everything outside this
+ * list still gets `install` left unset by `suggestStackCli`, per the "wrong
+ * guess is worse than an honest gap" rule below.
+ */
+const WELL_KNOWN_CLI_INSTALL: Record<string, string> = {
+  gh: "brew install gh",
+  codex: "npm install -g @openai/codex",
+  gemini: "npm install -g @google/gemini-cli",
+};
+
+/** Looks up a well-known install command by CLI name, case-insensitively. */
+export function wellKnownCliInstall(name: string): string | undefined {
+  return WELL_KNOWN_CLI_INSTALL[name.toLowerCase()];
+}
+
+/**
  * Turns captured CLI names into paste-ready `stack.cli` entries (SYD-82
- * point 2/3, `--capture-stack`). `install` is deliberately left unset —
- * there's no reliable way to infer an install command from a bare tool name,
- * and a wrong guess is worse than an honest gap: an operator fills it in, or
- * `--repair-stack` reports it as unrepairable rather than running something
- * unintended.
+ * point 2/3, `--capture-stack`). `install` is pre-filled for the small
+ * well-known set above (SYD-87 point 3) and otherwise deliberately left
+ * unset — there's no reliable way to infer an install command from an
+ * arbitrary tool name, and a wrong guess is worse than an honest gap: an
+ * operator fills it in, or `--repair-stack` reports it as unrepairable
+ * rather than running something unintended.
  */
 export function suggestStackCli(names: string[]): WorkerStackCli[] {
-  return names.map((name) => ({ name, check: `${name} --version` }));
+  return names.map((name) => {
+    const install = wellKnownCliInstall(name);
+    return install ? { name, check: `${name} --version`, install } : { name, check: `${name} --version` };
+  });
+}
+
+/**
+ * Lines for the containerized "add these to Dockerfile.worker" guidance
+ * (SYD-76's `--repair-stack`), extended to also cover captured-but-undeclared
+ * gaps (SYD-87 point 2) alongside declared-but-missing `stack.cli` entries,
+ * so one container rebuild can close both kinds of gap. Captured entries are
+ * labeled distinctly since they aren't in `stack.cli` yet — the operator
+ * still needs to add them there (e.g. via `--capture-stack`) for the parity
+ * warning to stop firing.
+ */
+export function formatDockerfileStackGuidance(declared: WorkerStackCli[], capturedGaps: string[]): string[] {
+  const lines = declared.map((c) => `  - ${c.name}: ${c.install ?? "(no install command declared)"}`);
+  for (const c of suggestStackCli(capturedGaps)) {
+    lines.push(`  - ${c.name} (captured, not yet in stack.cli): ${c.install ?? "(no install command known)"}`);
+  }
+  return lines;
 }
 
 /**
