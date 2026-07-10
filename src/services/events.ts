@@ -1,4 +1,4 @@
-import { asc, desc, eq, gt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { events, actors, issues, projects } from "../db/schema.js";
 
@@ -33,24 +33,27 @@ export const MAX_RECENT_EVENTS_LIMIT = 500;
 export type RecentEventsFilters = {
   since?: number;
   limit?: number;
+  /** Cursor for paging further back: only events with id strictly less than this. */
+  beforeId?: number;
 };
 
-/**
- * Global, newest-first event feed for reflection/analysis tooling (e.g. the
- * nightly dreamer job) — joined with issue ref, issue title, project key, and
- * actor name, using the same join shape as the webhook dispatcher.
- */
-export function listRecentEvents(db: Db, filters: RecentEventsFilters = {}) {
-  const limit = Math.min(Math.max(1, filters.limit ?? DEFAULT_RECENT_EVENTS_LIMIT), MAX_RECENT_EVENTS_LIMIT);
+function resolveRecentEventsLimit(limit?: number): number {
+  return Math.min(Math.max(1, limit ?? DEFAULT_RECENT_EVENTS_LIMIT), MAX_RECENT_EVENTS_LIMIT);
+}
+
+function queryRecentEvents(db: Db, filters: RecentEventsFilters, fetchLimit: number) {
+  const conditions = [];
+  if (filters.since !== undefined) conditions.push(gt(events.createdAt, filters.since));
+  if (filters.beforeId !== undefined) conditions.push(lt(events.id, filters.beforeId));
   const rows = db
     .select({ e: events, i: issues, p: projects, a: actors })
     .from(events)
     .innerJoin(issues, eq(events.issueId, issues.id))
     .innerJoin(projects, eq(issues.projectId, projects.id))
     .innerJoin(actors, eq(events.actorId, actors.id))
-    .where(filters.since !== undefined ? gt(events.createdAt, filters.since) : undefined)
+    .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(events.id))
-    .limit(limit)
+    .limit(fetchLimit)
     .all();
   return rows.map((r) => ({
     id: r.e.id,
@@ -62,6 +65,38 @@ export function listRecentEvents(db: Db, filters: RecentEventsFilters = {}) {
     projectKey: r.p.key,
     actorName: r.a.name,
   }));
+}
+
+/**
+ * Global, newest-first event feed for reflection/analysis tooling (e.g. the
+ * nightly dreamer job) — joined with issue ref, issue title, project key, and
+ * actor name, using the same join shape as the webhook dispatcher.
+ */
+export function listRecentEvents(db: Db, filters: RecentEventsFilters = {}) {
+  return queryRecentEvents(db, filters, resolveRecentEventsLimit(filters.limit));
+}
+
+export type RecentEventsPage = {
+  events: ReturnType<typeof queryRecentEvents>;
+  /** Pass as `beforeId` on the next call to fetch the next-older page; null once nothing older remains. */
+  nextCursor: number | null;
+  /** True when this page hit the limit cap — there may be older events still within `since` that weren't returned. */
+  truncated: boolean;
+};
+
+/**
+ * Cursor-paginated variant of listRecentEvents (SYD-89): busy days can
+ * produce more events than MAX_RECENT_EVENTS_LIMIT within a `since` window,
+ * so a single call can silently truncate the *oldest* part of that window.
+ * Callers that need the full window should loop, passing `nextCursor` back
+ * in as `beforeId`, until `truncated` is false.
+ */
+export function listRecentEventsPage(db: Db, filters: RecentEventsFilters = {}): RecentEventsPage {
+  const limit = resolveRecentEventsLimit(filters.limit);
+  const rows = queryRecentEvents(db, filters, limit + 1);
+  const truncated = rows.length > limit;
+  const page = truncated ? rows.slice(0, limit) : rows;
+  return { events: page, nextCursor: truncated ? page[page.length - 1].id : null, truncated };
 }
 
 export type UnansweredQuestion = {

@@ -8,7 +8,9 @@ import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { addComment } from "../../src/services/comments.js";
 import {
   listRecentEvents,
+  listRecentEventsPage,
   listUnansweredQuestions,
+  recordEvent,
   DEFAULT_RECENT_EVENTS_LIMIT,
   MAX_RECENT_EVENTS_LIMIT,
 } from "../../src/services/events.js";
@@ -67,6 +69,60 @@ describe("listRecentEvents", () => {
     updateIssue(db, human, "SYD-1", { status: "todo" });
     updateIssue(db, human, "SYD-1", { status: "in_progress" });
     expect(listRecentEvents(db, { limit: 1 })).toHaveLength(1);
+  });
+});
+
+describe("listRecentEventsPage", () => {
+  function setupManyEvents(count: number) {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Busy issue" }); // 1 "created" event
+    for (let i = 0; i < count - 1; i++) {
+      recordEvent(db, { issueId: issue.id, actorId: human.id, type: "comment", payload: {} });
+    }
+    return { db, human };
+  }
+
+  it("is not truncated and has no nextCursor when everything fits in one page (SYD-89)", () => {
+    const { db } = setupManyEvents(3);
+    const page = listRecentEventsPage(db, { limit: 10 });
+    expect(page.events).toHaveLength(3);
+    expect(page.truncated).toBe(false);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it("flags truncation and exposes a cursor to fetch the next-older page (SYD-89)", () => {
+    const { db } = setupManyEvents(5);
+    const page = listRecentEventsPage(db, { limit: 2 });
+    expect(page.events).toHaveLength(2);
+    expect(page.truncated).toBe(true);
+    expect(page.nextCursor).toBe(page.events[page.events.length - 1].id);
+  });
+
+  it("pages through the full window via beforeId until truncated is false, covering every event exactly once (SYD-89)", () => {
+    const { db } = setupManyEvents(1203); // > MAX_RECENT_EVENTS_LIMIT, forces multiple pages
+    const seen: number[] = [];
+    let cursor: number | undefined;
+    for (let guard = 0; guard < 10; guard++) {
+      const page = listRecentEventsPage(db, { limit: 500, beforeId: cursor });
+      seen.push(...page.events.map((e) => e.id));
+      if (!page.truncated) break;
+      cursor = page.nextCursor!;
+    }
+    expect(seen).toHaveLength(1203);
+    expect(new Set(seen).size).toBe(1203); // no duplicates or gaps across page boundaries
+  });
+
+  it("honors since across pages, never paging past the window's oldest event", () => {
+    const { db, human } = setupManyEvents(3);
+    const all = listRecentEvents(db);
+    const cutoff = all[all.length - 1].createdAt; // "created" event's timestamp
+
+    updateIssue(db, human, "SYD-1", { status: "todo" }); // newer event, after cutoff
+    const page = listRecentEventsPage(db, { since: cutoff, limit: 10 });
+    expect(page.events.every((e) => e.createdAt > cutoff)).toBe(true);
+    expect(page.truncated).toBe(false);
   });
 });
 

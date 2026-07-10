@@ -28,7 +28,8 @@ Run these against `$SWITCHYARD_URL` (adjust project keys if the board has more
 than one active project, but SYD is the primary one being reflected on):
 
 ```
-curl -sS -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
+curl -sS -D /tmp/dreamer-events-headers.txt -o /tmp/dreamer-events-page.json \
+  -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
   "$SWITCHYARD_URL/api/events?since=$DREAMER_SINCE&limit=500"
 
 curl -sS -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
@@ -40,7 +41,14 @@ curl -sS -H "Authorization: Bearer $SWITCHYARD_TOKEN" \
 
 - The first call is the last 24h of activity across the whole tracker (event
   type, issue ref/title, project, actor, payload, timestamp) — your primary
-  signal for "what happened."
+  signal for "what happened." **It's paginated (SYD-89):** check
+  `/tmp/dreamer-events-headers.txt` for `X-Truncated: true`. If present, the
+  page didn't cover the full 24h window — repeat the call with
+  `&before_id=<value of X-Next-Cursor from the same headers>` appended,
+  saving each page to a new file, and keep going until you see
+  `X-Truncated: false` (or the header is missing). Concatenate all the pages'
+  JSON arrays into one combined event list before moving on to Step 2 — on a
+  normal day this is a single request, only busy days need more than one.
 - The second is the full SYD board (every issue, any status) — your signal
   for board hygiene and standing state, not just what changed today.
 - The third is the current triage queue — issues an agent filed that no
