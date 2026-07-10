@@ -13,7 +13,7 @@ import type { Issue } from "../types";
 
 function issue(o: Partial<Issue> = {}): Issue {
   return {
-    id: 1, ref: "SYD-1", title: "Ship it", description: "",
+    id: 1, ref: "SYD-1", title: "Ship it", description: "", summary: null,
     status: "done", priority: "none",
     assigneeId: null, creatorId: 1, labels: [],
     sourceType: null, sourceDetail: null, sourceUrl: null,
