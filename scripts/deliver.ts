@@ -43,6 +43,7 @@ import {
   findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy, attemptAutoRebase,
   findMergedAgentPr,
   dispatchConflictResolution,
+  pollUntilMergeable,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
@@ -195,6 +196,8 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
           return;
         }
         console.log(`${ref}: conflict-resolution session resolved and pushed at ${resolution.sha}, retrying merge`);
+        const mergeable = await pollUntilMergeable(project.repo, prNumber);
+        console.log(`${ref}: post-force-push mergeability=${mergeable}`);
         mergeSha = await mergeAgentPr(project.repo, prNumber);
         resolvedConflict = true;
         console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (after conflict resolution)`);
@@ -208,6 +211,8 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
         return;
       } else {
         console.log(`${ref}: auto-rebased onto main at ${rebase.sha}, retrying merge`);
+        const mergeable = await pollUntilMergeable(project.repo, prNumber);
+        console.log(`${ref}: post-force-push mergeability=${mergeable}`);
         mergeSha = await mergeAgentPr(project.repo, prNumber);
         rebased = true;
       }

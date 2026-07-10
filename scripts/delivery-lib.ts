@@ -133,6 +133,34 @@ export function buildPrViewMergeShaArgs(prNumber: number, ownerRepo: string): st
   return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"];
 }
 
+// Post-force-push merge-retry poll (SYD-103): after attemptAutoRebase or a
+// SYD-100 resolver session force-pushes agent/<ref>, GitHub recomputes the
+// PR's mergeability asynchronously — `mergeable` reads UNKNOWN for several
+// seconds. Retrying `gh pr merge` in that window fails with "Pull Request is
+// not mergeable" even though the branch is fully resolved. Poll `mergeable`
+// until it leaves UNKNOWN (or times out) before the retry merge.
+
+export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+
+export const MERGE_POLL_INTERVAL_MS = 4000;
+export const MERGE_POLL_TIMEOUT_MS = 60000;
+
+export function buildPrViewMergeableArgs(prNumber: number, ownerRepo: string): string[] {
+  return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "mergeable", "--jq", ".mergeable"];
+}
+
+/**
+ * Whether the merge-retry poll should sleep and check again: only while
+ * GitHub's mergeability recompute is still in flight (state UNKNOWN) and the
+ * timeout hasn't elapsed. A definitive MERGEABLE or CONFLICTING answer always
+ * stops the poll immediately — there's nothing more GitHub is going to tell
+ * us by waiting longer. Pure so the stop condition is testable without
+ * shelling out to `gh` or a real clock.
+ */
+export function shouldRetryMergePoll(state: MergeableState, elapsedMs: number, timeoutMs: number = MERGE_POLL_TIMEOUT_MS): boolean {
+  return state === "UNKNOWN" && elapsedMs < timeoutMs;
+}
+
 /** Finds a *merged* PR for agent/<ref> regardless of whether deliver.ts's own
  * merge ever ran (SYD-94 reconciliation) — unlike buildPrListArgs (open only),
  * this looks at closed+merged history so a manually-merged PR is found even
