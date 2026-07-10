@@ -15,7 +15,7 @@ import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { listRecentEvents, listUnansweredQuestions } from "../services/events.js";
-import { searchIssues } from "../services/search.js";
+import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
@@ -90,6 +90,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       text: c.req.query("text") || undefined,
       needsInput: c.req.query("needs_input") === "true" ? true : undefined,
       excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
+      attention: (c.req.query("attention") as SearchFilters["attention"]) || undefined,
     });
     const attention = listAttentionByIssueId(db);
     return c.json(results.map((r) => ({ ...r, attention: attention.get(r.id) ?? null })));

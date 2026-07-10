@@ -4,6 +4,7 @@ import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { searchIssues } from "../../src/services/search.js";
+import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 let db: Db, human: Actor;
 beforeEach(() => {
@@ -31,6 +32,30 @@ describe("searchIssues", () => {
     const all = searchIssues(db, {});
     expect(all).toHaveLength(3);
     expect(all[0].ref).toBe("HAND-1");
+  });
+
+  it("attention filter (SYD-94) restricts to issues with an unresolved delivery_failed", () => {
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
+    expect(searchIssues(db, { attention: "delivery_failed" }).map((i) => i.ref)).toEqual(["AIPI-2"]);
+  });
+
+  it("attention filter returns nothing when no issue is flagged", () => {
+    expect(searchIssues(db, { attention: "delivery_failed" })).toEqual([]);
+  });
+
+  it("attention filter clears once a later delivered event fires", () => {
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false } });
+    expect(searchIssues(db, { attention: "delivery_failed" })).toEqual([]);
+  });
+
+  it("attention filter combines (ANDed) with other filters", () => {
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
+    expect(searchIssues(db, { attention: "delivery_failed", projectKey: "HAND" })).toEqual([]);
+    expect(searchIssues(db, { attention: "delivery_failed", projectKey: "AIPI" }).map((i) => i.ref)).toEqual(["AIPI-2"]);
   });
 
   it("treats %, _ and ~ in text as literals", () => {
