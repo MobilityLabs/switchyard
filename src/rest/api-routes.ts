@@ -18,6 +18,7 @@ import { searchIssues } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
+import { addGithubRepo, listGithubRepos, removeGithubRepo, type GithubRepo } from "../services/github-repos.js";
 import {
   saveAttachment,
   getAttachment,
@@ -37,6 +38,7 @@ import {
   dependencyBody,
   webhookCreateBody,
   webhookPatchBody,
+  githubRepoCreateBody,
   requestInputBody,
   snoozeBody,
   duplicateBody,
@@ -249,6 +251,28 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     }
     const { active } = c.req.valid("json");
     return c.json(redact(setWebhookActive(db, Number(c.req.param("id")), active)));
+  });
+
+  // Redact secret from linked-repo objects for safe API responses
+  const redactRepo = ({ secret, ...rest }: GithubRepo) => ({ ...rest, hasSecret: secret !== null });
+
+  app.get("/github-repos", (c) => c.json(listGithubRepos(db).map(redactRepo)));
+  app.post("/github-repos", body(githubRepoCreateBody), (c) => {
+    if (c.var.actor.type === "agent") {
+      throw new SwitchyardError(
+        "Only humans manage linked GitHub repos — ask a human to link or unlink a repo."
+      );
+    }
+    return c.json(redactRepo(addGithubRepo(db, c.req.valid("json"))));
+  });
+  app.delete("/github-repos/:id", (c) => {
+    if (c.var.actor.type === "agent") {
+      throw new SwitchyardError(
+        "Only humans manage linked GitHub repos — ask a human to link or unlink a repo."
+      );
+    }
+    removeGithubRepo(db, Number(c.req.param("id")));
+    return c.json({ ok: true });
   });
 
   return app;

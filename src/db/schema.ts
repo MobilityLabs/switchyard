@@ -107,3 +107,11 @@ export const webhookCursor = sqliteTable("webhook_cursor", {
   id: integer("id").primaryKey(),
   lastEventId: integer("last_event_id").notNull().default(0),
 });
+
+export const githubRepos = sqliteTable("github_repos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  fullName: text("full_name").notNull().unique(),
+  projectId: integer("project_id").references(() => projects.id),
+  secret: text("secret"),
+  createdAt: integer("created_at").notNull().default(now()),
+});
