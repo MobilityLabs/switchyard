@@ -381,3 +381,11 @@ kbd {
   .new-project-popover { width: calc(100vw - 48px); }
   .design-embed-frame { height: 260px; }
 }
+
+/* Agents panel (SYD-43) */
+.session-list { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.session-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.session-live { background: #1a7f37; color: #fff; }
+.session-note { font-style: italic; opacity: 0.8; }
+.agent-session-strip { display: flex; flex-direction: column; gap: 0.25rem; }
+.progress-note { font-style: italic; opacity: 0.8; }

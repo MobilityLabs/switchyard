@@ -13,6 +13,7 @@ import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { requestHumanInput } from "../services/needs-input.js";
+import { recordProgressNote } from "../services/agent-sessions.js";
 import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
 
 type ToolResult = {
@@ -200,6 +201,22 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     },
     guard(({ ref, body }: { ref: string; body: string }) => {
       addComment(db, actor, ref, body);
+      return { ok: true };
+    })
+  );
+
+  server.registerTool(
+    "progress_note",
+    {
+      description:
+        "Record a one-line note about what you are doing right now on an issue you are working " +
+        '(e.g. "tests written, implementing the service"). Shown live in the app while your ' +
+        "session runs — call it each time you start a new step so humans can follow along. " +
+        "Use comment for anything a human should read later; progress notes are ephemeral status.",
+      inputSchema: { ref: z.string(), note: z.string() },
+    },
+    guard(({ ref, note }: { ref: string; note: string }) => {
+      recordProgressNote(db, actor, ref, note);
       return { ok: true };
     })
   );

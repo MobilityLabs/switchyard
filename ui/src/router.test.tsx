@@ -192,3 +192,12 @@ describe("issue ref fast-path", () => {
     expect(isIssueRef("SYD-52x")).toBe(false);
   });
 });
+
+describe("agents route (SYD-43)", () => {
+  it("parses /agents", () => {
+    expect(parsePath("/agents")).toEqual({ view: "agents" });
+  });
+  it("round-trips through href", () => {
+    expect(href({ view: "agents" })).toBe("/agents");
+  });
+});

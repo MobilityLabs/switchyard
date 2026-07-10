@@ -177,6 +177,56 @@ async function postDeliveryEvent(
   }
 }
 
+/** Session-lifecycle reporting (SYD-43): tells the tracker a session started
+ * so the UI can show a live Agents panel. Best-effort — visibility must never
+ * break dispatch — so every failure resolves to null after logging. */
+export async function reportSessionStart(
+  config: WorkerConfig, token: string, input: { ref: string; mode: "cli" | "container" | "sdk"; pid: number | null }
+): Promise<number | null> {
+  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions`;
+  try {
+    return await withRetry(async () => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      if (!res.ok) {
+        throw new HttpStatusError(res.status, `POST agent-sessions for ${input.ref} failed: ${res.status} ${await res.text()}`);
+      }
+      return ((await res.json()) as { id: number }).id;
+    });
+  } catch (err) {
+    console.error(`could not report session start for ${input.ref}: ${(err as Error).message}`);
+    return null;
+  }
+}
+
+/** Closes out a session started by reportSessionStart. Takes the id as a
+ * promise so callers can wire it straight from the (unawaited) start call;
+ * a null id (start never landed) is a silent no-op. Never rejects. */
+export async function reportSessionEnd(
+  config: WorkerConfig, token: string, sessionId: Promise<number | null>, exitCode: number | null
+): Promise<void> {
+  const id = await sessionId;
+  if (id === null) return;
+  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions/${id}`;
+  try {
+    await withRetry(async () => {
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ exitCode }),
+      });
+      if (!res.ok) {
+        throw new HttpStatusError(res.status, `PATCH agent-sessions/${id} failed: ${res.status} ${await res.text()}`);
+      }
+    });
+  } catch (err) {
+    console.error(`could not report session end ${id}: ${(err as Error).message}`);
+  }
+}
+
 async function fetchReadyIssues(config: WorkerConfig, token: string): Promise<ApiIssue[]> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues?status=todo`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
@@ -205,7 +255,11 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
   return (
     resumedPreamble +
     `Work Switchyard issue ${ref} using the switchyard MCP tools. ` +
-    `Call claim_issue first. Implement the work with tests. Comment verification ` +
+    `Call claim_issue first. ` +
+    `Record a one-line note with the progress_note tool each time you start a new ` +
+    `step (reading code, writing tests, implementing, verifying) so humans can ` +
+    `watch progress live. ` +
+    `Implement the work with tests. Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
@@ -275,7 +329,19 @@ function dispatch(
   active.set(issue.ref, child);
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
 
+  // 'spawn' only fires once the OS actually launched the process (see the
+  // SYD-74 note in dispatchAnswer) — a failed spawn never creates a session.
+  let sessionId: Promise<number | null> = Promise.resolve(null);
+  child.on("spawn", () => {
+    sessionId = reportSessionStart(config, token, {
+      ref: issue.ref,
+      mode: config.containerized ? "container" : "cli",
+      pid: child.pid ?? null,
+    });
+  });
+
   child.on("exit", (code) => {
+    void reportSessionEnd(config, token, sessionId, code);
     active.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
     console.log(`${issue.ref} exited with code ${code}`);
@@ -315,6 +381,9 @@ function dispatch(
 
   child.on("error", (err) => {
     active.delete(issue.ref);
+    // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
+    // close the session (no-op when spawn never happened: sessionId is null).
+    void reportSessionEnd(config, token, sessionId, null);
     console.error(`failed to spawn claude for ${issue.ref}: ${err.message}`);
   });
 }
@@ -349,6 +418,7 @@ function dispatchSdk(
   active.set(issue.ref, "sdk");
   console.log(`dispatched ${issue.ref} (sdk session) -> ${logPath}`);
   safeAppend(`[worker] sdk session starting for ${issue.ref}\n`);
+  const sessionId = reportSessionStart(config, token, { ref: issue.ref, mode: "sdk", pid: null });
 
   const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
   import(runnerPath)
@@ -366,6 +436,7 @@ function dispatchSdk(
       (code) => {
         console.log(`${issue.ref} sdk session finished with code ${code}`);
         safeAppend(`[worker] exited with code ${code}\n`);
+        void reportSessionEnd(config, token, sessionId, code);
       },
       (err: Error) => {
         console.error(`sdk dispatch failed for ${issue.ref}: ${err.message}`);
@@ -373,6 +444,7 @@ function dispatchSdk(
           `[worker] sdk dispatch failed: ${err.message}\n` +
           `[worker] is worker-sdk installed? run: npm install --prefix worker-sdk\n`,
         );
+        void reportSessionEnd(config, token, sessionId, null);
       },
     )
     .catch((err: Error) => console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`))

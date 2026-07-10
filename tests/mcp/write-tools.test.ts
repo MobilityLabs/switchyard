@@ -10,6 +10,7 @@ import { createProject } from "../../src/services/projects.js";
 import { getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { snoozeIssue } from "../../src/services/triage-actions.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
+import { getActivity } from "../../src/services/comments.js";
 
 let db: Db, human: Actor, agent: Actor, client: Client;
 
@@ -274,5 +275,30 @@ describe("MCP write tools", () => {
     const results = JSON.parse(text(r));
     expect(results).toHaveLength(1);
     expect(results[0].ref).toBe("AIPI-1");
+  });
+
+  describe("progress_note (SYD-43)", () => {
+    it("records a progress_note event on the activity feed", async () => {
+      const filed = JSON.parse(text(await client.callTool({
+        name: "file_issue",
+        arguments: { project_key: "AIPI", title: "T", description: "d", source_type: "session" },
+      })));
+      const r = await client.callTool({
+        name: "progress_note",
+        arguments: { ref: filed.ref, note: "tests written, implementing the service" },
+      });
+      expect(JSON.parse(text(r))).toEqual({ ok: true });
+      const ev = getActivity(db, filed.ref).find((a) => a.type === "progress_note");
+      expect(ev?.payload).toEqual({ note: "tests written, implementing the service" });
+    });
+
+    it("returns an isError result for an empty note", async () => {
+      const filed = JSON.parse(text(await client.callTool({
+        name: "file_issue",
+        arguments: { project_key: "AIPI", title: "T2", description: "d", source_type: "session" },
+      })));
+      const r = await client.callTool({ name: "progress_note", arguments: { ref: filed.ref, note: " " } });
+      expect(r.isError).toBe(true);
+    });
   });
 });

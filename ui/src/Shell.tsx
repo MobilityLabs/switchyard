@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Actor, Project } from "./types";
 import { getLastProject, href, isIssueRef, navigate, useRoute, type Route } from "./router";
-import { logout, listIssues, createProject, ApiError } from "./api";
+import { logout, listIssues, listAgentSessions, createProject, ApiError } from "./api";
 import { usePoll } from "./usePoll";
 
 const KEY_PATTERN = /^[A-Z]{2,10}$/;
@@ -135,6 +135,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
     [scopeProject],
     30000,
   );
+  const liveSessions = usePoll(() => listAgentSessions({ active: true }), [], 15000);
 
   function onProjectCreated(project: Project) {
     setJustCreated(project);
@@ -164,6 +165,11 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
           </a>
           <a href={reviewHref} className={route.view === "review" ? "active" : ""}>
             Review{inReview.data && inReview.data.length > 0 && <span className="badge">{inReview.data.length}</span>}
+          </a>
+          <a href={href({ view: "agents" })} className={route.view === "agents" ? "active" : ""}>
+            Agents{liveSessions.data && liveSessions.data.length > 0 && (
+              <span className="badge">{liveSessions.data.length}</span>
+            )}
           </a>
         </nav>
         <SearchBox route={route} />

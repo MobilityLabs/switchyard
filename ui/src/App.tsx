@@ -10,6 +10,7 @@ import IssueDetail from "./views/IssueDetail";
 import Review from "./views/Review";
 import NewIssue from "./views/NewIssue";
 import Search from "./views/Search";
+import Agents from "./views/Agents";
 
 // Intercepts clicks on same-origin anchors that point at a known client
 // route and hands them to the History-API router instead of a full page
@@ -85,6 +86,7 @@ function ShellRouter({ me }: { me: Actor }) {
       {route.view === "review" && <Review project={route.project} currentRef={route.ref} />}
       {route.view === "new-issue" && <NewIssue />}
       {route.view === "search" && <Search query={route.query} />}
+      {route.view === "agents" && <Agents />}
     </Shell>
   );
 }
