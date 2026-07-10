@@ -1,0 +1,97 @@
+import { describe, it, expect } from "vitest";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+// SYD-81: piano-game's container dispatch hit an `npm ci` "usage error" with
+// no way to tell why after the fact. Reproduced locally (no Docker needed):
+// `npm error code EUSAGE ... can only install with an existing
+// package-lock.json` fires the instant a clone has package.json but no
+// lockfile -- exactly what `git clone /origin /work` produces for a target
+// repo that doesn't commit one. These tests exercise the actual script
+// container-entry.sh now shells out to.
+
+const REPO_DIR = path.resolve(__dirname, "../..");
+const SCRIPT = path.join(REPO_DIR, "scripts/npm-ci-guard.mjs");
+
+function run(workspace: string): string {
+  return execFileSync("node", [SCRIPT, workspace], { encoding: "utf8", stdio: "pipe" }).toString();
+}
+
+function runCapturingStderr(workspace: string): { stdout: string; stderr: string; status: number | null } {
+  const result = spawnSync("node", [SCRIPT, workspace], { encoding: "utf8" });
+  return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+}
+
+function tmpWorkspace(): string {
+  return mkdtempSync(path.join(tmpdir(), "npm-ci-guard-test-"));
+}
+
+describe("npm-ci-guard.mjs", () => {
+  it("skips npm ci and warns when no lockfile is present", () => {
+    const workspace = tmpWorkspace();
+    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-x", version: "1.0.0" }));
+
+    const { stderr } = runCapturingStderr(workspace);
+
+    expect(stderr).toContain("npm ci skipped -- no package-lock.json");
+    expect(existsSync(path.join(workspace, "node_modules"))).toBe(false);
+  });
+
+  it("exits 0 even when the lockfile is missing (non-fatal, matches prior behavior)", () => {
+    const workspace = tmpWorkspace();
+    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-x", version: "1.0.0" }));
+
+    expect(() => run(workspace)).not.toThrow();
+  });
+
+  it("runs npm ci successfully when package.json and package-lock.json are in sync", () => {
+    const workspace = tmpWorkspace();
+    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-x", version: "1.0.0" }));
+    writeFileSync(
+      path.join(workspace, "package-lock.json"),
+      JSON.stringify({
+        name: "tmp-x",
+        version: "1.0.0",
+        lockfileVersion: 3,
+        requires: true,
+        packages: { "": { name: "tmp-x", version: "1.0.0" } },
+      })
+    );
+
+    const { stderr } = runCapturingStderr(workspace);
+
+    expect(stderr).not.toContain("WARNING");
+  });
+
+  it("logs node/npm version when npm ci fails for a reason other than a missing lockfile", () => {
+    const workspace = tmpWorkspace();
+    // package.json declares a dependency the lockfile doesn't have -- npm ci's
+    // "in sync" EUSAGE case, resolved entirely offline (no registry hit).
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({ name: "tmp-x", version: "1.0.0", dependencies: { "left-pad": "^1.0.0" } })
+    );
+    writeFileSync(
+      path.join(workspace, "package-lock.json"),
+      JSON.stringify({
+        name: "tmp-x",
+        version: "1.0.0",
+        lockfileVersion: 3,
+        requires: true,
+        packages: { "": { name: "tmp-x", version: "1.0.0" } },
+      })
+    );
+
+    const { stderr } = runCapturingStderr(workspace);
+
+    expect(stderr).toContain("npm ci failed");
+    expect(stderr).toContain(`node ${process.version}`);
+    expect(stderr).toContain("engines/packageManager");
+  });
+
+  it("requires a workspace argument", () => {
+    expect(() => execFileSync("node", [SCRIPT], { stdio: "pipe" })).toThrow();
+  });
+});

@@ -11,6 +11,7 @@ RUN npm install -g @anthropic-ai/claude-code
 
 COPY scripts/container-entry.sh /entry.sh
 COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
+COPY scripts/npm-ci-guard.mjs /npm-ci-guard.mjs
 RUN chmod +x /entry.sh
 
 ENTRYPOINT ["/bin/sh", "/entry.sh"]
