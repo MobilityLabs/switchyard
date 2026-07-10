@@ -34,6 +34,15 @@ describe("searchIssues", () => {
     expect(all[0].ref).toBe("HAND-1");
   });
 
+  it("orders the triage status filter oldest first (SYD-159)", () => {
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    const provenance = { sourceType: "session" as const, detail: "test" };
+    createIssue(db, agent, { projectKey: "AIPI", title: "Filed first", description: "d", provenance });
+    createIssue(db, agent, { projectKey: "AIPI", title: "Filed second", description: "d", provenance });
+    const triaged = searchIssues(db, { status: "triage" }).map((i) => i.ref);
+    expect(triaged).toEqual(["AIPI-3", "AIPI-4"]);
+  });
+
   it("attention filter (SYD-94) restricts to issues with an unresolved delivery_failed", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
