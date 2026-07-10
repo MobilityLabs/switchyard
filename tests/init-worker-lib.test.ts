@@ -88,6 +88,21 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, dispatchPolicy: "yolo" })).toHaveLength(1);
   });
 
+  it("accepts an optional per-project baseBranch and rejects an empty one", () => {
+    expect(validateWorkerConfig({
+      ...good,
+      projects: { SYD: { repo: "/repo", baseBranch: "develop" } },
+    })).toEqual([]);
+    expect(validateWorkerConfig({
+      ...good,
+      projects: { SYD: { repo: "/repo", baseBranch: "" } },
+    })).toHaveLength(1);
+    expect(validateWorkerConfig({
+      ...good,
+      projects: { SYD: { repo: "/repo", baseBranch: 5 } },
+    })).toHaveLength(1);
+  });
+
   it("rejects a bare scheme url and a string containerized flag", () => {
     expect(validateWorkerConfig({ ...good, url: "http://" })).toHaveLength(1);
     expect(validateWorkerConfig({ ...good, containerized: "true" })).toHaveLength(1);

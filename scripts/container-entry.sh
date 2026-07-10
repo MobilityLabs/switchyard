@@ -21,6 +21,7 @@
 # Optional env:
 #   STACK_CHECKS              JSON array of {name, check, install} (SYD-76) --
 #                             verified before claude -p runs; see stack-check.mjs
+#   BASE_BRANCH               integration branch to base agent/<ref> on (default "main")
 #
 # Host repo mounted read-write at /origin.
 
@@ -53,11 +54,18 @@ cd /work
 # below), so there's no separate trust boundary left to enforce here.
 node /prime-workspace-trust.mjs /work
 
-# Recorded before any work happens, so we can tell afterwards whether the
-# session produced commits worth pushing.
+# Explicitly base the work branch on BASE_BRANCH (default "main") rather than
+# the clone's checked-out HEAD -- a plain `git clone` of a local repo hands
+# back whatever branch the host happened to have checked out at clone time,
+# which is nondeterministic from the container's point of view.
+BASE_BRANCH="${BASE_BRANCH:-main}"
+git fetch origin "$BASE_BRANCH"
+git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+
+# Recorded after the branch is cut from BASE_BRANCH, so the commit count below
+# reflects only what the session itself produced.
 INITIAL_HEAD=$(git rev-parse HEAD)
 
-git checkout -b "agent/$ISSUE_REF"
 git config user.name "switchyard-worker"
 git config user.email "worker@switchyard.local"
 

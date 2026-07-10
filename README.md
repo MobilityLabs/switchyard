@@ -142,6 +142,11 @@ cp switchyard-worker.example.json switchyard-worker.json
 }
 ```
 
+Containerized dispatch always bases `agent/<ref>` on `origin/main` in each
+project's repo, regardless of what branch is checked out on the host —
+set `projects.<KEY>.baseBranch` to override this for a repo whose
+integration branch isn't `main`.
+
 Setting up a machine to run the worker is one command — a doctor that checks
 the whole chain (config, project repos, docker image, tokens in `.env`, server
 reachability, and that the token is an *agent* actor, never a human one):

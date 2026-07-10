@@ -35,7 +35,12 @@ export type WorkerStack = {
   ports?: number[];
 };
 
-export type WorkerProject = { repo: string; stack?: WorkerStack };
+export type WorkerProject = {
+  repo: string;
+  stack?: WorkerStack;
+  /** Integration branch containerized dispatch bases agent/<ref> on (default "main"). */
+  baseBranch?: string;
+};
 
 export type DeliveryConfig = {
   /** Open a GitHub PR when a containerized session pushes agent/<ref> (default true). */
@@ -90,6 +95,7 @@ export type WorkerConfig = {
 const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
 const DEFAULT_WORKER_IMAGE = "switchyard-worker";
 export const DEFAULT_MAX_ANSWER_CONCURRENT = 2;
+const DEFAULT_BASE_BRANCH = "main";
 
 export function projectKeyOf(ref: string): string {
   return ref.split("-")[0];
@@ -468,8 +474,15 @@ export function recordAttempt(retryState: Map<string, RetryState>, ref: string, 
  * never answer it, leaving the board showing in_progress with no trace of
  * why. The container pre-trusts the workspace so this shouldn't recur, but
  * the instruction stands as a backstop for whatever prompt slips through.
+ * Also names the base branch (SYD-69) so a session whose work should target
+ * something other than the default knows that's a human decision, not
+ * something to assume.
  */
-export function buildContainerizedPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
+export function buildContainerizedPrompt(
+  ref: string,
+  opts: { resumed?: boolean; baseBranch?: string } = {}
+): string {
+  const baseBranch = opts.baseBranch ?? DEFAULT_BASE_BRANCH;
   const resumedPreamble = opts.resumed
     ? `You previously escalated a question on Switchyard issue ${ref} and a human ` +
       `has now answered it. Call get_issue first and read the activity feed for ` +
@@ -484,8 +497,11 @@ export function buildContainerizedPrompt(ref: string, opts: { resumed?: boolean 
     `If you are blocked on a decision only a human can make, call request_human_input ` +
     `with your question and stop. If a permission prompt blocks you, call ` +
     `request_human_input with what you need and stop — never exit silently. ` +
-    `You are in a disposable clone on branch agent/${ref}; commit your work — it ` +
-    `will be pushed for review. The issue comment MUST include the branch name.`
+    `You are in a disposable clone based on origin/${baseBranch}, on branch ` +
+    `agent/${ref}; commit your work — it will be pushed for review. The issue ` +
+    `comment MUST include the branch name. If this work should target a base ` +
+    `branch other than ${baseBranch}, that's a human decision — ask via ` +
+    `request_human_input rather than assuming.`
   );
 }
 
@@ -580,7 +596,8 @@ export function buildDockerArgs(
   }
 
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
-  const prompt = buildContainerizedPrompt(issue.ref, opts);
+  const baseBranch = project.baseBranch ?? DEFAULT_BASE_BRANCH;
+  const prompt = buildContainerizedPrompt(issue.ref, { ...opts, baseBranch });
   const image = config.image ?? DEFAULT_WORKER_IMAGE;
   const stackChecks = stackChecksEnv(project.stack);
 
@@ -597,6 +614,7 @@ export function buildDockerArgs(
     "-e", `WORKER_PROMPT=${prompt}`,
     "-e", `ALLOWED_TOOLS=${allowedTools.join(",")}`,
     ...(stackChecks ? ["-e", `STACK_CHECKS=${stackChecks}`] : []),
+    "-e", `BASE_BRANCH=${baseBranch}`,
     image,
   ];
 }
