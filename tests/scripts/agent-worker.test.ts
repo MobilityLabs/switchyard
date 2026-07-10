@@ -19,7 +19,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-const { buildPrompt, dispatchAnswer, active, answerState, reportSessionStart, reportSessionEnd } =
+const { buildPrompt, dispatch, dispatchAnswer, active, answerState, reportSessionStart, reportSessionEnd } =
   await import("../../scripts/agent-worker.js");
 
 describe("buildPrompt", () => {
@@ -153,5 +153,72 @@ describe("session lifecycle reporting (SYD-43)", () => {
     vi.stubGlobal("fetch", fetchMock);
     await reportSessionEnd(config, "tok", Promise.resolve(null), 0);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("mirrors a session-report failure to the onError callback (SYD-105)", async () => {
+    // 400 (not 5xx/network) so withRetry's isRetryableError treats it as
+    // terminal and this resolves on the first attempt, no real backoff delay.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({}), text: async () => "bad" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const onError = vi.fn();
+    const id = await reportSessionStart(config, "tok", { ref: "SYD-7", mode: "cli", pid: null }, onError);
+    expect(id).toBeNull();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("could not report session start for SYD-7"));
+    errorSpy.mockRestore();
+  });
+});
+
+describe("dispatch session-reporting wiring (SYD-105)", () => {
+  const ref = "SYD-105";
+  const issue = { ref, title: "Bundle", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 0 };
+  const config: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 2,
+    projects: { SYD: { repo: "/repo/syd" } },
+  };
+
+  beforeEach(() => {
+    active.clear();
+    spawnMock.mockReset();
+  });
+
+  it("reports session start on spawn and session end with the exit code on exit", async () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => ({
+      ok: true,
+      json: async () => (init.method === "POST" ? { id: 77 } : {}),
+      text: async () => "",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    dispatch(issue, config, "tok", "code");
+    child.pid = 555;
+    child.emit("spawn");
+
+    await vi.waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:3300/api/agent-sessions",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ ref, mode: "cli", pid: 555 }) }),
+      )
+    );
+
+    child.emit("exit", 0);
+
+    await vi.waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:3300/api/agent-sessions/77",
+        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ exitCode: 0 }) }),
+      )
+    );
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

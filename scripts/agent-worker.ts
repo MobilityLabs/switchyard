@@ -179,9 +179,13 @@ async function postDeliveryEvent(
 
 /** Session-lifecycle reporting (SYD-43): tells the tracker a session started
  * so the UI can show a live Agents panel. Best-effort — visibility must never
- * break dispatch — so every failure resolves to null after logging. */
+ * break dispatch — so every failure resolves to null after logging.
+ * `onError`, when given, additionally mirrors the failure to the caller's
+ * per-issue worker log (SYD-105) — console.error alone is easy to miss since
+ * dispatched sessions' stdout/stderr already goes to that same log file. */
 export async function reportSessionStart(
-  config: WorkerConfig, token: string, input: { ref: string; mode: "cli" | "container" | "sdk"; pid: number | null }
+  config: WorkerConfig, token: string, input: { ref: string; mode: "cli" | "container" | "sdk"; pid: number | null },
+  onError?: (message: string) => void,
 ): Promise<number | null> {
   const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions`;
   try {
@@ -197,16 +201,20 @@ export async function reportSessionStart(
       return ((await res.json()) as { id: number }).id;
     });
   } catch (err) {
-    console.error(`could not report session start for ${input.ref}: ${(err as Error).message}`);
+    const message = `could not report session start for ${input.ref}: ${(err as Error).message}`;
+    console.error(message);
+    onError?.(message);
     return null;
   }
 }
 
 /** Closes out a session started by reportSessionStart. Takes the id as a
  * promise so callers can wire it straight from the (unawaited) start call;
- * a null id (start never landed) is a silent no-op. Never rejects. */
+ * a null id (start never landed) is a silent no-op. Never rejects. See
+ * reportSessionStart for the `onError` mirroring contract. */
 export async function reportSessionEnd(
-  config: WorkerConfig, token: string, sessionId: Promise<number | null>, exitCode: number | null
+  config: WorkerConfig, token: string, sessionId: Promise<number | null>, exitCode: number | null,
+  onError?: (message: string) => void,
 ): Promise<void> {
   const id = await sessionId;
   if (id === null) return;
@@ -223,7 +231,9 @@ export async function reportSessionEnd(
       }
     });
   } catch (err) {
-    console.error(`could not report session end ${id}: ${(err as Error).message}`);
+    const message = `could not report session end ${id}: ${(err as Error).message}`;
+    console.error(message);
+    onError?.(message);
   }
 }
 
@@ -276,7 +286,10 @@ function triggerUnansweredDrain(config: WorkerConfig, token: string): void {
   );
 }
 
-function dispatch(
+// Exported for tests (SYD-105): lets the session-reporting integration test
+// below drive dispatch() end to end (spawn -> reportSessionStart, exit ->
+// reportSessionEnd) rather than only exercising the two helpers in isolation.
+export function dispatch(
   issue: ApiIssue, config: WorkerConfig, token: string, role: WorkerRole, opts: { resumed?: boolean } = {}
 ): void {
   const project = config.projects[projectKeyOf(issue.ref)];
@@ -288,6 +301,14 @@ function dispatch(
     dispatchSdk(issue, project.repo, config, token, role, logPath, opts);
     return;
   }
+
+  const logLine = (text: string) => {
+    try {
+      appendFileSync(logPath, text);
+    } catch (err) {
+      console.error(`could not append to ${logPath}: ${(err as Error).message}`);
+    }
+  };
 
   const fd = openSync(logPath, "a");
 
@@ -337,21 +358,14 @@ function dispatch(
       ref: issue.ref,
       mode: config.containerized ? "container" : "cli",
       pid: child.pid ?? null,
-    });
+    }, (message) => logLine(`[worker] ${message}\n`));
   });
 
   child.on("exit", (code) => {
-    void reportSessionEnd(config, token, sessionId, code);
+    void reportSessionEnd(config, token, sessionId, code, (message) => logLine(`[worker] ${message}\n`));
     active.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
     console.log(`${issue.ref} exited with code ${code}`);
-    const logLine = (text: string) => {
-      try {
-        appendFileSync(logPath, text);
-      } catch (err) {
-        console.error(`could not append to ${logPath}: ${(err as Error).message}`);
-      }
-    };
     logLine(`\n[worker] exited with code ${code}\n`);
     // Delivery gate (SYD-49): a containerized session that pushed agent/<ref>
     // gets its branch published to GitHub as a PR, host-side (gh + git auth
@@ -383,7 +397,7 @@ function dispatch(
     active.delete(issue.ref);
     // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
     // close the session (no-op when spawn never happened: sessionId is null).
-    void reportSessionEnd(config, token, sessionId, null);
+    void reportSessionEnd(config, token, sessionId, null, (message) => logLine(`[worker] ${message}\n`));
     console.error(`failed to spawn claude for ${issue.ref}: ${err.message}`);
   });
 }
@@ -418,7 +432,10 @@ function dispatchSdk(
   active.set(issue.ref, "sdk");
   console.log(`dispatched ${issue.ref} (sdk session) -> ${logPath}`);
   safeAppend(`[worker] sdk session starting for ${issue.ref}\n`);
-  const sessionId = reportSessionStart(config, token, { ref: issue.ref, mode: "sdk", pid: null });
+  const sessionId = reportSessionStart(
+    config, token, { ref: issue.ref, mode: "sdk", pid: null },
+    (message) => safeAppend(`[worker] ${message}\n`),
+  );
 
   const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
   import(runnerPath)
@@ -436,7 +453,7 @@ function dispatchSdk(
       (code) => {
         console.log(`${issue.ref} sdk session finished with code ${code}`);
         safeAppend(`[worker] exited with code ${code}\n`);
-        void reportSessionEnd(config, token, sessionId, code);
+        void reportSessionEnd(config, token, sessionId, code, (message) => safeAppend(`[worker] ${message}\n`));
       },
       (err: Error) => {
         console.error(`sdk dispatch failed for ${issue.ref}: ${err.message}`);
@@ -444,7 +461,7 @@ function dispatchSdk(
           `[worker] sdk dispatch failed: ${err.message}\n` +
           `[worker] is worker-sdk installed? run: npm install --prefix worker-sdk\n`,
         );
-        void reportSessionEnd(config, token, sessionId, null);
+        void reportSessionEnd(config, token, sessionId, null, (message) => safeAppend(`[worker] ${message}\n`));
       },
     )
     .catch((err: Error) => console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`))

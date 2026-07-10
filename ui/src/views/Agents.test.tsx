@@ -44,6 +44,17 @@ describe("formatElapsed", () => {
   it("uses now for a still-running session", () => {
     expect(formatElapsed(1000, null, 1090)).toBe("1m");
   });
+  it("crosses the 60s boundary from seconds to minutes (SYD-105)", () => {
+    expect(formatElapsed(1000, 1059)).toBe("59s");
+    expect(formatElapsed(1000, 1060)).toBe("1m");
+  });
+  it("crosses the 3600s boundary from minutes to hours, rendering '1h 0m' at the seam (SYD-105)", () => {
+    expect(formatElapsed(1000, 1000 + 3599)).toBe("59m");
+    expect(formatElapsed(1000, 1000 + 3600)).toBe("1h 0m");
+  });
+  it("clamps a clock-skewed endedAt before startedAt to 0s instead of going negative (SYD-105)", () => {
+    expect(formatElapsed(1000, 900)).toBe("0s");
+  });
 });
 
 describe("Agents view", () => {

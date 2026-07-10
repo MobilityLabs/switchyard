@@ -148,9 +148,12 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     c.json(startAgentSession(db, c.var.actor, c.req.valid("json")))
   );
 
-  app.patch("/agent-sessions/:id", body(agentSessionEndBody), (c) =>
-    c.json(endAgentSession(db, c.var.actor, Number(c.req.param("id")), c.req.valid("json").exitCode))
-  );
+  app.patch("/agent-sessions/:id", body(agentSessionEndBody), (c) => {
+    const idParam = c.req.param("id");
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) throw new SwitchyardError(`Agent session ${idParam} does not exist.`);
+    return c.json(endAgentSession(db, c.var.actor, id, c.req.valid("json").exitCode));
+  });
 
   app.post("/issues/:ref/progress-note", body(progressNoteBody), (c) => {
     recordProgressNote(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note);

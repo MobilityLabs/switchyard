@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
+import { events } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
@@ -121,5 +123,25 @@ describe("recordProgressNote", () => {
 
   it("rejects human actors — progress notes are agent session status", () => {
     expect(() => recordProgressNote(db, human, "SYD-1", "hi")).toThrow(/agent actors/i);
+  });
+
+  it("drops a note landing in the same second the session exits (SYD-105: strict upper bound)", () => {
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
+    recordProgressNote(db, agent, "SYD-1", "in the exit second");
+    const ended = endAgentSession(db, agent, s.id, 0);
+    // Force the note onto the exact second the session exits, regardless of
+    // real wall-clock timing, to pin the strict `lt(endedAt)` bound.
+    db.update(events).set({ createdAt: ended.endedAt as number }).where(eq(events.type, "progress_note")).run();
+    const [view] = listAgentSessions(db, { ref: "SYD-1" });
+    expect(view.lastNote).toBeNull();
+  });
+
+  it("does not attribute another agent actor's note in the same window to this session (SYD-105)", () => {
+    const otherAgent = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
+    recordProgressNote(db, otherAgent, "SYD-1", "not this session's note");
+    const [view] = listAgentSessions(db, { ref: "SYD-1" });
+    expect(view.id).toBe(s.id);
+    expect(view.lastNote).toBeNull();
   });
 });
