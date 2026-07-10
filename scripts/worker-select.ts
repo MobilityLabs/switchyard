@@ -8,6 +8,14 @@ export type WorkerIssue = {
   assigneeId: number | null;
   needsInput: boolean;
   updatedAt: number;
+  /**
+   * Set when the issue already has an open agent PR (SYD-99: a pr_opened or
+   * gh_pr_opened event with no later merge/close — see
+   * src/services/pr-status.ts). Dispatch must skip these even when
+   * assigneeId is null, e.g. a stale claim released back to todo while its
+   * PR is still unmerged — dispatching again would just race the open PR.
+   */
+  openPr?: { prNumber: number; url: string } | null;
 };
 
 /** One extra CLI tool a project's dispatched sessions need beyond the baseline (git, node, claude). */
@@ -172,9 +180,11 @@ export function checkRoleLockConflict(
 /**
  * Filter a list of `todo` issues down to the ones the worker should dispatch this
  * tick: carries the configured label, belongs to a configured project, is
- * unassigned, doesn't need human input, isn't already running, and fits within
- * remaining maxConcurrent capacity (existing active dispatches + newly
- * selected <= maxConcurrent).
+ * unassigned, doesn't need human input, doesn't already have an open agent PR
+ * (SYD-99 — belt-and-suspenders alongside claimIssue's own check, for a claim
+ * that was released back to todo while its PR is still open), isn't already
+ * running, and fits within remaining maxConcurrent capacity (existing active
+ * dispatches + newly selected <= maxConcurrent).
  */
 export function selectDispatchable<T extends WorkerIssue>(
   issues: T[],
@@ -201,6 +211,10 @@ export function selectDispatchable<T extends WorkerIssue>(
     if (!(projectKeyOf(issue.ref) in config.projects)) continue;
     if (issue.assigneeId !== null) continue;
     if (issue.needsInput) continue;
+    if (issue.openPr) {
+      console.log(`skipping ${issue.ref}: open PR (#${issue.openPr.prNumber}) already in flight`);
+      continue;
+    }
     if (active.has(issue.ref)) continue;
     selected.push(issue);
   }

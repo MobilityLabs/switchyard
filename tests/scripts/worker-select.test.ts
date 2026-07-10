@@ -79,6 +79,17 @@ describe("selectDispatchable", () => {
     expect(selectDispatchable(issues, config, [])).toEqual([issues[0]]);
   });
 
+  it("skips unassigned issues with an open agent PR (SYD-99: a stale claim released back to todo)", () => {
+    const issues = [
+      issue({ ref: "SYD-1" }),
+      issue({ ref: "SYD-2", openPr: { prNumber: 41, url: "https://x/41" } }),
+    ];
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(selectDispatchable(issues, config, [])).toEqual([issues[0]]);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/skipping SYD-2.*open PR.*#41/));
+    logSpy.mockRestore();
+  });
+
   it("caps selection so active + selected never exceeds maxConcurrent", () => {
     const issues = [issue({ ref: "SYD-1" }), issue({ ref: "SYD-2" }), issue({ ref: "SYD-3" })];
     expect(selectDispatchable(issues, { ...config, maxConcurrent: 2 }, ["SYD-9"])).toEqual([issues[0]]);

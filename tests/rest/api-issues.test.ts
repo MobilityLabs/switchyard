@@ -87,6 +87,33 @@ describe("issue routes", () => {
     expect(cleared.attention).toBeNull();
   });
 
+  it("flags an open PR for list/detail, and refuses a second claim while it's open (SYD-99)", async () => {
+    await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title: "Ship it" }) });
+    await app.request("/issues/SYD-1", { method: "PATCH", headers: humanH, body: JSON.stringify({ status: "todo" }) });
+    await app.request("/issues/SYD-1/claim", { method: "POST", headers: agentH });
+    await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({ type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" }),
+    });
+
+    const detail = await body<{ openPr: { prNumber: number; url: string } | null }>(
+      await app.request("/issues/SYD-1", { headers: humanH })
+    );
+    expect(detail.openPr).toEqual({ prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+
+    const list = await body<{ ref: string; openPr: unknown }[]>(
+      await app.request("/issues?project=SYD", { headers: humanH })
+    );
+    expect(list.find((i) => i.ref === "SYD-1")?.openPr).toEqual({ prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+
+    // A different actor claiming while the PR is open is refused.
+    const other = createActor(db, { name: "claude/other", type: "agent" });
+    const otherH = { authorization: `Bearer ${other.token}` };
+    const denied = await app.request("/issues/SYD-1/claim", { method: "POST", headers: otherH });
+    expect(denied.status).toBe(400);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/already claimed by claude\/dev/i);
+  });
+
   it("dependencies block claims over REST", async () => {
     for (const title of ["Schema", "API"]) {
       await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title }) });

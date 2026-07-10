@@ -6,6 +6,7 @@ import { SwitchyardError } from "./errors.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { getOpenBlockers } from "./dependencies.js";
+import { getOpenPr } from "./pr-status.js";
 
 export type Provenance = {
   sourceType: "session" | "todo" | "ci" | "manual";
@@ -123,6 +124,30 @@ export type UpdateIssueInput = {
   labels?: string[];
 };
 
+/**
+ * Refuses to let `actor` claim an issue already spoken for (SYD-99): claimed
+ * by a different actor, or sitting behind an open agent PR from a prior claim
+ * (see getOpenPr — this also catches a stale claim that got released while
+ * its PR is still unmerged). Reclaiming your own issue is always fine. This
+ * is the gap that let SYD-93 get fixed twice in parallel (worker PR #41 vs a
+ * coordinating session's PR #42, opened without ever calling claim_issue).
+ */
+function assertClaimable(db: Db, actor: Actor, current: IssueView): void {
+  if (current.assigneeId === actor.id) return;
+  if (current.assigneeId !== null) {
+    const assignee = db.select().from(actorsTable).where(eq(actorsTable.id, current.assigneeId)).get();
+    throw new SwitchyardError(
+      `${current.ref} is already claimed by ${assignee?.name ?? "another actor"} — check with them before starting duplicate work, or call next_task for another issue.`
+    );
+  }
+  const openPr = getOpenPr(db, current.id);
+  if (openPr) {
+    throw new SwitchyardError(
+      `${current.ref} already has an open PR (#${openPr.prNumber}: ${openPr.url}) from a prior claim — check it before starting duplicate work, or call next_task for another issue.`
+    );
+  }
+}
+
 export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssueInput): IssueView {
   checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
@@ -147,15 +172,17 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
         );
       }
       if (patch.status === "in_progress" && actor.type === "agent") {
-        // Same gate claimIssue enforces — without this, a PATCH straight to
+        // Same gates claimIssue enforces — without this, a PATCH straight to
         // in_progress would let an agent start work a human deliberately
-        // blocked behind another issue.
+        // blocked behind another issue, or duplicate a claim/PR already in
+        // flight (SYD-99).
         const blockers = getOpenBlockers(tx as Db, current.id);
         if (blockers.length > 0) {
           throw new SwitchyardError(
             `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
           );
         }
+        assertClaimable(tx as Db, actor, current);
       }
       changes.status = patch.status;
       toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
@@ -233,5 +260,6 @@ export function claimIssue(db: Db, actor: Actor, ref: string): IssueView {
       `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
     );
   }
+  assertClaimable(db, actor, current);
   return updateIssue(db, actor, ref, { status: "in_progress", assigneeName: actor.name });
 }
