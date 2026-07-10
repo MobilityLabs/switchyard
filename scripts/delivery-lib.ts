@@ -82,17 +82,23 @@ export function buildPrBody(ref: string, serverUrl: string): string {
 // caller passes them to execFile (never a shell), so issue-title content can
 // never be interpreted.
 
+// Every gh invocation carries -R <owner>/<repo> and runs from a neutral,
+// non-repo cwd (never project.repo, the human's live checkout) — see
+// delivery-exec.ts. -R makes gh operate purely against the GitHub API, so a
+// human's in-progress checkout of agent/<ref> is never switched or deleted.
+
 export function buildPushArgs(ref: string): string[] {
   return ["push", "origin", agentBranch(ref)];
 }
 
-export function buildPrListArgs(ref: string): string[] {
-  return ["pr", "list", "--head", agentBranch(ref), "--state", "open", "--json", "number"];
+export function buildPrListArgs(ref: string, ownerRepo: string): string[] {
+  return ["pr", "list", "-R", ownerRepo, "--head", agentBranch(ref), "--state", "open", "--json", "number"];
 }
 
-export function buildPrCreateArgs(ref: string, issueTitle: string, serverUrl: string): string[] {
+export function buildPrCreateArgs(ref: string, issueTitle: string, serverUrl: string, ownerRepo: string): string[] {
   return [
     "pr", "create",
+    "-R", ownerRepo,
     "--base", MAIN_BRANCH,
     "--head", agentBranch(ref),
     "--title", buildPrTitle(ref, issueTitle),
@@ -100,12 +106,26 @@ export function buildPrCreateArgs(ref: string, issueTitle: string, serverUrl: st
   ];
 }
 
-export function buildPrMergeArgs(prNumber: number): string[] {
-  return ["pr", "merge", String(prNumber), "--merge", "--delete-branch"];
+export function buildPrMergeArgs(prNumber: number, ownerRepo: string): string[] {
+  return ["pr", "merge", String(prNumber), "-R", ownerRepo, "--merge", "--delete-branch"];
 }
 
-export function buildPrViewUrlArgs(prNumber: number): string[] {
-  return ["pr", "view", String(prNumber), "--json", "url", "--jq", ".url"];
+export function buildPrViewMergeShaArgs(prNumber: number, ownerRepo: string): string[] {
+  return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"];
+}
+
+/** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */
+export function parseOwnerRepo(remoteUrl: string): string {
+  const trimmed = remoteUrl.trim().replace(/\.git$/, "");
+  const sshMatch = trimmed.match(/^[\w.-]+@[^:/]+[:/](.+)$/);
+  if (sshMatch) return sshMatch[1];
+  const httpMatch = trimmed.match(/^https?:\/\/[^/]+\/(.+)$/);
+  if (httpMatch) return httpMatch[1];
+  throw new Error(`cannot parse owner/repo from git remote url: ${remoteUrl}`);
+}
+
+export function buildPrViewUrlArgs(prNumber: number, ownerRepo: string): string[] {
+  return ["pr", "view", String(prNumber), "--json", "url", "--jq", ".url", "-R", ownerRepo];
 }
 
 /** Outcome of a publishAgentBranch call (delivery-exec.ts) — pure so the log-line

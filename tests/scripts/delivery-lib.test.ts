@@ -8,6 +8,8 @@ import {
   buildPrCreateArgs,
   buildPrMergeArgs,
   buildPrViewUrlArgs,
+  buildPrViewMergeShaArgs,
+  parseOwnerRepo,
   buildPrTitle,
   buildPrBody,
   deliveryComment,
@@ -99,26 +101,34 @@ describe("argv builders", () => {
     expect(buildPushArgs("SYD-9")).toEqual(["push", "origin", "agent/SYD-9"]);
   });
 
-  it("buildPrListArgs", () => {
-    expect(buildPrListArgs("SYD-9")).toEqual([
-      "pr", "list", "--head", "agent/SYD-9", "--state", "open", "--json", "number",
+  it("buildPrListArgs carries -R so gh never needs to be run inside the repo", () => {
+    expect(buildPrListArgs("SYD-9", "MobilityLabs/switchyard")).toEqual([
+      "pr", "list", "-R", "MobilityLabs/switchyard", "--head", "agent/SYD-9", "--state", "open", "--json", "number",
     ]);
   });
 
-  it("buildPrCreateArgs embeds title and body as discrete argv entries", () => {
-    const args = buildPrCreateArgs("SYD-9", "Fix the; thing `rm -rf`", "http://host:3300/");
-    expect(args.slice(0, 5)).toEqual(["pr", "create", "--base", "main", "--head"]);
+  it("buildPrCreateArgs embeds title, body, and -R as discrete argv entries", () => {
+    const args = buildPrCreateArgs("SYD-9", "Fix the; thing `rm -rf`", "http://host:3300/", "MobilityLabs/switchyard");
+    expect(args.slice(0, 5)).toEqual(["pr", "create", "-R", "MobilityLabs/switchyard", "--base"]);
     expect(args).toContain("agent/SYD-9");
     expect(args).toContain("SYD-9: Fix the; thing `rm -rf`");
     expect(args.join(" ")).toContain("http://host:3300/issue/SYD-9");
   });
 
   it("buildPrMergeArgs", () => {
-    expect(buildPrMergeArgs(41)).toEqual(["pr", "merge", "41", "--merge", "--delete-branch"]);
+    expect(buildPrMergeArgs(41, "MobilityLabs/switchyard")).toEqual([
+      "pr", "merge", "41", "-R", "MobilityLabs/switchyard", "--merge", "--delete-branch",
+    ]);
+  });
+
+  it("buildPrViewMergeShaArgs", () => {
+    expect(buildPrViewMergeShaArgs(41, "MobilityLabs/switchyard")).toEqual([
+      "pr", "view", "41", "-R", "MobilityLabs/switchyard", "--json", "mergeCommit", "--jq", ".mergeCommit.oid",
+    ]);
   });
 
   it("buildPrViewUrlArgs", () => {
-    expect(buildPrViewUrlArgs(41)).toEqual(["pr", "view", "41", "--json", "url", "--jq", ".url"]);
+    expect(buildPrViewUrlArgs(41, "acme/widgets")).toEqual(["pr", "view", "41", "--json", "url", "--jq", ".url", "-R", "acme/widgets"]);
   });
 
   it("buildPrTitle / buildPrBody", () => {
@@ -147,6 +157,24 @@ describe("formatPublishOutcome", () => {
       .toBe("pushed agent/SYD-9; PR #5 already open");
     expect(formatPublishOutcome("agent/SYD-9", { status: "opened", prNumber: 6, url: "https://x/pull/6" }))
       .toBe("opened PR for agent/SYD-9: https://x/pull/6");
+  });
+});
+
+describe("parseOwnerRepo", () => {
+  it("parses an ssh-style remote url", () => {
+    expect(parseOwnerRepo("git@github.com:MobilityLabs/switchyard.git")).toBe("MobilityLabs/switchyard");
+  });
+
+  it("parses an https remote url with a .git suffix", () => {
+    expect(parseOwnerRepo("https://github.com/MobilityLabs/switchyard.git")).toBe("MobilityLabs/switchyard");
+  });
+
+  it("parses an https remote url without a .git suffix", () => {
+    expect(parseOwnerRepo("https://github.com/MobilityLabs/switchyard")).toBe("MobilityLabs/switchyard");
+  });
+
+  it("throws on an unparseable url", () => {
+    expect(() => parseOwnerRepo("not-a-url")).toThrow(/cannot parse/);
   });
 });
 

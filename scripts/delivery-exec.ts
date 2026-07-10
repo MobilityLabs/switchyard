@@ -6,6 +6,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   agentBranch,
@@ -13,7 +14,9 @@ import {
   buildPrListArgs,
   buildPrCreateArgs,
   buildPrMergeArgs,
+  buildPrViewMergeShaArgs,
   buildPrViewUrlArgs,
+  parseOwnerRepo,
   parsePrNumberFromUrl,
   tailOf,
   MAIN_BRANCH,
@@ -25,6 +28,19 @@ const execFileP = promisify(execFile);
 export async function run(cmd: string, args: string[], opts: { cwd?: string } = {}): Promise<string> {
   const { stdout } = await execFileP(cmd, args, { cwd: opts.cwd, maxBuffer: 10 * 1024 * 1024 });
   return stdout.trim();
+}
+
+// Every gh call below runs with -R <owner>/<repo> from GH_CWD — a directory
+// with no .git of its own — instead of `cwd: repo` (the human's live
+// checkout). gh then talks to the GitHub API only: it never has a local
+// checkout of agent/<ref> to switch off of or delete, so `gh pr merge
+// --delete-branch` can't yank a working tree out from under a human who has
+// that branch checked out for review.
+const GH_CWD = os.tmpdir();
+
+async function originOwnerRepo(repo: string): Promise<string> {
+  const url = await run("git", ["-C", repo, "remote", "get-url", "origin"]);
+  return parseOwnerRepo(url);
 }
 
 /**
@@ -53,29 +69,27 @@ export async function publishAgentBranch(
   if (ahead === "0") return { status: "no-commits" };
 
   await run("git", ["-C", repo, ...buildPushArgs(ref)]);
-  const open = JSON.parse(await run("gh", buildPrListArgs(ref), { cwd: repo })) as { number: number }[];
-  if (open.length > 0) {
-    const prNumber = open[0].number;
-    const url = await run("gh", buildPrViewUrlArgs(prNumber), { cwd: repo });
+  const ownerRepo = await originOwnerRepo(repo);
+  const prNumber = await findOpenAgentPr(repo, ref);
+  if (prNumber !== null) {
+    const url = await run("gh", buildPrViewUrlArgs(prNumber, ownerRepo), { cwd: GH_CWD });
     return { status: "already-open", prNumber, url };
   }
-  const url = await run("gh", buildPrCreateArgs(ref, issueTitle, serverUrl), { cwd: repo });
+  const url = await run("gh", buildPrCreateArgs(ref, issueTitle, serverUrl, ownerRepo), { cwd: GH_CWD });
   return { status: "opened", prNumber: parsePrNumberFromUrl(url), url };
 }
 
 export async function findOpenAgentPr(repo: string, ref: string): Promise<number | null> {
-  const open = JSON.parse(await run("gh", buildPrListArgs(ref), { cwd: repo })) as { number: number }[];
+  const ownerRepo = await originOwnerRepo(repo);
+  const open = JSON.parse(await run("gh", buildPrListArgs(ref, ownerRepo), { cwd: GH_CWD })) as { number: number }[];
   return open.length > 0 ? open[0].number : null;
 }
 
 /** Merges the PR (merge commit, deletes the remote branch) and returns the merge SHA. */
 export async function mergeAgentPr(repo: string, prNumber: number): Promise<string> {
-  await run("gh", buildPrMergeArgs(prNumber), { cwd: repo });
-  return run(
-    "gh",
-    ["pr", "view", String(prNumber), "--json", "mergeCommit", "--jq", ".mergeCommit.oid"],
-    { cwd: repo }
-  );
+  const ownerRepo = await originOwnerRepo(repo);
+  await run("gh", buildPrMergeArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+  return run("gh", buildPrViewMergeShaArgs(prNumber, ownerRepo), { cwd: GH_CWD });
 }
 
 /**

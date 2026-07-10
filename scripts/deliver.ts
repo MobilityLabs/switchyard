@@ -12,7 +12,7 @@
 // cloneDir, deploy). The event cursor persists in .superpowers/deliver-cursor
 // so approvals stamped while this worker is down are delivered on restart.
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,7 +70,11 @@ function readCursor(): number | null {
 
 function writeCursor(id: number): void {
   mkdirSync(path.dirname(cursorPath()), { recursive: true });
-  writeFileSync(cursorPath(), `${id}\n`);
+  // Write-then-rename so a crash mid-write can never leave a truncated
+  // cursor file for readCursor()/parseCursorText() to trip over.
+  const tmpPath = `${cursorPath()}.tmp-${process.pid}`;
+  writeFileSync(tmpPath, `${id}\n`);
+  renameSync(tmpPath, cursorPath());
 }
 
 function cloneRootOf(config: WorkerConfig): string {
@@ -218,12 +222,20 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const gate = newTickGate();
 
+  // Dry runs are non-mutating (never merge/deploy/comment/advance the
+  // cursor), so they're safe to overlap with a live worker or each other —
+  // only a real run (looped or --once) needs exclusivity.
+  const releaseLock = dryRun ? null : acquirePidLock(path.join(repoRoot(), ".superpowers", "deliver.pid"));
+
   if (once) {
-    await tick(config, token, gate, dryRun);
+    try {
+      await tick(config, token, gate, dryRun);
+    } finally {
+      releaseLock?.();
+    }
     return;
   }
 
-  const releaseLock = acquirePidLock(path.join(repoRoot(), ".superpowers", "deliver.pid"));
   await tick(config, token, gate, dryRun);
 
   const pollSeconds = config.delivery?.pollSeconds ?? DEFAULT_POLL_SECONDS;
@@ -234,12 +246,12 @@ async function main(): Promise<void> {
 
   const stop = () => {
     clearInterval(timer);
-    releaseLock();
+    releaseLock?.();
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
-  process.on("exit", releaseLock);
+  process.on("exit", () => releaseLock?.());
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
