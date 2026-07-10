@@ -58,15 +58,6 @@ a { color: var(--accent-2); text-decoration: none; }
   background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
   border-radius: 6px; padding: 4px 8px;
 }
-.accept-prompt { display: flex; gap: 8px; align-items: center; }
-.accept-prompt select {
-  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-  border-radius: 6px; padding: 4px 8px;
-}
-.accept-labels {
-  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-  border-radius: 6px; padding: 4px 8px; width: 200px;
-}
 .error-bar {
   background: color-mix(in srgb, var(--danger) 15%, var(--panel)); border: 1px solid var(--danger);
   padding: 8px 12px; border-radius: var(--radius);
