@@ -10,7 +10,7 @@ import { createProject, listProjects } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
 import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
-import { addDependency, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
+import { addDependency, listBlockedIssueIds, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
 import { startAgentSession, endAgentSession, listAgentSessions, recordProgressNote } from "../services/agent-sessions.js";
@@ -99,8 +99,14 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     });
     const attention = listAttentionByIssueId(db);
     const openPrs = listOpenPrByIssueId(db);
+    const blocked = listBlockedIssueIds(db);
     return c.json(
-      results.map((r) => ({ ...r, attention: attention.get(r.id) ?? null, openPr: openPrs.get(r.id) ?? null }))
+      results.map((r) => ({
+        ...r,
+        attention: attention.get(r.id) ?? null,
+        openPr: openPrs.get(r.id) ?? null,
+        blocked: blocked.has(r.id),
+      }))
     );
   });
 

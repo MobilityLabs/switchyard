@@ -6,6 +6,7 @@ import { createIssue, updateIssue, claimIssue } from "../../src/services/issues.
 import {
   addDependency,
   getOpenBlockers,
+  listBlockedIssueIds,
   listDependencies,
   nextTask,
   removeDependency,
@@ -43,6 +44,16 @@ describe("dependencies", () => {
     expect(nextTask(db, agent, "AIPI")?.ref).toBe("AIPI-2");
     for (const ref of ["AIPI-2", "AIPI-3"]) updateIssue(db, human, ref, { status: "done" });
     expect(nextTask(db, agent)).toBeNull();
+  });
+
+  it("listBlockedIssueIds returns ids of issues with an open blocker, cleared once the blocker closes (SYD-160)", () => {
+    addDependency(db, human, "AIPI-1", "AIPI-2"); // AIPI-1 blocks AIPI-2
+    addDependency(db, human, "AIPI-3", "AIPI-2"); // AIPI-3 also blocks AIPI-2 — still one id
+    expect([...listBlockedIssueIds(db)]).toEqual([2]);
+    updateIssue(db, human, "AIPI-1", { status: "done" });
+    expect([...listBlockedIssueIds(db)]).toEqual([2]); // AIPI-3 still open
+    updateIssue(db, human, "AIPI-3", { status: "canceled" });
+    expect(listBlockedIssueIds(db).size).toBe(0);
   });
 
   it("nextTask skips issues assigned to someone else", () => {

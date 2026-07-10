@@ -116,6 +116,37 @@ describe("selectDispatchable", () => {
     const issues = [issue({ ref: "SYD-1", needsInput: true }), issue({ ref: "SYD-2", needsInput: false })];
     expect(selectDispatchable(issues, config, [])).toEqual([issues[1]]);
   });
+
+  it("skips issues with an open blocker, even if otherwise eligible (SYD-160)", () => {
+    const issues = [issue({ ref: "SYD-1", blocked: true }), issue({ ref: "SYD-2", blocked: false })];
+    expect(selectDispatchable(issues, config, [])).toEqual([issues[1]]);
+  });
+
+  it("prefers the higher-priority issue regardless of the feed's arrival order (SYD-160)", () => {
+    // The feed arrives newest-id-first; priority must win over arrival order.
+    const issues = [
+      issue({ ref: "SYD-3", priority: "low" }),
+      issue({ ref: "SYD-2", priority: "urgent" }),
+      issue({ ref: "SYD-1", priority: "medium" }),
+    ];
+    expect(selectDispatchable(issues, { ...config, maxConcurrent: 1 }, []).map((i) => i.ref)).toEqual(["SYD-2"]);
+  });
+
+  it("orders selection by priority, then oldest-first within a priority (SYD-160)", () => {
+    const issues = [
+      issue({ ref: "SYD-1", priority: "high", createdAt: 200 }),
+      issue({ ref: "SYD-2", priority: "high", createdAt: 100 }),
+      issue({ ref: "SYD-3", priority: "urgent", createdAt: 300 }),
+    ];
+    expect(selectDispatchable(issues, { ...config, maxConcurrent: 5 }, []).map((i) => i.ref)).toEqual([
+      "SYD-3", "SYD-2", "SYD-1",
+    ]);
+  });
+
+  it("treats an unset priority as lowest, below any ranked priority (SYD-160)", () => {
+    const issues = [issue({ ref: "SYD-1" }), issue({ ref: "SYD-2", priority: "low" })];
+    expect(selectDispatchable(issues, { ...config, maxConcurrent: 1 }, []).map((i) => i.ref)).toEqual(["SYD-2"]);
+  });
 });
 
 describe("filterRetryCapped", () => {
