@@ -310,7 +310,10 @@ the issue `done`. Three pieces (SYD-49):
    deployed and not commented — on restart the ref is skipped (its PR is no
    longer open), so if an issue is stamped done and its PR shows merged but no
    delivery comment ever lands, re-run the deploy manually (`npm run deploy`)
-   or re-deliver by hand.
+   or re-deliver by hand. If delivery fails, re-stamping an already-`done`
+   issue done is a no-op (unchanged status emits no event) — instead click
+   **Retry delivery** on the issue's attention banner, which fires a
+   `redeliver_requested` event the worker also polls for (SYD-102).
 3. **Branch protection on `main`** blocks force-pushes and deletion. Required
    PR reviews stay off for now: all pushes authenticate as one GitHub identity
    and GitHub forbids self-approval — full can't-push-to-main enforcement is

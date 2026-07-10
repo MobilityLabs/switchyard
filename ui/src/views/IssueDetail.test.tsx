@@ -65,12 +65,12 @@ describe("DescriptionSection", () => {
 // rendered `attention` — a delivery_failed issue looked clean on its own
 // page, which is where a human goes to investigate.
 describe("AttentionBanner", () => {
-  async function render(attention: Issue["attention"]): Promise<HTMLElement> {
+  async function render(attention: Issue["attention"], onRetry?: () => void): Promise<HTMLElement> {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<AttentionBanner attention={attention} />);
+      root.render(<AttentionBanner attention={attention} onRetry={onRetry} />);
     });
     return container;
   }
@@ -85,6 +85,24 @@ describe("AttentionBanner", () => {
     const banner = container.querySelector(".banner.danger");
     expect(banner).not.toBeNull();
     expect(banner?.textContent).toContain("merge conflict");
+  });
+
+  it("renders no Retry button when onRetry is not passed", async () => {
+    const container = await render({ reason: "delivery_failed", message: "merge conflict" });
+    expect(container.querySelector(".retry-delivery")).toBeNull();
+  });
+
+  // SYD-102: re-stamping done is a silent no-op, so the failure banner needs
+  // its own retry trigger rather than telling humans to re-stamp done.
+  it("renders a Retry delivery button that calls onRetry when clicked", async () => {
+    let clicked = 0;
+    const container = await render({ reason: "delivery_failed", message: "merge conflict" }, () => { clicked += 1; });
+    const button = container.querySelector(".retry-delivery") as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(clicked).toBe(1);
   });
 });
 

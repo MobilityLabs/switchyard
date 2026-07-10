@@ -5,6 +5,7 @@ import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue, toView, type IssueView } from "./issues.js";
 import { recordEvent } from "./events.js";
+import { getAttention } from "./attention.js";
 
 function requireHuman(actor: Actor, action: string): void {
   if (actor.type !== "human") {
@@ -69,4 +70,26 @@ export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string):
     });
     return toView(tx as Db, row);
   });
+}
+
+/**
+ * Requests a retry of a stalled delivery (SYD-102). Re-stamping an
+ * already-done issue done is a silent no-op — status unchanged means no
+ * status_changed event, so deliver.ts's done-stamp scan never sees it. This
+ * gives retry a real trigger: a `redeliver_requested` event, fired only when
+ * there's an unresolved delivery_failed attention flag to retry, that
+ * deliver.ts subscribes to alongside its usual done-stamp scan. Human-only,
+ * like the rest of this file — agents still can't drive the delivery gate.
+ */
+export function redeliverIssue(db: Db, actor: Actor, ref: string): IssueView {
+  requireHuman(actor, "retry a delivery");
+  const current = getIssue(db, ref);
+  const attention = getAttention(db, current.id);
+  if (attention?.reason !== "delivery_failed") {
+    throw new SwitchyardError(
+      `${ref} has no unresolved delivery failure to retry.`
+    );
+  }
+  recordEvent(db, { issueId: current.id, actorId: actor.id, type: "redeliver_requested", payload: {} });
+  return getIssue(db, ref);
 }

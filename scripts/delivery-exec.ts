@@ -27,12 +27,16 @@ import {
   buildConflictResolutionDockerArgs,
   buildDetachOntoMainArgs,
   buildSyncLocalMainArgs,
+  buildPrViewMergeableArgs,
+  shouldRetryMergePoll,
   parsePrNumberFromUrl,
   tailOf,
   MAIN_BRANCH,
+  MERGE_POLL_INTERVAL_MS,
   type PublishOutcome,
   type RebaseOutcome,
   type ConflictResolutionOutcome,
+  type MergeableState,
 } from "./delivery-lib.js";
 import type { WorkerConfig, WorkerProject } from "./worker-select.js";
 
@@ -119,6 +123,36 @@ export async function mergeAgentPr(repo: string, prNumber: number): Promise<stri
   return run("gh", buildPrViewMergeShaArgs(prNumber, ownerRepo), { cwd: GH_CWD });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readMergeableState(prNumber: number, ownerRepo: string): Promise<MergeableState> {
+  const out = await run("gh", buildPrViewMergeableArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+  return out as MergeableState;
+}
+
+/**
+ * Polls `gh pr view --json mergeable` after a force-push (SYD-103) until it
+ * leaves UNKNOWN or MERGE_POLL_TIMEOUT_MS elapses, so the merge retry that
+ * follows a rebase/conflict-resolution force-push doesn't race GitHub's
+ * asynchronous mergeability recompute. Returns whatever state was last
+ * observed — including a still-UNKNOWN timeout — and never throws on
+ * CONFLICTING or timeout: the caller retries the merge through its normal
+ * path regardless, so a real conflict or a slow recompute just fails the
+ * same way delivery already handles a merge failure.
+ */
+export async function pollUntilMergeable(repo: string, prNumber: number): Promise<MergeableState> {
+  const ownerRepo = await originOwnerRepo(repo);
+  const start = Date.now();
+  let state = await readMergeableState(prNumber, ownerRepo);
+  while (shouldRetryMergePoll(state, Date.now() - start)) {
+    await sleep(MERGE_POLL_INTERVAL_MS);
+    state = await readMergeableState(prNumber, ownerRepo);
+  }
+  return state;
+}
+
 /**
  * Deploys must never run from a working tree (stale/dirty trees must not be
  * shippable) — keep a dedicated clone hard-reset to origin/main instead.
@@ -135,17 +169,30 @@ export async function ensureCleanClone(sourceRepo: string, cloneDir: string): Pr
 }
 
 /**
+ * Installs dependencies in the clean clone via `npm ci`. `npm ci` deletes
+ * node_modules wholesale before installing from the lockfile, unlike `npm
+ * install` (which leaves already-installed packages alone) -- needed
+ * because ensureCleanClone's `git clean -fd` does NOT remove node_modules
+ * (it's gitignored; -fd only clears untracked files git isn't told to
+ * ignore), so a persistent clone can carry native modules (e.g.
+ * better-sqlite3) compiled for a node version the gate no longer runs
+ * (SYD-101).
+ */
+export async function installDeps(cloneDir: string): Promise<string> {
+  return run("npm", ["ci"], { cwd: cloneDir });
+}
+
+/**
  * Post-merge verification gate (SYD-78): a PR is reviewed and green in
  * isolation, but nothing previously confirmed that main *after* the merge
  * (i.e. this branch plus everything else landed since its clone) still
  * typechecks and passes its tests — semantic conflicts between concurrently
  * merged branches land silently. Runs in the clean clone, never the deploy
- * caller's working tree. `npm install` first because ensureCleanClone's
- * `git clean -fd` wipes the clone's (gitignored) node_modules every time.
+ * caller's working tree.
  */
 export async function runVerification(cloneDir: string): Promise<{ ok: boolean; tail: string }> {
   try {
-    await run("npm", ["install"], { cwd: cloneDir });
+    await installDeps(cloneDir);
     const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir });
     const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir });
     return { ok: true, tail: tailOf(`${typecheck}\n${tests}`) };

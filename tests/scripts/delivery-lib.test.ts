@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   agentBranch,
   findDeliverableRefs,
+  findRedeliverRefs,
   feedGap,
   buildPushArgs,
   buildPrListArgs,
@@ -19,6 +20,9 @@ import {
   buildRebaseAbortArgs,
   buildConflictFilesArgs,
   buildForcePushWithLeaseArgs,
+  buildPrViewMergeableArgs,
+  shouldRetryMergePoll,
+  MERGE_POLL_TIMEOUT_MS,
   deliveryComment,
   deliveryFailureComment,
   verificationFailureComment,
@@ -91,6 +95,36 @@ describe("findDeliverableRefs", () => {
   });
 });
 
+describe("findRedeliverRefs", () => {
+  const keys = ["SYD"];
+  const redeliver = (o: Partial<DeliveryFeedEvent>): DeliveryFeedEvent =>
+    ev({ type: "redeliver_requested", payload: {}, ...o });
+
+  it("null cursor initializes to newest id without firing on history", () => {
+    const feed = [redeliver({ id: 7 }), redeliver({ id: 3 })];
+    expect(findRedeliverRefs(feed, keys, null)).toEqual({ refs: [], lastEventId: 7 });
+  });
+
+  it("fires on redeliver_requested newer than the cursor", () => {
+    const feed = [redeliver({ id: 10 })];
+    expect(findRedeliverRefs(feed, keys, 5)).toEqual({ refs: ["SYD-9"], lastEventId: 10 });
+  });
+
+  it("ignores events at or below the cursor", () => {
+    expect(findRedeliverRefs([redeliver({ id: 5 })], keys, 5).refs).toEqual([]);
+  });
+
+  it("ignores a done-stamp (that's findDeliverableRefs's job, not this one's)", () => {
+    const feed = [ev({ id: 11, type: "status_changed", payload: { from: "in_review", to: "done" } })];
+    expect(findRedeliverRefs(feed, keys, 5).refs).toEqual([]);
+  });
+
+  it("ignores unconfigured projects and dedupes refs", () => {
+    const feed = [redeliver({ id: 11, issue: "OTHER-1" }), redeliver({ id: 12 }), redeliver({ id: 13 })];
+    expect(findRedeliverRefs(feed, keys, 5).refs).toEqual(["SYD-9"]);
+  });
+});
+
 describe("feedGap", () => {
   it("null cursor ⇒ null", () => {
     expect(feedGap([ev({ id: 9 })], null)).toBeNull();
@@ -148,6 +182,12 @@ describe("argv builders", () => {
     ]);
   });
 
+  it("buildPrViewMergeableArgs", () => {
+    expect(buildPrViewMergeableArgs(41, "MobilityLabs/switchyard")).toEqual([
+      "pr", "view", "41", "-R", "MobilityLabs/switchyard", "--json", "mergeable", "--jq", ".mergeable",
+    ]);
+  });
+
   it("buildPrViewUrlArgs", () => {
     expect(buildPrViewUrlArgs(41, "acme/widgets")).toEqual(["pr", "view", "41", "--json", "url", "--jq", ".url", "-R", "acme/widgets"]);
   });
@@ -181,6 +221,31 @@ describe("auto-rebase argv builders (SYD-85)", () => {
 
   it("buildForcePushWithLeaseArgs — only ever targets the agent/<ref> branch", () => {
     expect(buildForcePushWithLeaseArgs("SYD-9")).toEqual(["push", "--force-with-lease", "origin", "agent/SYD-9"]);
+  });
+});
+
+describe("shouldRetryMergePoll (SYD-103)", () => {
+  it("keeps polling while UNKNOWN and under the timeout", () => {
+    expect(shouldRetryMergePoll("UNKNOWN", 0, 60000)).toBe(true);
+    expect(shouldRetryMergePoll("UNKNOWN", 59999, 60000)).toBe(true);
+  });
+
+  it("stops once the timeout elapses, even if still UNKNOWN", () => {
+    expect(shouldRetryMergePoll("UNKNOWN", 60000, 60000)).toBe(false);
+    expect(shouldRetryMergePoll("UNKNOWN", 70000, 60000)).toBe(false);
+  });
+
+  it("stops immediately on a definitive MERGEABLE answer", () => {
+    expect(shouldRetryMergePoll("MERGEABLE", 0, 60000)).toBe(false);
+  });
+
+  it("stops immediately on a definitive CONFLICTING answer", () => {
+    expect(shouldRetryMergePoll("CONFLICTING", 0, 60000)).toBe(false);
+  });
+
+  it("defaults the timeout to MERGE_POLL_TIMEOUT_MS", () => {
+    expect(shouldRetryMergePoll("UNKNOWN", MERGE_POLL_TIMEOUT_MS - 1)).toBe(true);
+    expect(shouldRetryMergePoll("UNKNOWN", MERGE_POLL_TIMEOUT_MS)).toBe(false);
   });
 });
 

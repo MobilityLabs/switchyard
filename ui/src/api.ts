@@ -49,6 +49,7 @@ export const snoozeIssue = (ref: string, until: number) =>
   api<Issue>(`/api/issues/${ref}/snooze`, { method: "POST", body: JSON.stringify({ until }) });
 export const markDuplicate = (ref: string, of: string) =>
   api<Issue>(`/api/issues/${ref}/duplicate`, { method: "POST", body: JSON.stringify({ of }) });
+export const redeliverIssue = (ref: string) => api<Issue>(`/api/issues/${ref}/redeliver`, { method: "POST" });
 export const addDependency = (blockerRef: string, blockedRef: string) =>
   api<{ ok: true }>("/api/dependencies", { method: "POST", body: JSON.stringify({ blockerRef, blockedRef }) });
 export const removeDependency = (blockerRef: string, blockedRef: string) =>

@@ -22,6 +22,7 @@ import {
 } from "./worker-select.js";
 import {
   findDeliverableRefs,
+  findRedeliverRefs,
   feedGap,
   parseCursorText,
   deliveryComment,
@@ -43,6 +44,7 @@ import {
   findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy, attemptAutoRebase,
   findMergedAgentPr,
   dispatchConflictResolution,
+  pollUntilMergeable,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
@@ -145,7 +147,7 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
   try {
     const prNumber = await findOpenAgentPr(project.repo, ref);
     if (prNumber === null) {
-      console.log(`${ref} stamped done but has no open agent PR — interactive work, skipping`);
+      console.log(`${ref} has no open agent PR — interactive work, skipping`);
       return;
     }
     if (dryRun) {
@@ -195,6 +197,8 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
           return;
         }
         console.log(`${ref}: conflict-resolution session resolved and pushed at ${resolution.sha}, retrying merge`);
+        const mergeable = await pollUntilMergeable(project.repo, prNumber);
+        console.log(`${ref}: post-force-push mergeability=${mergeable}`);
         mergeSha = await mergeAgentPr(project.repo, prNumber);
         resolvedConflict = true;
         console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (after conflict resolution)`);
@@ -208,6 +212,8 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
         return;
       } else {
         console.log(`${ref}: auto-rebased onto main at ${rebase.sha}, retrying merge`);
+        const mergeable = await pollUntilMergeable(project.repo, prNumber);
+        console.log(`${ref}: post-force-push mergeability=${mergeable}`);
         mergeSha = await mergeAgentPr(project.repo, prNumber);
         rebased = true;
       }
@@ -309,7 +315,9 @@ async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof
         `Any done-stamps in that range were NOT delivered; check the board for stamped-but-unmerged issues.`
       );
     }
-    const { refs, lastEventId } = findDeliverableRefs(feed, Object.keys(config.projects), cursor);
+    const { refs: doneRefs, lastEventId } = findDeliverableRefs(feed, Object.keys(config.projects), cursor);
+    const { refs: redeliverRefs } = findRedeliverRefs(feed, Object.keys(config.projects), cursor);
+    const refs = [...new Set([...doneRefs, ...redeliverRefs])];
     for (const ref of refs) {
       // Sequential on purpose: deliveries deploy; two at once would race the clone.
       await deliver(ref, config, token, dryRun);
