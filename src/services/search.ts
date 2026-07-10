@@ -57,11 +57,14 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
       )!
     );
   }
+  // Triage is worked oldest-first (SYD-159) — humans clear the inbox in
+  // filing order rather than always seeing whatever landed most recently.
+  // Every other view keeps the newest-first default.
   const rows = db
     .select()
     .from(issues)
     .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(desc(issues.id))
+    .orderBy(filters.status === "triage" ? issues.id : desc(issues.id))
     .all();
   return rows.map((r) => toView(db, r));
 }
