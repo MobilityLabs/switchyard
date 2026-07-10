@@ -26,3 +26,10 @@ export type IssueDetail = Issue & {
   dependencies: { blockedBy: DependencyRef[]; blocks: DependencyRef[] };
   attachments: Attachment[];
 };
+export type AgentSession = {
+  id: number; ref: string; issueTitle: string;
+  mode: "cli" | "container" | "sdk";
+  pid: number | null; status: "running" | "exited"; exitCode: number | null;
+  startedAt: number; endedAt: number | null;
+  lastNote: { note: string; createdAt: number } | null;
+};

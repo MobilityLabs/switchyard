@@ -6,7 +6,8 @@ export type Route =
   | { view: "issue"; ref: string }
   | { view: "review"; project: string | null; ref: string | null }
   | { view: "new-issue" }
-  | { view: "search"; query: string };
+  | { view: "search"; query: string }
+  | { view: "agents" };
 
 // Matches a project key (e.g. "SYD"), as opposed to an issue ref like
 // "SYD-66" — lets /review/:project? disambiguate from /review/:ref
@@ -82,6 +83,7 @@ function matchRoute(pathname: string, search: string): Route | null {
     return { view: "search", query: new URLSearchParams(search).get("q") ?? "" };
   }
   if (parts[0] === "new" && parts.length === 1) return { view: "new-issue" };
+  if (parts[0] === "agents" && parts.length === 1) return { view: "agents" };
   return null;
 }
 
@@ -103,6 +105,7 @@ export function href(route: Route): string {
   }
   if (route.view === "new-issue") return `/new`;
   if (route.view === "search") return route.query ? `/search?q=${encodeURIComponent(route.query)}` : "/search";
+  if (route.view === "agents") return "/agents";
   return "/";
 }
 

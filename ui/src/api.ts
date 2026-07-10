@@ -1,4 +1,4 @@
-import type { Actor, Attachment, Issue, IssueDetail, Priority, Project, Status } from "./types";
+import type { Actor, AgentSession, Attachment, Issue, IssueDetail, Priority, Project, Status } from "./types";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -57,6 +57,13 @@ export const removeDependency = (blockerRef: string, blockedRef: string) =>
     { method: "DELETE" },
   );
 export const logout = () => api<{ ok: true }>("/auth/logout", { method: "POST" });
+export const listAgentSessions = (filters: { active?: boolean; ref?: string } = {}) => {
+  const q = new URLSearchParams();
+  if (filters.active) q.set("active", "true");
+  if (filters.ref) q.set("ref", filters.ref);
+  const qs = q.toString();
+  return api<AgentSession[]>(`/api/agent-sessions${qs ? `?${qs}` : ""}`);
+};
 
 export async function uploadAttachment(ref: string, file: File): Promise<{ id: number; url: string; markdown: string }> {
   const form = new FormData();

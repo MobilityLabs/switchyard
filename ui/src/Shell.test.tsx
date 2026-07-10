@@ -379,3 +379,27 @@ describe("Shell search box", () => {
     expect(searchInput(container).value).toBe("widgets");
   });
 });
+
+describe("Shell agents nav (SYD-43)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    history.replaceState(null, "", "/");
+  });
+
+  it("links to /agents and polls the active session count", async () => {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (url: string) => {
+      calls.push(url);
+      return { ok: true, json: async () => [] } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const container = await renderShell();
+      await act(async () => {});
+      expect(navLink(container, "Agents").getAttribute("href")).toBe("/agents");
+      expect(calls.some((u) => u.startsWith("/api/agent-sessions?active=true"))).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
