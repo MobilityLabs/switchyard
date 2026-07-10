@@ -217,6 +217,34 @@ describe("Review scroll-to-top (SYD-70)", () => {
   });
 });
 
+describe("Review row attention badge (SYD-98)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(listIssues).mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders no attention badge when the issue is clean", async () => {
+    vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First")]);
+    const container = await mountReviewRoute("/review/SYD-1");
+    expect(container.querySelector(".issue-head .badge.danger")).toBeNull();
+  });
+
+  it("renders an icon-only badge for an unresolved delivery_failed, with the message as a hover title", async () => {
+    vi.mocked(listIssues).mockResolvedValue([
+      { ...issue("SYD-1", "First"), attention: { reason: "delivery_failed", message: "merge conflict" } },
+    ]);
+    const container = await mountReviewRoute("/review/SYD-1");
+    const badge = container.querySelector(".issue-head .badge.danger");
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).not.toContain("merge conflict");
+    expect(badge?.textContent).toBe("⛔ delivery failed");
+    expect(badge?.getAttribute("title")).toBe("merge conflict");
+  });
+});
+
 describe("Review project scoping", () => {
   beforeEach(() => {
     vi.useFakeTimers();
