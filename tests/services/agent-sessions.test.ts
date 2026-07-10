@@ -109,4 +109,13 @@ describe("recordProgressNote", () => {
     expect(view.id).toBe(s.id);
     expect(view.lastNote?.note).toBe("second");
   });
+
+  it("does not attribute a later session's note to an earlier exited session", () => {
+    const first = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
+    endAgentSession(db, agent, first.id, 0);
+    startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
+    recordProgressNote(db, agent, "SYD-1", "second session note");
+    const firstView = listAgentSessions(db, { ref: "SYD-1" }).find((s) => s.id === first.id);
+    expect(firstView?.lastNote).toBeNull();
+  });
 });

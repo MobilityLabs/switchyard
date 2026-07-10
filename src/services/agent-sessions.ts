@@ -3,7 +3,7 @@
 // Progress notes ride the events table (type "progress_note") like all other
 // issue history; sessions get a real table because they are worker-process
 // state (pid, exit code), not issue history.
-import { and, desc, eq, gt, gte, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, gte, lt, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { agentSessions, events, issues, projects } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -40,14 +40,23 @@ function requireAgent(actor: Actor): void {
   }
 }
 
-// Notes are per-issue events; scoping to createdAt >= startedAt attributes
-// them to this session (good enough — one work session per issue at a time
-// is already enforced by the claim gate).
-function lastNoteFor(db: Db, issueId: number, startedAt: number): AgentSessionView["lastNote"] {
+// Notes are per-issue events; scoping to the session's [startedAt, endedAt)
+// window attributes them to this session. The upper bound is strict: a note
+// landing in the same second the session exits is dropped rather than risk
+// attributing a later session's note to this one (unixepoch granularity).
+function lastNoteFor(
+  db: Db, issueId: number, startedAt: number, endedAt: number | null
+): AgentSessionView["lastNote"] {
+  const conditions = [
+    eq(events.issueId, issueId),
+    eq(events.type, "progress_note"),
+    gte(events.createdAt, startedAt),
+  ];
+  if (endedAt !== null) conditions.push(lt(events.createdAt, endedAt));
   const [row] = db
     .select({ payload: events.payload, createdAt: events.createdAt })
     .from(events)
-    .where(and(eq(events.issueId, issueId), eq(events.type, "progress_note"), gte(events.createdAt, startedAt)))
+    .where(and(...conditions))
     .orderBy(desc(events.id))
     .limit(1)
     .all();
@@ -75,7 +84,7 @@ function queryViews(db: Db, conditions: SQL[]): AgentSessionView[] {
     exitCode: r.s.exitCode,
     startedAt: r.s.startedAt,
     endedAt: r.s.endedAt,
-    lastNote: lastNoteFor(db, r.s.issueId, r.s.startedAt),
+    lastNote: lastNoteFor(db, r.s.issueId, r.s.startedAt, r.s.endedAt),
   }));
 }
 
