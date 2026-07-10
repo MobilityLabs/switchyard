@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { addComment, addDependency, getIssue, removeDependency, updateIssue } from "../api";
+import { addComment, addDependency, getIssue, listAgentSessions, removeDependency, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
@@ -8,6 +8,7 @@ import { PRIORITIES, STATUSES, type Activity, type Attachment, type DependencyRe
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
+import { formatElapsed } from "./Agents";
 
 export function projectKeyFromRef(ref: string): string {
   return ref.split("-")[0] ?? "";
@@ -163,6 +164,25 @@ function DeliveryStrip({ status }: { status: DeliveryStatus }) {
   );
 }
 
+/** Live agent-session strip (SYD-43): while the dispatch worker has a session
+ * running on this issue, show liveness + the session's latest progress note.
+ * Server-side `active` filtering also hides zombie sessions a dead worker
+ * never closed out. */
+export function AgentSessionStrip({ refId }: { refId: string }) {
+  const { data } = usePoll(() => listAgentSessions({ ref: refId, active: true }), [refId]);
+  if (!data || data.length === 0) return null;
+  return (
+    <div className="agent-session-strip panel">
+      {data.map((s) => (
+        <span key={s.id}>
+          🤖 agent session running ({s.mode}) · {formatElapsed(s.startedAt, null)} elapsed
+          {s.lastNote && <> · <em>{s.lastNote.note}</em></>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function IssueDetail({ refId }: { refId: string }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -231,6 +251,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
       )}
       <PollErrorBar error={error} />
       {delivery && <DeliveryStrip status={delivery} />}
+      <AgentSessionStrip refId={refId} />
       {data.sourceType && (
         <div className="provenance panel">
           Filed from: {data.sourceType} · {data.sourceDetail ?? ""}
@@ -486,6 +507,13 @@ export function Event({
         GitHub: pushed {url ? <a href={url} target="_blank" rel="noreferrer">{label}</a> : label}
         {sha && <> (<code>{sha.slice(0, 7)}</code>)</>}
         {" "}<time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "progress_note") {
+    return (
+      <p className="event progress-note">
+        <strong>{ev.actorName}</strong> ⏱ {String(ev.payload.note ?? "")} <time>{when}</time>
       </p>
     );
   }

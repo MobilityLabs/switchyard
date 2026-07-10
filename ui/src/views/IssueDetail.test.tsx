@@ -5,8 +5,19 @@
 // state the issue view renders — PR link + open/merged, merge sha, deploy
 // result, and a delivery-failure banner that clears once a later delivery
 // succeeds.
-import { describe, it, expect } from "vitest";
-import { AttentionBanner, computeDeliveryStatus, DescriptionSection, Event, withAttachmentIds } from "./IssueDetail";
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("../api", () => ({
+  addComment: vi.fn(),
+  addDependency: vi.fn(),
+  getIssue: vi.fn(),
+  removeDependency: vi.fn(),
+  updateIssue: vi.fn(),
+  listAgentSessions: vi.fn(() => Promise.resolve([])),
+}));
+
+import { AgentSessionStrip, AttentionBanner, computeDeliveryStatus, DescriptionSection, Event, withAttachmentIds } from "./IssueDetail";
+import { listAgentSessions } from "../api";
 import type { Activity, Attachment, Issue } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -310,5 +321,56 @@ describe("Event rendering for delivery events", () => {
     );
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).toContain("attached old.png");
+  });
+});
+
+// SYD-43: progress_note events are recorded by the dispatch worker mid-session
+// (src/services/agent-sessions.ts) — the issue's activity feed should surface
+// them like any other event rather than falling through to the generic
+// "actor <type-with-underscores>" renderer.
+describe("Event rendering for progress_note (SYD-43)", () => {
+  it("renders the note text as a status line", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <Event
+          ev={ev({ type: "progress_note", payload: { note: "compiling" } })}
+          projectKey="SYD"
+        />
+      );
+    });
+    expect(container.textContent).toContain("compiling");
+    expect(container.querySelector(".progress-note")).not.toBeNull();
+  });
+});
+
+// SYD-43: while the dispatch worker has a session running on this issue, the
+// detail view shows liveness + the session's latest progress note so a human
+// doesn't have to guess whether an agent is still working.
+describe("AgentSessionStrip (SYD-43)", () => {
+  it("shows a live line per active session with the last note", async () => {
+    vi.mocked(listAgentSessions).mockResolvedValue([{
+      id: 1, ref: "SYD-1", issueTitle: "Ship v1", mode: "container",
+      pid: null, status: "running", exitCode: null,
+      startedAt: Math.floor(Date.now() / 1000) - 300, endedAt: null,
+      lastNote: { note: "running the tests", createdAt: 0 },
+    }]);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<AgentSessionStrip refId="SYD-1" />); });
+    expect(container.textContent).toContain("running the tests");
+    expect(container.textContent).toMatch(/5m/);
+  });
+
+  it("renders nothing when no session is active", async () => {
+    vi.mocked(listAgentSessions).mockResolvedValue([]);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<AgentSessionStrip refId="SYD-1" />); });
+    expect(container.textContent).toBe("");
   });
 });
