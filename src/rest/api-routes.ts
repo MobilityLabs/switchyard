@@ -19,6 +19,7 @@ import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate } from "../services/triage-actions.js";
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo, type GithubRepo } from "../services/github-repos.js";
+import { handleGithubWebhook } from "../services/github-webhook.js";
 import {
   saveAttachment,
   getAttachment,
@@ -39,6 +40,7 @@ import {
   webhookCreateBody,
   webhookPatchBody,
   githubRepoCreateBody,
+  githubEventBody,
   requestInputBody,
   snoozeBody,
   duplicateBody,
@@ -273,6 +275,20 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     }
     removeGithubRepo(db, Number(c.req.param("id")));
     return c.json({ ok: true });
+  });
+
+  // Authenticated ingestion point for the polling fallback (SYD-71):
+  // scripts/github-poll.ts can't reach POST /webhooks/github's HMAC signature
+  // (it doesn't run inside the server process and per-repo secrets are
+  // write-only over the API), so it derives the same GitHub-shaped
+  // pull_request/check_suite payloads itself and posts them here instead —
+  // bearer-token authenticated rather than signature-verified, but running
+  // through the exact same src/services/github-webhook.ts matching/recording
+  // logic as the real webhook, so both paths converge on one place.
+  app.post("/github-events", body(githubEventBody), (c) => {
+    const { event, payload } = c.req.valid("json");
+    const outcome = handleGithubWebhook(db, event, payload);
+    return c.json({ ok: true, ...outcome });
   });
 
   return app;

@@ -61,6 +61,11 @@ export type DeliveryConfig = {
   verify?: boolean;
 };
 
+export type GithubPollConfig = {
+  /** How often github-poll.ts scans linked repos' PRs/checks (default 120s). */
+  pollSeconds?: number;
+};
+
 export type WorkerConfig = {
   url: string;
   label: string;
@@ -90,6 +95,8 @@ export type WorkerConfig = {
    * `maxConcurrent` (which governs code-dispatch capacity only). Default 2.
    */
   maxAnswerConcurrent?: number;
+  /** GitHub polling fallback (SYD-71): scripts/github-poll.ts settings. */
+  githubPoll?: GithubPollConfig;
 };
 
 const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];

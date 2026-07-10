@@ -94,6 +94,41 @@ Deliveries are rejected with 401 unless they carry a valid
 `X-Hub-Signature-256` for the configured secret, and 501 if no secret is
 configured at all.
 
+Link the repos you want inbound visibility for (owner/repo, optionally scoped
+to a project):
+
+```bash
+npx tsx src/cli.ts switchyard.db add-github-repo acme/widgets SYD
+```
+
+#### Polling fallback
+
+Some repos can't have a webhook installed (no admin access, org policy,
+etc.). `scripts/github-poll.ts` covers those: it watches every repo linked
+via `add-github-repo` above through the `gh` CLI (`gh pr list`, `gh run
+list` — no local clone needed, just `gh auth login` on the host) instead of
+waiting for a delivery, and feeds whatever changed into the same
+`src/services/github-webhook.ts` matching/recording logic via
+`POST /api/github-events` — an authenticated version of `POST /webhooks/github`
+for callers that can't produce (or verify) an HMAC signature. Both paths
+converge on the same timeline events, so a repo only needs to be linked, not
+also webhook-configured, to show up on the SYD-54 delivery strip.
+
+```bash
+SWITCHYARD_TOKEN=... npx tsx scripts/github-poll.ts            # loop forever
+SWITCHYARD_TOKEN=... npx tsx scripts/github-poll.ts --once     # single scan
+SWITCHYARD_TOKEN=... npx tsx scripts/github-poll.ts --dry-run  # print, don't POST
+```
+
+Polls every `githubPoll.pollSeconds` in `switchyard-worker.json` (default
+120s — kept well above `delivery.pollSeconds` since each tick spends GitHub
+API rate limit per linked repo). Per-repo/per-PR state persists in
+`.superpowers/github-poll-state.json`, so only state *transitions* (a PR
+opening, closing, or a run's conclusion changing) get reported — a repo's
+already-open PRs at link time are treated as newly opened, but re-polling
+the same unchanged PR or check conclusion is a no-op, so restarts don't
+replay history.
+
 ### Slack notifications
 
 A standalone consumer (its own process, not part of the main server) that turns
