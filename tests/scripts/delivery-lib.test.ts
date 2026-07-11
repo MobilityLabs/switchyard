@@ -609,6 +609,8 @@ describe("queue-mode comments and argv builders (SYD-164)", () => {
     expect(body).toContain("src/a.ts");
     expect(body).toContain("ui/b.tsx");
     expect(body.toLowerCase()).toContain("re-dispatch");
+    expect(body.toLowerCase().indexOf("re-dispatch")).toBeLessThan(body.toLowerCase().indexOf("fix agent/"));
+    expect(body.toLowerCase()).toContain("recommended");
     expect(body).not.toContain("undefined");
   });
 

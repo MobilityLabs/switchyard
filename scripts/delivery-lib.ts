@@ -627,14 +627,14 @@ export function buildOriginMainShaArgs(): string[] {
 export function queueBounceComment(ref: string, d: Extract<QueueDecision, { kind: "bounce" }>): string {
   const branch = agentBranch(ref);
   const header = `⛔ Delivery bounced — main was not touched.`;
-  const retry = `To retry: fix ${branch} (or re-dispatch this issue so a fresh session regenerates the change against current ${MAIN_BRANCH}), then stamp done again or hit Retry delivery.`;
+  const retry = `To retry: re-dispatch this issue so a fresh session regenerates the change against current ${MAIN_BRANCH} (recommended), or fix ${branch} by hand — the queue re-verifies whatever lands there. Then stamp done again or hit Retry delivery.`;
   switch (d.reason) {
     case "conflict":
       return [
         header,
         `Rebasing ${branch} onto ${MAIN_BRANCH} hit real conflicts in:`,
         ...d.files.map((f) => `- \`${f}\``),
-        `Queue mode does not auto-resolve conflicts — re-dispatch beats repairing a stale branch (see docs/2026-07-10-merge-queue-research.md).`,
+        `Queue mode never auto-resolves conflicts (see docs/2026-07-10-merge-queue-research.md — regeneration beats repair for stale branches).`,
         retry,
       ].join("\n");
     case "verify-failed":
