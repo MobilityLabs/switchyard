@@ -1,5 +1,5 @@
 import { eq, sql } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 import { projects } from "../db/schema.js";
 import { SwitchyardError } from "./errors.js";
 
@@ -24,7 +24,7 @@ export function listProjects(db: Db): Project[] {
   return db.select().from(projects).all();
 }
 
-export function getProjectByKey(db: Db, key: string): Project {
+export function getProjectByKey(db: DbOrTx, key: string): Project {
   const p = db.select().from(projects).where(eq(projects.key, key)).get();
   if (!p) {
     throw new SwitchyardError(
@@ -34,7 +34,7 @@ export function getProjectByKey(db: Db, key: string): Project {
   return p;
 }
 
-export function reserveIssueNumber(db: Db, projectId: number): number {
+export function reserveIssueNumber(db: DbOrTx, projectId: number): number {
   const row = db
     .update(projects)
     .set({ nextIssueNumber: sql`${projects.nextIssueNumber} + 1` })

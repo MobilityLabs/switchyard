@@ -7,6 +7,14 @@ import * as schema from "./schema.js";
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
+/** The transaction handle drizzle passes to `db.transaction((tx) => ...)`. */
+export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/** For service helpers that run the same reads/writes whether called with the
+ * root connection or from inside a transaction — the honest signature for
+ * what used to be papered over with 38 tx-as-Db casts (SYD-144). */
+export type DbOrTx = Db | Tx;
+
 const migrationsFolder = path.join(
   path.dirname(fileURLToPath(import.meta.url)), "../../drizzle"
 );

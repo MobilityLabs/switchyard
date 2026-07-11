@@ -53,7 +53,7 @@ export function releaseStaleClaims(db: Db, maxIdleSeconds: number = getSetting(d
         )
         .run();
       if (result.changes === 0) return false;
-      recordEvent(tx as Db, {
+      recordEvent(tx, {
         issueId: issue.id,
         actorId,
         type: "claim_released",
