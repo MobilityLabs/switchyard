@@ -1,4 +1,5 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import type { SQLiteUpdateSetSource } from "drizzle-orm/sqlite-core";
 import type { Db } from "../db/index.js";
 import { issues, projects, actors as actorsTable, STATUSES, PRIORITIES, type Status, type Priority } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -185,7 +186,7 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
   checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
     const current = getIssue(tx as Db, ref);
-    const changes: Partial<typeof issues.$inferInsert> = {};
+    const changes: SQLiteUpdateSetSource<typeof issues> = {};
     const toRecord: { type: string; payload: Record<string, unknown> }[] = [];
 
     if (patch.status !== undefined && patch.status !== current.status) {
@@ -307,7 +308,7 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
     }
 
     if (Object.keys(changes).length === 0) return current;
-    changes.updatedAt = Math.floor(Date.now() / 1000);
+    changes.updatedAt = sql`(unixepoch())`;
     const row = tx.update(issues).set(changes).where(eq(issues.id, current.id)).returning().get();
     for (const e of toRecord) {
       recordEvent(tx as Db, { issueId: current.id, actorId: actor.id, ...e });

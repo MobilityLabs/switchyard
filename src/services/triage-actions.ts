@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -28,7 +28,7 @@ export function snoozeIssue(db: Db, actor: Actor, ref: string, untilUnixSeconds:
     const current = getIssue(tx as Db, ref);
     const row = tx
       .update(issues)
-      .set({ snoozedUntil: untilUnixSeconds, updatedAt: now })
+      .set({ snoozedUntil: untilUnixSeconds, updatedAt: sql`(unixepoch())` })
       .where(eq(issues.id, current.id))
       .returning()
       .get();
@@ -51,10 +51,9 @@ export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string):
     if (current.id === of.id) {
       throw new SwitchyardError(`An issue cannot be marked as a duplicate of itself (${ref}).`);
     }
-    const now = Math.floor(Date.now() / 1000);
     const row = tx
       .update(issues)
-      .set({ status: "canceled", updatedAt: now })
+      .set({ status: "canceled", updatedAt: sql`(unixepoch())` })
       .where(eq(issues.id, current.id))
       .returning()
       .get();

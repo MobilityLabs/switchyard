@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -195,6 +195,23 @@ describe("updateIssue", () => {
     // a status change by a human does clear it
     updateIssue(db, human, filed.ref, { status: "in_progress" });
     expect(getIssue(db, filed.ref).needsInput).toBe(false);
+  });
+
+  // SYD-147: updatedAt used to be computed from the app's Date.now() rather
+  // than the DB's own clock (the schema default's unixepoch()), a second
+  // source of "now" that could drift. Fake the app clock to a wildly
+  // different time and confirm updatedAt still reflects real time — SQLite's
+  // unixepoch() reads the OS clock directly and is unaffected by vi's fake
+  // timers, so this only passes if updatedAt is DB-computed.
+  it("updatedAt comes from the DB clock, not the app clock", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2000-01-01T00:00:00Z"));
+    try {
+      const updated = updateIssue(db, human, "AIPI-1", { priority: "high" });
+      expect(updated.updatedAt).toBeGreaterThan(946684800); // year-2000 epoch: proves it ignored the faked app clock
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

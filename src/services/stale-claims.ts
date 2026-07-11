@@ -1,4 +1,4 @@
-import { and, eq, max } from "drizzle-orm";
+import { and, eq, max, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues, events } from "../db/schema.js";
 import { recordEvent } from "./events.js";
@@ -43,7 +43,7 @@ export function releaseStaleClaims(db: Db, maxIdleSeconds: number = getSetting(d
       // .changes === 0 means someone else touched it first, so we skip the event.
       const result = tx
         .update(issues)
-        .set({ status: "todo", assigneeId: null, updatedAt: now })
+        .set({ status: "todo", assigneeId: null, updatedAt: sql`(unixepoch())` })
         .where(
           and(
             eq(issues.id, issue.id),

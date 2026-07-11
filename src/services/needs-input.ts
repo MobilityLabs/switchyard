@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -20,7 +20,7 @@ export function requestHumanInput(db: Db, actor: Actor, ref: string, question: s
     const issue = getIssue(tx as Db, ref);
     const row = tx
       .update(issues)
-      .set({ needsInput: true, updatedAt: Math.floor(Date.now() / 1000) })
+      .set({ needsInput: true, updatedAt: sql`(unixepoch())` })
       .where(eq(issues.id, issue.id))
       .returning()
       .get();
