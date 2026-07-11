@@ -42,7 +42,7 @@ Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-proj
 
 **Claim before you touch code.** For any board-tracked issue, call `claim_issue` before editing files — even in an interactive/coordinating session, not just dispatched workers. This is what lets the server (and the dispatch worker) see your claim and refuse to double-work the same issue; skipping it is exactly how SYD-93 got fixed twice in parallel (worker PR #41 vs a coordinating session's PR #42, opened without ever claiming).
 
-**Mutate issues only through services** — issue state is a fold over the append-only `events` table, so a direct DB write would skip the audit trail.
+**Mutate issues only through services** — core issue state lives in mutable columns on the `issues` table, with `events` a co-written append-only audit log (not a fold/replay source — see `src/services/issues.ts`); a direct DB write would skip that log. Only the auxiliary attention/open-PR/unanswered-questions signals are actually derived by querying `events` (see `src/services/attention.ts`, `pr-status.ts`, `events.ts`), so those can't drift from what happened.
 
 **Security invariants:**
 - Secrets live in `.env` (0600, never committed, excluded from the deploy tarball).

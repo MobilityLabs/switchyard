@@ -198,6 +198,30 @@ describe("updateIssue", () => {
   });
 });
 
+describe("audit log stays consistent with column state", () => {
+  // SYD-127: events is a co-written audit log, not a fold/replay source —
+  // nothing enforces agreement between it and the mutable issues columns
+  // except that every service-layer mutation writes both. This asserts that
+  // convention holds for status/priority/title, whose events do carry a
+  // "to" payload (description_changed/summary_changed intentionally don't —
+  // see issues.ts — so they're out of scope for this reconstruction check).
+  it("replaying the last status/priority/title event matches the current column value", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo", priority: "high", title: "Ship v1 (renamed)" });
+    claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review", priority: "urgent" });
+
+    const current = getIssue(db, "AIPI-1");
+    const events = listIssueEvents(db, current.id);
+
+    const lastToPayload = (type: string) =>
+      [...events].reverse().find((e) => e.type === type)?.payload as { to?: unknown } | undefined;
+
+    expect(lastToPayload("status_changed")?.to).toBe(current.status);
+    expect(lastToPayload("priority_changed")?.to).toBe(current.priority);
+    expect(lastToPayload("title_changed")?.to).toBe(current.title);
+  });
+});
+
 describe("claimIssue", () => {
   it("assigns the caller and moves to in_progress", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
