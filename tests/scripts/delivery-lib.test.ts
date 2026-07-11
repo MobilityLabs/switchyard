@@ -676,4 +676,43 @@ describe("tailOf", () => {
     const colored = "\x1b[31mFAIL\x1b[39m \x1b[2mtests/foo.test.ts\x1b[22m > \x1b[1mbar\x1b[0m\n\x1b[32m- Expected\x1b[39m false";
     expect(tailOf(colored)).toBe("FAIL tests/foo.test.ts > bar\n- Expected false");
   });
+
+  it("strips tar xattr noise so a real error surviving 20 lines of it still surfaces (SYD-173)", () => {
+    const noise = Array.from(
+      { length: 30 },
+      (_, i) => `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance' for entry file${i}.txt`
+    );
+    const text = [...noise, "Error: health check failed after deploy"].join("\n");
+    const tail = tailOf(text, 20);
+    expect(tail).toBe("Error: health check failed after deploy");
+  });
+
+  it("strips the ssh post-quantum key-exchange warning block", () => {
+    const text = [
+      "** WARNING: connection is not using a post-quantum key exchange algorithm.",
+      "** This session may be vulnerable to a store-now-decrypt-later attack.",
+      "** See https://openssh.com/pq.html for more information.",
+      "Error: rsync exited with code 23",
+    ].join("\n");
+    expect(tailOf(text, 20)).toBe("Error: rsync exited with code 23");
+  });
+
+  it("strips a mix of noise so it doesn't drown a real error under the line budget", () => {
+    const tarNoise = Array.from(
+      { length: 15 },
+      (_, i) => `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance' for entry file${i}.txt`
+    );
+    const sshNoise = [
+      "** WARNING: connection is not using a post-quantum key exchange algorithm.",
+      "** This session may be vulnerable to a store-now-decrypt-later attack.",
+    ];
+    const text = [...tarNoise, ...sshNoise, "FATAL: migration crashed on issues.parentId"].join("\n");
+    const tail = tailOf(text, 20);
+    expect(tail).toBe("FATAL: migration crashed on issues.parentId");
+  });
+
+  it("keeps non-noise lines that merely resemble noise in ordinary output", () => {
+    const text = "Running deploy...\nAll good.";
+    expect(tailOf(text, 20)).toBe(text);
+  });
 });

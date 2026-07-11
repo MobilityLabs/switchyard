@@ -638,11 +638,41 @@ export function parseCursorText(text: string): number | null {
   return Number.isInteger(n) && n >= 0 && text.trim() !== "" ? n : null;
 }
 
+/**
+ * Known-noise line patterns stripped before tailOf takes its slice (SYD-173):
+ * during a SYD-148 deploy failure, macOS `tar` emitted dozens of xattr
+ * warnings and ssh added a multi-line post-quantum key-exchange banner,
+ * filling the entire tail budget and pushing the real error out of the
+ * comment. Kept small and documented — add here only for output observed to
+ * actually drown a real failure, not speculative noise.
+ */
+const NOISE_LINE_PATTERNS: RegExp[] = [
+  // macOS tar re-packing extended attributes into the deploy tarball, one
+  // line per file per xattr.
+  /^tar: Ignoring unknown extended header keyword /,
+  // OpenSSH's post-quantum key-exchange advisory: every line of the banner
+  // is prefixed with `**`, so this strips the whole block regardless of
+  // exact wording; the keyword match is a fallback for differently-prefixed
+  // variants.
+  /^\*\*/,
+  /post-quantum/i,
+];
+
+/** Drops lines matching `NOISE_LINE_PATTERNS`, keeping tailOf's budget for
+ * signal instead of boilerplate warnings. */
+function stripNoiseLines(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => !NOISE_LINE_PATTERNS.some((p) => p.test(line)))
+    .join("\n");
+}
+
 /** Last `maxLines` lines of subprocess output, capped at `maxChars`. */
 export function tailOf(text: string, maxLines = 20, maxChars = 2000): string {
   // Vitest/tsc emit ANSI color codes even piped; left in, they render as
   // `[31m` garbage in issue comments (the UI drops the ESC byte).
   const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
-  const tail = plain.trimEnd().split("\n").slice(-maxLines).join("\n");
+  const stripped = stripNoiseLines(plain);
+  const tail = stripped.trimEnd().split("\n").slice(-maxLines).join("\n");
   return tail.length > maxChars ? tail.slice(-maxChars) : tail;
 }
