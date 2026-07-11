@@ -207,8 +207,8 @@ export async function ensureCleanClone(sourceRepo: string, cloneDir: string): Pr
  * better-sqlite3) compiled for a node version the gate no longer runs
  * (SYD-101).
  */
-export async function installDeps(cloneDir: string): Promise<string> {
-  return run("npm", ["ci"], { cwd: cloneDir });
+export async function installDeps(cloneDir: string, env?: NodeJS.ProcessEnv): Promise<string> {
+  return run("npm", ["ci"], { cwd: cloneDir, env });
 }
 
 /**
@@ -224,12 +224,17 @@ export async function installDeps(cloneDir: string): Promise<string> {
  * exists (CLAUDE.md), and tests/integration/spa-fallback.test.ts depends on
  * it, so skipping build:ui here fails that test on every clean clone
  * regardless of the branch's content (SYD-168). NO_COLOR=1 makes verify
- * tails born plain instead of relying on tailOf's ANSI strip (SYD-161).
+ * tails born plain instead of relying on tailOf's ANSI strip (SYD-161) — and
+ * is passed to installDeps too, not just the steps below, so npm ci's
+ * behavior doesn't depend on whether the calling process happens to have
+ * NO_COLOR set (SYD-170: it's set here in every real run, so a test
+ * asserting it unset for npm ci passes locally but fails under this very
+ * gate).
  */
 export async function runVerification(cloneDir: string): Promise<{ ok: boolean; tail: string }> {
   const env = { NO_COLOR: "1" };
   try {
-    await installDeps(cloneDir);
+    await installDeps(cloneDir, env);
     const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir, env });
     const buildUi = await run("npm", ["run", "build:ui"], { cwd: cloneDir, env });
     const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir, env });
