@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createIssue, listProjects, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
+import { Composer } from "../Composer";
 import { navigate } from "../router";
 import { PRIORITIES, SUMMARY_MAX_LENGTH, type Priority } from "../types";
 import { parseLabels } from "../labels";
@@ -64,9 +65,6 @@ export default function NewIssue() {
       {error && (
         <p className="error-bar">{error} <button onClick={() => setError(null)}>×</button></p>
       )}
-      {uploadError && (
-        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
-      )}
       <form
         className="panel new-issue-form"
         onSubmit={(e) => { e.preventDefault(); submit(); }}
@@ -102,14 +100,12 @@ export default function NewIssue() {
 
         <label>
           Description
-          <textarea
-            ref={textareaRef}
+          <Composer
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            onPaste={onPaste}
+            onChange={setDescription}
             placeholder="Details… (paste an image or video to attach it)"
+            paste={{ onPaste, uploading, uploadError, setUploadError, textareaRef }}
           />
-          {uploading && <span className="uploading-note">uploading…</span>}
         </label>
 
         <label>

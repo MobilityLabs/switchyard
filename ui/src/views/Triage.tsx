@@ -3,11 +3,14 @@ import { addComment, getIssue, listActors, listIssues, markDuplicate, snoozeIssu
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
+import { Composer } from "../Composer";
+import { ConfirmModal, PromptModal } from "../Modal";
 import { href } from "../router";
 import { PRIORITIES, type Issue, type IssueDetail, type Priority } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
-import { ActivityFeed, DescriptionSection, projectKeyFromRef, summaryText } from "./IssueDetail";
+import { ActivityFeed, DescriptionSection, summaryText } from "./IssueDetail";
+import { projectKeyFromRef } from "../refs";
 
 // Issues routinely leave triage with priority "none" (SYD-65) — default
 // accept-to-todo to "medium" unless a human already set something more
@@ -101,6 +104,8 @@ export function TriageRow({
   const [draft, setDraft] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(issue.ref, draft, setDraft);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [dismissOpen, setDismissOpen] = useState(false);
 
   // Only fetches while this row is the expanded one; collapsed rows resolve
   // to null immediately, same shape as Review's per-issue detail poll.
@@ -184,20 +189,14 @@ export function TriageRow({
           {commentError && (
             <p className="error-bar">{commentError} <button onClick={() => setCommentError(null)}>×</button></p>
           )}
-          {uploadError && (
-            <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
-          )}
-          <div className="composer">
-            <textarea
-              ref={textareaRef}
-              value={draft}
-              placeholder="Write a comment… (paste an image or video to attach it)"
-              onChange={(e) => setDraft(e.target.value)}
-              onPaste={onPaste}
-            />
+          <Composer
+            value={draft}
+            onChange={setDraft}
+            placeholder="Write a comment… (paste an image or video to attach it)"
+            paste={{ onPaste, uploading, uploadError, setUploadError, textareaRef }}
+          >
             <button disabled={!draft.trim() || uploading} onClick={postComment}>Comment</button>
-            {uploading && <span className="uploading-note">uploading…</span>}
-          </div>
+          </Composer>
         </div>
       )}
 
@@ -223,21 +222,30 @@ export function TriageRow({
         <button onClick={() => act(() => snoozeIssue(issue.ref, Math.floor(Date.now() / 1000) + 604800))}>
           Snooze 1w
         </button>
-        <button
-          onClick={() => {
-            const of = prompt(`Mark ${issue.ref} as a duplicate of which ref?`);
-            if (of) act(() => markDuplicate(issue.ref, of));
-          }}
-        >
+        <button onClick={() => setDuplicateOpen(true)}>
           Duplicate…
         </button>
-        <button
-          className="danger"
-          onClick={() => { if (confirm(`Dismiss ${issue.ref}?`)) act(() => updateIssue(issue.ref, { status: "canceled" })); }}
-        >
+        <button className="danger" onClick={() => setDismissOpen(true)}>
           Dismiss
         </button>
       </div>
+
+      {duplicateOpen && (
+        <PromptModal
+          title={`Mark ${issue.ref} as a duplicate of which ref?`}
+          placeholder="SYD-12"
+          onCancel={() => setDuplicateOpen(false)}
+          onSubmit={(of) => { setDuplicateOpen(false); act(() => markDuplicate(issue.ref, of)); }}
+        />
+      )}
+      {dismissOpen && (
+        <ConfirmModal
+          title={`Dismiss ${issue.ref}?`}
+          confirmLabel="Dismiss"
+          onCancel={() => setDismissOpen(false)}
+          onConfirm={() => { setDismissOpen(false); act(() => updateIssue(issue.ref, { status: "canceled" })); }}
+        />
+      )}
     </article>
   );
 }

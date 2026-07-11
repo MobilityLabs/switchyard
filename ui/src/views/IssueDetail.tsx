@@ -9,10 +9,8 @@ import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
 import { formatElapsed } from "./Agents";
-
-export function projectKeyFromRef(ref: string): string {
-  return ref.split("-")[0] ?? "";
-}
+import { projectKeyFromRef } from "../refs";
+import { Composer } from "../Composer";
 
 const SUMMARY_FALLBACK_LENGTH = 200;
 
@@ -353,17 +351,12 @@ export default function IssueDetail({ refId }: { refId: string }) {
         <ActivityFeed activity={activity} projectKey={projectKey} knownActorNames={actorNames} />
       </div>
 
-      {uploadError && (
-        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
-      )}
-      <div className="composer">
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          placeholder="Write a comment… (paste an image or video to attach it, or lead with @agent to ask an agent)"
-          onChange={(e) => setDraft(e.target.value)}
-          onPaste={onPaste}
-        />
+      <Composer
+        value={draft}
+        onChange={setDraft}
+        placeholder="Write a comment… (paste an image or video to attach it, or lead with @agent to ask an agent)"
+        paste={{ onPaste, uploading, uploadError, setUploadError, textareaRef }}
+      >
         <button
           className="primary"
           disabled={!draft.trim() || uploading}
@@ -371,8 +364,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
         >
           Send
         </button>
-        {uploading && <span className="uploading-note">uploading…</span>}
-      </div>
+      </Composer>
     </section>
   );
 }

@@ -23,7 +23,7 @@ vi.mock("../api", () => ({
   listActors: vi.fn(() => Promise.resolve([])),
 }));
 
-import { listIssues, updateIssue } from "../api";
+import { listIssues, markDuplicate, updateIssue } from "../api";
 
 const ISSUE: Issue = {
   id: 1, ref: "SYD-1", title: "Do the thing", description: "", summary: null,
@@ -169,5 +169,91 @@ describe("Triage project scoping", () => {
     await renderTriage(null);
     expect(listIssues).toHaveBeenCalledWith({ project: undefined, status: "triage", excludeSnoozed: true });
     expect(listIssues).toHaveBeenCalledWith({ project: undefined, needsInput: true });
+  });
+});
+
+// SYD-132: Duplicate/Dismiss used native prompt()/confirm() — unstyleable,
+// blocking, and unmockable in tests. Replaced with in-app modals so these
+// flows can be driven and asserted on like any other UI.
+describe("TriageRow Duplicate/Dismiss modals", () => {
+  beforeEach(() => {
+    vi.mocked(updateIssue).mockClear();
+    vi.mocked(markDuplicate).mockClear();
+  });
+
+  async function renderRow(): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await reactAct(async () => {
+      root.render(
+        <TriageRow
+          issue={ISSUE}
+          act={(fn: () => Promise<unknown>) => { fn(); }}
+          knownActorNames={[]}
+          expanded={false}
+          onToggleExpand={() => {}}
+        />
+      );
+    });
+    return container;
+  }
+
+  it("opens a prompt modal for Duplicate and calls markDuplicate with the entered ref", async () => {
+    const container = await renderRow();
+    expect(container.querySelector(".modal-overlay")).toBeNull();
+
+    const duplicateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Duplicate…")!;
+    await reactAct(async () => duplicateButton.click());
+    expect(container.querySelector(".modal-overlay")).not.toBeNull();
+
+    const input = container.querySelector(".modal input") as HTMLInputElement;
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    await reactAct(async () => {
+      nativeSetter.call(input, "SYD-99");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const okButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "OK")!;
+    await reactAct(async () => okButton.click());
+
+    expect(markDuplicate).toHaveBeenCalledWith("SYD-1", "SYD-99");
+    expect(container.querySelector(".modal-overlay")).toBeNull();
+  });
+
+  it("closes the Duplicate modal without acting when Cancel is clicked", async () => {
+    const container = await renderRow();
+    const duplicateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Duplicate…")!;
+    await reactAct(async () => duplicateButton.click());
+
+    const cancelButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Cancel")!;
+    await reactAct(async () => cancelButton.click());
+
+    expect(markDuplicate).not.toHaveBeenCalled();
+    expect(container.querySelector(".modal-overlay")).toBeNull();
+  });
+
+  it("opens a confirm modal for Dismiss and cancels the issue on confirm", async () => {
+    const container = await renderRow();
+    const dismissButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Dismiss")!;
+    await reactAct(async () => dismissButton.click());
+    expect(container.querySelector(".modal-overlay")).not.toBeNull();
+
+    const confirmButton = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent === "Dismiss")[1];
+    await reactAct(async () => confirmButton.click());
+
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", { status: "canceled" });
+    expect(container.querySelector(".modal-overlay")).toBeNull();
+  });
+
+  it("closes the Dismiss modal without acting when Cancel is clicked", async () => {
+    const container = await renderRow();
+    const dismissButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Dismiss")!;
+    await reactAct(async () => dismissButton.click());
+
+    const cancelButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Cancel")!;
+    await reactAct(async () => cancelButton.click());
+
+    expect(updateIssue).not.toHaveBeenCalled();
+    expect(container.querySelector(".modal-overlay")).toBeNull();
   });
 });

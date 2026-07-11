@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { projectKeyFromRef } from "./refs";
 
 export type Route =
   | { view: "triage"; project: string | null }
@@ -25,10 +26,6 @@ export function isProjectKey(value: string): boolean {
 const ISSUE_REF_PATTERN = /^[A-Z]{2,10}-\d+$/;
 export function isIssueRef(value: string): boolean {
   return ISSUE_REF_PATTERN.test(value);
-}
-
-function projectKeyFromRef(ref: string): string {
-  return ref.split("-")[0] ?? "";
 }
 
 // Fired whenever `navigate()` pushes a new history entry, so `useRoute` can

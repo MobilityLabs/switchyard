@@ -396,6 +396,19 @@ kbd {
 .agent-session-strip { display: flex; flex-direction: column; gap: 0.25rem; }
 .progress-note { font-style: italic; opacity: 0.8; }
 
+/* In-app modals (SYD-132) replacing native prompt()/confirm() in Triage */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+  display: grid; place-items: center; z-index: 100;
+}
+.modal { width: 320px; max-width: calc(100vw - 32px); }
+.modal-title { margin: 0 0 12px; }
+.modal input {
+  width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; font-family: inherit; font-size: 14px;
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
 /* Collapsed progress_note runs in the activity feed (SYD-104) */
 .progress-note-group { display: flex; flex-direction: column; gap: 4px; }
 .link-button {

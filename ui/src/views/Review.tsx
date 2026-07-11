@@ -3,8 +3,10 @@ import { addComment, getIssue, listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
+import { Composer } from "../Composer";
 import type { Issue, IssueDetail as IssueDetailType } from "../types";
-import { ActivityFeed, projectKeyFromRef } from "./IssueDetail";
+import { ActivityFeed } from "./IssueDetail";
+import { projectKeyFromRef } from "../refs";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
@@ -155,9 +157,6 @@ export default function Review({ project, currentRef }: { project: string | null
       {actionError && (
         <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
       )}
-      {uploadError && (
-        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
-      )}
       <PollErrorBar error={error} />
 
       <header className="review-head">
@@ -214,16 +213,12 @@ export default function Review({ project, currentRef }: { project: string | null
               : <p className="empty">Loading activity…</p>}
           </div>
 
-          <div className="composer">
-            <textarea
-              ref={textareaRef}
-              value={draft}
-              placeholder="Write a comment… (Comment posts it; required for Send back; paste an image or video to attach it)"
-              onChange={(e) => setDraft(e.target.value)}
-              onPaste={onPaste}
-            />
-            {uploading && <span className="uploading-note">uploading…</span>}
-          </div>
+          <Composer
+            value={draft}
+            onChange={setDraft}
+            placeholder="Write a comment… (Comment posts it; required for Send back; paste an image or video to attach it)"
+            paste={{ onPaste, uploading, uploadError, setUploadError, textareaRef }}
+          />
 
           <div className="review-verdicts">
             <button className="primary" disabled={uploading} onClick={approve}>Approve → done <kbd>a</kbd></button>
