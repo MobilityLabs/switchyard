@@ -559,4 +559,8 @@ describe("tailOf", () => {
   it("caps total characters", () => {
     expect(tailOf("x".repeat(5000), 20, 2000).length).toBe(2000);
   });
+  it("strips ANSI escape sequences so issue comments stay readable", () => {
+    const colored = "\x1b[31mFAIL\x1b[39m \x1b[2mtests/foo.test.ts\x1b[22m > \x1b[1mbar\x1b[0m\n\x1b[32m- Expected\x1b[39m false";
+    expect(tailOf(colored)).toBe("FAIL tests/foo.test.ts > bar\n- Expected false");
+  });
 });
