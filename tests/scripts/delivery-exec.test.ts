@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { installDeps, run, runGit, pollUntilMergeable } from "../../scripts/delivery-exec.js";
+import { installDeps, run, runGit, pollUntilMergeable, runVerification } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
 
@@ -82,6 +82,48 @@ describe("installDeps", () => {
     await installDeps(workspace);
 
     expect(existsSync(staleModule)).toBe(false);
+  });
+});
+
+// SYD-168: runVerification ran typecheck + vitest but never build:ui, so
+// tests/integration/spa-fallback.test.ts (which needs dist/ui) failed on
+// every clean clone regardless of branch content. Fakes npm/npx on PATH to
+// assert the exact command sequence and env, without a real npm ci/build.
+describe("runVerification", () => {
+  /** Fake `npm`/`npx` that record `<argv> NO_COLOR=<val>` per invocation and exit 0. */
+  function makeFakeNpmAndNpx(binDir: string): { callsFile: string } {
+    const callsFile = path.join(binDir, "calls");
+    writeFileSync(callsFile, "");
+    for (const name of ["npm", "npx"]) {
+      const binPath = path.join(binDir, name);
+      writeFileSync(binPath, `#!/bin/sh\necho "${name} $* NO_COLOR=$NO_COLOR" >> "${callsFile}"\nexit 0\n`);
+      chmodSync(binPath, 0o755);
+    }
+    return { callsFile };
+  }
+
+  it("runs build:ui between typecheck and vitest, with NO_COLOR set on each verify step", async () => {
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-verify-test-"));
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-verify-bin-"));
+    const { callsFile } = makeFakeNpmAndNpx(binDir);
+
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    let result: { ok: boolean; tail: string };
+    try {
+      result = await runVerification(cloneDir);
+    } finally {
+      process.env.PATH = origPath;
+    }
+
+    expect(result.ok).toBe(true);
+    const calls = readFileSync(callsFile, "utf8").trim().split("\n");
+    expect(calls).toEqual([
+      "npm ci NO_COLOR=",
+      "npm run typecheck NO_COLOR=1",
+      "npm run build:ui NO_COLOR=1",
+      "npx vitest run NO_COLOR=1",
+    ]);
   });
 });
 

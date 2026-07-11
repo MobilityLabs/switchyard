@@ -42,8 +42,16 @@ import type { WorkerConfig, WorkerProject } from "./worker-select.js";
 
 const execFileP = promisify(execFile);
 
-export async function run(cmd: string, args: string[], opts: { cwd?: string } = {}): Promise<string> {
-  const { stdout } = await execFileP(cmd, args, { cwd: opts.cwd, maxBuffer: 10 * 1024 * 1024 });
+export async function run(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
+): Promise<string> {
+  const { stdout } = await execFileP(cmd, args, {
+    cwd: opts.cwd,
+    env: opts.env ? { ...process.env, ...opts.env } : undefined,
+    maxBuffer: 10 * 1024 * 1024,
+  });
   return stdout.trim();
 }
 
@@ -210,13 +218,22 @@ export async function installDeps(cloneDir: string): Promise<string> {
  * typechecks and passes its tests — semantic conflicts between concurrently
  * merged branches land silently. Runs in the clean clone, never the deploy
  * caller's working tree.
+ *
+ * Mirrors the commit gate's `typecheck` -> `build:ui` -> `test` order
+ * (.github/workflows/ci.yml): the server 404s SPA routes until `dist/ui`
+ * exists (CLAUDE.md), and tests/integration/spa-fallback.test.ts depends on
+ * it, so skipping build:ui here fails that test on every clean clone
+ * regardless of the branch's content (SYD-168). NO_COLOR=1 makes verify
+ * tails born plain instead of relying on tailOf's ANSI strip (SYD-161).
  */
 export async function runVerification(cloneDir: string): Promise<{ ok: boolean; tail: string }> {
+  const env = { NO_COLOR: "1" };
   try {
     await installDeps(cloneDir);
-    const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir });
-    const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir });
-    return { ok: true, tail: tailOf(`${typecheck}\n${tests}`) };
+    const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir, env });
+    const buildUi = await run("npm", ["run", "build:ui"], { cwd: cloneDir, env });
+    const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir, env });
+    return { ok: true, tail: tailOf(`${typecheck}\n${buildUi}\n${tests}`) };
   } catch (err) {
     const e = err as Error & { stdout?: string; stderr?: string };
     return { ok: false, tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
