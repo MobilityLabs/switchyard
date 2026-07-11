@@ -91,6 +91,12 @@ h2 { display: flex; align-items: center; gap: 8px; }
 }
 .card p { margin: 6px 0; font-size: 13px; }
 .card:active { cursor: grabbing; }
+.card-move {
+  display: block; margin-top: 8px; width: 100%;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 8px; font-size: 12px;
+}
+.card:focus-visible, .triage-row:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
 .issue-head { display: flex; align-items: center; gap: 12px; }
 .issue-head h2 { flex: 1; margin: 0; }
