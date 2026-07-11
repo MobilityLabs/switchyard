@@ -1,8 +1,59 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { installDeps } from "../../scripts/delivery-exec.js";
+import { installDeps, run, runGit } from "../../scripts/delivery-exec.js";
+
+const execFileP = promisify(execFile);
+
+/**
+ * Sets up a real git repo with a `pre-push` hook that leaves a marker file if
+ * it fires, plus a bare remote to push to — the exact SYD-109 shape: a
+ * containerized dispatch session has RW Bash+Write access to a repo mount and
+ * can plant hooks directly under .git/hooks, which a later host-side `git`
+ * command against that same directory would otherwise execute.
+ */
+async function makeRepoWithPlantedHook(): Promise<{ repo: string; remote: string; marker: string }> {
+  const repo = mkdtempSync(path.join(tmpdir(), "delivery-exec-hook-test-"));
+  await execFileP("git", ["init", "-q", repo]);
+  await execFileP("git", ["-C", repo, "config", "user.email", "test@example.com"]);
+  await execFileP("git", ["-C", repo, "config", "user.name", "test"]);
+  writeFileSync(path.join(repo, "file.txt"), "hello");
+  await execFileP("git", ["-C", repo, "add", "file.txt"]);
+  await execFileP("git", ["-C", repo, "commit", "-q", "-m", "init"]);
+
+  const marker = path.join(repo, "pwned");
+  const hooksDir = path.join(repo, ".git", "hooks");
+  mkdirSync(hooksDir, { recursive: true });
+  const hookPath = path.join(hooksDir, "pre-push");
+  writeFileSync(hookPath, `#!/bin/sh\ntouch "${marker}"\n`);
+  chmodSync(hookPath, 0o755);
+
+  const remote = mkdtempSync(path.join(tmpdir(), "delivery-exec-remote-"));
+  await execFileP("git", ["init", "-q", "--bare", remote]);
+
+  return { repo, remote, marker };
+}
+
+describe("runGit", () => {
+  it("does not execute a hook planted in the container-touched repo (SYD-109)", async () => {
+    const { repo, remote, marker } = await makeRepoWithPlantedHook();
+
+    await runGit(["-C", repo, "push", remote, "HEAD:refs/heads/agent/TEST-1"]);
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("control: the planted hook does fire on a plain git push (proves the marker methodology)", async () => {
+    const { repo, remote, marker } = await makeRepoWithPlantedHook();
+
+    await run("git", ["-C", repo, "push", remote, "HEAD:refs/heads/agent/TEST-1"]);
+
+    expect(existsSync(marker)).toBe(true);
+  });
+});
 
 // SYD-101: the persistent deliver clone kept native modules (e.g.
 // better-sqlite3) compiled for a node version the gate no longer runs,

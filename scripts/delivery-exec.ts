@@ -47,6 +47,22 @@ export async function run(cmd: string, args: string[], opts: { cwd?: string } = 
   return stdout.trim();
 }
 
+/**
+ * Runs git with repo hooks disabled (`-c core.hooksPath=/dev/null`). Every
+ * git invocation in this file targets a directory a containerized dispatch
+ * session mounts read-write as /origin — project.repo for ordinary work
+ * dispatch (buildDockerArgs, worker-select.ts) or the shared deliver.ts
+ * cloneDir for conflict-resolution dispatch (buildConflictResolutionDockerArgs,
+ * delivery-lib.ts). A prompt-injected session has Bash+Write in there and can
+ * plant e.g. .git/hooks/pre-push directly on the mount; without this flag a
+ * later host-side git command against that same directory (push, checkout,
+ * rebase, ...) would execute the planted hook as the host/worker user, which
+ * holds GitHub push credentials — container-to-host RCE (SYD-109).
+ */
+export async function runGit(args: string[], opts: { cwd?: string } = {}): Promise<string> {
+  return run("git", ["-c", "core.hooksPath=/dev/null", ...args], opts);
+}
+
 // Every gh call below runs with -R <owner>/<repo> from GH_CWD — a directory
 // with no .git of its own — instead of `cwd: repo` (the human's live
 // checkout). gh then talks to the GitHub API only: it never has a local
@@ -56,7 +72,7 @@ export async function run(cmd: string, args: string[], opts: { cwd?: string } = 
 const GH_CWD = os.tmpdir();
 
 async function originOwnerRepo(repo: string): Promise<string> {
-  const url = await run("git", ["-C", repo, "remote", "get-url", "origin"]);
+  const url = await runGit(["-C", repo, "remote", "get-url", "origin"]);
   return parseOwnerRepo(url);
 }
 
@@ -78,14 +94,14 @@ export async function publishAgentBranch(
 ): Promise<PublishOutcome> {
   const branch = agentBranch(ref);
   try {
-    await run("git", ["-C", repo, "rev-parse", "--verify", `refs/heads/${branch}`]);
+    await runGit(["-C", repo, "rev-parse", "--verify", `refs/heads/${branch}`]);
   } catch {
     return { status: "no-branch" };
   }
-  const ahead = await run("git", ["-C", repo, "rev-list", `${MAIN_BRANCH}..${branch}`, "--count"]);
+  const ahead = await runGit(["-C", repo, "rev-list", `${MAIN_BRANCH}..${branch}`, "--count"]);
   if (ahead === "0") return { status: "no-commits" };
 
-  await run("git", ["-C", repo, ...buildPushArgs(ref)]);
+  await runGit(["-C", repo, ...buildPushArgs(ref)]);
   const ownerRepo = await originOwnerRepo(repo);
   const prNumber = await findOpenAgentPr(repo, ref);
   if (prNumber !== null) {
@@ -159,13 +175,13 @@ export async function pollUntilMergeable(repo: string, prNumber: number): Promis
  */
 export async function ensureCleanClone(sourceRepo: string, cloneDir: string): Promise<void> {
   if (!existsSync(path.join(cloneDir, ".git"))) {
-    const remote = await run("git", ["-C", sourceRepo, "remote", "get-url", "origin"]);
+    const remote = await runGit(["-C", sourceRepo, "remote", "get-url", "origin"]);
     mkdirSync(path.dirname(cloneDir), { recursive: true });
-    await run("git", ["clone", remote, cloneDir]);
+    await runGit(["clone", remote, cloneDir]);
   }
-  await run("git", ["-C", cloneDir, "fetch", "origin", MAIN_BRANCH]);
-  await run("git", ["-C", cloneDir, "reset", "--hard", `origin/${MAIN_BRANCH}`]);
-  await run("git", ["-C", cloneDir, "clean", "-fd"]);
+  await runGit(["-C", cloneDir, "fetch", "origin", MAIN_BRANCH]);
+  await runGit(["-C", cloneDir, "reset", "--hard", `origin/${MAIN_BRANCH}`]);
+  await runGit(["-C", cloneDir, "clean", "-fd"]);
 }
 
 /**
@@ -217,23 +233,23 @@ export async function runVerification(cloneDir: string): Promise<{ ok: boolean; 
 export async function attemptAutoRebase(repo: string, cloneDir: string, ref: string): Promise<RebaseOutcome> {
   await ensureCleanClone(repo, cloneDir);
   try {
-    await run("git", ["-C", cloneDir, ...buildFetchAgentBranchArgs(ref)]);
+    await runGit(["-C", cloneDir, ...buildFetchAgentBranchArgs(ref)]);
   } catch {
     return { status: "no-branch" };
   }
-  await run("git", ["-C", cloneDir, ...buildCheckoutRebaseBranchArgs(ref)]);
+  await runGit(["-C", cloneDir, ...buildCheckoutRebaseBranchArgs(ref)]);
   try {
-    await run("git", ["-C", cloneDir, ...buildRebaseOntoMainArgs()]);
+    await runGit(["-C", cloneDir, ...buildRebaseOntoMainArgs()]);
   } catch {
-    const filesOut = await run("git", ["-C", cloneDir, ...buildConflictFilesArgs()]).catch(() => "");
+    const filesOut = await runGit(["-C", cloneDir, ...buildConflictFilesArgs()]).catch(() => "");
     const files = filesOut.split("\n").map((f) => f.trim()).filter(Boolean);
-    await run("git", ["-C", cloneDir, ...buildRebaseAbortArgs()]).catch(() => {});
+    await runGit(["-C", cloneDir, ...buildRebaseAbortArgs()]).catch(() => {});
     return { status: "conflict", files };
   }
   const verify = await runVerification(cloneDir);
   if (!verify.ok) return { status: "verify-failed", tail: verify.tail };
-  await run("git", ["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
-  const sha = await run("git", ["-C", cloneDir, "rev-parse", "HEAD"]);
+  await runGit(["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
+  const sha = await runGit(["-C", cloneDir, "rev-parse", "HEAD"]);
   return { status: "rebased", sha };
 }
 
@@ -266,10 +282,10 @@ export async function dispatchConflictResolution(
   project: WorkerProject,
   config: WorkerConfig
 ): Promise<ConflictResolutionOutcome> {
-  const originalSha = await run("git", ["-C", cloneDir, "rev-parse", agentBranch(ref)]);
+  const originalSha = await runGit(["-C", cloneDir, "rev-parse", agentBranch(ref)]);
 
-  await run("git", ["-C", cloneDir, ...buildSyncLocalMainArgs()]);
-  await run("git", ["-C", cloneDir, ...buildDetachOntoMainArgs()]);
+  await runGit(["-C", cloneDir, ...buildSyncLocalMainArgs()]);
+  await runGit(["-C", cloneDir, ...buildDetachOntoMainArgs()]);
 
   const dockerArgs = buildConflictResolutionDockerArgs(ref, conflictFiles, cloneDir, project, config, process.env);
   let dockerOutput: string;
@@ -280,7 +296,7 @@ export async function dispatchConflictResolution(
     return { status: "failed", tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
   }
 
-  const resolvedSha = await run("git", ["-C", cloneDir, "rev-parse", agentBranch(ref)]);
+  const resolvedSha = await runGit(["-C", cloneDir, "rev-parse", agentBranch(ref)]);
   if (resolvedSha === originalSha) {
     return {
       status: "failed",
@@ -289,7 +305,7 @@ export async function dispatchConflictResolution(
   }
 
   try {
-    await run("git", ["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
+    await runGit(["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
   } catch (err) {
     return {
       status: "failed",
