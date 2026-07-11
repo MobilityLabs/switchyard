@@ -95,7 +95,7 @@ describe("markDuplicate", () => {
 
 describe("redeliverIssue", () => {
   it("rejects agents legibly", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", {
+    recordDeliveryEvent(db, human, "AIPI-1", {
       type: "delivery_failed",
       message: "merge conflict",
     });
@@ -109,11 +109,11 @@ describe("redeliverIssue", () => {
   });
 
   it("rejects an issue whose delivery_failed was already resolved", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", {
+    recordDeliveryEvent(db, human, "AIPI-1", {
       type: "delivery_failed",
       message: "merge conflict",
     });
-    recordDeliveryEvent(db, agent, "AIPI-1", {
+    recordDeliveryEvent(db, human, "AIPI-1", {
       type: "delivered",
       prNumber: 7,
       mergeSha: "abc123",
@@ -125,7 +125,7 @@ describe("redeliverIssue", () => {
   });
 
   it("records a redeliver_requested event without changing issue status", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", {
+    recordDeliveryEvent(db, human, "AIPI-1", {
       type: "delivery_failed",
       message: "merge conflict",
     });

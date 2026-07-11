@@ -23,9 +23,9 @@ describe("getOpenPr", () => {
   });
 
   it("flags an issue whose latest event is pr_opened", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",
@@ -37,7 +37,7 @@ describe("getOpenPr", () => {
   });
 
   it("flags an issue whose latest event is gh_pr_opened (webhook path)", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
     recordEvent(db, {
       issueId: issue.id,
@@ -56,14 +56,14 @@ describe("getOpenPr", () => {
   });
 
   it("clears once delivered", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://x/41",
     });
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 41,
       mergeSha: "abc123",
@@ -73,7 +73,7 @@ describe("getOpenPr", () => {
   });
 
   it("clears once gh_pr_merged or gh_pr_closed fires", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
     recordEvent(db, {
       issueId: issue.id,
@@ -91,7 +91,7 @@ describe("getOpenPr", () => {
   });
 
   it("doesn't let a belated close for an old PR report a newer still-open PR as closed (SYD-125)", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
     recordEvent(db, {
       issueId: issue.id,
@@ -116,20 +116,20 @@ describe("getOpenPr", () => {
   });
 
   it("re-flags if a new PR opens after the previous one closed", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://x/41",
     });
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 41,
       mergeSha: "abc123",
       deploy: { ran: false },
     });
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "pr_opened",
       prNumber: 55,
       url: "https://x/55",
@@ -142,7 +142,7 @@ describe("listOpenPrByIssueId", () => {
   it("only includes issues with an unresolved open PR", () => {
     const { db, human, agent } = setup();
     createIssue(db, human, { projectKey: "SYD", title: "Also shipping" }); // SYD-2
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://x/41",

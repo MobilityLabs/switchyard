@@ -302,7 +302,7 @@ describe("claimIssue", () => {
   it("refuses to claim an issue with an open PR, even after the claim was released back to todo", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     claimIssue(db, agent, "AIPI-1");
-    recordDeliveryEvent(db, agent, "AIPI-1", {
+    recordDeliveryEvent(db, human, "AIPI-1", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",

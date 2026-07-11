@@ -10,7 +10,8 @@ describe("recordDeliveryEvent", () => {
   it("appends pr_opened, delivered, and delivery_failed events to the activity feed", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    // The delivery infra authenticates with a human-typed token (SYD-107/108).
+    const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
@@ -32,7 +33,7 @@ describe("recordDeliveryEvent", () => {
       prNumber: 12,
       url: "https://github.com/acme/widgets/pull/12",
     });
-    expect(activity[1].actorName).toBe("claude/worker");
+    expect(activity[1].actorName).toBe("delivery-worker");
     expect(activity[2].payload).toEqual({
       prNumber: 12,
       mergeSha: "abc123",
@@ -43,7 +44,7 @@ describe("recordDeliveryEvent", () => {
   it("records delivery_failed with just a message", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
@@ -59,9 +60,27 @@ describe("recordDeliveryEvent", () => {
     });
   });
 
+  it("rejects agent actors so delivery status can't be forged (SYD-108)", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+
+    expect(() =>
+      recordDeliveryEvent(db, agent, "SYD-1", {
+        type: "delivered",
+        prNumber: 12,
+        mergeSha: "abc123",
+        deploy: { ran: false },
+      }),
+    ).toThrowError(/delivery infrastructure/);
+    expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
+  });
+
   it("throws for an unknown issue ref", () => {
     const db = openDb(":memory:");
-    const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     expect(() =>
       recordDeliveryEvent(db, worker, "SYD-9", { type: "delivery_failed", message: "boom" }),

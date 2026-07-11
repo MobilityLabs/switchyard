@@ -235,7 +235,7 @@ describe("escalation, snooze, and duplicate routes", () => {
 
     await app.request(`/issues/${filed.ref}/delivery-events`, {
       method: "POST",
-      headers: agentH,
+      headers: humanH,
       body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
     });
 

@@ -23,9 +23,9 @@ describe("getAttention", () => {
   });
 
   it("flags an issue whose latest delivery event is delivery_failed", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
     expect(getAttention(db, issue.id)).toEqual({
       reason: "delivery_failed",
       message: "merge conflict",
@@ -33,10 +33,10 @@ describe("getAttention", () => {
   });
 
   it("clears the flag once a later delivered event fires", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 7,
       mergeSha: "abc123",
@@ -46,15 +46,15 @@ describe("getAttention", () => {
   });
 
   it("re-flags if delivery fails again after a successful delivery", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 7,
       mergeSha: "abc123",
       deploy: { ran: false },
     });
-    recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "deploy broke" });
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "deploy broke" });
     expect(getAttention(db, issue.id)).toEqual({
       reason: "delivery_failed",
       message: "deploy broke",
@@ -66,7 +66,7 @@ describe("listAttentionByIssueId", () => {
   it("only includes issues with an unresolved delivery_failed", () => {
     const { db, human, agent } = setup();
     createIssue(db, human, { projectKey: "SYD", title: "Also shipping" }); // SYD-2
-    recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
 
     const failing = getIssue(db, "SYD-1");
     const clean = getIssue(db, "SYD-2");
@@ -76,9 +76,9 @@ describe("listAttentionByIssueId", () => {
   });
 
   it("clears once delivered, for the bulk query too", () => {
-    const { db, agent } = setup();
-    recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
-    recordDeliveryEvent(db, agent, "SYD-1", {
+    const { db, human, agent } = setup();
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 7,
       mergeSha: "abc123",

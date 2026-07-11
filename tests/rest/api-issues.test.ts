@@ -83,7 +83,7 @@ describe("issue routes", () => {
     });
     await app.request("/issues/SYD-1/delivery-events", {
       method: "POST",
-      headers: agentH,
+      headers: humanH,
       body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
     });
 
@@ -103,7 +103,7 @@ describe("issue routes", () => {
     // Clears once delivered.
     await app.request("/issues/SYD-1/delivery-events", {
       method: "POST",
-      headers: agentH,
+      headers: humanH,
       body: JSON.stringify({
         type: "delivered",
         prNumber: 1,
@@ -131,7 +131,7 @@ describe("issue routes", () => {
     await app.request("/issues/SYD-1/claim", { method: "POST", headers: agentH });
     await app.request("/issues/SYD-1/delivery-events", {
       method: "POST",
-      headers: agentH,
+      headers: humanH,
       body: JSON.stringify({
         type: "pr_opened",
         prNumber: 41,
@@ -183,7 +183,7 @@ describe("issue routes", () => {
     }
     await app.request("/issues/SYD-1/delivery-events", {
       method: "POST",
-      headers: agentH,
+      headers: humanH,
       body: JSON.stringify({
         type: "pr_opened",
         prNumber: 41,
@@ -192,7 +192,7 @@ describe("issue routes", () => {
     });
     await app.request("/issues/SYD-2/delivery-events", {
       method: "POST",
-      headers: agentH,
+      headers: humanH,
       body: JSON.stringify({
         type: "pr_opened",
         prNumber: 42,
@@ -201,7 +201,7 @@ describe("issue routes", () => {
     });
     await app.request("/issues/SYD-2/delivery-events", {
       method: "POST",
-      headers: agentH,
+      headers: humanH,
       body: JSON.stringify({
         type: "delivered",
         prNumber: 42,

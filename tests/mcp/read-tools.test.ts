@@ -53,7 +53,7 @@ describe("MCP read tools", () => {
   });
 
   it("get_issue and search_issues surface an attention flag for an unresolved delivery_failed", async () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", {
+    recordDeliveryEvent(db, human, "AIPI-1", {
       type: "delivery_failed",
       message: "merge conflict",
     });

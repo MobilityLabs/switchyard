@@ -10,7 +10,9 @@ let workerH: Record<string, string>;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  const worker = createActor(db, { name: "claude/worker", type: "agent" });
+  // The delivery infra (deliver.ts / agent-worker.ts) authenticates with a
+  // human-typed token (SYD-107/108) — agent tokens are rejected below.
+  const worker = createActor(db, { name: "delivery-worker", type: "human" });
   workerH = { authorization: `Bearer ${worker.token}`, "content-type": "application/json" };
   createProject(db, { key: "SYD", name: "Switchyard" });
   createIssue(db, worker.actor, {
@@ -86,6 +88,22 @@ describe("POST /issues/:ref/delivery-events", () => {
       body: JSON.stringify({ type: "bogus" }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("rejects agent-token callers so delivery status can't be forged (SYD-108)", async () => {
+    const agent = createActor(db, { name: "claude/rogue", type: "agent" });
+    const res = await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST",
+      headers: { authorization: `Bearer ${agent.token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "delivered",
+        prNumber: 7,
+        mergeSha: "deadbeef",
+        deploy: { ran: false },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/delivery infrastructure/);
   });
 
   it("requires authentication", async () => {
