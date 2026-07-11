@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import type { ChildProcess } from "node:child_process";
 import { answerKey, type WorkerConfig } from "../../scripts/worker-select.js";
 
 const spawnMock = vi.fn();
@@ -20,8 +21,9 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const {
-  buildPrompt, dispatch, dispatchAnswer, active, answerState,
+  buildPrompt, dispatch, dispatchAnswer, active, activeMode, answerState,
   reportSessionStart, reportSessionEnd, runTick, refreshDispatchPolicy,
+  killActiveSessions, adoptContainerSession, reconcileContainerSessions,
 } = await import("../../scripts/agent-worker.js");
 
 describe("buildPrompt", () => {
@@ -52,6 +54,7 @@ class FakeChildProcess extends EventEmitter {
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   kill = vi.fn((_signal?: NodeJS.Signals) => true);
+  stdout = new EventEmitter();
 }
 
 describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
@@ -66,6 +69,7 @@ describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
 
   beforeEach(() => {
     active.clear();
+    activeMode.clear();
     answerState.clear();
     spawnMock.mockReset();
   });
@@ -396,6 +400,7 @@ describe("dispatch session-reporting wiring (SYD-105)", () => {
 
   beforeEach(() => {
     active.clear();
+    activeMode.clear();
     spawnMock.mockReset();
   });
 
@@ -517,5 +522,171 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
       expect(String(call[0])).not.toContain("/claim");
     }
     logSpy.mockRestore();
+  });
+});
+
+describe("killActiveSessions (SYD-121)", () => {
+  it("sends SIGTERM to a cli session's process group and resolves once it exits — no SIGKILL needed", async () => {
+    const child = new FakeChildProcess();
+    child.pid = 4242;
+    const active = new Map<string, ChildProcess | "sdk">([["SYD-1", child as unknown as ChildProcess]]);
+    const activeMode = new Map<string, "cli" | "container">([["SYD-1", "cli"]]);
+    const killFn = vi.fn();
+
+    const done = killActiveSessions(active, activeMode, { killFn, graceMs: 5000 });
+    expect(killFn).toHaveBeenCalledWith(-4242, "SIGTERM");
+    child.emit("exit");
+    await done;
+
+    expect(killFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("escalates to SIGKILL if the child hasn't exited within the grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChildProcess();
+      child.pid = 99;
+      const active = new Map<string, ChildProcess | "sdk">([["SYD-2", child as unknown as ChildProcess]]);
+      const activeMode = new Map<string, "cli" | "container">([["SYD-2", "cli"]]);
+      const killFn = vi.fn();
+
+      const done = killActiveSessions(active, activeMode, { killFn, graceMs: 1000 });
+      expect(killFn).toHaveBeenCalledWith(-99, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(1000);
+      await done;
+
+      expect(killFn).toHaveBeenCalledWith(-99, "SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a containerized session's child alone — it's the sandbox and should survive the restart", async () => {
+    const child = new FakeChildProcess();
+    child.pid = 123;
+    const active = new Map<string, ChildProcess | "sdk">([["SYD-3", child as unknown as ChildProcess]]);
+    const activeMode = new Map<string, "cli" | "container">([["SYD-3", "container"]]);
+    const killFn = vi.fn();
+
+    await killActiveSessions(active, activeMode, { killFn });
+
+    expect(killFn).not.toHaveBeenCalled();
+  });
+
+  it("skips in-process sdk sessions entirely — the worker exiting kills them for free", async () => {
+    const active = new Map<string, ChildProcess | "sdk">([["SYD-4", "sdk"]]);
+    const activeMode = new Map<string, "cli" | "container">();
+    const killFn = vi.fn();
+
+    await killActiveSessions(active, activeMode, { killFn });
+
+    expect(killFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("adoptContainerSession (SYD-121)", () => {
+  const config: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 2,
+    containerized: true,
+    projects: { SYD: { repo: "/repo/syd" } },
+  };
+
+  beforeEach(() => {
+    active.clear();
+    activeMode.clear();
+    spawnMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("watches a still-running container via `docker wait` and reports its exit code once it stops", async () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    adoptContainerSession({ id: 88, ref: "SYD-9", mode: "container", issueTitle: "Adopted work" }, config, "tok");
+
+    expect(spawnMock).toHaveBeenCalledWith("docker", ["wait", "syd-SYD-9"], expect.anything());
+    expect(active.get("SYD-9")).toBe(child);
+    expect(activeMode.get("SYD-9")).toBe("container");
+
+    child.stdout.emit("data", Buffer.from("0\n"));
+    child.emit("exit");
+
+    await vi.waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:3300/api/agent-sessions/88",
+        expect.objectContaining({ method: "PATCH", body: JSON.stringify({ exitCode: 0 }) }),
+      )
+    );
+    expect(active.has("SYD-9")).toBe(false);
+    expect(activeMode.has("SYD-9")).toBe(false);
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+});
+
+describe("reconcileContainerSessions (SYD-121)", () => {
+  const config: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 2,
+    containerized: true,
+    projects: { SYD: { repo: "/repo/syd" } },
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("does nothing when the worker doesn't run containerized dispatch", async () => {
+    const bareConfig: WorkerConfig = { ...config, containerized: false };
+    const listLiveContainerNames = vi.fn();
+    await reconcileContainerSessions(bareConfig, "tok", { listLiveContainerNames });
+    expect(listLiveContainerNames).not.toHaveBeenCalled();
+  });
+
+  it("closes out a stuck session with no running container, and hands a still-live one to adopt", async () => {
+    const sessions = [
+      { id: 1, ref: "SYD-1", mode: "container", issueTitle: "Live one" },
+      { id: 2, ref: "SYD-2", mode: "container", issueTitle: "Orphaned one" },
+    ];
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/api/agent-sessions?active=true")) {
+        return { ok: true, json: async () => sessions, text: async () => "" };
+      }
+      return { ok: true, json: async () => ({}), text: async () => "" };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const listLiveContainerNames = vi.fn(async () => new Set(["syd-SYD-1"]));
+    const adopt = vi.fn();
+
+    await reconcileContainerSessions(config, "tok", { listLiveContainerNames, adopt });
+
+    expect(adopt).toHaveBeenCalledTimes(1);
+    expect(adopt).toHaveBeenCalledWith(sessions[0], config, "tok");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3300/api/agent-sessions/2",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ exitCode: null }) }),
+    );
+
+    logSpy.mockRestore();
+  });
+
+  it("skips reconciliation without throwing if docker ps fails", async () => {
+    const listLiveContainerNames = vi.fn(async () => {
+      throw new Error("docker not found");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(reconcileContainerSessions(config, "tok", { listLiveContainerNames })).resolves.toBeUndefined();
+
+    errorSpy.mockRestore();
   });
 });

@@ -702,6 +702,16 @@ export async function withRetry<T>(
 }
 
 /**
+ * Docker container name this worker uses for a containerized dispatch of
+ * `ref` — must stay in sync between `buildDockerArgs` (which sets `--name`)
+ * and the SYD-121 startup reconciler (which reads names back via `docker
+ * ps`) so a still-running container is recognized as the same session.
+ */
+export function containerNameFor(ref: string): string {
+  return `syd-${ref}`;
+}
+
+/**
  * Builds the `docker run` argv for a containerized dispatch. Pure so it's
  * unit-testable without actually spawning docker. Secrets (SWITCHYARD_TOKEN,
  * CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY) are passed with the bare `-e
@@ -745,7 +755,7 @@ export function buildDockerArgs(
   return [
     "run",
     "--rm",
-    "--name", `syd-${issue.ref}`,
+    "--name", containerNameFor(issue.ref),
     "--memory", CONTAINER_MEMORY_LIMIT,
     "--cpus", CONTAINER_CPU_LIMIT,
     "--pids-limit", CONTAINER_PIDS_LIMIT,
@@ -777,4 +787,35 @@ export function buildDockerArgs(
 export function stackChecksEnv(stack: WorkerStack | undefined): string | undefined {
   if (!stack?.cli || stack.cli.length === 0) return undefined;
   return JSON.stringify(stack.cli.map(({ name, check, install }) => ({ name, check, install })));
+}
+
+/** The subset of a GET /api/agent-sessions?active=true row the SYD-121 startup reconciler needs. */
+export type RunningContainerSessionRow = {
+  id: number;
+  ref: string;
+  mode: string;
+  issueTitle: string;
+};
+
+/**
+ * Splits recorded-"running" agent sessions into ones whose container is still
+ * actually alive per `docker ps` (live — the worker restarted mid-session but
+ * the container survived, so it can be re-adopted) and ones whose container
+ * isn't running anymore (orphaned — it already exited, or never really
+ * started, while no worker process was around to report it; SYD-121). Bare
+ * cli/sdk sessions never survive their worker process exiting, so there's
+ * nothing to reconcile for them here — they're filtered out entirely and left
+ * to the server's time-based sweepOrphanedAgentSessions.
+ */
+export function partitionContainerSessions(
+  sessions: RunningContainerSessionRow[],
+  liveContainerNames: ReadonlySet<string>
+): { orphaned: RunningContainerSessionRow[]; live: RunningContainerSessionRow[] } {
+  const orphaned: RunningContainerSessionRow[] = [];
+  const live: RunningContainerSessionRow[] = [];
+  for (const s of sessions) {
+    if (s.mode !== "container") continue;
+    (liveContainerNames.has(containerNameFor(s.ref)) ? live : orphaned).push(s);
+  }
+  return { orphaned, live };
 }

@@ -43,7 +43,8 @@
 // sessions per issue. Dispatched sessions still go through claim -> in_review ->
 // human review; they can never reach `done` themselves.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import {
   existsSync, readFileSync, mkdirSync, openSync, closeSync, appendFileSync,
 } from "node:fs";
@@ -77,13 +78,17 @@ import {
   withRetry,
   HttpStatusError,
   applyDispatchPolicy,
+  containerNameFor,
+  partitionContainerSessions,
   type WorkerConfig,
+  type WorkerProject,
   type WorkerIssue,
   type RetryState,
   type FeedEvent,
   type AnswerState,
   type WorkerRole,
   type DispatchPolicy,
+  type RunningContainerSessionRow,
 } from "./worker-select.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
 import { publishAgentBranch } from "./delivery-exec.js";
@@ -98,6 +103,14 @@ const DEFAULT_EVENT_POLL_SECONDS = 15;
 // maxConcurrent / maxAnswerConcurrent accounting (split by key suffix, see
 // answerKey) and duplicate suppression.
 export const active = new Map<string, ChildProcess | "sdk">();
+// Per-ref dispatch mode, tracked alongside `active` (SYD-121): shutdown needs
+// to know whether a tracked child is a bare host process it should kill, or a
+// containerized session that's meant to survive a worker restart (it's the
+// actual sandbox; killing it on every restart — including the automatic
+// self-deploy restart, SYD-66 — would destroy in-flight work). "sdk" sessions
+// run in-process and need no entry here: the worker exiting kills them for
+// free.
+export const activeMode = new Map<string, "cli" | "container">();
 const retryState = new Map<string, RetryState>();
 // Refs whose escalation was just answered — their next dispatch gets a prompt
 // primed to read the answer. Populated by the event poll, consumed by tick().
@@ -363,6 +376,57 @@ function killSession(child: ChildProcess, containerName: string | null): void {
   }, SIGKILL_GRACE_MS);
 }
 
+/**
+ * Shared session-finished bookkeeping: reports the exit to the tracker and,
+ * for a containerized session, publishes the pushed agent/<ref> branch as a
+ * PR (SYD-49). Factored out of `dispatch`'s `child.on("exit", ...)` so the
+ * SYD-121 startup reconciler's adopted sessions (see `adoptContainerSession`)
+ * get the exact same delivery wiring a live dispatch would have — a session
+ * that survives a worker restart still needs its exit reported and its
+ * branch published, not just silently forgotten.
+ */
+function finishSessionExit(
+  ref: string,
+  issueTitle: string,
+  project: WorkerProject,
+  config: WorkerConfig,
+  token: string,
+  sessionId: Promise<number | null>,
+  exitCode: number | null,
+  logLine: (text: string) => void,
+): void {
+  void reportSessionEnd(config, token, sessionId, exitCode, (message) => logLine(`[worker] ${message}\n`));
+  console.log(`${ref} exited with code ${exitCode}`);
+  logLine(`\n[worker] exited with code ${exitCode}\n`);
+  // Delivery gate (SYD-49): a containerized session that pushed agent/<ref>
+  // gets its branch published to GitHub as a PR, host-side (gh + git auth
+  // live here, never in the container). Merging still waits for a human
+  // done-stamp via scripts/deliver.ts. Publish fires on commit count alone,
+  // independent of a clean exit (SYD-118) — an errored/killed session that
+  // still committed partial work opens a PR too, so `exitCode` is passed
+  // through to mark the PR body when it isn't a clean exit.
+  if (config.containerized && config.delivery && config.delivery.openPrs !== false) {
+    publishAgentBranch(project.repo, ref, issueTitle, config.url, exitCode)
+      .then((outcome) => {
+        const line = formatPublishOutcome(agentBranch(ref), outcome);
+        console.log(`${ref}: ${line}`);
+        logLine(`[worker] ${line}\n`);
+        if ((outcome.status === "opened" || outcome.status === "already-open") && outcome.prNumber !== null) {
+          postDeliveryEvent(config, token, ref, {
+            type: "pr_opened", prNumber: outcome.prNumber, url: outcome.url,
+          }).catch((err: Error) => {
+            console.error(`could not record pr_opened event for ${ref}: ${err.message}`);
+            logLine(`[worker] could not record pr_opened event: ${err.message}\n`);
+          });
+        }
+      })
+      .catch((err: Error) => {
+        console.error(`publish failed for ${ref}: ${err.message}`);
+        logLine(`[worker] publish failed: ${err.message}\n`);
+      });
+  }
+}
+
 // Exported for tests (SYD-105): lets the session-reporting integration test
 // below drive dispatch() end to end (spawn -> reportSessionStart, exit ->
 // reportSessionEnd) rather than only exercising the two helpers in isolation.
@@ -425,6 +489,7 @@ export function dispatch(
   }
 
   active.set(issue.ref, child);
+  activeMode.set(issue.ref, config.containerized ? "container" : "cli");
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
 
   // Watchdog (SYD-115): a hung `claude -p` or stuck `docker run` would
@@ -450,43 +515,16 @@ export function dispatch(
 
   child.on("exit", (code) => {
     clearTimeout(watchdog);
-    void reportSessionEnd(config, token, sessionId, code, (message) => logLine(`[worker] ${message}\n`));
     active.delete(issue.ref);
+    activeMode.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
-    console.log(`${issue.ref} exited with code ${code}`);
-    logLine(`\n[worker] exited with code ${code}\n`);
-    // Delivery gate (SYD-49): a containerized session that pushed agent/<ref>
-    // gets its branch published to GitHub as a PR, host-side (gh + git auth
-    // live here, never in the container). Merging still waits for a human
-    // done-stamp via scripts/deliver.ts. Publish fires on commit count alone,
-    // independent of a clean exit (SYD-118) — an errored/killed session that
-    // still committed partial work opens a PR too, so `code` is passed
-    // through to mark the PR body when it isn't a clean exit.
-    if (config.containerized && config.delivery && config.delivery.openPrs !== false) {
-      publishAgentBranch(project.repo, issue.ref, issue.title, config.url, code)
-        .then((outcome) => {
-          const line = formatPublishOutcome(agentBranch(issue.ref), outcome);
-          console.log(`${issue.ref}: ${line}`);
-          logLine(`[worker] ${line}\n`);
-          if ((outcome.status === "opened" || outcome.status === "already-open") && outcome.prNumber !== null) {
-            postDeliveryEvent(config, token, issue.ref, {
-              type: "pr_opened", prNumber: outcome.prNumber, url: outcome.url,
-            }).catch((err: Error) => {
-              console.error(`could not record pr_opened event for ${issue.ref}: ${err.message}`);
-              logLine(`[worker] could not record pr_opened event: ${err.message}\n`);
-            });
-          }
-        })
-        .catch((err: Error) => {
-          console.error(`publish failed for ${issue.ref}: ${err.message}`);
-          logLine(`[worker] publish failed: ${err.message}\n`);
-        });
-    }
+    finishSessionExit(issue.ref, issue.title, project, config, token, sessionId, code, logLine);
   });
 
   child.on("error", (err) => {
     clearTimeout(watchdog);
     active.delete(issue.ref);
+    activeMode.delete(issue.ref);
     // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
     // close the session (no-op when spawn never happened: sessionId is null).
     void reportSessionEnd(config, token, sessionId, null, (message) => logLine(`[worker] ${message}\n`));
@@ -618,6 +656,7 @@ export function dispatchAnswer(ref: string, config: WorkerConfig, token: string,
   }
 
   active.set(key, child);
+  activeMode.set(key, "cli");
 
   // Watchdog (SYD-115): answer sessions share the same hung-process risk as
   // work dispatch and would otherwise hold a maxAnswerConcurrent slot
@@ -643,12 +682,14 @@ export function dispatchAnswer(ref: string, config: WorkerConfig, token: string,
   child.on("exit", (code) => {
     clearTimeout(watchdog);
     active.delete(key);
+    activeMode.delete(key);
     triggerUnansweredDrain(config, token);
     console.log(`answer session for ${ref} exited with code ${code}`);
   });
   child.on("error", (err) => {
     clearTimeout(watchdog);
     active.delete(key);
+    activeMode.delete(key);
     console.error(`failed to spawn answer session for ${ref}: ${err.message}`);
   });
 }
@@ -810,6 +851,190 @@ async function pollEvents(config: WorkerConfig, token: string, role: WorkerRole,
   }
 }
 
+const SHUTDOWN_GRACE_MS = 5000;
+
+/**
+ * Best-effort teardown for tracked children on worker shutdown (SYD-121):
+ * children are spawned `detached: true` so a bare `process.exit()` leaves
+ * them running as orphans. For a bare-host `claude -p` session (mode "cli")
+ * there's no way to reconnect to it later, so this sends SIGTERM to its whole
+ * process group (detached spawn makes `pid` its own pgid, so `-pid` reaches
+ * any children it spawned too), waits up to `graceMs`, and escalates to
+ * SIGKILL if it's still alive. A containerized session (mode "container") is
+ * deliberately left alone — it's the actual sandbox executing the work, and
+ * the next startup's `reconcileContainerSessions` re-adopts it rather than
+ * losing the work to a restart. "sdk" sessions run in-process and need no
+ * signal at all. `killFn` is injectable so tests don't need a real process
+ * group to signal.
+ */
+export async function killActiveSessions(
+  active: ReadonlyMap<string, ChildProcess | "sdk">,
+  activeMode: ReadonlyMap<string, "cli" | "container">,
+  opts: { killFn?: (pid: number, signal: NodeJS.Signals) => void; graceMs?: number } = {}
+): Promise<void> {
+  const killFn = opts.killFn ?? ((pid, signal) => process.kill(pid, signal));
+  const graceMs = opts.graceMs ?? SHUTDOWN_GRACE_MS;
+
+  const waits: Promise<void>[] = [];
+  for (const [key, child] of active) {
+    if (child === "sdk") continue;
+    if (activeMode.get(key) === "container") continue;
+    const pid = child.pid;
+    if (pid === undefined || child.exitCode !== null) continue;
+    try {
+      killFn(-pid, "SIGTERM");
+    } catch {
+      continue; // already gone
+    }
+    waits.push(
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          try {
+            killFn(-pid, "SIGKILL");
+          } catch {
+            // already gone
+          }
+          resolve();
+        }, graceMs);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      })
+    );
+  }
+  await Promise.all(waits);
+}
+
+const execFileP = promisify(execFile);
+
+/**
+ * Names of currently-running Docker containers this worker could plausibly
+ * own (SYD-121) — every containerized dispatch names its container via
+ * `containerNameFor`, so filtering on that prefix scopes the query away from
+ * unrelated containers on the same host.
+ */
+async function listLiveContainerNames(): Promise<Set<string>> {
+  const { stdout } = await execFileP("docker", ["ps", "--filter", "name=syd-", "--format", "{{.Names}}"]);
+  return new Set(stdout.split("\n").map((s) => s.trim()).filter(Boolean));
+}
+
+async function fetchRunningContainerSessions(
+  config: WorkerConfig, token: string
+): Promise<RunningContainerSessionRow[]> {
+  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    throw new Error(`GET /api/agent-sessions?active=true failed: ${res.status} ${await res.text()}`);
+  }
+  return (await res.json()) as RunningContainerSessionRow[];
+}
+
+/**
+ * Re-attaches a still-running containerized session's exit handling after a
+ * worker restart (SYD-121). `docker wait <name>` blocks until the container
+ * stops and prints its exit code on stdout — treating that as the child
+ * process feeds the exact same `finishSessionExit` flow (report the exit,
+ * publish the branch as a PR) a live dispatch uses, and keeps the ref in
+ * `active` so the next tick won't try to dispatch it again (which would
+ * collide on the still-in-use container name).
+ */
+export function adoptContainerSession(session: RunningContainerSessionRow, config: WorkerConfig, token: string): void {
+  const project = config.projects[projectKeyOf(session.ref)];
+  if (!project) return;
+
+  const logDir = path.join(project.repo, ".superpowers", "worker-logs");
+  mkdirSync(logDir, { recursive: true });
+  const logPath = path.join(logDir, `${session.ref}.log`);
+  const logLine = (text: string) => {
+    try {
+      appendFileSync(logPath, text);
+    } catch (err) {
+      console.error(`could not append to ${logPath}: ${(err as Error).message}`);
+    }
+  };
+
+  const child = spawn("docker", ["wait", containerNameFor(session.ref)], { stdio: ["ignore", "pipe", "ignore"] });
+  active.set(session.ref, child);
+  activeMode.set(session.ref, "container");
+  console.log(`adopted ${session.ref}: still-running container from before the restart`);
+  logLine(`[worker] adopted running container after a worker restart\n`);
+
+  let output = "";
+  child.stdout?.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+  });
+
+  child.on("exit", () => {
+    active.delete(session.ref);
+    activeMode.delete(session.ref);
+    const parsed = Number.parseInt(output.trim(), 10);
+    const exitCode = Number.isFinite(parsed) ? parsed : null;
+    finishSessionExit(session.ref, session.issueTitle, project, config, token, Promise.resolve(session.id), exitCode, logLine);
+  });
+  child.on("error", (err) => {
+    active.delete(session.ref);
+    activeMode.delete(session.ref);
+    console.error(`failed to adopt container session for ${session.ref}: ${err.message}`);
+  });
+}
+
+/**
+ * Startup reconciliation (SYD-121): a containerized session survives its
+ * worker process dying (see `killActiveSessions`), but a freshly-started
+ * process has no record of it in `active` — nobody would dedupe against it
+ * (docker `--name` collision on re-dispatch) or ever report its exit (a
+ * session stuck "running" forever in the Agents panel, with its branch never
+ * published). Diffs the tracker's recorded-running container sessions
+ * against `docker ps`: a session whose container is still alive gets adopted
+ * (see `adoptContainerSession`); one whose container is gone already exited
+ * with nobody around to report it, so it's closed out now rather than left
+ * for the server's time-based `sweepOrphanedAgentSessions` (default 12h) to
+ * eventually catch. Only meaningful when this worker runs containerized
+ * dispatch at all. Best-effort: a docker or tracker failure here must never
+ * block the worker from starting its normal poll loop.
+ *
+ * `deps.listLiveContainerNames`/`deps.adopt` default to the real docker/adopt
+ * implementations; tests inject fakes so they don't need a real Docker daemon.
+ */
+export async function reconcileContainerSessions(
+  config: WorkerConfig,
+  token: string,
+  deps: {
+    listLiveContainerNames?: () => Promise<Set<string>>;
+    adopt?: (session: RunningContainerSessionRow, config: WorkerConfig, token: string) => void;
+  } = {}
+): Promise<void> {
+  if (!config.containerized) return;
+  const listNames = deps.listLiveContainerNames ?? listLiveContainerNames;
+  const adopt = deps.adopt ?? adoptContainerSession;
+
+  let liveNames: Set<string>;
+  try {
+    liveNames = await listNames();
+  } catch (err) {
+    console.error(`startup reconciliation: docker ps failed, skipping: ${(err as Error).message}`);
+    return;
+  }
+
+  let sessions: RunningContainerSessionRow[];
+  try {
+    sessions = await fetchRunningContainerSessions(config, token);
+  } catch (err) {
+    console.error(`startup reconciliation: fetching agent sessions failed, skipping: ${(err as Error).message}`);
+    return;
+  }
+
+  const { orphaned, live } = partitionContainerSessions(sessions, liveNames);
+  for (const session of orphaned) {
+    console.log(`reconcile: ${session.ref} has no running container — closing stuck session ${session.id}`);
+    await reportSessionEnd(config, token, Promise.resolve(session.id), null);
+  }
+  for (const session of live) {
+    adopt(session, config, token);
+  }
+}
+
 /**
  * Acquires the single-instance pidfile lock for `role` (SYD-67): each role
  * gets its own pidfile (worker.pid / worker-code.pid / worker-answer.pid) so
@@ -861,6 +1086,11 @@ async function main(): Promise<void> {
   }
 
   const releaseLock = acquireRoleLock(role);
+  if (!dryRun) {
+    await reconcileContainerSessions(config, token).catch((err: Error) =>
+      console.error(`startup reconciliation failed: ${err.message}`)
+    );
+  }
   await runTick(config, token, role, { dryRun });
 
   console.log(
@@ -902,15 +1132,23 @@ async function main(): Promise<void> {
   scheduleTick();
   scheduleEventPoll();
 
-  const shutdown = () => {
+  // Kills tracked children before releasing the lock and exiting (SYD-121) —
+  // see killActiveSessions for what "kill" means per session mode. Async, so
+  // the signal handler awaits it before actually exiting the process.
+  const shutdown = async (): Promise<void> => {
     stopped = true;
     clearTimeout(tickTimer);
     clearTimeout(eventTimer);
+    await killActiveSessions(active, activeMode);
     releaseLock();
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => {
+    void shutdown();
+  });
+  process.on("SIGTERM", () => {
+    void shutdown();
+  });
   process.on("exit", releaseLock);
 }
 

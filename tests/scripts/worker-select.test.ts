@@ -12,6 +12,9 @@ findResumeRefs,
   buildDockerArgs,
   buildContainerizedPrompt,
   stackChecksEnv,
+  containerNameFor,
+  partitionContainerSessions,
+  type RunningContainerSessionRow,
   newTickGate,
   runGated,
   answerKey,
@@ -634,6 +637,54 @@ describe("stackChecksEnv", () => {
   it("serializes cli entries to a JSON array, dropping unset install", () => {
     const json = stackChecksEnv({ cli: [{ name: "gh", check: "gh --version" }] });
     expect(JSON.parse(json!)).toEqual([{ name: "gh", check: "gh --version" }]);
+  });
+});
+
+describe("containerNameFor", () => {
+  it("prefixes the ref with syd- to match buildDockerArgs's --name", () => {
+    expect(containerNameFor("SYD-121")).toBe("syd-SYD-121");
+  });
+});
+
+describe("partitionContainerSessions (SYD-121)", () => {
+  const session = (overrides: Partial<RunningContainerSessionRow>): RunningContainerSessionRow => ({
+    id: 1,
+    ref: "SYD-1",
+    mode: "container",
+    issueTitle: "Some issue",
+    ...overrides,
+  });
+
+  it("puts a container session with a still-running container in `live`", () => {
+    const sessions = [session({ id: 1, ref: "SYD-1" })];
+    const { live, orphaned } = partitionContainerSessions(sessions, new Set(["syd-SYD-1"]));
+    expect(live).toEqual(sessions);
+    expect(orphaned).toEqual([]);
+  });
+
+  it("puts a container session with no matching running container in `orphaned`", () => {
+    const sessions = [session({ id: 1, ref: "SYD-1" })];
+    const { live, orphaned } = partitionContainerSessions(sessions, new Set(["syd-SYD-2"]));
+    expect(orphaned).toEqual(sessions);
+    expect(live).toEqual([]);
+  });
+
+  it("ignores non-container sessions entirely — nothing to reconcile for a bare cli/sdk session", () => {
+    const sessions = [session({ id: 1, ref: "SYD-1", mode: "cli" })];
+    const { live, orphaned } = partitionContainerSessions(sessions, new Set());
+    expect(live).toEqual([]);
+    expect(orphaned).toEqual([]);
+  });
+
+  it("partitions a mix correctly", () => {
+    const sessions = [
+      session({ id: 1, ref: "SYD-1" }), // live
+      session({ id: 2, ref: "SYD-2" }), // orphaned
+      session({ id: 3, ref: "SYD-3", mode: "sdk" }), // ignored
+    ];
+    const { live, orphaned } = partitionContainerSessions(sessions, new Set(["syd-SYD-1"]));
+    expect(live).toEqual([sessions[0]]);
+    expect(orphaned).toEqual([sessions[1]]);
   });
 });
 
