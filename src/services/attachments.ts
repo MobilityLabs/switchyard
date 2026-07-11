@@ -75,7 +75,7 @@ export async function saveAttachment(
   }
 
   const row = db.transaction((tx) => {
-    const issue = getIssue(tx as Db, ref);
+    const issue = getIssue(tx, ref);
     const inserted = tx
       .insert(attachments)
       .values({
@@ -87,7 +87,7 @@ export async function saveAttachment(
       })
       .returning()
       .get();
-    recordEvent(tx as Db, {
+    recordEvent(tx, {
       issueId: issue.id,
       actorId: actor.id,
       type: "attachment_added",

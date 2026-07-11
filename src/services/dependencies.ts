@@ -1,5 +1,5 @@
 import { and, eq, isNull, notInArray, or, sql } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 import { dependencies, issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
@@ -14,12 +14,12 @@ const PRIORITY_RANK = sql`CASE ${issues.priority}
 
 export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedRef: string): void {
   db.transaction((tx) => {
-    const blocker = getIssue(tx as Db, blockerRef);
-    const blocked = getIssue(tx as Db, blockedRef);
+    const blocker = getIssue(tx, blockerRef);
+    const blocked = getIssue(tx, blockedRef);
     if (blocker.id === blocked.id) {
       throw new SwitchyardError(`An issue cannot block itself (${blockerRef}).`);
     }
-    if (isReachable(tx as Db, blocked.id, blocker.id)) {
+    if (isReachable(tx, blocked.id, blocker.id)) {
       throw new SwitchyardError(
         `Adding this dependency would create a cycle — ${blockedRef} already blocks ${blockerRef} (directly or transitively).`
       );
@@ -31,7 +31,7 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
       .returning()
       .get();
     if (inserted) {
-      recordEvent(tx as Db, {
+      recordEvent(tx, {
         issueId: blocked.id, actorId: actor.id,
         type: "blocked_by_added", payload: { blocker: blocker.ref },
       });
@@ -50,15 +50,15 @@ export function removeDependency(db: Db, actor: Actor, blockerRef: string, block
     );
   }
   db.transaction((tx) => {
-    const blocker = getIssue(tx as Db, blockerRef);
-    const blocked = getIssue(tx as Db, blockedRef);
+    const blocker = getIssue(tx, blockerRef);
+    const blocked = getIssue(tx, blockedRef);
     const deleted = tx
       .delete(dependencies)
       .where(and(eq(dependencies.blockerId, blocker.id), eq(dependencies.blockedId, blocked.id)))
       .returning()
       .get();
     if (deleted) {
-      recordEvent(tx as Db, {
+      recordEvent(tx, {
         issueId: blocked.id, actorId: actor.id,
         type: "blocked_by_removed", payload: { blocker: blocker.ref },
       });
@@ -96,7 +96,7 @@ export function listDependencies(
   return { blockedBy: pick(blockedBy), blocks: pick(blocks) };
 }
 
-function isReachable(db: Db, fromId: number, toId: number): boolean {
+function isReachable(db: DbOrTx, fromId: number, toId: number): boolean {
   const visited = new Set<number>([fromId]);
   const queue = [fromId];
   while (queue.length > 0) {
@@ -134,7 +134,7 @@ export function listBlockedIssueIds(db: Db): Set<number> {
   return new Set(rows.map((r) => r.blockedId));
 }
 
-export function getOpenBlockers(db: Db, issueId: number): IssueView[] {
+export function getOpenBlockers(db: DbOrTx, issueId: number): IssueView[] {
   const rows = db
     .select({ issue: issues })
     .from(dependencies)
