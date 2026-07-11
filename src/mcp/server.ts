@@ -12,6 +12,7 @@ import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
+import { listRecentEventsPage, DEFAULT_RECENT_EVENTS_LIMIT, MAX_RECENT_EVENTS_LIMIT } from "../services/events.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { recordProgressNote, listAgentSessions } from "../services/agent-sessions.js";
 import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
@@ -273,6 +274,27 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
       addDependency(db, actor, blocker_ref, blocked_ref);
       return { ok: true };
+    })
+  );
+
+  server.registerTool(
+    "recent_events",
+    {
+      description:
+        "Cross-issue, newest-first activity feed for diagnosing \"what just happened on the board\" " +
+        "(the same feed the dispatch worker polls). Optional `since` (unix seconds) filters to events " +
+        `after that time. Defaults to the ${DEFAULT_RECENT_EVENTS_LIMIT} most recent events, capped at ` +
+        `${MAX_RECENT_EVENTS_LIMIT} — the response includes \`truncated\` and \`next_cursor\`; pass ` +
+        "`next_cursor` back in as `before_id` to page further back instead of raising the limit.",
+      inputSchema: {
+        since: z.number().optional(),
+        limit: z.number().optional(),
+        before_id: z.number().optional(),
+      },
+    },
+    guard(({ since, limit, before_id }: { since?: number; limit?: number; before_id?: number }) => {
+      const page = listRecentEventsPage(db, { since, limit, beforeId: before_id });
+      return { events: page.events, next_cursor: page.nextCursor, truncated: page.truncated };
     })
   );
 
