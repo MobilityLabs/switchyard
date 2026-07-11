@@ -149,14 +149,18 @@ async function readMergeableState(prNumber: number, ownerRepo: string): Promise<
 }
 
 /**
- * Polls `gh pr view --json mergeable` after a force-push (SYD-103) until it
- * leaves UNKNOWN or MERGE_POLL_TIMEOUT_MS elapses, so the merge retry that
- * follows a rebase/conflict-resolution force-push doesn't race GitHub's
- * asynchronous mergeability recompute. Returns whatever state was last
- * observed — including a still-UNKNOWN timeout — and never throws on
- * CONFLICTING or timeout: the caller retries the merge through its normal
- * path regardless, so a real conflict or a slow recompute just fails the
- * same way delivery already handles a merge failure.
+ * Polls `gh pr view --json mergeable` until it leaves UNKNOWN or
+ * MERGE_POLL_TIMEOUT_MS elapses, so a merge attempt doesn't race GitHub's
+ * asynchronous mergeability recompute. Originally added (SYD-103) for the
+ * merge retry that follows a rebase/conflict-resolution force-push; also
+ * called before deliver.ts's very first merge attempt (SYD-152) since a PR
+ * pushed or force-pushed moments earlier — by publishAgentBranch, or by an
+ * auto-rebase from a prior delivery attempt on the same ref — can still read
+ * UNKNOWN there too. Returns whatever state was last observed — including a
+ * still-UNKNOWN timeout — and never throws on CONFLICTING or timeout: the
+ * caller attempts/retries the merge through its normal path regardless, so a
+ * real conflict or a slow recompute just fails the same way delivery already
+ * handles a merge failure.
  */
 export async function pollUntilMergeable(repo: string, prNumber: number): Promise<MergeableState> {
   const ownerRepo = await originOwnerRepo(repo);

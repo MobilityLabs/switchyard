@@ -160,6 +160,17 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
     let rebased = false;
     let resolvedConflict = false;
     try {
+      // Poll before the very first merge attempt too (SYD-152): a PR pushed
+      // or force-pushed moments earlier (e.g. by publishAgentBranch, or by an
+      // auto-rebase from a prior delivery attempt on this same ref) can still
+      // read `mergeable=UNKNOWN` here, and `gh pr merge` against UNKNOWN fails
+      // with a false "not mergeable" delivery_failed even though the PR is
+      // actually clean. Same advisory poll already used before the
+      // post-rebase retry merges below — it never gates the merge attempt,
+      // it just gives GitHub's async mergeability recompute a chance to
+      // settle first.
+      const mergeable = await pollUntilMergeable(project.repo, prNumber);
+      console.log(`${ref}: PR #${prNumber} mergeability=${mergeable}`);
       mergeSha = await mergeAgentPr(project.repo, prNumber);
     } catch (mergeErr) {
       // Merge-failure is the steady state under batch stamping (N parallel

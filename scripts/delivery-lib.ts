@@ -163,12 +163,14 @@ export function buildPrViewMergeShaArgs(prNumber: number, ownerRepo: string): st
   return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"];
 }
 
-// Post-force-push merge-retry poll (SYD-103): after attemptAutoRebase or a
-// SYD-100 resolver session force-pushes agent/<ref>, GitHub recomputes the
-// PR's mergeability asynchronously — `mergeable` reads UNKNOWN for several
-// seconds. Retrying `gh pr merge` in that window fails with "Pull Request is
+// Pre-merge mergeability poll (SYD-103, widened by SYD-152): after
+// attemptAutoRebase or a SYD-100 resolver session force-pushes agent/<ref>,
+// or after publishAgentBranch's own initial push, GitHub recomputes the PR's
+// mergeability asynchronously — `mergeable` reads UNKNOWN for several
+// seconds. Calling `gh pr merge` in that window fails with "Pull Request is
 // not mergeable" even though the branch is fully resolved. Poll `mergeable`
-// until it leaves UNKNOWN (or times out) before the retry merge.
+// until it leaves UNKNOWN (or times out) before every merge attempt —
+// deliver.ts's first attempt and its post-force-push retries alike.
 
 export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
 
