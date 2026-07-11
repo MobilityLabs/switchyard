@@ -28,7 +28,8 @@
     "verify": true,
     "autoRebase": true,
     "reconcile": true,
-    "conflictResolution": true
+    "conflictResolution": true,
+    "mode": "merge-first"
   },
   "githubPoll": {
     "pollSeconds": 120

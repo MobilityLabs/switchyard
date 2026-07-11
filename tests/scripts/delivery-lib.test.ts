@@ -50,6 +50,7 @@ import {
   queueDeliveredNote,
   buildFetchMainArgs,
   buildOriginMainShaArgs,
+  isQueueMode,
   type DeliveryFeedEvent,
   type QueueDecision,
 } from "../../scripts/delivery-lib.js";
@@ -680,5 +681,17 @@ describe("decideQueueAction (SYD-164 queue mode planner)", () => {
 
   it("mainMoved is irrelevant for non-rebased outcomes", () => {
     expect(decideQueueAction({ status: "no-branch" }, true, 3).kind).toBe("bounce");
+  });
+});
+
+describe("isQueueMode (SYD-164)", () => {
+  const base = { url: "http://x", label: "l", intervalSeconds: 60, maxConcurrent: 1, projects: {} };
+  it("false when delivery or mode is absent or merge-first", () => {
+    expect(isQueueMode(base as never)).toBe(false);
+    expect(isQueueMode({ ...base, delivery: {} } as never)).toBe(false);
+    expect(isQueueMode({ ...base, delivery: { mode: "merge-first" } } as never)).toBe(false);
+  });
+  it("true only for mode queue", () => {
+    expect(isQueueMode({ ...base, delivery: { mode: "queue" } } as never)).toBe(true);
   });
 });

@@ -109,6 +109,17 @@ export type DeliveryConfig = {
    * needs the same clone-in/branch-out sandbox as ordinary work dispatch.
    */
   conflictResolution?: boolean;
+  /**
+   * Delivery strategy (SYD-164). "merge-first" (default): today's flow —
+   * merge, then verify merged main, deploy; conflicts fall back to
+   * autoRebase and optional conflictResolution sessions. "queue": rebase
+   * agent/<ref> onto current main, verify the REBASED tree, and only merge
+   * on green (bors/Zuul-style pre-merge gating; see
+   * docs/2026-07-10-merge-queue-research.md). In queue mode `autoRebase`
+   * and `conflictResolution` are ignored — the rebase IS the pipeline, and
+   * failures bounce to the author instead of dispatching repair sessions.
+   */
+  mode?: "merge-first" | "queue";
 };
 
 export type GithubPollConfig = {

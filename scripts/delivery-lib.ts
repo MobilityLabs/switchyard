@@ -675,3 +675,8 @@ export function queueDeliveredNote(ref: string, attempts: number): string {
   const cycles = attempts > 1 ? ` (took ${attempts} rebase cycles — ${MAIN_BRANCH} was moving)` : "";
   return `🔁 ${agentBranch(ref)} was rebased onto main and verified pre-merge by queue mode${cycles}.`;
 }
+
+/** Queue mode flag (SYD-164). */
+export function isQueueMode(config: WorkerConfig): boolean {
+  return config.delivery?.mode === "queue";
+}

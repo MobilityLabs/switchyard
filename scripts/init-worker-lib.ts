@@ -112,6 +112,10 @@ export function validateWorkerConfig(raw: unknown): string[] {
           problems.push(`\`delivery.${key}\` must be true or false`);
         }
       }
+      const mode = (d as { mode?: unknown }).mode;
+      if (mode !== undefined && mode !== "merge-first" && mode !== "queue") {
+        problems.push('`delivery.mode` must be "merge-first" or "queue" when set');
+      }
     }
   }
   if (

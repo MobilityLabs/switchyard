@@ -272,6 +272,28 @@ describe("validateWorkerConfig", () => {
   });
 });
 
+describe("validateWorkerConfig delivery.mode (SYD-164)", () => {
+  const base = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 1,
+    projects: { SYD: { repo: "/repo" } },
+  };
+
+  it("accepts absent, merge-first, and queue", () => {
+    for (const mode of [undefined, "merge-first", "queue"]) {
+      const cfg = { ...base, delivery: mode === undefined ? {} : { mode } };
+      expect(validateWorkerConfig(cfg)).toEqual([]);
+    }
+  });
+
+  it("rejects an unknown mode with a pointed message", () => {
+    const problems = validateWorkerConfig({ ...base, delivery: { mode: "yolo" } });
+    expect(problems.some((p) => p.includes("delivery.mode"))).toBe(true);
+  });
+});
+
 describe("validateWorkerConfig githubPoll block (SYD-71)", () => {
     const base = {
       url: "http://localhost:3300",
