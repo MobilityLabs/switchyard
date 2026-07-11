@@ -19,8 +19,10 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-const { buildPrompt, dispatch, dispatchAnswer, active, answerState, reportSessionStart, reportSessionEnd, runTick } =
-  await import("../../scripts/agent-worker.js");
+const {
+  buildPrompt, dispatch, dispatchAnswer, active, answerState,
+  reportSessionStart, reportSessionEnd, runTick, refreshDispatchPolicy,
+} = await import("../../scripts/agent-worker.js");
 
 describe("buildPrompt", () => {
   it("builds the standard work prompt", () => {
@@ -315,6 +317,68 @@ describe("session lifecycle reporting (SYD-43)", () => {
     const id = await reportSessionStart(config, "tok", { ref: "SYD-7", mode: "cli", pid: null }, onError);
     expect(id).toBeNull();
     expect(onError).toHaveBeenCalledWith(expect.stringContaining("could not report session start for SYD-7"));
+    errorSpy.mockRestore();
+  });
+});
+
+describe("refreshDispatchPolicy (SYD-155)", () => {
+  const baseConfig = (): WorkerConfig => ({
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    eventPollSeconds: 15,
+    maxConcurrent: 1,
+    maxAnswerConcurrent: 2,
+    projects: { SYD: { repo: "/repo/syd" } },
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("overlays a successful fetch onto the config, overriding the file's values", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ maxConcurrent: 5, maxAnswerConcurrent: 8, intervalSeconds: 60, eventPollSeconds: 5 }),
+      text: async () => "",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = baseConfig();
+    await refreshDispatchPolicy(config, "tok");
+    expect(config).toMatchObject({
+      maxConcurrent: 5, maxAnswerConcurrent: 8, intervalSeconds: 60, eventPollSeconds: 5,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3300/api/dispatch-policy",
+      expect.objectContaining({ headers: { authorization: "Bearer tok" } }),
+    );
+  });
+
+  it("keeps the last-known (file) values on a fetch failure", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => "down" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = baseConfig();
+    await refreshDispatchPolicy(config, "tok");
+    expect(config).toMatchObject({
+      maxConcurrent: 1, maxAnswerConcurrent: 2, intervalSeconds: 300, eventPollSeconds: 15,
+    });
+    errorSpy.mockRestore();
+  });
+
+  it("keeps the last-known (previously fetched) values on a subsequent network error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const config = baseConfig();
+
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ maxConcurrent: 9, maxAnswerConcurrent: 9, intervalSeconds: 30, eventPollSeconds: 3 }),
+      text: async () => "",
+    })));
+    await refreshDispatchPolicy(config, "tok");
+    expect(config.maxConcurrent).toBe(9);
+
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
+    await refreshDispatchPolicy(config, "tok");
+    expect(config).toMatchObject({ maxConcurrent: 9, maxAnswerConcurrent: 9, intervalSeconds: 30, eventPollSeconds: 3 });
     errorSpy.mockRestore();
   });
 });

@@ -2,6 +2,7 @@ import { and, eq, max } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues, events } from "../db/schema.js";
 import { recordEvent } from "./events.js";
+import { getSetting } from "./settings.js";
 
 /**
  * Releases `in_progress` issues whose newest event is older than `maxIdleSeconds`.
@@ -12,7 +13,7 @@ import { recordEvent } from "./events.js";
  * `claim_released` event is recorded (attributed to the assignee if set, else
  * the creator). Returns the number of issues released.
  */
-export function releaseStaleClaims(db: Db, maxIdleSeconds = 4 * 3600): number {
+export function releaseStaleClaims(db: Db, maxIdleSeconds: number = getSetting(db, "claims.stale_seconds")): number {
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - maxIdleSeconds;
 

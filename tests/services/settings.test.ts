@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
-import { getSetting, getAllSettings, setSetting, resetSetting, REGISTRY } from "../../src/services/settings.js";
+import {
+  getSetting, getAllSettings, setSetting, resetSetting, getDispatchPolicy, REGISTRY,
+} from "../../src/services/settings.js";
 
 describe("settings", () => {
   it("falls back to the compiled-in default when unset", () => {
@@ -73,5 +75,23 @@ describe("settings", () => {
     const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
     expect(() => setSetting(db, agent, "instance.name", "Nope")).toThrowError(/human-only/i);
     expect(() => resetSetting(db, agent, "instance.name")).toThrowError(/human-only/i);
+  });
+
+  it("getDispatchPolicy returns just the dispatch.* group, defaults on a fresh DB", () => {
+    const db = openDb(":memory:");
+    expect(getDispatchPolicy(db)).toEqual({
+      maxConcurrent: REGISTRY["dispatch.max_concurrent"].default,
+      maxAnswerConcurrent: REGISTRY["dispatch.max_answer_concurrent"].default,
+      intervalSeconds: REGISTRY["dispatch.poll_seconds"].default,
+      eventPollSeconds: REGISTRY["dispatch.event_poll_seconds"].default,
+    });
+  });
+
+  it("getDispatchPolicy reflects human overrides", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    setSetting(db, human, "dispatch.max_concurrent", 5);
+    setSetting(db, human, "dispatch.poll_seconds", 30);
+    expect(getDispatchPolicy(db)).toMatchObject({ maxConcurrent: 5, intervalSeconds: 30 });
   });
 });

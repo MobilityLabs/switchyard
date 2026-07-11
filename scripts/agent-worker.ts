@@ -76,12 +76,14 @@ import {
   sessionTimeoutMs,
   withRetry,
   HttpStatusError,
+  applyDispatchPolicy,
   type WorkerConfig,
   type WorkerIssue,
   type RetryState,
   type FeedEvent,
   type AnswerState,
   type WorkerRole,
+  type DispatchPolicy,
 } from "./worker-select.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
 import { publishAgentBranch } from "./delivery-exec.js";
@@ -255,6 +257,25 @@ async function fetchUnansweredQuestions(config: WorkerConfig, token: string): Pr
   }
   const rows = (await res.json()) as { ref: string }[];
   return rows.map((r) => r.ref);
+}
+
+/**
+ * Fetches the dispatch.* policy group (SYD-155) and overlays it onto `config`
+ * in place — called at startup and before each main poll tick, so a human's
+ * edit in the Settings UI takes effect within one poll interval, no launchd
+ * restart. On fetch failure this logs and leaves `config` untouched: the
+ * worker keeps running on the last-known values (the file's own values, on
+ * the very first call).
+ */
+export async function refreshDispatchPolicy(config: WorkerConfig, token: string): Promise<void> {
+  const url = `${config.url.replace(/\/$/, "")}/api/dispatch-policy`;
+  try {
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new HttpStatusError(res.status, await res.text());
+    applyDispatchPolicy(config, (await res.json()) as DispatchPolicy);
+  } catch (err) {
+    console.error(`could not fetch dispatch policy, keeping last-known values: ${(err as Error).message}`);
+  }
 }
 
 /**
@@ -830,6 +851,7 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig(defaultConfigPath());
+  await refreshDispatchPolicy(config, token);
 
   if (once) {
     // Single ticks (incl. init-worker's --self-test) may run alongside a live
@@ -841,30 +863,54 @@ async function main(): Promise<void> {
   const releaseLock = acquireRoleLock(role);
   await runTick(config, token, role, { dryRun });
 
-  const eventPollSeconds = config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS;
   console.log(
-    `role=${role} polling every ${config.intervalSeconds}s, event feed every ${eventPollSeconds}s ` +
+    `role=${role} polling every ${config.intervalSeconds}s, event feed every ${config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS}s ` +
     `(maxConcurrent=${config.maxConcurrent}, maxAnswerConcurrent=${config.maxAnswerConcurrent ?? DEFAULT_MAX_ANSWER_CONCURRENT}, label="${config.label}")`
   );
-  const timer = setInterval(() => {
-    runTick(config, token, role, { dryRun }).catch((err) => console.error(`tick failed: ${(err as Error).message}`));
-  }, config.intervalSeconds * 1000);
-  const eventTimer = setInterval(() => {
-    pollEvents(config, token, role, { dryRun }).catch((err) => console.error(`event poll failed: ${(err as Error).message}`));
-  }, eventPollSeconds * 1000);
 
-  process.on("SIGINT", () => {
-    clearInterval(timer);
-    clearInterval(eventTimer);
+  // Self-rescheduling setTimeout loops (rather than setInterval) so that a
+  // dispatch-policy fetch changing config.intervalSeconds/eventPollSeconds
+  // mid-run actually changes the cadence of the *next* fire, not just next
+  // process start.
+  let stopped = false;
+  let tickTimer: NodeJS.Timeout;
+  let eventTimer: NodeJS.Timeout;
+
+  const scheduleTick = () => {
+    if (stopped) return;
+    tickTimer = setTimeout(async () => {
+      await refreshDispatchPolicy(config, token);
+      try {
+        await runTick(config, token, role, { dryRun });
+      } catch (err) {
+        console.error(`tick failed: ${(err as Error).message}`);
+      }
+      scheduleTick();
+    }, config.intervalSeconds * 1000);
+  };
+  const scheduleEventPoll = () => {
+    if (stopped) return;
+    eventTimer = setTimeout(async () => {
+      try {
+        await pollEvents(config, token, role, { dryRun });
+      } catch (err) {
+        console.error(`event poll failed: ${(err as Error).message}`);
+      }
+      scheduleEventPoll();
+    }, (config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS) * 1000);
+  };
+  scheduleTick();
+  scheduleEventPoll();
+
+  const shutdown = () => {
+    stopped = true;
+    clearTimeout(tickTimer);
+    clearTimeout(eventTimer);
     releaseLock();
     process.exit(0);
-  });
-  process.on("SIGTERM", () => {
-    clearInterval(timer);
-    clearInterval(eventTimer);
-    releaseLock();
-    process.exit(0);
-  });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
   process.on("exit", releaseLock);
 }
 

@@ -31,7 +31,7 @@ import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-a
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo, type GithubRepo } from "../services/github-repos.js";
 import { handleGithubWebhook } from "../services/github-webhook.js";
-import { getAllSettings, setSetting, resetSetting } from "../services/settings.js";
+import { getAllSettings, setSetting, resetSetting, getDispatchPolicy } from "../services/settings.js";
 import {
   saveAttachment,
   getAttachment,
@@ -368,6 +368,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     c.json(setSetting(db, c.var.actor, c.req.param("key"), c.req.valid("json").value))
   );
   app.delete("/settings/:key", (c) => c.json(resetSetting(db, c.var.actor, c.req.param("key"))));
+
+  // Worker-facing: agent tokens are expected callers here (SYD-155) — the
+  // dispatch worker polls this to retune concurrency and poll intervals
+  // without a launchd restart.
+  app.get("/dispatch-policy", (c) => c.json(getDispatchPolicy(db)));
 
   app.post("/github-events", body(githubEventBody), (c) => {
     if (c.var.actor.type === "agent") {

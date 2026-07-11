@@ -124,3 +124,23 @@ export function resetSetting(db: Db, actor: Actor, key: string): SettingView {
   db.delete(settings).where(eq(settings.key, key)).run();
   return { key, value: entry.default, default: entry.default, isDefault: true, description: entry.description ?? null };
 }
+
+export type DispatchPolicy = {
+  maxConcurrent: number;
+  maxAnswerConcurrent: number;
+  intervalSeconds: number;
+  eventPollSeconds: number;
+};
+
+// Worker-facing subset of the registry (GET /api/dispatch-policy) — the only
+// Settings read agent tokens may hit. Field names match WorkerConfig's policy
+// fields (scripts/worker-select.ts) directly so a worker can overlay this
+// response onto its config with no translation.
+export function getDispatchPolicy(db: Db): DispatchPolicy {
+  return {
+    maxConcurrent: getSetting(db, "dispatch.max_concurrent"),
+    maxAnswerConcurrent: getSetting(db, "dispatch.max_answer_concurrent"),
+    intervalSeconds: getSetting(db, "dispatch.poll_seconds"),
+    eventPollSeconds: getSetting(db, "dispatch.event_poll_seconds"),
+  };
+}

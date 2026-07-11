@@ -10,13 +10,16 @@ import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
+import { getSetting } from "./settings.js";
 
 export const AGENT_SESSION_MODES = ["cli", "container", "sdk"] as const;
 export type AgentSessionMode = (typeof AGENT_SESSION_MODES)[number];
 
 // A "running" session older than this is presumed lost (the worker died
 // before reporting the exit) and drops out of active lists rather than
-// showing a zombie "live" strip forever.
+// showing a zombie "live" strip forever. Reads go through getSetting
+// (sessions.stale_seconds); this constant just anchors the registry default
+// so tests have a stable value to reference.
 export const AGENT_SESSION_STALE_SECONDS = 12 * 60 * 60;
 
 // Flat LIMIT, no cursor: the panel only ever shows "active + recent," never
@@ -136,7 +139,7 @@ export function listAgentSessions(
   if (filters.ref) conditions.push(eq(agentSessions.issueId, getIssue(db, filters.ref).id));
   if (filters.active) {
     conditions.push(eq(agentSessions.status, "running"));
-    conditions.push(gt(agentSessions.startedAt, nowSeconds - AGENT_SESSION_STALE_SECONDS));
+    conditions.push(gt(agentSessions.startedAt, nowSeconds - getSetting(db, "sessions.stale_seconds")));
   }
   return queryViews(db, conditions);
 }
@@ -153,7 +156,7 @@ export function listAgentSessions(
  * is unknown. Returns the number of sessions swept.
  */
 export function sweepOrphanedAgentSessions(
-  db: Db, staleSeconds: number = AGENT_SESSION_STALE_SECONDS
+  db: Db, staleSeconds: number = getSetting(db, "sessions.stale_seconds")
 ): number {
   const cutoff = Math.floor(Date.now() / 1000) - staleSeconds;
   const swept = db
