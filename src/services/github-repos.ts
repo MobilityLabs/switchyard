@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { githubRepos } from "../db/schema.js";
+import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getProjectByKey } from "./projects.js";
 
@@ -8,10 +9,20 @@ export type GithubRepo = typeof githubRepos.$inferSelect;
 
 const FULL_NAME_RE = /^[\w.-]+\/[\w.-]+$/;
 
+function requireHuman(actor: Actor): void {
+  if (actor.type === "agent") {
+    throw new SwitchyardError(
+      "Only humans manage linked GitHub repos — ask a human to link or unlink a repo."
+    );
+  }
+}
+
 export function addGithubRepo(
   db: Db,
+  actor: Actor,
   input: { fullName: string; projectKey?: string; secret?: string }
 ): GithubRepo {
+  requireHuman(actor);
   if (!FULL_NAME_RE.test(input.fullName)) {
     throw new SwitchyardError(`GitHub repo must be "owner/repo" — got "${input.fullName}".`);
   }
@@ -31,7 +42,8 @@ export function listGithubRepos(db: Db): GithubRepo[] {
   return db.select().from(githubRepos).all();
 }
 
-export function removeGithubRepo(db: Db, id: number): void {
+export function removeGithubRepo(db: Db, actor: Actor, id: number): void {
+  requireHuman(actor);
   const gone = db.delete(githubRepos).where(eq(githubRepos.id, id)).returning().get();
   if (!gone) {
     throw new SwitchyardError(`There is no linked GitHub repo with id ${id} — list them with GET /api/github-repos.`);

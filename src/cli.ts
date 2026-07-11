@@ -1,10 +1,14 @@
 import { openDb } from "./db/index.js";
-import { createActor } from "./services/actors.js";
+import { createActor, type Actor } from "./services/actors.js";
 import { createProject } from "./services/projects.js";
 import { createLoginLink } from "./services/auth.js";
 import { addWebhook, listWebhooks, removeWebhook } from "./services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo } from "./services/github-repos.js";
 import { SwitchyardError } from "./services/errors.js";
+
+// The CLI operates directly on the db file with no HTTP auth, so it stands
+// in for a human operator when calling human-only service functions.
+const cliActor: Actor = { id: 0, name: "cli", type: "human" };
 
 const [dbPath, cmd, ...args] = process.argv.slice(2);
 if (!dbPath || !cmd) {
@@ -55,7 +59,7 @@ try {
       console.error("add-webhook needs: <url> [PROJECT_KEY] [secret]");
       process.exit(1);
     }
-    const hook = addWebhook(db, { url, projectKey, secret });
+    const hook = addWebhook(db, cliActor, { url, projectKey, secret });
     console.log(`webhook ${hook.id} -> ${hook.url}${projectKey ? ` (project ${projectKey})` : " (all projects)"}${secret ? " (signed)" : ""}`);
   } else if (cmd === "list-webhooks") {
     for (const h of listWebhooks(db)) {
@@ -67,7 +71,7 @@ try {
       console.error("rm-webhook needs: <id>");
       process.exit(1);
     }
-    removeWebhook(db, Number(id));
+    removeWebhook(db, cliActor, Number(id));
     console.log("removed");
   } else if (cmd === "add-github-repo") {
     const [fullName, projectKey, secret] = args;
@@ -75,7 +79,7 @@ try {
       console.error("add-github-repo needs: <owner/repo> [PROJECT_KEY] [secret]");
       process.exit(1);
     }
-    const repo = addGithubRepo(db, { fullName, projectKey, secret });
+    const repo = addGithubRepo(db, cliActor, { fullName, projectKey, secret });
     console.log(`github repo ${repo.id} -> ${repo.fullName}${projectKey ? ` (project ${projectKey})` : " (no project scope)"}${secret ? " (own secret)" : " (shares GITHUB_WEBHOOK_SECRET)"}`);
   } else if (cmd === "list-github-repos") {
     for (const r of listGithubRepos(db)) {
@@ -87,7 +91,7 @@ try {
       console.error("rm-github-repo needs: <id>");
       process.exit(1);
     }
-    removeGithubRepo(db, Number(id));
+    removeGithubRepo(db, cliActor, Number(id));
     console.log("removed");
   } else {
     console.error(`unknown command "${cmd}"`);

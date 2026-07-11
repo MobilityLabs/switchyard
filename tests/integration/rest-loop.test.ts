@@ -16,7 +16,7 @@ const hookBodies: string[] = [];
 beforeAll(async () => {
   db = openDb(":memory:");
   agentToken = createActor(db, { name: "claude/dev", type: "agent" }).token;
-  createActor(db, { name: "sean", type: "human" });
+  const human = createActor(db, { name: "sean", type: "human" }).actor;
   createProject(db, { key: "SYD", name: "Switchyard" });
 
   server = await new Promise((resolve) => {
@@ -31,7 +31,7 @@ beforeAll(async () => {
   });
   receiver = await new Promise((resolve) => {
     const s = serve({ fetch: rec.fetch, port: 0 }, (i) => {
-      addWebhook(db, { url: `http://127.0.0.1:${i.port}/hook` });
+      addWebhook(db, human, { url: `http://127.0.0.1:${i.port}/hook` });
       resolve(s);
     });
   });
