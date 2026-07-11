@@ -27,13 +27,17 @@
 #
 # Required env:
 #   SWITCHYARD_URL     base URL of the running switchyard server
-#   SWITCHYARD_TOKEN   bearer token for an actor registered via add-actor
+#   SWITCHYARD_TOKEN   bearer token for an actor registered via add-actor.
+#                      If unset, read from SWITCHYARD_TOKEN_FILE instead
+#                      (SYD-119: keeps the token out of the world-readable
+#                      launchd plist) — the file must be mode 0600.
 #
 # Optional env:
 #   CLAUDE_BIN               path to claude CLI                default: $HOME/.local/bin/claude
 #   DREAMS_DIR                where the dated digest is written default: $HOME/.claude/dreams
 #   DREAMER_DRY_RUN           set 1 to skip filing issues       default: unset (files findings)
 #   DREAMER_TIMEOUT_SECONDS   kill a hung claude session        default: 1800 (30 min)
+#   SWITCHYARD_TOKEN_FILE     0600 file holding the token        default: $HOME/.switchyard/dreamer-token
 
 set -u
 
@@ -48,10 +52,28 @@ mkdir -p "$DREAMS_DIR"
 
 log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"; }
 
+# SYD-119: launchd EnvironmentVariables plists land in ~/Library/LaunchAgents
+# at world-readable 0644, so SWITCHYARD_TOKEN must not be embedded there. If
+# it's not already in the environment, load it from a 0600 file instead
+# (macOS `stat -f`, GNU `stat -c` fallback, matching the date -v/-d pattern
+# above). A file with loose permissions is refused rather than trusted.
+if [ -z "${SWITCHYARD_TOKEN:-}" ]; then
+  SWITCHYARD_TOKEN_FILE="${SWITCHYARD_TOKEN_FILE:-$HOME/.switchyard/dreamer-token}"
+  if [ -f "$SWITCHYARD_TOKEN_FILE" ]; then
+    mode=$(stat -f '%Lp' "$SWITCHYARD_TOKEN_FILE" 2>/dev/null || stat -c '%a' "$SWITCHYARD_TOKEN_FILE" 2>/dev/null)
+    if [ "${mode: -2}" != "00" ]; then
+      log "FATAL: $SWITCHYARD_TOKEN_FILE is mode $mode (group/world-readable) — run: chmod 600 $SWITCHYARD_TOKEN_FILE"
+      exit 1
+    fi
+    SWITCHYARD_TOKEN=$(cat "$SWITCHYARD_TOKEN_FILE")
+  fi
+fi
+
 if [ -z "${SWITCHYARD_URL:-}" ] || [ -z "${SWITCHYARD_TOKEN:-}" ]; then
-  log "FATAL: SWITCHYARD_URL and SWITCHYARD_TOKEN must both be set"
+  log "FATAL: SWITCHYARD_URL and SWITCHYARD_TOKEN must both be set (directly or via SWITCHYARD_TOKEN_FILE)"
   exit 1
 fi
+export SWITCHYARD_TOKEN
 
 if [ ! -x "$CLAUDE_BIN" ]; then
   log "FATAL: claude not found at $CLAUDE_BIN (set CLAUDE_BIN to override)"

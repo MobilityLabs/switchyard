@@ -18,9 +18,15 @@
   Install:
     cp launchd/com.switchyard.dreamer.plist ~/Library/LaunchAgents/
     # Edit ~/Library/LaunchAgents/com.switchyard.dreamer.plist:
-    #   replace REPLACE_WITH_TOKEN below with a real actor token
-    #   (npx tsx src/cli.ts switchyard.db add-actor dreamer agent), and
     #   double-check SWITCHYARD_URL / WorkingDirectory for your host.
+    # SWITCHYARD_TOKEN is deliberately NOT set here (SYD-119): plists
+    # installed to ~/Library/LaunchAgents are world-readable at the default
+    # 0644, so embedding a token in EnvironmentVariables would leak it to
+    # any local user. Instead, write a real actor token
+    # (npx tsx src/cli.ts switchyard.db add-actor dreamer agent) to a 0600
+    # file that scripts/dreamer.sh loads at runtime:
+    #   mkdir -p ~/.switchyard
+    #   ( umask 077 && echo -n '<token>' > ~/.switchyard/dreamer-token )
     launchctl load ~/Library/LaunchAgents/com.switchyard.dreamer.plist
     launchctl start com.switchyard.dreamer    # run now to test
 
@@ -122,8 +128,6 @@
         <string>/Users/sean</string>
         <key>SWITCHYARD_URL</key>
         <string>http://localhost:3300</string>
-        <key>SWITCHYARD_TOKEN</key>
-        <string>REPLACE_WITH_TOKEN</string>
     </dict>
 </dict>
 </plist>
