@@ -13,7 +13,7 @@ import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { requestHumanInput } from "../services/needs-input.js";
-import { recordProgressNote } from "../services/agent-sessions.js";
+import { recordProgressNote, listAgentSessions } from "../services/agent-sessions.js";
 import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
 
 type ToolResult = {
@@ -288,6 +288,17 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     guard(({ project_key, include_snoozed }: { project_key?: string; include_snoozed?: boolean }) =>
       searchIssues(db, { projectKey: project_key, status: "triage", excludeSnoozed: !include_snoozed })
     )
+  );
+
+  server.registerTool(
+    "list_agent_sessions",
+    {
+      description:
+        "List agent worker sessions (what's running or recently ran), mirroring the web UI's Agents " +
+        "panel. Use to check whether an issue already has an agent working it, or what's currently live.",
+      inputSchema: { active: z.boolean().optional(), ref: z.string().optional() },
+    },
+    guard(({ active, ref }: { active?: boolean; ref?: string }) => listAgentSessions(db, { active, ref }))
   );
 
   return server;
