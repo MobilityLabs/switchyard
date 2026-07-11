@@ -1,6 +1,17 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { actors, issues, projects, type Status, type Priority } from "../db/schema.js";
+import {
+  actors,
+  dependencies,
+  events,
+  issues,
+  projects,
+  type Status,
+  type Priority,
+} from "../db/schema.js";
+import { getOrCreateActor, type Actor } from "./actors.js";
+import { saveAttachment } from "./attachments.js";
+import { createProject } from "./projects.js";
 import { SwitchyardError } from "./errors.js";
 
 // ---- Shapes handed over by the fetch layer (scripts/import-linear-lib.ts) ----
@@ -222,6 +233,263 @@ export function buildImportPlan(db: Db, data: LinearExport): ImportPlan {
     skipped,
     warnings,
   };
+}
+
+// ---- Execution ----
+
+export type ExecuteDeps = {
+  /** Authenticated download of an uploads.linear.app file; null = fetch failed. */
+  download: (url: string) => Promise<{ data: Buffer } | null>;
+  attachmentsDir: string;
+};
+
+export type ImportReport = {
+  projectsCreated: number;
+  actorsCreated: number;
+  issuesCreated: number;
+  commentsCreated: number;
+  dependenciesCreated: number;
+  attachmentsCreated: number;
+  skipped: number;
+  warnings: string[];
+};
+
+/** Markdown image/link embeds pointing at Linear's (auth-gated) upload host —
+ * these break for anyone without a Linear API key, so the importer re-hosts
+ * them. Linear wraps some URLs in angle brackets. */
+const UPLOAD_EMBED_RE = /!?\[([^\]]*)\]\(<?(https:\/\/uploads\.linear\.app\/[^)\s>]+)>?\)/g;
+
+export function extractUploadEmbeds(markdown: string): { filename: string; url: string }[] {
+  const out: { filename: string; url: string }[] = [];
+  for (const m of markdown.matchAll(UPLOAD_EMBED_RE)) {
+    out.push({ filename: m[1], url: m[2] });
+  }
+  return out;
+}
+
+function rewriteUrls(text: string, urlMap: Map<string, string>): string {
+  let result = text;
+  for (const [from, to] of urlMap) result = result.replaceAll(from, to);
+  return result;
+}
+
+/**
+ * Applies an ImportPlan. Deliberately writes `issues` and `events` rows
+ * directly instead of going through createIssue/addComment: imported records
+ * must carry their original numbers, statuses, authors, and timestamps, which
+ * the services (correctly) refuse to accept from clients. Every issue write
+ * still co-writes its audit events, preserving the services' invariant.
+ *
+ * Not one big transaction — saveAttachment opens its own — so a failed run is
+ * recovered by re-running: buildImportPlan skips whatever already landed.
+ */
+export async function executeImportPlan(
+  db: Db,
+  plan: ImportPlan,
+  deps: ExecuteDeps,
+): Promise<ImportReport> {
+  const report: ImportReport = {
+    projectsCreated: 0,
+    actorsCreated: 0,
+    issuesCreated: 0,
+    commentsCreated: 0,
+    dependenciesCreated: 0,
+    attachmentsCreated: 0,
+    skipped: plan.skipped.length,
+    warnings: [...plan.warnings],
+  };
+
+  for (const p of plan.projects) {
+    if (!p.exists) {
+      createProject(db, { key: p.key, name: p.name });
+      report.projectsCreated++;
+    }
+  }
+  const projectByKey = new Map(
+    plan.projects.map((p) => [p.key, db.select().from(projects).where(eq(projects.key, p.key)).get()!]),
+  );
+
+  const actorByName = new Map<string, Actor>();
+  for (const a of plan.actors) {
+    actorByName.set(a.name, getOrCreateActor(db, a.name, "human"));
+    if (!a.exists) report.actorsCreated++;
+  }
+  const actorFor = (name: string): Actor => {
+    let actor = actorByName.get(name);
+    if (!actor) {
+      actor = getOrCreateActor(db, name, "human");
+      actorByName.set(name, actor);
+    }
+    return actor;
+  };
+
+  for (const pi of plan.issues) {
+    const project = projectByKey.get(pi.projectKey);
+    if (!project) {
+      report.warnings.push(`skipping ${pi.ref}: no project for team ${pi.projectKey}`);
+      continue;
+    }
+    const creator = actorFor(pi.creatorName);
+    const assignee = pi.assigneeName ? actorFor(pi.assigneeName) : null;
+
+    const row = db
+      .insert(issues)
+      .values({
+        projectId: project.id,
+        number: pi.number,
+        title: pi.title,
+        description: pi.description,
+        status: pi.status,
+        priority: pi.priority,
+        labels: pi.labels,
+        assigneeId: assignee?.id ?? null,
+        creatorId: creator.id,
+        sourceType: "manual",
+        sourceDetail: `linear:${pi.linearId}`,
+        sourceUrl: pi.sourceUrl,
+        createdAt: pi.createdAt,
+        updatedAt: pi.updatedAt,
+      })
+      .returning()
+      .get();
+    report.issuesCreated++;
+    db.insert(events)
+      .values({
+        issueId: row.id,
+        actorId: creator.id,
+        type: "created",
+        payload: {},
+        createdAt: pi.createdAt,
+      })
+      .run();
+
+    // Re-host uploads.linear.app files (markdown embeds + file attachment
+    // entities), building an old-URL → local-URL map for rewriting.
+    const urlMap = new Map<string, string>();
+    const wanted = new Map<string, string>(); // url → filename
+    for (const embed of extractUploadEmbeds(
+      [pi.description, ...pi.comments.map((c) => c.body)].join("\n"),
+    )) {
+      if (!wanted.has(embed.url)) wanted.set(embed.url, embed.filename);
+    }
+    for (const fa of pi.fileAttachments) {
+      if (!wanted.has(fa.url)) wanted.set(fa.url, fa.title);
+    }
+    for (const [url, filename] of wanted) {
+      const file = await deps.download(url);
+      if (!file) {
+        report.warnings.push(`${pi.ref}: could not download ${filename} (${url}) — keeping the original URL`);
+        continue;
+      }
+      try {
+        const { attachment } = await saveAttachment(
+          db,
+          creator,
+          pi.ref,
+          filename,
+          file.data,
+          deps.attachmentsDir,
+        );
+        urlMap.set(url, `/api/attachments/${attachment.id}/${attachment.filename}`);
+        report.attachmentsCreated++;
+      } catch (err) {
+        if (err instanceof SwitchyardError) {
+          report.warnings.push(`${pi.ref}: could not re-upload ${filename} — ${err.message} Keeping the original URL.`);
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    let description = rewriteUrls(pi.description, urlMap);
+    if (pi.linkAttachments.length > 0) {
+      description +=
+        "\n\n### Imported links\n\n" +
+        pi.linkAttachments.map((a) => `- [${a.title}](${a.url})`).join("\n");
+    }
+    if (description !== pi.description) {
+      // Import bookkeeping, not a user edit — no description_changed event.
+      db.update(issues).set({ description }).where(eq(issues.id, row.id)).run();
+    }
+
+    for (const c of pi.comments) {
+      db.insert(events)
+        .values({
+          issueId: row.id,
+          actorId: actorFor(c.authorName).id,
+          type: "comment",
+          payload: { body: rewriteUrls(c.body, urlMap), linearId: c.linearId },
+          createdAt: c.createdAt,
+        })
+        .run();
+      report.commentsCreated++;
+    }
+  }
+
+  // Second pass, once every issue exists: parents and dependencies (either
+  // side may live in another team's project or in a previous import run).
+  const findByRef = (ref: string): { id: number } | undefined => {
+    const m = /^([A-Z]{2,10})-(\d+)$/.exec(ref);
+    if (!m) return undefined;
+    const project = db.select().from(projects).where(eq(projects.key, m[1])).get();
+    if (!project) return undefined;
+    return db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(and(eq(issues.projectId, project.id), eq(issues.number, Number(m[2]))))
+      .get();
+  };
+
+  for (const pi of plan.issues) {
+    if (!pi.parentRef) continue;
+    const child = findByRef(pi.ref);
+    const parent = findByRef(pi.parentRef);
+    if (!child || !parent) {
+      report.warnings.push(`${pi.ref}: parent ${pi.parentRef} not found — leaving unparented`);
+      continue;
+    }
+    db.update(issues).set({ parentId: parent.id }).where(eq(issues.id, child.id)).run();
+  }
+
+  for (const dep of plan.dependencies) {
+    const blocker = findByRef(dep.blockerRef);
+    const blocked = findByRef(dep.blockedRef);
+    if (!blocker || !blocked) {
+      report.warnings.push(
+        `dependency ${dep.blockerRef} → ${dep.blockedRef}: issue not found — skipping`,
+      );
+      continue;
+    }
+    const inserted = db
+      .insert(dependencies)
+      .values({ blockerId: blocker.id, blockedId: blocked.id })
+      .onConflictDoNothing()
+      .returning()
+      .get();
+    if (inserted) {
+      db.insert(events)
+        .values({
+          issueId: blocked.id,
+          actorId: actorFor(FALLBACK_ACTOR_NAME).id,
+          type: "blocked_by_added",
+          payload: { blocker: dep.blockerRef },
+        })
+        .run();
+      report.dependenciesCreated++;
+    }
+  }
+
+  // Bump each project's counter past the highest imported number (never down).
+  for (const pi of plan.issues) {
+    const project = projectByKey.get(pi.projectKey);
+    if (!project) continue;
+    db.update(projects)
+      .set({ nextIssueNumber: pi.number + 1 })
+      .where(and(eq(projects.id, project.id), lt(projects.nextIssueNumber, pi.number + 1)))
+      .run();
+  }
+
+  return report;
 }
 
 /**
