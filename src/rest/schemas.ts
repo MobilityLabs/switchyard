@@ -74,6 +74,7 @@ export const githubEventBody = z.object({
   event: z.enum(["pull_request", "check_suite"]),
   payload: z.record(z.any()),
 });
+export const settingPutBody = z.object({ value: z.any() });
 
 export const body = <T extends z.ZodTypeAny>(schema: T) =>
   zValidator("json", schema, (result, c) => {

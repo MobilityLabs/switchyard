@@ -23,6 +23,7 @@ import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-a
 import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo, type GithubRepo } from "../services/github-repos.js";
 import { handleGithubWebhook } from "../services/github-webhook.js";
+import { getAllSettings, setSetting, resetSetting } from "../services/settings.js";
 import {
   saveAttachment,
   getAttachment,
@@ -50,6 +51,7 @@ import {
   requestInputBody,
   snoozeBody,
   duplicateBody,
+  settingPutBody,
 } from "./schemas.js";
 
 type Env = { Variables: { actor: Actor } };
@@ -317,6 +319,12 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // actor. Restrict to human-authenticated callers — run
   // scripts/github-poll.ts with a dedicated human-type actor's token, not an
   // agent's.
+  app.get("/settings", (c) => c.json(getAllSettings(db)));
+  app.put("/settings/:key", body(settingPutBody), (c) =>
+    c.json(setSetting(db, c.var.actor, c.req.param("key"), c.req.valid("json").value))
+  );
+  app.delete("/settings/:key", (c) => c.json(resetSetting(db, c.var.actor, c.req.param("key"))));
+
   app.post("/github-events", body(githubEventBody), (c) => {
     if (c.var.actor.type === "agent") {
       throw new SwitchyardError(
