@@ -49,6 +49,16 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
   );
 
   server.registerTool(
+    "whoami",
+    {
+      description:
+        "Get the actor name/type/id your MCP token is bound to — the MCP equivalent of REST's " +
+        "GET /me. Useful for assignee-scoped search_issues, or to confirm which actor a token authenticates as.",
+    },
+    guard(() => actor)
+  );
+
+  server.registerTool(
     "get_issue",
     {
       description: "Get one issue by ref (e.g. AIPI-42), including its full activity history.",

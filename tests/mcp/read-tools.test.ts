@@ -104,6 +104,17 @@ describe("MCP read tools", () => {
     expect(page2.events[0].id).toBeLessThan(page1.events[0].id);
   });
 
+  it("whoami returns the actor the calling token authenticates as", async () => {
+    const r = await client.callTool({ name: "whoami", arguments: {} });
+    expect(JSON.parse(text(r))).toEqual({ id: agent.id, name: "claude/worker", type: "agent" });
+  });
+
+  it("whoami reflects a human actor's own token", async () => {
+    const humanClient = await connect(human);
+    const r = await humanClient.callTool({ name: "whoami", arguments: {} });
+    expect(JSON.parse(text(r))).toEqual({ id: human.id, name: "sean", type: "human" });
+  });
+
   it("errors are agent-legible, not stack traces", async () => {
     const r = await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-99" } });
     expect(r.isError).toBe(true);
