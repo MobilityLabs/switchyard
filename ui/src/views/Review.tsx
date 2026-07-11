@@ -7,6 +7,7 @@ import { Composer } from "../Composer";
 import type { Issue, IssueDetail as IssueDetailType } from "../types";
 import { ActivityFeed } from "./IssueDetail";
 import { projectKeyFromRef } from "../refs";
+import { safeHref } from "../safeHref";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
@@ -189,7 +190,7 @@ export default function Review({ project, currentRef }: { project: string | null
           {current.sourceType && (
             <div className="provenance panel">
               Filed from: {current.sourceType} · {current.sourceDetail ?? ""}
-              {current.sourceUrl && <> · <a href={current.sourceUrl} target="_blank" rel="noreferrer">link</a></>}
+              {current.sourceUrl && <> · <a href={safeHref(current.sourceUrl)} target="_blank" rel="noreferrer">link</a></>}
             </div>
           )}
 
