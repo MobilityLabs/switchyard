@@ -6,6 +6,7 @@ import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
+import { startAgentSession, endAgentSession } from "../../src/services/agent-sessions.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
 let db: Db, human: Actor, agent: Actor, client: Client;
@@ -74,5 +75,30 @@ describe("MCP read tools", () => {
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/AIPI-99 does not exist/);
     expect(text(r)).not.toMatch(/at .*\.ts/);
+  });
+
+  it("list_agent_sessions returns sessions joined with their issue ref", async () => {
+    startAgentSession(db, agent, { ref: "AIPI-1", mode: "cli", pid: 123 });
+    const r = await client.callTool({ name: "list_agent_sessions", arguments: {} });
+    const sessions = JSON.parse(text(r));
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ ref: "AIPI-1", mode: "cli", pid: 123, status: "running" });
+  });
+
+  it("list_agent_sessions active filter excludes exited sessions", async () => {
+    const s = startAgentSession(db, agent, { ref: "AIPI-1", mode: "cli" });
+    endAgentSession(db, agent, s.id, 0);
+    const r = await client.callTool({ name: "list_agent_sessions", arguments: { active: true } });
+    expect(JSON.parse(text(r))).toEqual([]);
+  });
+
+  it("list_agent_sessions filters by ref", async () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Other work" });
+    startAgentSession(db, agent, { ref: "AIPI-1", mode: "cli" });
+    startAgentSession(db, agent, { ref: "AIPI-2", mode: "cli" });
+    const r = await client.callTool({ name: "list_agent_sessions", arguments: { ref: "AIPI-2" } });
+    const sessions = JSON.parse(text(r));
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].ref).toBe("AIPI-2");
   });
 });
