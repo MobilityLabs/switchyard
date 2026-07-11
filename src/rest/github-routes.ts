@@ -10,7 +10,7 @@
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Db } from "../db/index.js";
-import { handleGithubWebhook } from "../services/github-webhook.js";
+import { handleGithubWebhook, repositoryFullName } from "../services/github-webhook.js";
 import { findGithubRepo } from "../services/github-repos.js";
 
 export function defaultGithubWebhookSecret(): string | undefined {
@@ -31,8 +31,8 @@ function validSignature(secret: string, rawBody: string, header: string | undefi
  * repo that's linked with no secret of its own, or isn't linked at all,
  * falls back to the instance-wide GITHUB_WEBHOOK_SECRET.
  */
-function resolveSecret(db: Db, globalSecret: string | undefined, fullName: unknown): string | undefined {
-  if (typeof fullName === "string") {
+function resolveSecret(db: Db, globalSecret: string | undefined, fullName: string | undefined): string | undefined {
+  if (fullName) {
     const repo = findGithubRepo(db, fullName);
     if (repo?.secret) return repo.secret;
   }
@@ -57,7 +57,7 @@ export function buildGithubWebhookRoutes(db: Db, secret: string | undefined = de
     } catch {
       return c.json({ error: "request body is not valid JSON" }, 400);
     }
-    const effectiveSecret = resolveSecret(db, secret, (payload as any)?.repository?.full_name);
+    const effectiveSecret = resolveSecret(db, secret, repositoryFullName(payload));
     if (!effectiveSecret) {
       console.error("github webhook: no secret configured for this repo, and GITHUB_WEBHOOK_SECRET is not set — rejecting delivery");
       return c.json(

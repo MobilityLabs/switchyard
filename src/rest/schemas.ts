@@ -73,7 +73,9 @@ export const githubRepoCreateBody = z.object({
 });
 export const githubEventBody = z.object({
   event: z.enum(["pull_request", "check_suite"]),
-  payload: z.record(z.any()),
+  // Shape varies by event type; handleGithubWebhook validates the fields it
+  // actually reads against a per-event zod schema (src/services/github-webhook.ts).
+  payload: z.unknown(),
 });
 export const settingPutBody = z.object({ value: z.any() });
 

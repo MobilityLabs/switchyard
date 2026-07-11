@@ -4,7 +4,7 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
-import { handleGithubWebhook, refFromBranch, refFromText } from "../../src/services/github-webhook.js";
+import { handleGithubWebhook, refFromBranch, refFromText, repositoryFullName } from "../../src/services/github-webhook.js";
 
 function setup() {
   const db = openDb(":memory:");
@@ -304,6 +304,61 @@ describe("handleGithubWebhook / unhandled event types", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "issues", {});
     expect(outcome).toEqual({ handled: false, reason: 'unsupported event type "issues"' });
+  });
+});
+
+describe("handleGithubWebhook / malformed payloads", () => {
+  it("reports unhandled instead of throwing when pull_request is the wrong shape", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      pull_request: "not-an-object",
+    });
+    expect(outcome).toEqual({ handled: false, reason: "malformed pull_request payload" });
+  });
+
+  it("reports unhandled instead of throwing when a push commit isn't an object", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "push", {
+      ref: "refs/heads/agent/SYD-1",
+      commits: ["not-an-object"],
+    });
+    expect(outcome).toEqual({ handled: false, reason: "malformed push payload" });
+  });
+
+  it("reports unhandled instead of throwing when check_suite.pull_requests is the wrong shape", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "check_suite", {
+      action: "completed",
+      check_suite: { head_branch: "agent/SYD-1", pull_requests: "not-an-array" },
+    });
+    expect(outcome).toEqual({ handled: false, reason: "malformed check_suite payload" });
+  });
+
+  it("reports unhandled instead of throwing when the top-level payload isn't an object", () => {
+    const db = setup();
+    expect(handleGithubWebhook(db, "pull_request", null)).toEqual({
+      handled: false,
+      reason: "malformed pull_request payload",
+    });
+    expect(handleGithubWebhook(db, "push", "oops")).toEqual({
+      handled: false,
+      reason: "malformed push payload",
+    });
+  });
+});
+
+describe("repositoryFullName", () => {
+  it("extracts repository.full_name from a well-shaped payload", () => {
+    expect(repositoryFullName({ repository: { full_name: "acme/widgets" } })).toBe("acme/widgets");
+  });
+
+  it("returns undefined for missing or malformed repository fields", () => {
+    expect(repositoryFullName({})).toBeUndefined();
+    expect(repositoryFullName({ repository: {} })).toBeUndefined();
+    expect(repositoryFullName({ repository: { full_name: 42 } })).toBeUndefined();
+    expect(repositoryFullName(null)).toBeUndefined();
+    expect(repositoryFullName("oops")).toBeUndefined();
   });
 });
 

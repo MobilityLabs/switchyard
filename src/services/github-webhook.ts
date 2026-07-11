@@ -13,12 +13,63 @@
 // activity-feed line instead of a strip badge.
 
 import { sql } from "drizzle-orm";
+import { z } from "zod";
 import type { Db } from "../db/index.js";
 import { getOrCreateActor } from "./actors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
 
 const GITHUB_ACTOR_NAME = "github";
+
+// Only the fields actually read below are declared — these are untrusted
+// external payloads (webhook delivery or poller-derived), so unknown extra
+// fields are ignored rather than rejected, and every field we read is
+// optional/nullable to match what GitHub actually sends across event types.
+const pullRequestPayloadSchema = z.object({
+  action: z.string().optional(),
+  pull_request: z
+    .object({
+      number: z.union([z.number(), z.string()]).optional(),
+      html_url: z.string().optional(),
+      merged: z.boolean().optional(),
+      merge_commit_sha: z.string().nullable().optional(),
+      title: z.string().nullable().optional(),
+      body: z.string().nullable().optional(),
+      head: z.object({ ref: z.string().optional() }).optional(),
+    })
+    .optional(),
+});
+
+const pushPayloadSchema = z.object({
+  ref: z.string().optional(),
+  deleted: z.boolean().optional(),
+  after: z.string().optional(),
+  compare: z.string().nullable().optional(),
+  commits: z.array(z.object({ message: z.string().optional() })).optional(),
+});
+
+const checkSuitePayloadSchema = z.object({
+  action: z.string().optional(),
+  check_suite: z
+    .object({
+      head_branch: z.string().nullable().optional(),
+      head_sha: z.string().nullable().optional(),
+      conclusion: z.string().nullable().optional(),
+      pull_requests: z
+        .array(z.object({ head: z.object({ ref: z.string().optional() }).optional() }))
+        .optional(),
+    })
+    .optional(),
+});
+
+const repositoryPayloadSchema = z.object({
+  repository: z.object({ full_name: z.string().optional() }).optional(),
+});
+
+/** Used before the event type is known, to pick which secret to verify the delivery against. */
+export function repositoryFullName(payload: unknown): string | undefined {
+  return repositoryPayloadSchema.safeParse(payload).data?.repository?.full_name;
+}
 
 const AGENT_BRANCH_RE = /^agent\/([A-Z]{2,10}-\d+)$/;
 const REF_RE = /\b([A-Z]{2,10}-\d+)\b/;
@@ -87,8 +138,11 @@ function record(
   return { handled: true, ref, type };
 }
 
-function handlePullRequest(db: Db, payload: any): GithubWebhookOutcome {
-  const pr = payload?.pull_request;
+function handlePullRequest(db: Db, rawPayload: unknown): GithubWebhookOutcome {
+  const parsed = pullRequestPayloadSchema.safeParse(rawPayload);
+  if (!parsed.success) return { handled: false, reason: "malformed pull_request payload" };
+  const payload = parsed.data;
+  const pr = payload.pull_request;
   if (!pr) return { handled: false, reason: "pull_request payload missing pull_request object" };
   const ref = resolveRef([pr.head?.ref], [pr.title, pr.body]);
   if (!ref) return { handled: false, reason: "no issue ref found in branch, title, or body" };
@@ -113,14 +167,17 @@ function branchFromGitRef(gitRef: unknown): string | null {
   return gitRef.slice("refs/heads/".length);
 }
 
-function handlePush(db: Db, payload: any): GithubWebhookOutcome {
-  if (payload?.deleted) return { handled: false, reason: "ignored branch-deletion push" };
+function handlePush(db: Db, rawPayload: unknown): GithubWebhookOutcome {
+  const parsed = pushPayloadSchema.safeParse(rawPayload);
+  if (!parsed.success) return { handled: false, reason: "malformed push payload" };
+  const payload = parsed.data;
+  if (payload.deleted) return { handled: false, reason: "ignored branch-deletion push" };
 
-  const commits = Array.isArray(payload?.commits) ? payload.commits : [];
+  const commits = payload.commits ?? [];
   if (commits.length === 0) return { handled: false, reason: "push has no commits" };
 
-  const branch = branchFromGitRef(payload?.ref);
-  const messages = commits.map((c: any) => c?.message);
+  const branch = branchFromGitRef(payload.ref);
+  const messages = commits.map((c) => c.message);
   const ref = resolveRef([branch], messages);
   if (!ref) return { handled: false, reason: "no issue ref found in branch or commit messages" };
 
@@ -134,13 +191,16 @@ function handlePush(db: Db, payload: any): GithubWebhookOutcome {
   );
 }
 
-function handleCheckSuite(db: Db, payload: any): GithubWebhookOutcome {
-  const suite = payload?.check_suite;
+function handleCheckSuite(db: Db, rawPayload: unknown): GithubWebhookOutcome {
+  const parsed = checkSuitePayloadSchema.safeParse(rawPayload);
+  if (!parsed.success) return { handled: false, reason: "malformed check_suite payload" };
+  const payload = parsed.data;
+  const suite = payload.check_suite;
   if (!suite) return { handled: false, reason: "check_suite payload missing check_suite object" };
   if (payload.action !== "completed") {
     return { handled: false, reason: `ignored check_suite action "${payload.action}"` };
   }
-  const prBranches = Array.isArray(suite.pull_requests) ? suite.pull_requests.map((p: any) => p?.head?.ref) : [];
+  const prBranches = (suite.pull_requests ?? []).map((p) => p.head?.ref);
   const ref = resolveRef([suite.head_branch, ...prBranches]);
   if (!ref) return { handled: false, reason: "no issue ref found in check_suite branch" };
 
@@ -150,7 +210,7 @@ function handleCheckSuite(db: Db, payload: any): GithubWebhookOutcome {
   return record(db, ref, type, { conclusion, headSha }, { jsonPath: "$.headSha", value: headSha });
 }
 
-export function handleGithubWebhook(db: Db, githubEvent: string, payload: any): GithubWebhookOutcome {
+export function handleGithubWebhook(db: Db, githubEvent: string, payload: unknown): GithubWebhookOutcome {
   switch (githubEvent) {
     case "pull_request":
       return handlePullRequest(db, payload);
