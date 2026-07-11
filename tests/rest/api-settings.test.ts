@@ -97,4 +97,26 @@ describe("settings routes", () => {
     expect(reset.isDefault).toBe(true);
     expect(reset.value).toBe("Switchyard");
   });
+
+  it("GET /dispatch-policy is agent-readable and returns only the dispatch.* group", async () => {
+    const db = openDb(":memory:");
+    const app = buildApiRoutes(db);
+    const humanToken = createActor(db, { name: "sean", type: "human" }).token;
+    const agentToken = createActor(db, { name: "claude/worker", type: "agent" }).token;
+
+    await app.request("/settings/dispatch.max_concurrent", {
+      method: "PUT",
+      headers: { authorization: `Bearer ${humanToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ value: 3 }),
+    });
+
+    const res = await app.request("/dispatch-policy", { headers: { authorization: `Bearer ${agentToken}` } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      maxConcurrent: 3,
+      maxAnswerConcurrent: 2,
+      intervalSeconds: 300,
+      eventPollSeconds: 15,
+    });
+  });
 });

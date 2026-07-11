@@ -8,6 +8,7 @@ import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/servic
 import { listIssueEvents } from "../../src/services/events.js";
 import { releaseStaleClaims } from "../../src/services/stale-claims.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
+import { setSetting } from "../../src/services/settings.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -155,6 +156,18 @@ describe("releaseStaleClaims", () => {
     expect(after.assigneeId).toBe(agent.id);
     const types = listIssueEvents(db, issue.id).map((e) => e.type);
     expect(types).not.toContain("claim_released");
+  });
+
+  it("respects a lowered claims.stale_seconds setting (knob bite)", () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    const issue = getIssue(db, "AIPI-1");
+    ageAllEvents(db, issue.id, 30); // fresh under the 4h default
+
+    setSetting(db, human, "claims.stale_seconds", 10);
+    expect(releaseStaleClaims(db)).toBe(1); // now stale under the lowered setting
+    expect(getIssue(db, "AIPI-1").status).toBe("todo");
   });
 
   it("respects a custom maxIdleSeconds", () => {

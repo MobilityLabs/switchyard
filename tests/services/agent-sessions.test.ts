@@ -6,6 +6,7 @@ import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
+import { setSetting } from "../../src/services/settings.js";
 import {
   startAgentSession, endAgentSession, listAgentSessions, recordProgressNote,
   sweepOrphanedAgentSessions, AGENT_SESSION_STALE_SECONDS,
@@ -89,6 +90,18 @@ describe("listAgentSessions", () => {
     startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
     const farFuture = Math.floor(Date.now() / 1000) + AGENT_SESSION_STALE_SECONDS + 60;
     expect(listAgentSessions(db, { active: true }, farFuture)).toEqual([]);
+  });
+
+  it("respects a lowered sessions.stale_seconds setting (knob bite)", () => {
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
+    setSetting(db, human, "sessions.stale_seconds", 30);
+    // fresh (well within the lowered 30s window)
+    expect(listAgentSessions(db, { active: true }).map((v) => v.id)).toEqual([s.id]);
+
+    // "now" 60s later crosses the lowered window even though it's still well
+    // within the 12h default — proves the setting, not the constant, governs.
+    const later = Math.floor(Date.now() / 1000) + 60;
+    expect(listAgentSessions(db, { active: true }, later)).toEqual([]);
   });
 
   it("filters by ref", () => {

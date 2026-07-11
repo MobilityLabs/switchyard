@@ -184,6 +184,33 @@ export function sessionTimeoutMs(config: WorkerConfig): number {
   return (config.sessionTimeoutSeconds ?? DEFAULT_SESSION_TIMEOUT_SECONDS) * 1000;
 }
 
+/**
+ * Shape of `GET /api/dispatch-policy` (src/services/settings.ts) — the
+ * `dispatch.*` settings group, worker-facing and agent-token readable.
+ */
+export type DispatchPolicy = {
+  maxConcurrent: number;
+  maxAnswerConcurrent: number;
+  intervalSeconds: number;
+  eventPollSeconds: number;
+};
+
+/**
+ * Overlays a fetched dispatch policy onto a live `WorkerConfig` in place
+ * (SYD-155). Host concerns (url, image, containerized, roles, paths) stay
+ * file-only; only these four policy fields come from Settings, so a human
+ * can retune a running worker's concurrency and poll cadence without a
+ * launchd restart. Mutating in place (rather than returning a new config)
+ * means every closure already holding a reference to `config` sees the
+ * update immediately.
+ */
+export function applyDispatchPolicy(config: WorkerConfig, policy: DispatchPolicy): void {
+  config.maxConcurrent = policy.maxConcurrent;
+  config.maxAnswerConcurrent = policy.maxAnswerConcurrent;
+  config.intervalSeconds = policy.intervalSeconds;
+  config.eventPollSeconds = policy.eventPollSeconds;
+}
+
 export function projectKeyOf(ref: string): string {
   return ref.split("-")[0];
 }

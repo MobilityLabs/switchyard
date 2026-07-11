@@ -4,8 +4,8 @@ import { actors, loginLinks, sessions } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { hashToken, mintToken } from "./tokens.js";
+import { getSetting } from "./settings.js";
 
-const LOGIN_TTL = 15 * 60;
 const SESSION_TTL = 30 * 24 * 3600;
 const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -18,8 +18,9 @@ export function createLoginLink(db: Db, actorName: string): { token: string; pat
     );
   }
   const token = mintToken("syl");
+  const ttl = getSetting(db, "auth.login_link_ttl_seconds");
   db.insert(loginLinks)
-    .values({ tokenHash: hashToken(token), actorId: actor.id, expiresAt: nowSec() + LOGIN_TTL })
+    .values({ tokenHash: hashToken(token), actorId: actor.id, expiresAt: nowSec() + ttl })
     .run();
   return { token, path: `/auth/login?token=${token}` };
 }

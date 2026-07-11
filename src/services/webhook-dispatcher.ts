@@ -4,13 +4,7 @@ import type { Db } from "../db/index.js";
 import { actors, events, issues, projects, webhooks, webhookCursor } from "../db/schema.js";
 import { releaseStaleClaims } from "./stale-claims.js";
 import { sweepOrphanedAgentSessions } from "./agent-sessions.js";
-
-// progress_note events fire once per work step (buildPrompt prompts agents to
-// post them liberally) — a chatty session posts 10-20 per issue. Forwarding
-// every one to every active webhook floods generic consumers (e.g. Slack)
-// within the ~2s dispatch interval, so they're suppressed by default. Every
-// other event type still fans out unchanged. (SYD-104)
-const SUPPRESSED_WEBHOOK_EVENT_TYPES: ReadonlySet<string> = new Set(["progress_note"]);
+import { getSetting } from "./settings.js";
 
 export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Promise<number> {
   let cursor = db.select().from(webhookCursor).where(eq(webhookCursor.id, 1)).get();
@@ -31,9 +25,16 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
   if (rows.length === 0) return 0;
 
   const hooks = db.select().from(webhooks).where(eq(webhooks.active, true)).all();
+  // progress_note events fire once per work step (buildPrompt prompts agents
+  // to post them liberally) — a chatty session posts 10-20 per issue.
+  // Forwarding every one to every active webhook floods generic consumers
+  // (e.g. Slack) within the ~2s dispatch interval, so they're suppressed by
+  // default (webhooks.suppressed_events, SYD-104). Every other event type
+  // still fans out unchanged.
+  const suppressed = new Set(getSetting(db, "webhooks.suppressed_events"));
   let delivered = 0;
   for (const r of rows) {
-    if (SUPPRESSED_WEBHOOK_EVENT_TYPES.has(r.e.type)) {
+    if (suppressed.has(r.e.type)) {
       db.update(webhookCursor).set({ lastEventId: r.e.id }).where(eq(webhookCursor.id, 1)).run();
       continue;
     }
@@ -70,29 +71,14 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
   return delivered;
 }
 
-/**
- * Resolves STALE_CLAIM_HOURS (as read from the environment) to a seconds value,
- * falling back to a 4h default when unset or invalid. Warns only when the
- * value was set but isn't a valid positive number — an unset var is the normal
- * default case and shouldn't warn.
- */
-export function resolveStaleClaimSeconds(envValue: string | undefined): number {
-  const n = Number(envValue);
-  const valid = Number.isFinite(n) && n > 0;
-  if (envValue !== undefined && !valid) {
-    console.warn(
-      `STALE_CLAIM_HOURS="${envValue}" is not a valid positive number of hours — falling back to 4h.`
-    );
-  }
-  return (valid ? n : 4) * 3600;
-}
-
 export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
-  const staleSeconds = resolveStaleClaimSeconds(process.env.STALE_CLAIM_HOURS);
   const timer = setInterval(() => {
     dispatchPending(db).catch((err) => console.error("webhook dispatch:", err));
     try {
-      releaseStaleClaims(db, staleSeconds);
+      // No explicit staleSeconds: releaseStaleClaims reads claims.stale_seconds
+      // fresh from settings every tick, so a human's edit in the UI takes
+      // effect on the next sweep, not just at process start.
+      releaseStaleClaims(db);
     } catch (err) {
       console.error("stale claim release:", err);
     }

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { createHmac } from "node:crypto";
 import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
@@ -8,7 +8,8 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { addWebhook } from "../../src/services/webhooks.js";
 import { recordProgressNote } from "../../src/services/agent-sessions.js";
-import { dispatchPending, resolveStaleClaimSeconds } from "../../src/services/webhook-dispatcher.js";
+import { setSetting } from "../../src/services/settings.js";
+import { dispatchPending } from "../../src/services/webhook-dispatcher.js";
 
 describe("webhook dispatcher", () => {
   it("delivers signed events once, then advances the cursor", async () => {
@@ -104,36 +105,30 @@ describe("webhook dispatcher", () => {
 
     server.close();
   });
-});
 
-describe("resolveStaleClaimSeconds", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  it("fans progress_note events out again when webhooks.suppressed_events is cleared (knob bite)", async () => {
+    const received: string[] = [];
+    const receiver = new Hono().post("/hook", async (c) => {
+      received.push(await c.req.text());
+      return c.json({ ok: true });
+    });
+    let port = 0;
+    const server: ServerType = await new Promise((resolve) => {
+      const s = serve({ fetch: receiver.fetch, port: 0 }, (i) => { port = i.port; resolve(s); });
+    });
 
-  it("defaults to 4 hours when STALE_CLAIM_HOURS is unset, without warning", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(resolveStaleClaimSeconds(undefined)).toBe(4 * 3600);
-    expect(warn).not.toHaveBeenCalled();
-  });
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    createProject(db, { key: "SYD", name: "Switchyard" });
+    addWebhook(db, human, { url: `http://127.0.0.1:${port}/hook` });
+    setSetting(db, human, "webhooks.suppressed_events", []);
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event: created
+    recordProgressNote(db, agent, "SYD-1", "compiling");             // 1 event: progress_note
 
-  it("honors a valid positive value", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(resolveStaleClaimSeconds("2")).toBe(2 * 3600);
-    expect(warn).not.toHaveBeenCalled();
-  });
+    expect(await dispatchPending(db)).toBe(2); // both delivered now that nothing is suppressed
+    expect(received.map((b) => JSON.parse(b).event)).toEqual(["created", "progress_note"]);
 
-  it("falls back to 4 hours and warns on a set-but-invalid value", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    expect(resolveStaleClaimSeconds("not-a-number")).toBe(4 * 3600);
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    warn.mockClear();
-    expect(resolveStaleClaimSeconds("-1")).toBe(4 * 3600);
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    warn.mockClear();
-    expect(resolveStaleClaimSeconds("0")).toBe(4 * 3600);
-    expect(warn).toHaveBeenCalledTimes(1);
+    server.close();
   });
 });

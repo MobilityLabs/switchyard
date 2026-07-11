@@ -29,12 +29,14 @@ findResumeRefs,
   RETRY_BACKOFFS_MS,
   isRetryableError,
   withRetry,
+  applyDispatchPolicy,
   type WorkerConfig,
   type WorkerIssue,
   type WorkerProject,
   type RetryState,
   type FeedEvent,
   type AnswerState,
+  type DispatchPolicy,
 } from "../../scripts/worker-select.js";
 
 /** A promise plus its resolve/reject, for controlling when async work settles in tests. */
@@ -343,6 +345,33 @@ describe("sessionTimeoutMs (SYD-115)", () => {
 
   it("respects a configured sessionTimeoutSeconds", () => {
     expect(sessionTimeoutMs({ ...config, sessionTimeoutSeconds: 60 })).toBe(60_000);
+  });
+});
+
+describe("applyDispatchPolicy (SYD-155)", () => {
+  const policy: DispatchPolicy = {
+    maxConcurrent: 5,
+    maxAnswerConcurrent: 7,
+    intervalSeconds: 60,
+    eventPollSeconds: 10,
+  };
+
+  it("overlays every policy field onto the config in place", () => {
+    const live: WorkerConfig = { ...config };
+    applyDispatchPolicy(live, policy);
+    expect(live).toMatchObject(policy);
+    // host concerns are untouched
+    expect(live.url).toBe(config.url);
+    expect(live.label).toBe(config.label);
+    expect(live.projects).toBe(config.projects);
+  });
+
+  it("mutates the same object other closures hold a reference to", () => {
+    const live: WorkerConfig = { ...config };
+    const alias = live;
+    applyDispatchPolicy(live, policy);
+    expect(alias.maxConcurrent).toBe(5);
+    expect(alias.intervalSeconds).toBe(60);
   });
 });
 
