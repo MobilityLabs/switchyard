@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { installDeps, run, runGit, pollUntilMergeable } from "../../scripts/delivery-exec.js";
+import { installDeps, run, runGit, pollUntilMergeable, currentOriginMainSha } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
 
@@ -162,4 +162,29 @@ describe("pollUntilMergeable", () => {
     },
     15000
   );
+});
+
+describe("currentOriginMainSha (SYD-164)", () => {
+  it("re-fetches and reports origin/main's tip, seeing commits added after clone", async () => {
+    const upstream = mkdtempSync(path.join(tmpdir(), "queue-upstream-"));
+    await execFileP("git", ["init", "-q", "-b", "main", upstream]);
+    await execFileP("git", ["-C", upstream, "config", "user.email", "t@e.c"]);
+    await execFileP("git", ["-C", upstream, "config", "user.name", "t"]);
+    writeFileSync(path.join(upstream, "a.txt"), "1");
+    await execFileP("git", ["-C", upstream, "add", "a.txt"]);
+    await execFileP("git", ["-C", upstream, "commit", "-q", "-m", "one"]);
+
+    const clone = mkdtempSync(path.join(tmpdir(), "queue-clone-"));
+    await execFileP("git", ["clone", "-q", upstream, clone]);
+    const shaBefore = await currentOriginMainSha(clone);
+
+    writeFileSync(path.join(upstream, "b.txt"), "2");
+    await execFileP("git", ["-C", upstream, "add", "b.txt"]);
+    await execFileP("git", ["-C", upstream, "commit", "-q", "-m", "two"]);
+    const upstreamTip = (await execFileP("git", ["-C", upstream, "rev-parse", "main"])).stdout.trim();
+
+    const shaAfter = await currentOriginMainSha(clone);
+    expect(shaAfter).toBe(upstreamTip);
+    expect(shaAfter).not.toBe(shaBefore);
+  });
 });

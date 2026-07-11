@@ -643,7 +643,7 @@ describe("queue-mode comments and argv builders (SYD-164)", () => {
 });
 
 describe("decideQueueAction (SYD-164 queue mode planner)", () => {
-  const rebased = { status: "rebased", sha: "abc123", mainSha: "main111" } as const;
+  const rebased = { status: "rebased" as const, sha: "abc123", mainSha: "main111" };
 
   it("merges when the rebase verified clean and main has not moved", () => {
     expect(decideQueueAction(rebased, false, 1)).toEqual({ kind: "merge" });

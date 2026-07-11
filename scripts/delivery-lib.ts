@@ -279,7 +279,7 @@ export type RebaseOutcome =
   | { status: "no-branch" }
   | { status: "conflict"; files: string[] }
   | { status: "verify-failed"; tail: string }
-  | { status: "rebased"; sha: string };
+  | { status: "rebased"; sha: string; mainSha: string };
 
 /** Queue mode (SYD-164): how many rebase→verify cycles to attempt when main
  * keeps moving between our verify and our merge (e.g. a human merging by

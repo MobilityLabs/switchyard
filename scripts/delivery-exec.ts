@@ -28,6 +28,8 @@ import {
   buildDetachOntoMainArgs,
   buildSyncLocalMainArgs,
   buildPrViewMergeableArgs,
+  buildFetchMainArgs,
+  buildOriginMainShaArgs,
   shouldRetryMergePoll,
   parsePrNumberFromUrl,
   tailOf,
@@ -255,7 +257,17 @@ export async function attemptAutoRebase(repo: string, cloneDir: string, ref: str
   if (!verify.ok) return { status: "verify-failed", tail: verify.tail };
   await runGit(["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
   const sha = await runGit(["-C", cloneDir, "rev-parse", "HEAD"]);
-  return { status: "rebased", sha };
+  const mainSha = await runGit(["-C", cloneDir, ...buildOriginMainShaArgs()]);
+  return { status: "rebased", sha, mainSha };
+}
+
+/** Queue mode (SYD-164): the freshest origin/main tip, re-fetched now. Used
+ * as the optimistic-concurrency check between "verified the rebased tree"
+ * and "merge the PR" — if this differs from the mainSha the rebase used,
+ * the verified result is stale and the planner retries the rebase. */
+export async function currentOriginMainSha(cloneDir: string): Promise<string> {
+  await runGit(["-C", cloneDir, ...buildFetchMainArgs()]);
+  return runGit(["-C", cloneDir, ...buildOriginMainShaArgs()]);
 }
 
 /**
