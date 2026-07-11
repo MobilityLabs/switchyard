@@ -657,7 +657,15 @@ export async function withRetry<T>(
  * Throws if neither auth env var is present, so a misconfigured worker fails
  * before spinning up a container that would just fail the same check inside
  * scripts/container-entry.sh.
+ *
+ * Applies conservative resource limits (SYD-116) so a runaway or
+ * fork-bombing session can't exhaust the host, which also runs the
+ * Switchyard tracker, dispatch worker, and the user's desktop.
  */
+const CONTAINER_MEMORY_LIMIT = "4g";
+const CONTAINER_CPU_LIMIT = "2";
+const CONTAINER_PIDS_LIMIT = "512";
+
 export function buildDockerArgs(
   issue: WorkerIssue,
   project: WorkerProject,
@@ -681,6 +689,9 @@ export function buildDockerArgs(
     "run",
     "--rm",
     "--name", `syd-${issue.ref}`,
+    "--memory", CONTAINER_MEMORY_LIMIT,
+    "--cpus", CONTAINER_CPU_LIMIT,
+    "--pids-limit", CONTAINER_PIDS_LIMIT,
     "-v", `${project.repo}:/origin`,
     "-e", `ISSUE_REF=${issue.ref}`,
     "-e", `SWITCHYARD_URL=${config.url}`,
