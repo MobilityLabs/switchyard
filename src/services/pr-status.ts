@@ -10,7 +10,7 @@
 // that let SYD-93 get fixed twice in parallel (worker PR #41 vs a
 // coordinating session's PR #42).
 import { sql } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 
 export type OpenPr = { prNumber: number; url: string };
 
@@ -19,7 +19,7 @@ type Row = { issueId: number; prNumber: number; url: string };
 // Ordered oldest-eventId-first so listOpenPrByIssueId's Map construction
 // (later entries overwrite earlier ones for the same issueId) keeps the most
 // recently opened PR when an issue somehow has more than one open at once.
-function openPrRows(db: Db, issueId?: number): Row[] {
+function openPrRows(db: DbOrTx, issueId?: number): Row[] {
   return db.all<Row>(sql`
     SELECT latest.issue_id AS issueId,
            latest.prNumber AS prNumber,
@@ -45,7 +45,7 @@ function openPrRows(db: Db, issueId?: number): Row[] {
   `);
 }
 
-export function getOpenPr(db: Db, issueId: number): OpenPr | null {
+export function getOpenPr(db: DbOrTx, issueId: number): OpenPr | null {
   const rows = openPrRows(db, issueId);
   const row = rows[rows.length - 1];
   return row ? { prNumber: row.prNumber, url: row.url } : null;

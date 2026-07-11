@@ -17,15 +17,15 @@ export function requestHumanInput(db: Db, actor: Actor, ref: string, question: s
     );
   }
   return db.transaction((tx) => {
-    const issue = getIssue(tx as Db, ref);
+    const issue = getIssue(tx, ref);
     const row = tx
       .update(issues)
       .set({ needsInput: true, updatedAt: Math.floor(Date.now() / 1000) })
       .where(eq(issues.id, issue.id))
       .returning()
       .get();
-    recordEvent(tx as Db, { issueId: issue.id, actorId: actor.id, type: "comment", payload: { body: question } });
-    recordEvent(tx as Db, { issueId: issue.id, actorId: actor.id, type: "needs_input_set" });
-    return toView(tx as Db, row);
+    recordEvent(tx, { issueId: issue.id, actorId: actor.id, type: "comment", payload: { body: question } });
+    recordEvent(tx, { issueId: issue.id, actorId: actor.id, type: "needs_input_set" });
+    return toView(tx, row);
   });
 }

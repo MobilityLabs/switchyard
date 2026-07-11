@@ -25,18 +25,18 @@ export function snoozeIssue(db: Db, actor: Actor, ref: string, untilUnixSeconds:
     );
   }
   return db.transaction((tx) => {
-    const current = getIssue(tx as Db, ref);
+    const current = getIssue(tx, ref);
     const row = tx
       .update(issues)
       .set({ snoozedUntil: untilUnixSeconds, updatedAt: now })
       .where(eq(issues.id, current.id))
       .returning()
       .get();
-    recordEvent(tx as Db, {
+    recordEvent(tx, {
       issueId: current.id, actorId: actor.id,
       type: "snoozed", payload: { until: untilUnixSeconds },
     });
-    return toView(tx as Db, row);
+    return toView(tx, row);
   });
 }
 
@@ -46,8 +46,8 @@ export function snoozeIssue(db: Db, actor: Actor, ref: string, untilUnixSeconds:
 export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string): IssueView {
   requireHuman(actor, "mark an issue as a duplicate");
   return db.transaction((tx) => {
-    const current = getIssue(tx as Db, ref);
-    const of = getIssue(tx as Db, ofRef);
+    const current = getIssue(tx, ref);
+    const of = getIssue(tx, ofRef);
     if (current.id === of.id) {
       throw new SwitchyardError(`An issue cannot be marked as a duplicate of itself (${ref}).`);
     }
@@ -59,16 +59,16 @@ export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string):
       .returning()
       .get();
     if (current.status !== "canceled") {
-      recordEvent(tx as Db, {
+      recordEvent(tx, {
         issueId: current.id, actorId: actor.id,
         type: "status_changed", payload: { from: current.status, to: "canceled" },
       });
     }
-    recordEvent(tx as Db, {
+    recordEvent(tx, {
       issueId: current.id, actorId: actor.id,
       type: "marked_duplicate", payload: { of: of.ref },
     });
-    return toView(tx as Db, row);
+    return toView(tx, row);
   });
 }
 

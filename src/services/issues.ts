@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 import { issues, projects, actors as actorsTable, STATUSES, PRIORITIES, type Status, type Priority } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
@@ -66,12 +66,12 @@ export function parseRef(ref: string): { key: string; number: number } {
   return { key: m[1], number: Number(m[2]) };
 }
 
-export function toView(db: Db, row: typeof issues.$inferSelect): IssueView {
+export function toView(db: DbOrTx, row: typeof issues.$inferSelect): IssueView {
   const project = db.select().from(projects).where(eq(projects.id, row.projectId)).get()!;
   return { ...row, ref: `${project.key}-${row.number}` };
 }
 
-export function getIssue(db: Db, ref: string): IssueView {
+export function getIssue(db: DbOrTx, ref: string): IssueView {
   const { key, number } = parseRef(ref);
   const project = getProjectByKey(db, key);
   const row = db
@@ -106,9 +106,9 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
   }
   checkSummaryLength(input.summary);
   return db.transaction((tx) => {
-    const project = getProjectByKey(tx as Db, input.projectKey);
-    const number = reserveIssueNumber(tx as Db, project.id);
-    const parentId = input.parentRef ? getIssue(tx as Db, input.parentRef).id : null;
+    const project = getProjectByKey(tx, input.projectKey);
+    const number = reserveIssueNumber(tx, project.id);
+    const parentId = input.parentRef ? getIssue(tx, input.parentRef).id : null;
     const row = tx
       .insert(issues)
       .values({
@@ -128,8 +128,8 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
       })
       .returning()
       .get();
-    recordEvent(tx as Db, { issueId: row.id, actorId: actor.id, type: "created" });
-    return toView(tx as Db, row);
+    recordEvent(tx, { issueId: row.id, actorId: actor.id, type: "created" });
+    return toView(tx, row);
   });
 }
 
@@ -151,7 +151,7 @@ export type UpdateIssueInput = {
  * is the gap that let SYD-93 get fixed twice in parallel (worker PR #41 vs a
  * coordinating session's PR #42, opened without ever calling claim_issue).
  */
-function assertClaimable(db: Db, actor: Actor, current: IssueView): void {
+function assertClaimable(db: DbOrTx, actor: Actor, current: IssueView): void {
   if (current.assigneeId === actor.id) return;
   if (current.assigneeId !== null) {
     const assignee = db.select().from(actorsTable).where(eq(actorsTable.id, current.assigneeId)).get();
@@ -184,7 +184,7 @@ function assertAssignee(db: Db, actor: Actor, current: IssueView, toStatus: Stat
 export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssueInput): IssueView {
   checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
-    const current = getIssue(tx as Db, ref);
+    const current = getIssue(tx, ref);
     const changes: Partial<typeof issues.$inferInsert> = {};
     const toRecord: { type: string; payload: Record<string, unknown> }[] = [];
 
@@ -310,9 +310,9 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
     changes.updatedAt = Math.floor(Date.now() / 1000);
     const row = tx.update(issues).set(changes).where(eq(issues.id, current.id)).returning().get();
     for (const e of toRecord) {
-      recordEvent(tx as Db, { issueId: current.id, actorId: actor.id, ...e });
+      recordEvent(tx, { issueId: current.id, actorId: actor.id, ...e });
     }
-    return toView(tx as Db, row);
+    return toView(tx, row);
   });
 }
 

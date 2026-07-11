@@ -1,9 +1,9 @@
 import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 import { events, actors, issues, projects } from "../db/schema.js";
 
 export function recordEvent(
-  db: Db,
+  db: DbOrTx,
   e: { issueId: number; actorId: number; type: string; payload?: Record<string, unknown> }
 ): void {
   db.insert(events)

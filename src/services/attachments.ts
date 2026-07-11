@@ -1,7 +1,7 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { asc, eq } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 import { attachments, actors } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
@@ -75,7 +75,7 @@ export async function saveAttachment(
   }
 
   const row = db.transaction((tx) => {
-    const issue = getIssue(tx as Db, ref);
+    const issue = getIssue(tx, ref);
     const inserted = tx
       .insert(attachments)
       .values({
@@ -87,7 +87,7 @@ export async function saveAttachment(
       })
       .returning()
       .get();
-    recordEvent(tx as Db, {
+    recordEvent(tx, {
       issueId: issue.id,
       actorId: actor.id,
       type: "attachment_added",
