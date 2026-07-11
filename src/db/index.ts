@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { fileURLToPath } from "node:url";
+import { chmodSync, existsSync } from "node:fs";
 import path from "node:path";
 import * as schema from "./schema.js";
 
@@ -19,6 +20,17 @@ const migrationsFolder = path.join(
   path.dirname(fileURLToPath(import.meta.url)), "../../drizzle"
 );
 
+// The db holds webhook/repo HMAC secrets in plaintext (SYD-139) — tighten to
+// 0600 so filesystem access, not just API redaction, gates read access.
+// Covers the WAL/SHM siblings too since they can hold uncheckpointed pages.
+function tightenPermissions(dbPath: string): void {
+  if (dbPath === ":memory:") return;
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const p = dbPath + suffix;
+    if (existsSync(p)) chmodSync(p, 0o600);
+  }
+}
+
 export function openDb(dbPath: string): Db {
   const sqlite = new Database(dbPath);
   sqlite.pragma("journal_mode = WAL");
@@ -33,5 +45,6 @@ export function openDb(dbPath: string): Db {
   sqlite.pragma("foreign_keys = OFF");
   migrate(db, { migrationsFolder });
   sqlite.pragma("foreign_keys = ON");
+  tightenPermissions(dbPath);
   return db;
 }
