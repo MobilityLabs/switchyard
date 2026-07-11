@@ -73,6 +73,7 @@ import {
   workerPidFileName,
   remainingAnswerCapacity,
   DEFAULT_MAX_ANSWER_CONCURRENT,
+  sessionTimeoutMs,
   withRetry,
   HttpStatusError,
   type WorkerConfig,
@@ -286,6 +287,26 @@ function triggerUnansweredDrain(config: WorkerConfig, token: string): void {
   );
 }
 
+const SIGKILL_GRACE_MS = 10_000;
+
+/**
+ * Kills a dispatched CLI session's process on watchdog timeout (SYD-115):
+ * SIGTERM first, escalating to SIGKILL after a grace period if it's still
+ * alive. `containerName` is the deterministic `syd-<ref>` name buildDockerArgs
+ * gives a containerized dispatch — it's `docker kill`ed directly rather than
+ * relying on the local `docker run` client process to notice its own SIGTERM
+ * and stop the container it's attached to.
+ */
+function killSession(child: ChildProcess, containerName: string | null): void {
+  if (containerName) {
+    spawn("docker", ["kill", containerName], { stdio: "ignore" }).on("error", () => {});
+  }
+  child.kill("SIGTERM");
+  setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }, SIGKILL_GRACE_MS);
+}
+
 // Exported for tests (SYD-105): lets the session-reporting integration test
 // below drive dispatch() end to end (spawn -> reportSessionStart, exit ->
 // reportSessionEnd) rather than only exercising the two helpers in isolation.
@@ -350,6 +371,16 @@ export function dispatch(
   active.set(issue.ref, child);
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
 
+  // Watchdog (SYD-115): a hung `claude -p` or stuck `docker run` would
+  // otherwise hold this maxConcurrent slot forever. Cleared on exit/error
+  // below so a session that finishes normally never gets killed late.
+  const timeoutMs = sessionTimeoutMs(config);
+  const watchdog = setTimeout(() => {
+    console.error(`${issue.ref}: session exceeded ${timeoutMs / 1000}s watchdog timeout — killing`);
+    logLine(`[worker] session exceeded ${timeoutMs / 1000}s watchdog timeout — killing\n`);
+    killSession(child, config.containerized ? `syd-${issue.ref}` : null);
+  }, timeoutMs);
+
   // 'spawn' only fires once the OS actually launched the process (see the
   // SYD-74 note in dispatchAnswer) — a failed spawn never creates a session.
   let sessionId: Promise<number | null> = Promise.resolve(null);
@@ -362,6 +393,7 @@ export function dispatch(
   });
 
   child.on("exit", (code) => {
+    clearTimeout(watchdog);
     void reportSessionEnd(config, token, sessionId, code, (message) => logLine(`[worker] ${message}\n`));
     active.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
@@ -394,6 +426,7 @@ export function dispatch(
   });
 
   child.on("error", (err) => {
+    clearTimeout(watchdog);
     active.delete(issue.ref);
     // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
     // close the session (no-op when spawn never happened: sessionId is null).
@@ -447,6 +480,7 @@ function dispatchSdk(
         switchyardToken: token,
         allowedTools,
         logPath,
+        timeoutMs: sessionTimeoutMs(config),
       }),
     )
     .then(
@@ -526,6 +560,16 @@ export function dispatchAnswer(ref: string, config: WorkerConfig, token: string,
 
   active.set(key, child);
 
+  // Watchdog (SYD-115): answer sessions share the same hung-process risk as
+  // work dispatch and would otherwise hold a maxAnswerConcurrent slot
+  // forever. Never containerized (see the module comment above), so there's
+  // no container name to kill.
+  const timeoutMs = sessionTimeoutMs(config);
+  const watchdog = setTimeout(() => {
+    console.error(`answer session for ${ref} exceeded ${timeoutMs / 1000}s watchdog timeout — killing`);
+    killSession(child, null);
+  }, timeoutMs);
+
   // `child.pid` is only populated once the OS has actually spawned the
   // process; reading it synchronously here printed `pid undefined` on a
   // spawn failure (e.g. ENOENT for a bare `claude` not on launchd's PATH —
@@ -538,11 +582,13 @@ export function dispatchAnswer(ref: string, config: WorkerConfig, token: string,
   });
 
   child.on("exit", (code) => {
+    clearTimeout(watchdog);
     active.delete(key);
     triggerUnansweredDrain(config, token);
     console.log(`answer session for ${ref} exited with code ${code}`);
   });
   child.on("error", (err) => {
+    clearTimeout(watchdog);
     active.delete(key);
     console.error(`failed to spawn answer session for ${ref}: ${err.message}`);
   });
@@ -578,6 +624,7 @@ function dispatchAnswerSdk(
         switchyardToken: token,
         allowedTools: ANSWER_ALLOWED_TOOLS,
         logPath,
+        timeoutMs: sessionTimeoutMs(config),
       }),
     )
     .then(

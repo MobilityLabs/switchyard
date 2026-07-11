@@ -147,12 +147,27 @@ export type WorkerConfig = {
   maxAnswerConcurrent?: number;
   /** GitHub polling fallback (SYD-71): scripts/github-poll.ts settings. */
   githubPoll?: GithubPollConfig;
+  /**
+   * Per-session watchdog (SYD-115): a dispatched session (CLI child, docker
+   * container, or in-process SDK query — work or answer alike) running longer
+   * than this is killed/aborted and its concurrency slot freed. Backstop for
+   * a hung `claude -p`, a stuck `docker run`, or an SDK query that never
+   * yields a `result` message, any of which would otherwise hold a
+   * maxConcurrent/maxAnswerConcurrent slot forever. Default 3600 (1h).
+   */
+  sessionTimeoutSeconds?: number;
 };
 
 const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
 const DEFAULT_WORKER_IMAGE = "switchyard-worker";
 export const DEFAULT_MAX_ANSWER_CONCURRENT = 2;
 const DEFAULT_BASE_BRANCH = "main";
+export const DEFAULT_SESSION_TIMEOUT_SECONDS = 3600;
+
+/** Effective per-session watchdog timeout in ms — see `WorkerConfig.sessionTimeoutSeconds`. */
+export function sessionTimeoutMs(config: WorkerConfig): number {
+  return (config.sessionTimeoutSeconds ?? DEFAULT_SESSION_TIMEOUT_SECONDS) * 1000;
+}
 
 export function projectKeyOf(ref: string): string {
   return ref.split("-")[0];

@@ -142,6 +142,14 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, maxAnswerConcurrent: "2" })).toHaveLength(1);
   });
 
+  it("accepts an absent sessionTimeoutSeconds and rejects a non-positive one (SYD-115)", () => {
+    expect(validateWorkerConfig(good)).toEqual([]);
+    expect(validateWorkerConfig({ ...good, sessionTimeoutSeconds: 1800 })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, sessionTimeoutSeconds: 0 })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, sessionTimeoutSeconds: -60 })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, sessionTimeoutSeconds: "3600" })).toHaveLength(1);
+  });
+
   describe("validateWorkerConfig delivery block", () => {
     const base = {
       url: "http://localhost:3300",
