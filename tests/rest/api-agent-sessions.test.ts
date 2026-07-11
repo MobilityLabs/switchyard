@@ -6,7 +6,9 @@ import { createIssue } from "../../src/services/issues.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
-let workerH: Record<string, string>, humanH: Record<string, string>, otherWorkerH: Record<string, string>;
+let workerH: Record<string, string>,
+  humanH: Record<string, string>,
+  otherWorkerH: Record<string, string>;
 
 beforeEach(() => {
   db = openDb(":memory:");
@@ -15,7 +17,10 @@ beforeEach(() => {
   const otherWorker = createActor(db, { name: "claude/other", type: "agent" });
   workerH = { authorization: `Bearer ${worker.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };
-  otherWorkerH = { authorization: `Bearer ${otherWorker.token}`, "content-type": "application/json" };
+  otherWorkerH = {
+    authorization: `Bearer ${otherWorker.token}`,
+    "content-type": "application/json",
+  };
   createProject(db, { key: "SYD", name: "Switchyard" });
   createIssue(db, worker.actor, {
     projectKey: "SYD",
@@ -119,11 +124,13 @@ describe("PATCH /agent-sessions/:id", () => {
   it("rejects ending another agent's session (SYD-123)", async () => {
     const { id } = await startSession();
     const res = await app.request(`/agent-sessions/${id}`, {
-      method: "PATCH", headers: otherWorkerH, body: JSON.stringify({ exitCode: 0 }),
+      method: "PATCH",
+      headers: otherWorkerH,
+      body: JSON.stringify({ exitCode: 0 }),
     });
     expect(res.status).toBe(400);
     const all = await body<{ id: number; status: string }[]>(
-      await app.request("/agent-sessions", { headers: workerH })
+      await app.request("/agent-sessions", { headers: workerH }),
     );
     expect(all.find((s) => s.id === id)?.status).toBe("running");
   });

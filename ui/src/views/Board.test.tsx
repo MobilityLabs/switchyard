@@ -39,7 +39,10 @@ function issue(o: Partial<Issue> = {}): Issue {
   };
 }
 
-async function render(i: Issue, onMove?: (ref: string, status: Issue["status"]) => void): Promise<HTMLElement> {
+async function render(
+  i: Issue,
+  onMove?: (ref: string, status: Issue["status"]) => void,
+): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -84,7 +87,9 @@ describe("Board Card keyboard accessibility", () => {
     const container = await render(issue({ ref: "SYD-7" }));
     const card = container.querySelector(".card")!;
     await act(async () => {
-      card.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(location.pathname).toBe("/issue/SYD-7");
   });
@@ -93,7 +98,9 @@ describe("Board Card keyboard accessibility", () => {
     const container = await render(issue({ ref: "SYD-8" }));
     const card = container.querySelector(".card")!;
     await act(async () => {
-      card.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+      );
     });
     expect(location.pathname).toBe("/issue/SYD-8");
   });
@@ -102,7 +109,9 @@ describe("Board Card keyboard accessibility", () => {
     const container = await render(issue({ ref: "SYD-9" }), () => {});
     const link = container.querySelector("a.ref")!;
     await act(async () => {
-      link.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      link.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(location.pathname).not.toBe("/issue/SYD-9");
   });
@@ -114,9 +123,8 @@ describe("Board Card keyboard accessibility", () => {
 
   it("offers a keyboard-reachable select to move the card without dragging", async () => {
     const moves: Array<[string, string]> = [];
-    const container = await render(
-      issue({ ref: "SYD-10", status: "todo" }),
-      (ref, status) => moves.push([ref, status]),
+    const container = await render(issue({ ref: "SYD-10", status: "todo" }), (ref, status) =>
+      moves.push([ref, status]),
     );
     const select = container.querySelector<HTMLSelectElement>(".card-move")!;
     expect(select.getAttribute("aria-label")).toContain("SYD-10");

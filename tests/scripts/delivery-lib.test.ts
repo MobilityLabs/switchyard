@@ -262,13 +262,24 @@ describe("argv builders", () => {
   });
 
   it("buildPrCreateArgs threads the exit code into the PR body", () => {
-    const args = buildPrCreateArgs("SYD-9", "A title", "http://host:3300", "MobilityLabs/switchyard", 1);
+    const args = buildPrCreateArgs(
+      "SYD-9",
+      "A title",
+      "http://host:3300",
+      "MobilityLabs/switchyard",
+      1,
+    );
     const bodyArg = args[args.indexOf("--body") + 1];
     expect(bodyArg).toContain("non-zero code (1)");
   });
 
   it("buildPrCreateArgs defaults to no exit-code warning when omitted", () => {
-    const args = buildPrCreateArgs("SYD-9", "A title", "http://host:3300", "MobilityLabs/switchyard");
+    const args = buildPrCreateArgs(
+      "SYD-9",
+      "A title",
+      "http://host:3300",
+      "MobilityLabs/switchyard",
+    );
     const bodyArg = args[args.indexOf("--body") + 1];
     expect(bodyArg).not.toContain("non-zero");
   });

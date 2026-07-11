@@ -117,7 +117,7 @@ describe("TriageRow keyboard accessibility", () => {
           knownActorNames={[]}
           expanded={expanded}
           onToggleExpand={onToggleExpand}
-        />
+        />,
       );
     });
     return container;
@@ -133,30 +133,44 @@ describe("TriageRow keyboard accessibility", () => {
 
   it("toggles expansion on Enter", async () => {
     let toggled = 0;
-    const container = await renderRow(false, () => { toggled += 1; });
+    const container = await renderRow(false, () => {
+      toggled += 1;
+    });
     const row = container.querySelector(".triage-row")!;
     await reactAct(async () => {
-      row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(toggled).toBe(1);
   });
 
   it("toggles expansion on Space", async () => {
     let toggled = 0;
-    const container = await renderRow(false, () => { toggled += 1; });
+    const container = await renderRow(false, () => {
+      toggled += 1;
+    });
     const row = container.querySelector(".triage-row")!;
     await reactAct(async () => {
-      row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+      );
     });
     expect(toggled).toBe(1);
   });
 
   it("leaves toggling to the control when Enter originates from a nested button", async () => {
     let toggled = 0;
-    const container = await renderRow(false, () => { toggled += 1; });
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
+    const container = await renderRow(false, () => {
+      toggled += 1;
+    });
+    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Accept → todo",
+    )!;
     await reactAct(async () => {
-      acceptButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      acceptButton.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(toggled).toBe(0);
   });

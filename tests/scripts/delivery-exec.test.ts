@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  chmodSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { installDeps, run, runGit, pollUntilMergeable } from "../../scripts/delivery-exec.js";
@@ -15,7 +22,11 @@ const execFileP = promisify(execFile);
  * can plant hooks directly under .git/hooks, which a later host-side `git`
  * command against that same directory would otherwise execute.
  */
-async function makeRepoWithPlantedHook(): Promise<{ repo: string; remote: string; marker: string }> {
+async function makeRepoWithPlantedHook(): Promise<{
+  repo: string;
+  remote: string;
+  marker: string;
+}> {
   const repo = mkdtempSync(path.join(tmpdir(), "delivery-exec-hook-test-"));
   await execFileP("git", ["init", "-q", repo]);
   await execFileP("git", ["-C", repo, "config", "user.email", "test@example.com"]);
@@ -100,13 +111,24 @@ describe("pollUntilMergeable", () => {
   async function makeRepoWithOrigin(): Promise<string> {
     const repo = mkdtempSync(path.join(tmpdir(), "delivery-exec-poll-test-"));
     await execFileP("git", ["init", "-q", repo]);
-    await execFileP("git", ["-C", repo, "remote", "add", "origin", "https://github.com/acme/widgets.git"]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
     return repo;
   }
 
   /** Fake `gh` that answers `pr view --json mergeable --jq .mergeable` with
    * "UNKNOWN" for the first `unknownCount` invocations, then `finalState`. */
-  function makeFakeGh(binDir: string, unknownCount: number, finalState: string): { callsFile: string } {
+  function makeFakeGh(
+    binDir: string,
+    unknownCount: number,
+    finalState: string,
+  ): { callsFile: string } {
     const callsFile = path.join(binDir, "calls");
     writeFileSync(callsFile, "0");
     const ghPath = path.join(binDir, "gh");
@@ -116,7 +138,7 @@ describe("pollUntilMergeable", () => {
         `n=$(cat "${callsFile}")\n` +
         "n=$((n + 1))\n" +
         `echo "$n" > "${callsFile}"\n` +
-        `if [ "$n" -le ${unknownCount} ]; then echo UNKNOWN; else echo ${finalState}; fi\n`
+        `if [ "$n" -le ${unknownCount} ]; then echo UNKNOWN; else echo ${finalState}; fi\n`,
     );
     chmodSync(ghPath, 0o755);
     return { callsFile };
@@ -154,18 +176,14 @@ describe("pollUntilMergeable", () => {
     expect(readFileSync(callsFile, "utf8").trim()).toBe("1");
   });
 
-  it(
-    "polls past a transient UNKNOWN (e.g. right after a push) until gh settles",
-    async () => {
-      const repo = await makeRepoWithOrigin();
-      const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-gh-"));
-      const { callsFile } = makeFakeGh(binDir, 1, "MERGEABLE");
+  it("polls past a transient UNKNOWN (e.g. right after a push) until gh settles", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-gh-"));
+    const { callsFile } = makeFakeGh(binDir, 1, "MERGEABLE");
 
-      const state = await withFakeGhOnPath(binDir, () => pollUntilMergeable(repo, 42));
+    const state = await withFakeGhOnPath(binDir, () => pollUntilMergeable(repo, 42));
 
-      expect(state).toBe("MERGEABLE");
-      expect(readFileSync(callsFile, "utf8").trim()).toBe("2");
-    },
-    15000
-  );
+    expect(state).toBe("MERGEABLE");
+    expect(readFileSync(callsFile, "utf8").trim()).toBe("2");
+  }, 15000);
 });

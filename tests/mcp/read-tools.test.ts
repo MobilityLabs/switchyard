@@ -92,23 +92,30 @@ describe("MCP read tools", () => {
   });
 
   it("recent_events honors since and before_id paging", async () => {
-    const all = JSON.parse(text(await client.callTool({ name: "recent_events", arguments: {} }))).events;
+    const all = JSON.parse(
+      text(await client.callTool({ name: "recent_events", arguments: {} })),
+    ).events;
     const cutoff = all[all.length - 1].createdAt;
 
     const since = JSON.parse(
-      text(await client.callTool({ name: "recent_events", arguments: { since: cutoff } }))
+      text(await client.callTool({ name: "recent_events", arguments: { since: cutoff } })),
     );
     expect(since.events.every((e: { createdAt: number }) => e.createdAt > cutoff)).toBe(true);
 
     const page1 = JSON.parse(
-      text(await client.callTool({ name: "recent_events", arguments: { limit: 1 } }))
+      text(await client.callTool({ name: "recent_events", arguments: { limit: 1 } })),
     );
     expect(page1.events).toHaveLength(1);
     expect(page1.truncated).toBe(true);
     expect(page1.next_cursor).toBe(page1.events[0].id);
 
     const page2 = JSON.parse(
-      text(await client.callTool({ name: "recent_events", arguments: { limit: 1, before_id: page1.next_cursor } }))
+      text(
+        await client.callTool({
+          name: "recent_events",
+          arguments: { limit: 1, before_id: page1.next_cursor },
+        }),
+      ),
     );
     expect(page2.events[0].id).toBeLessThan(page1.events[0].id);
   });

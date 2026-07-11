@@ -16,7 +16,11 @@ import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
-import { listRecentEventsPage, DEFAULT_RECENT_EVENTS_LIMIT, MAX_RECENT_EVENTS_LIMIT } from "../services/events.js";
+import {
+  listRecentEventsPage,
+  DEFAULT_RECENT_EVENTS_LIMIT,
+  MAX_RECENT_EVENTS_LIMIT,
+} from "../services/events.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { recordProgressNote, listAgentSessions } from "../services/agent-sessions.js";
 import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
@@ -343,7 +347,7 @@ export function buildMcpServer(
     "recent_events",
     {
       description:
-        "Cross-issue, newest-first activity feed for diagnosing \"what just happened on the board\" " +
+        'Cross-issue, newest-first activity feed for diagnosing "what just happened on the board" ' +
         "(the same feed the dispatch worker polls). Optional `since` (unix seconds) filters to events " +
         `after that time. Defaults to the ${DEFAULT_RECENT_EVENTS_LIMIT} most recent events, capped at ` +
         `${MAX_RECENT_EVENTS_LIMIT} — the response includes \`truncated\` and \`next_cursor\`; pass ` +
@@ -357,7 +361,7 @@ export function buildMcpServer(
     guard(({ since, limit, before_id }: { since?: number; limit?: number; before_id?: number }) => {
       const page = listRecentEventsPage(db, { since, limit, beforeId: before_id });
       return { events: page.events, next_cursor: page.nextCursor, truncated: page.truncated };
-    })
+    }),
   );
 
   server.registerTool(
@@ -386,7 +390,9 @@ export function buildMcpServer(
         "panel. Use to check whether an issue already has an agent working it, or what's currently live.",
       inputSchema: { active: z.boolean().optional(), ref: z.string().optional() },
     },
-    guard(({ active, ref }: { active?: boolean; ref?: string }) => listAgentSessions(db, { active, ref }))
+    guard(({ active, ref }: { active?: boolean; ref?: string }) =>
+      listAgentSessions(db, { active, ref }),
+    ),
   );
 
   return server;

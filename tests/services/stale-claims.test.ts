@@ -116,10 +116,12 @@ describe("releaseStaleClaims", () => {
     // (which saw needsInput=false and decided to release) and its per-issue
     // UPDATE transaction: the agent escalates right before the release lands.
     const originalTransaction = db.transaction.bind(db);
-    const spy = vi.spyOn(db, "transaction").mockImplementationOnce((cb: Parameters<typeof db.transaction>[0]) => {
-      requestHumanInput(db, agent, "AIPI-1", "actually blocked on a decision");
-      return originalTransaction(cb);
-    });
+    const spy = vi
+      .spyOn(db, "transaction")
+      .mockImplementationOnce((cb: Parameters<typeof db.transaction>[0]) => {
+        requestHumanInput(db, agent, "AIPI-1", "actually blocked on a decision");
+        return originalTransaction(cb);
+      });
 
     const released = releaseStaleClaims(db);
     spy.mockRestore();
@@ -143,10 +145,12 @@ describe("releaseStaleClaims", () => {
     // Simulate a second writer (e.g. src/cli.ts on its own connection) moving
     // the issue to in_review right before releaseStaleClaims' UPDATE lands.
     const originalTransaction = db.transaction.bind(db);
-    const spy = vi.spyOn(db, "transaction").mockImplementationOnce((cb: Parameters<typeof db.transaction>[0]) => {
-      db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issue.id)).run();
-      return originalTransaction(cb);
-    });
+    const spy = vi
+      .spyOn(db, "transaction")
+      .mockImplementationOnce((cb: Parameters<typeof db.transaction>[0]) => {
+        db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issue.id)).run();
+        return originalTransaction(cb);
+      });
 
     const released = releaseStaleClaims(db);
     spy.mockRestore();

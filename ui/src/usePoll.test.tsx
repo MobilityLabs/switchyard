@@ -38,41 +38,63 @@ describe("usePoll visibility handling", () => {
   it("polls on the interval while the tab is visible", async () => {
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
     expect(fn).toHaveBeenCalledTimes(2);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
   it("stops polling once the tab is hidden", async () => {
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { setVisibility("hidden"); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("refetches immediately and resumes polling once the tab becomes visible again", async () => {
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { setVisibility("hidden"); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { setVisibility("visible"); });
+    await act(async () => {
+      setVisibility("visible");
+    });
     expect(fn).toHaveBeenCalledTimes(2);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
@@ -80,10 +102,14 @@ describe("usePoll visibility handling", () => {
     setVisibility("hidden");
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
   });
 });

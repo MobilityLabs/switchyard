@@ -93,10 +93,25 @@ describe("getOpenPr", () => {
   it("doesn't let a belated close for an old PR report a newer still-open PR as closed (SYD-125)", () => {
     const { db, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    recordEvent(db, { issueId: issue.id, actorId: agent.id, type: "gh_pr_opened", payload: { prNumber: 1, url: "https://x/1" } });
-    recordEvent(db, { issueId: issue.id, actorId: agent.id, type: "gh_pr_opened", payload: { prNumber: 2, url: "https://x/2" } });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_opened",
+      payload: { prNumber: 1, url: "https://x/1" },
+    });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_opened",
+      payload: { prNumber: 2, url: "https://x/2" },
+    });
     // A belated close for PR#1 arrives after PR#2 already opened.
-    recordEvent(db, { issueId: issue.id, actorId: agent.id, type: "gh_pr_closed", payload: { prNumber: 1, url: "https://x/1" } });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_closed",
+      payload: { prNumber: 1, url: "https://x/1" },
+    });
     expect(getOpenPr(db, issue.id)).toEqual({ prNumber: 2, url: "https://x/2" });
   });
 

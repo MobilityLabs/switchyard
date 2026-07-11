@@ -38,9 +38,10 @@ describe("App session expiry", () => {
   });
 
   it("shows the app after a successful boot getMe()", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
-      url === "/api/me" ? okJson(ME) : okJson([]),
-    ));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))),
+    );
 
     const container = await renderApp();
     expect(container.textContent).not.toContain("You need a login link");
@@ -54,8 +55,9 @@ describe("App session expiry", () => {
     expect(container.textContent).not.toContain("You need a login link");
 
     // Simulate a poll or mutation hitting an expired session sometime later.
-    fetchMock.mockImplementationOnce(async () =>
-      ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
+    fetchMock.mockImplementationOnce(
+      async () =>
+        ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
     );
     await act(async () => {
       await api("/api/issues").catch(() => {});
@@ -70,8 +72,8 @@ describe("App session expiry", () => {
 
     const container = await renderApp();
 
-    fetchMock.mockImplementationOnce(async () =>
-      ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
+    fetchMock.mockImplementationOnce(
+      async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
     );
     await act(async () => {
       await api("/api/issues").catch(() => {});
@@ -96,8 +98,9 @@ describe("App session expiry", () => {
       root.unmount();
     });
 
-    fetchMock.mockImplementationOnce(async () =>
-      ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
+    fetchMock.mockImplementationOnce(
+      async () =>
+        ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
     );
     // Should not throw despite no mounted App to receive the state update.
     await expect(api("/api/issues")).rejects.toBeTruthy();

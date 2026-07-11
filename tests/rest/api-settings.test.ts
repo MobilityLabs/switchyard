@@ -30,13 +30,17 @@ describe("settings routes", () => {
     };
 
     const agentRes = await app.request("/settings/instance.name", {
-      method: "PUT", headers: agentH, body: JSON.stringify({ value: "Nope" }),
+      method: "PUT",
+      headers: agentH,
+      body: JSON.stringify({ value: "Nope" }),
     });
     expect(agentRes.status).toBe(400);
     expect(((await agentRes.json()) as { error: string }).error).toMatch(/human-only/i);
 
     const humanRes = await app.request("/settings/instance.name", {
-      method: "PUT", headers: humanH, body: JSON.stringify({ value: "Acme Tracker" }),
+      method: "PUT",
+      headers: humanH,
+      body: JSON.stringify({ value: "Acme Tracker" }),
     });
     expect(humanRes.status).toBe(200);
     const updated = (await humanRes.json()) as { value: string; isDefault: boolean };
@@ -45,7 +49,7 @@ describe("settings routes", () => {
 
     const listRes = await app.request("/settings", { headers: humanH });
     const row = ((await listRes.json()) as Array<{ key: string; value: string }>).find(
-      (r) => r.key === "instance.name"
+      (r) => r.key === "instance.name",
     )!;
     expect(row.value).toBe("Acme Tracker");
   });
@@ -59,13 +63,17 @@ describe("settings routes", () => {
     };
 
     const unknown = await app.request("/settings/nope.nope", {
-      method: "PUT", headers: humanH, body: JSON.stringify({ value: "x" }),
+      method: "PUT",
+      headers: humanH,
+      body: JSON.stringify({ value: "x" }),
     });
     expect(unknown.status).toBe(400);
     expect(((await unknown.json()) as { error: string }).error).toMatch(/unknown setting/i);
 
     const invalid = await app.request("/settings/dispatch.max_concurrent", {
-      method: "PUT", headers: humanH, body: JSON.stringify({ value: "not a number" }),
+      method: "PUT",
+      headers: humanH,
+      body: JSON.stringify({ value: "not a number" }),
     });
     expect(invalid.status).toBe(400);
     expect(((await invalid.json()) as { error: string }).error).toMatch(/positive integer/i);
@@ -84,14 +92,22 @@ describe("settings routes", () => {
     };
 
     await app.request("/settings/instance.name", {
-      method: "PUT", headers: humanH, body: JSON.stringify({ value: "Acme Tracker" }),
+      method: "PUT",
+      headers: humanH,
+      body: JSON.stringify({ value: "Acme Tracker" }),
     });
 
-    const agentDelete = await app.request("/settings/instance.name", { method: "DELETE", headers: agentH });
+    const agentDelete = await app.request("/settings/instance.name", {
+      method: "DELETE",
+      headers: agentH,
+    });
     expect(agentDelete.status).toBe(400);
     expect(((await agentDelete.json()) as { error: string }).error).toMatch(/human-only/i);
 
-    const humanDelete = await app.request("/settings/instance.name", { method: "DELETE", headers: humanH });
+    const humanDelete = await app.request("/settings/instance.name", {
+      method: "DELETE",
+      headers: humanH,
+    });
     expect(humanDelete.status).toBe(200);
     const reset = (await humanDelete.json()) as { value: string; isDefault: boolean };
     expect(reset.isDefault).toBe(true);

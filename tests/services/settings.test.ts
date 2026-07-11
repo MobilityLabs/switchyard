@@ -1,12 +1,20 @@
 import { describe, it, expect } from "vitest";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
-import { getSetting, getAllSettings, setSetting, resetSetting, REGISTRY } from "../../src/services/settings.js";
+import {
+  getSetting,
+  getAllSettings,
+  setSetting,
+  resetSetting,
+  REGISTRY,
+} from "../../src/services/settings.js";
 
 describe("settings", () => {
   it("falls back to the compiled-in default when unset", () => {
     const db = openDb(":memory:");
-    expect(getSetting(db, "sessions.stale_seconds")).toBe(REGISTRY["sessions.stale_seconds"].default);
+    expect(getSetting(db, "sessions.stale_seconds")).toBe(
+      REGISTRY["sessions.stale_seconds"].default,
+    );
     expect(getSetting(db, "webhooks.suppressed_events")).toEqual(["progress_note"]);
   });
 
@@ -51,13 +59,23 @@ describe("settings", () => {
   it("validates type and range", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    expect(() => setSetting(db, human, "dispatch.max_concurrent", "not a number")).toThrowError(/positive integer/i);
-    expect(() => setSetting(db, human, "dispatch.max_concurrent", -1)).toThrowError(/positive integer/i);
-    expect(() => setSetting(db, human, "dispatch.max_concurrent", 1.5)).toThrowError(/positive integer/i);
+    expect(() => setSetting(db, human, "dispatch.max_concurrent", "not a number")).toThrowError(
+      /positive integer/i,
+    );
+    expect(() => setSetting(db, human, "dispatch.max_concurrent", -1)).toThrowError(
+      /positive integer/i,
+    );
+    expect(() => setSetting(db, human, "dispatch.max_concurrent", 1.5)).toThrowError(
+      /positive integer/i,
+    );
     expect(() => setSetting(db, human, "instance.name", "")).toThrowError(/non-empty string/i);
     expect(() => setSetting(db, human, "instance.name", 42)).toThrowError(/non-empty string/i);
-    expect(() => setSetting(db, human, "webhooks.suppressed_events", "nope")).toThrowError(/array of strings/i);
-    expect(() => setSetting(db, human, "webhooks.suppressed_events", [1, 2])).toThrowError(/array of strings/i);
+    expect(() => setSetting(db, human, "webhooks.suppressed_events", "nope")).toThrowError(
+      /array of strings/i,
+    );
+    expect(() => setSetting(db, human, "webhooks.suppressed_events", [1, 2])).toThrowError(
+      /array of strings/i,
+    );
   });
 
   it("rejects unknown keys on get/set/reset", () => {

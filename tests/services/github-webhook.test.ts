@@ -264,14 +264,22 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
     const payload = {
       action: "opened",
       pull_request: {
-        number: 12, html_url: "https://github.com/acme/widgets/pull/12",
-        head: { ref: "agent/SYD-1" }, title: null, body: null,
+        number: 12,
+        html_url: "https://github.com/acme/widgets/pull/12",
+        head: { ref: "agent/SYD-1" },
+        title: null,
+        body: null,
       },
     };
     const first = handleGithubWebhook(db, "pull_request", payload);
     const redelivery = handleGithubWebhook(db, "pull_request", payload);
     expect(first).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
-    expect(redelivery).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened", duplicate: true });
+    expect(redelivery).toEqual({
+      handled: true,
+      ref: "SYD-1",
+      type: "gh_pr_opened",
+      duplicate: true,
+    });
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 
@@ -283,7 +291,12 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
     });
     const outcome = handleGithubWebhook(db, "pull_request", {
       action: "closed",
-      pull_request: { number: 12, html_url: "https://x/12", merged: false, head: { ref: "agent/SYD-1" } },
+      pull_request: {
+        number: 12,
+        html_url: "https://x/12",
+        merged: false,
+        head: { ref: "agent/SYD-1" },
+      },
     });
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_closed" });
   });
@@ -291,7 +304,9 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
   it("ignores a redelivered push with the same head sha", () => {
     const db = setup();
     const payload = {
-      ref: "refs/heads/agent/SYD-1", after: "deadbeef", commits: [{ message: "wip" }],
+      ref: "refs/heads/agent/SYD-1",
+      after: "deadbeef",
+      commits: [{ message: "wip" }],
     };
     handleGithubWebhook(db, "push", payload);
     const redelivery = handleGithubWebhook(db, "push", payload);
@@ -302,7 +317,9 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
   it("does not inflate the commit count when the same push is redelivered", () => {
     const db = setup();
     const payload = {
-      ref: "refs/heads/agent/SYD-1", after: "deadbeef", commits: [{ message: "one" }, { message: "two" }],
+      ref: "refs/heads/agent/SYD-1",
+      after: "deadbeef",
+      commits: [{ message: "one" }, { message: "two" }],
     };
     handleGithubWebhook(db, "push", payload);
     handleGithubWebhook(db, "push", payload);

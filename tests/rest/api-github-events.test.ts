@@ -121,8 +121,12 @@ describe("POST /github-events", () => {
         payload: {
           action: "closed",
           pull_request: {
-            number: 5, html_url: "https://github.com/acme/widgets/pull/5", merged: true,
-            head: { ref: "agent/SYD-1" }, title: "unrelated", body: null,
+            number: 5,
+            html_url: "https://github.com/acme/widgets/pull/5",
+            merged: true,
+            head: { ref: "agent/SYD-1" },
+            title: "unrelated",
+            body: null,
           },
         },
       }),

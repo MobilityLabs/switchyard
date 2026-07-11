@@ -16,7 +16,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("calls the registered handler on a 401 response", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(401, { error: "unauthorized" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(401, { error: "unauthorized" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -25,7 +28,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("does not call the handler on a non-401 error", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(500, { error: "boom" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(500, { error: "boom" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -34,7 +40,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("does not call the handler on success", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { id: 1 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(200, { id: 1 })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -43,7 +52,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("stops notifying once the handler is unregistered", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(401, { error: "unauthorized" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(401, { error: "unauthorized" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
     setUnauthorizedHandler(null);
@@ -53,7 +65,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("also notifies on a 401 from uploadAttachment's standalone fetch", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(401, { error: "unauthorized" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(401, { error: "unauthorized" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 

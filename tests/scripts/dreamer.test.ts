@@ -60,7 +60,11 @@ function runDreamer(dreamsDir: string, claudeBin: string, extraEnv: Record<strin
 
 // Same as runDreamer but without the default SWITCHYARD_TOKEN, so tests can
 // exercise the SWITCHYARD_TOKEN_FILE fallback (SYD-119) directly.
-function runDreamerNoTokenEnv(dreamsDir: string, claudeBin: string, extraEnv: Record<string, string> = {}) {
+function runDreamerNoTokenEnv(
+  dreamsDir: string,
+  claudeBin: string,
+  extraEnv: Record<string, string> = {},
+) {
   try {
     execFileSync("bash", [SCRIPT], {
       cwd: REPO_DIR,
@@ -172,7 +176,7 @@ describe("scripts/dreamer.sh SWITCHYARD_TOKEN_FILE fallback", () => {
     chmodSync(tokenFile, 0o600);
     const claude = writeStubClaude(
       binDir,
-      `printf 'token seen: %s\\n' "$SWITCHYARD_TOKEN" > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`
+      `printf 'token seen: %s\\n' "$SWITCHYARD_TOKEN" > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`,
     );
 
     const rc = runDreamerNoTokenEnv(dreamsDir, claude, { SWITCHYARD_TOKEN_FILE: tokenFile });
@@ -209,7 +213,7 @@ describe("scripts/dreamer.sh SWITCHYARD_TOKEN_FILE fallback", () => {
     chmodSync(tokenFile, 0o600);
     const claude = writeStubClaude(
       binDir,
-      `printf 'token seen: %s\\n' "$SWITCHYARD_TOKEN" > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`
+      `printf 'token seen: %s\\n' "$SWITCHYARD_TOKEN" > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`,
     );
 
     const rc = runDreamer(dreamsDir, claude, { SWITCHYARD_TOKEN_FILE: tokenFile });
