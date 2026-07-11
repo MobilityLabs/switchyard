@@ -13,12 +13,16 @@ export function buildAuthRoutes(db: Db) {
     const token = c.req.query("token");
     if (!token) return c.json({ error: "Missing token query parameter." }, 400);
     try {
-      const { sessionToken, actor } = redeemLoginLink(db, token);
+      const { sessionToken } = redeemLoginLink(db, token);
       setCookie(c, SESSION_COOKIE, sessionToken, {
         httpOnly: true, sameSite: "Lax", path: "/", maxAge: 30 * 24 * 3600,
         secure: process.env.SWITCHYARD_COOKIE_SECURE === "1",
       });
-      return c.json({ ok: true, actor: actor.name });
+      // Redirect immediately so the token doesn't linger in browser history
+      // or get replayed via Referer on whatever page loads next — the
+      // server access log for this request is the only place it's still
+      // visible, mitigated by single-use + the 15-min TTL.
+      return c.redirect("/", 302);
     } catch (err) {
       if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
       throw err;

@@ -42,8 +42,9 @@ afterAll(() => { server.close(); receiver.close(); });
 describe("plan 2 loop", () => {
   it("login link -> cookie -> full REST loop with triage gate and webhooks", async () => {
     const { path } = createLoginLink(db, "sean");
-    const login = await fetch(base + path);
-    expect(login.status).toBe(200);
+    const login = await fetch(base + path, { redirect: "manual" });
+    expect(login.status).toBe(302);
+    expect(login.headers.get("location")).toBe("/");
     const cookie = login.headers.get("set-cookie")!.split(";")[0];
 
     const agentH = { authorization: `Bearer ${agentToken}`, "content-type": "application/json" };

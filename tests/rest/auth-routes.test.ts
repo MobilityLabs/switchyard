@@ -12,8 +12,8 @@ describe("auth routes", () => {
     const { path } = createLoginLink(db, "sean");
 
     const res = await app.request(path);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, actor: "sean" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/");
     const cookie = res.headers.get("set-cookie")!;
     expect(cookie).toMatch(/switchyard_session=sys_/);
     expect(cookie).toMatch(/HttpOnly/i);
