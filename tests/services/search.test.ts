@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import type Database from "better-sqlite3";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -65,6 +66,26 @@ describe("searchIssues", () => {
     recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
     expect(searchIssues(db, { attention: "delivery_failed", projectKey: "HAND" })).toEqual([]);
     expect(searchIssues(db, { attention: "delivery_failed", projectKey: "AIPI" }).map((i) => i.ref)).toEqual(["AIPI-2"]);
+  });
+
+  it("issues a single query regardless of result-set size (SYD-143 — no per-row project SELECT)", () => {
+    for (let i = 0; i < 20; i++) {
+      createIssue(db, human, { projectKey: "AIPI", title: `Bulk issue ${i}` });
+    }
+    const client = (db as unknown as { $client: Database.Database }).$client;
+    const prepare = client.prepare.bind(client);
+    const calls: string[] = [];
+    client.prepare = ((sql: string) => {
+      calls.push(sql);
+      return prepare(sql);
+    }) as typeof client.prepare;
+    try {
+      const results = searchIssues(db, {});
+      expect(results.length).toBeGreaterThan(15);
+      expect(calls.filter((sql) => /select/i.test(sql))).toHaveLength(1);
+    } finally {
+      client.prepare = prepare;
+    }
   });
 
   it("treats %, _ and ~ in text as literals", () => {

@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { actors, issues, type Status } from "../db/schema.js";
-import { toView, type IssueView } from "./issues.js";
+import { actors, issues, projects, type Status } from "../db/schema.js";
+import { type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
 import { SwitchyardError } from "./errors.js";
 import { listAttentionByIssueId, type AttentionFlag } from "./attention.js";
@@ -60,11 +60,16 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
   // Triage is worked oldest-first (SYD-159) — humans clear the inbox in
   // filing order rather than always seeing whatever landed most recently.
   // Every other view keeps the newest-first default.
+  // Joined with projects (rather than mapping rows through toView) so this
+  // stays a single query regardless of result-set size (SYD-143) — toView
+  // does a per-row project SELECT, which is fine for a single issue but an
+  // N+1 here since board/triage views can return many rows.
   const rows = db
-    .select()
+    .select({ issue: issues, project: projects })
     .from(issues)
+    .innerJoin(projects, eq(issues.projectId, projects.id))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(filters.status === "triage" ? issues.id : desc(issues.id))
     .all();
-  return rows.map((r) => toView(db, r));
+  return rows.map((r): IssueView => ({ ...r.issue, ref: `${r.project.key}-${r.issue.number}` }));
 }
