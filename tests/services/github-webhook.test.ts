@@ -220,6 +220,85 @@ describe("handleGithubWebhook / push", () => {
   });
 });
 
+describe("handleGithubWebhook / idempotency (SYD-125)", () => {
+  it("ignores a redelivered gh_pr_opened for the same PR number", () => {
+    const db = setup();
+    const payload = {
+      action: "opened",
+      pull_request: {
+        number: 12, html_url: "https://github.com/acme/widgets/pull/12",
+        head: { ref: "agent/SYD-1" }, title: null, body: null,
+      },
+    };
+    const first = handleGithubWebhook(db, "pull_request", payload);
+    const redelivery = handleGithubWebhook(db, "pull_request", payload);
+    expect(first).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
+    expect(redelivery).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened", duplicate: true });
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
+  });
+
+  it("still records a close for a different PR number after an open was recorded", () => {
+    const db = setup();
+    handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      pull_request: { number: 12, html_url: "https://x/12", head: { ref: "agent/SYD-1" } },
+    });
+    const outcome = handleGithubWebhook(db, "pull_request", {
+      action: "closed",
+      pull_request: { number: 12, html_url: "https://x/12", merged: false, head: { ref: "agent/SYD-1" } },
+    });
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_closed" });
+  });
+
+  it("ignores a redelivered push with the same head sha", () => {
+    const db = setup();
+    const payload = {
+      ref: "refs/heads/agent/SYD-1", after: "deadbeef", commits: [{ message: "wip" }],
+    };
+    handleGithubWebhook(db, "push", payload);
+    const redelivery = handleGithubWebhook(db, "push", payload);
+    expect(redelivery).toMatchObject({ handled: true, duplicate: true });
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pushed")).toHaveLength(1);
+  });
+
+  it("does not inflate the commit count when the same push is redelivered", () => {
+    const db = setup();
+    const payload = {
+      ref: "refs/heads/agent/SYD-1", after: "deadbeef", commits: [{ message: "one" }, { message: "two" }],
+    };
+    handleGithubWebhook(db, "push", payload);
+    handleGithubWebhook(db, "push", payload);
+    const events = getActivity(db, "SYD-1").filter((a) => a.type === "gh_pushed");
+    expect(events).toHaveLength(1);
+    expect(events[0].payload).toMatchObject({ commitCount: 2 });
+  });
+
+  it("ignores a redelivered check_suite with the same head sha and conclusion", () => {
+    const db = setup();
+    const payload = {
+      action: "completed",
+      check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion: "success" },
+    };
+    handleGithubWebhook(db, "check_suite", payload);
+    const redelivery = handleGithubWebhook(db, "check_suite", payload);
+    expect(redelivery).toMatchObject({ handled: true, duplicate: true });
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_checks_passed")).toHaveLength(1);
+  });
+
+  it("records a failure and a later success for the same head sha as distinct events", () => {
+    const db = setup();
+    handleGithubWebhook(db, "check_suite", {
+      action: "completed",
+      check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion: "failure" },
+    });
+    const outcome = handleGithubWebhook(db, "check_suite", {
+      action: "completed",
+      check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion: "success" },
+    });
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_checks_passed" });
+  });
+});
+
 describe("handleGithubWebhook / unhandled event types", () => {
   it("reports unsupported for anything else", () => {
     const db = setup();

@@ -12,6 +12,7 @@
 // state transition like open/merged/closed, so it renders as a plain
 // activity-feed line instead of a strip badge.
 
+import { sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { getOrCreateActor } from "./actors.js";
 import { getIssue } from "./issues.js";
@@ -45,15 +46,41 @@ function resolveRef(branchCandidates: unknown[], textCandidates: unknown[] = [])
 }
 
 export type GithubWebhookOutcome =
-  | { handled: true; ref: string; type: string }
+  | { handled: true; ref: string; type: string; duplicate?: true }
   | { handled: false; reason: string };
 
-function record(db: Db, ref: string, type: string, payload: Record<string, unknown>): GithubWebhookOutcome {
+/**
+ * Dedupe key for a delivery: matches an existing event of the same type on
+ * the same issue whose payload already carries this JSON-path value. GitHub
+ * redelivers at-least-once and the SYD-71 poller can re-post a derived
+ * payload on a schedule, so without this every redelivery would append
+ * another gh_pr_opened/gh_pushed/etc and inflate push commit counts.
+ */
+function isDuplicate(db: Db, issueId: number, type: string, jsonPath: string, value: string | number | null): boolean {
+  if (value === null) return false;
+  const [row] = db.all<{ hit: number }>(sql`
+    SELECT 1 AS hit FROM events
+    WHERE issue_id = ${issueId} AND type = ${type} AND json_extract(payload, ${jsonPath}) = ${value}
+    LIMIT 1
+  `);
+  return !!row;
+}
+
+function record(
+  db: Db,
+  ref: string,
+  type: string,
+  payload: Record<string, unknown>,
+  dedupe?: { jsonPath: string; value: string | number | null }
+): GithubWebhookOutcome {
   let issueId: number;
   try {
     issueId = getIssue(db, ref).id;
   } catch {
     return { handled: false, reason: `no Switchyard issue matches ref ${ref}` };
+  }
+  if (dedupe && isDuplicate(db, issueId, type, dedupe.jsonPath, dedupe.value)) {
+    return { handled: true, ref, type, duplicate: true };
   }
   const actor = getOrCreateActor(db, GITHUB_ACTOR_NAME, "agent");
   recordEvent(db, { issueId, actorId: actor.id, type, payload });
@@ -69,13 +96,14 @@ function handlePullRequest(db: Db, payload: any): GithubWebhookOutcome {
   const prNumber = Number(pr.number);
   const url = String(pr.html_url ?? "");
 
+  const byPrNumber = { jsonPath: "$.prNumber", value: prNumber };
   if (payload.action === "opened") {
-    return record(db, ref, "gh_pr_opened", { prNumber, url, branch: pr.head?.ref ?? null });
+    return record(db, ref, "gh_pr_opened", { prNumber, url, branch: pr.head?.ref ?? null }, byPrNumber);
   }
   if (payload.action === "closed") {
     return pr.merged
-      ? record(db, ref, "gh_pr_merged", { prNumber, url, mergeSha: pr.merge_commit_sha ?? null })
-      : record(db, ref, "gh_pr_closed", { prNumber, url });
+      ? record(db, ref, "gh_pr_merged", { prNumber, url, mergeSha: pr.merge_commit_sha ?? null }, byPrNumber)
+      : record(db, ref, "gh_pr_closed", { prNumber, url }, byPrNumber);
   }
   return { handled: false, reason: `ignored pull_request action "${payload.action}"` };
 }
@@ -96,12 +124,14 @@ function handlePush(db: Db, payload: any): GithubWebhookOutcome {
   const ref = resolveRef([branch], messages);
   if (!ref) return { handled: false, reason: "no issue ref found in branch or commit messages" };
 
-  return record(db, ref, "gh_pushed", {
-    commitCount: commits.length,
-    headSha: typeof payload.after === "string" ? payload.after : null,
-    branch,
-    url: typeof payload.compare === "string" ? payload.compare : null,
-  });
+  const headSha = typeof payload.after === "string" ? payload.after : null;
+  return record(
+    db,
+    ref,
+    "gh_pushed",
+    { commitCount: commits.length, headSha, branch, url: typeof payload.compare === "string" ? payload.compare : null },
+    { jsonPath: "$.headSha", value: headSha }
+  );
 }
 
 function handleCheckSuite(db: Db, payload: any): GithubWebhookOutcome {
@@ -116,7 +146,8 @@ function handleCheckSuite(db: Db, payload: any): GithubWebhookOutcome {
 
   const conclusion = String(suite.conclusion ?? "");
   const type = conclusion === "success" ? "gh_checks_passed" : "gh_checks_failed";
-  return record(db, ref, type, { conclusion, headSha: suite.head_sha ?? null });
+  const headSha = suite.head_sha ?? null;
+  return record(db, ref, type, { conclusion, headSha }, { jsonPath: "$.headSha", value: headSha });
 }
 
 export function handleGithubWebhook(db: Db, githubEvent: string, payload: any): GithubWebhookOutcome {

@@ -6,6 +6,7 @@ import { SwitchyardError } from "./errors.js";
 import { getIssue, toView, type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
 import { recordEvent } from "./events.js";
+import { listOpenPrByIssueId } from "./pr-status.js";
 
 const CLOSED = ["done", "canceled"] as const;
 const PRIORITY_RANK = sql`CASE ${issues.priority}
@@ -152,23 +153,14 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
       JOIN issues b ON b.id = d.blocker_id
       WHERE d.blocked_id = ${issues.id} AND b.status NOT IN ('done', 'canceled')
     )`,
-    // SYD-99: don't recommend an issue whose prior claim already has an open
-    // PR in flight (e.g. released back to todo by a stale-claim sweep while
-    // its PR is still unmerged) — claimIssue would refuse it anyway.
-    sql`NOT EXISTS (
-      SELECT 1 FROM (
-        SELECT issue_id, MAX(id) AS eventId FROM events
-        WHERE type IN ('pr_opened', 'gh_pr_opened') AND issue_id = ${issues.id}
-        GROUP BY issue_id
-      ) latest
-      WHERE NOT EXISTS (
-        SELECT 1 FROM events e2
-        WHERE e2.issue_id = latest.issue_id
-          AND e2.type IN ('delivered', 'gh_pr_merged', 'gh_pr_closed')
-          AND e2.id > latest.eventId
-      )
-    )`,
   ];
+  // SYD-99: don't recommend an issue whose prior claim already has an open
+  // PR in flight (e.g. released back to todo by a stale-claim sweep while
+  // its PR is still unmerged) — claimIssue would refuse it anyway. Reuses
+  // getOpenPr's PR-number-matched close logic (SYD-125) instead of
+  // duplicating it here.
+  const openPrIssueIds = [...listOpenPrByIssueId(db).keys()];
+  if (openPrIssueIds.length > 0) conditions.push(notInArray(issues.id, openPrIssueIds));
   if (project) conditions.push(eq(issues.projectId, project.id));
   const candidates = db
     .select()
