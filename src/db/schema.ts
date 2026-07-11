@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, primaryKey, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const STATUSES = [
@@ -38,7 +38,7 @@ export const issues = sqliteTable("issues", {
   priority: text("priority", { enum: PRIORITIES }).notNull().default("none"),
   assigneeId: integer("assignee_id").references(() => actors.id),
   creatorId: integer("creator_id").notNull().references(() => actors.id),
-  parentId: integer("parent_id"),
+  parentId: integer("parent_id").references((): AnySQLiteColumn => issues.id),
   labels: text("labels", { mode: "json" }).$type<string[]>().notNull().default([]),
   sourceType: text("source_type", { enum: ["session", "todo", "ci", "manual"] }),
   sourceDetail: text("source_detail"),
