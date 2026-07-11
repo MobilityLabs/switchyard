@@ -116,6 +116,17 @@ export const githubRepos = sqliteTable("github_repos", {
   createdAt: integer("created_at").notNull().default(now()),
 });
 
+// Config knobs (SYD-154): rows exist only for values overriding the
+// compile-time registry default in src/services/settings.ts — "reset to
+// default" deletes the row. Not an events-table concern (same reasoning as
+// agent_sessions): settings are not issue history.
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value", { mode: "json" }).notNull(),
+  updatedAt: integer("updated_at").notNull().default(now()),
+  updatedByActorId: integer("updated_by_actor_id").references(() => actors.id),
+});
+
 // Live agent-session lifecycle (SYD-43): worker-process state (pid, exit
 // code), not issue history — hence a table, unlike progress notes which ride
 // the events table.
