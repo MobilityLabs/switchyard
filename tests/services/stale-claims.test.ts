@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
-import { events } from "../../src/db/schema.js";
+import { events, issues } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
@@ -101,6 +101,60 @@ describe("releaseStaleClaims", () => {
     expect(after.status).toBe("in_progress");
     expect(after.assigneeId).toBe(agent.id);
     expect(after.needsInput).toBe(true);
+  });
+
+  it("does not release an issue that escalated (needsInput) between the outer read and the update transaction", () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    const issue = getIssue(db, "AIPI-1");
+    ageAllEvents(db, issue.id, 5 * 3600);
+
+    // Simulate a second writer landing between releaseStaleClaims' outer read
+    // (which saw needsInput=false and decided to release) and its per-issue
+    // UPDATE transaction: the agent escalates right before the release lands.
+    const originalTransaction = db.transaction.bind(db);
+    const spy = vi.spyOn(db, "transaction").mockImplementationOnce((cb: Parameters<typeof db.transaction>[0]) => {
+      requestHumanInput(db, agent, "AIPI-1", "actually blocked on a decision");
+      return originalTransaction(cb);
+    });
+
+    const released = releaseStaleClaims(db);
+    spy.mockRestore();
+
+    expect(released).toBe(0);
+    const after = getIssue(db, "AIPI-1");
+    expect(after.status).toBe("in_progress");
+    expect(after.needsInput).toBe(true);
+    expect(after.assigneeId).toBe(agent.id);
+    const types = listIssueEvents(db, issue.id).map((e) => e.type);
+    expect(types).not.toContain("claim_released");
+  });
+
+  it("does not release an issue whose status changed between the outer read and the update transaction", () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    const issue = getIssue(db, "AIPI-1");
+    ageAllEvents(db, issue.id, 5 * 3600);
+
+    // Simulate a second writer (e.g. src/cli.ts on its own connection) moving
+    // the issue to in_review right before releaseStaleClaims' UPDATE lands.
+    const originalTransaction = db.transaction.bind(db);
+    const spy = vi.spyOn(db, "transaction").mockImplementationOnce((cb: Parameters<typeof db.transaction>[0]) => {
+      db.update(issues).set({ status: "in_review" }).where(eq(issues.id, issue.id)).run();
+      return originalTransaction(cb);
+    });
+
+    const released = releaseStaleClaims(db);
+    spy.mockRestore();
+
+    expect(released).toBe(0);
+    const after = getIssue(db, "AIPI-1");
+    expect(after.status).toBe("in_review");
+    expect(after.assigneeId).toBe(agent.id);
+    const types = listIssueEvents(db, issue.id).map((e) => e.type);
+    expect(types).not.toContain("claim_released");
   });
 
   it("respects a custom maxIdleSeconds", () => {

@@ -1,4 +1,4 @@
-import { eq, max } from "drizzle-orm";
+import { and, eq, max } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues, events } from "../db/schema.js";
 import { recordEvent } from "./events.js";
@@ -35,19 +35,32 @@ export function releaseStaleClaims(db: Db, maxIdleSeconds = 4 * 3600): number {
 
     const idleSeconds = now - newestCreatedAt;
     const actorId = issue.assigneeId ?? issue.creatorId;
-    db.transaction((tx) => {
-      tx.update(issues)
+    const wasReleased = db.transaction((tx) => {
+      // Re-assert status/needsInput inside the UPDATE's WHERE so a second writer
+      // (e.g. src/cli.ts's own connection) that claimed or escalated this issue
+      // between the read above and this transaction wins the race atomically —
+      // .changes === 0 means someone else touched it first, so we skip the event.
+      const result = tx
+        .update(issues)
         .set({ status: "todo", assigneeId: null, updatedAt: now })
-        .where(eq(issues.id, issue.id))
+        .where(
+          and(
+            eq(issues.id, issue.id),
+            eq(issues.status, "in_progress"),
+            eq(issues.needsInput, false),
+          ),
+        )
         .run();
+      if (result.changes === 0) return false;
       recordEvent(tx as Db, {
         issueId: issue.id,
         actorId,
         type: "claim_released",
         payload: { idleSeconds },
       });
+      return true;
     });
-    released++;
+    if (wasReleased) released++;
   }
   return released;
 }
