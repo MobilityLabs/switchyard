@@ -169,6 +169,16 @@ describe("validateWorkerConfig", () => {
       })).toEqual([]);
     });
 
+    it("accepts delivery.mode 'legacy' or 'queue' (SYD-164)", () => {
+      expect(validateWorkerConfig({ ...base, delivery: { mode: "legacy" } })).toEqual([]);
+      expect(validateWorkerConfig({ ...base, delivery: { mode: "queue" } })).toEqual([]);
+    });
+
+    it("rejects an unknown delivery.mode", () => {
+      const problems = validateWorkerConfig({ ...base, delivery: { mode: "yolo" } });
+      expect(problems.some((p) => p.includes("delivery.mode"))).toBe(true);
+    });
+
     it("accepts an absent delivery block", () => {
       expect(validateWorkerConfig(base)).toEqual([]);
     });

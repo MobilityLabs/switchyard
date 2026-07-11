@@ -112,6 +112,9 @@ export function validateWorkerConfig(raw: unknown): string[] {
           problems.push(`\`delivery.${key}\` must be true or false`);
         }
       }
+      if (d.mode !== undefined && d.mode !== "legacy" && d.mode !== "queue") {
+        problems.push('`delivery.mode` must be "legacy" or "queue"');
+      }
     }
   }
   if (

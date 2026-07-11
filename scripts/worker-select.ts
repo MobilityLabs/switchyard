@@ -107,8 +107,23 @@ export type DeliveryConfig = {
    * dispatch) instead of escalating straight to a human (default true).
    * SYD-100. Only takes effect when `containerized` is also set — resolution
    * needs the same clone-in/branch-out sandbox as ordinary work dispatch.
+   * Ignored under `mode: "queue"`, which never dispatches a resolver.
    */
   conflictResolution?: boolean;
+  /**
+   * Per-ref delivery flow (SYD-164). "legacy" (default) merges first and
+   * only rebases as a post-failure fallback (SYD-85) — a semantic conflict
+   * between concurrently-merged branches can land on main and only get
+   * caught after the fact, by the post-merge verify gate (SYD-78). "queue"
+   * rebases agent/<ref> onto current main and runs typecheck + tests on the
+   * REBASED tree before ever attempting the merge: a conflict or a failing
+   * verify bounces the ref (comment + delivery_failed, main untouched)
+   * instead of landing and being reported after the fact. No
+   * conflict-resolution session is dispatched in queue mode — a rebase
+   * conflict always bounces for re-dispatch. `autoRebase` is ignored under
+   * `mode: "queue"` (rebasing is the flow, not an optional fallback).
+   */
+  mode?: "legacy" | "queue";
 };
 
 export type GithubPollConfig = {
