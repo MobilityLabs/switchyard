@@ -69,6 +69,40 @@ describe("MCP read tools", () => {
     expect(JSON.parse(text(r)).ref).toBe("AIPI-1");
   });
 
+  it("recent_events returns the cross-issue feed newest-first", async () => {
+    const r = await client.callTool({ name: "recent_events", arguments: {} });
+    const body = JSON.parse(text(r));
+    expect(body.truncated).toBe(false);
+    expect(body.next_cursor).toBeNull();
+    expect(body.events.length).toBeGreaterThanOrEqual(2);
+    expect(body.events[0]).toMatchObject({ issue: "AIPI-1" });
+    // newest-first: the status-change event (to todo) comes back before the creation event
+    expect(body.events[0].type).not.toBe("created");
+    expect(body.events[body.events.length - 1].type).toBe("created");
+  });
+
+  it("recent_events honors since and before_id paging", async () => {
+    const all = JSON.parse(text(await client.callTool({ name: "recent_events", arguments: {} }))).events;
+    const cutoff = all[all.length - 1].createdAt;
+
+    const since = JSON.parse(
+      text(await client.callTool({ name: "recent_events", arguments: { since: cutoff } }))
+    );
+    expect(since.events.every((e: { createdAt: number }) => e.createdAt > cutoff)).toBe(true);
+
+    const page1 = JSON.parse(
+      text(await client.callTool({ name: "recent_events", arguments: { limit: 1 } }))
+    );
+    expect(page1.events).toHaveLength(1);
+    expect(page1.truncated).toBe(true);
+    expect(page1.next_cursor).toBe(page1.events[0].id);
+
+    const page2 = JSON.parse(
+      text(await client.callTool({ name: "recent_events", arguments: { limit: 1, before_id: page1.next_cursor } }))
+    );
+    expect(page2.events[0].id).toBeLessThan(page1.events[0].id);
+  });
+
   it("errors are agent-legible, not stack traces", async () => {
     const r = await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-99" } });
     expect(r.isError).toBe(true);
