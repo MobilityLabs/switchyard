@@ -119,7 +119,7 @@ describe("runVerification", () => {
     expect(result.ok).toBe(true);
     const calls = readFileSync(callsFile, "utf8").trim().split("\n");
     expect(calls).toEqual([
-      "npm ci NO_COLOR=",
+      "npm ci NO_COLOR=1",
       "npm run typecheck NO_COLOR=1",
       "npm run build:ui NO_COLOR=1",
       "npx vitest run NO_COLOR=1",
