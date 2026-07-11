@@ -90,7 +90,8 @@ export async function publishAgentBranch(
   repo: string,
   ref: string,
   issueTitle: string,
-  serverUrl: string
+  serverUrl: string,
+  exitCode: number | null = null
 ): Promise<PublishOutcome> {
   const branch = agentBranch(ref);
   try {
@@ -108,7 +109,7 @@ export async function publishAgentBranch(
     const url = await run("gh", buildPrViewUrlArgs(prNumber, ownerRepo), { cwd: GH_CWD });
     return { status: "already-open", prNumber, url };
   }
-  const url = await run("gh", buildPrCreateArgs(ref, issueTitle, serverUrl, ownerRepo), { cwd: GH_CWD });
+  const url = await run("gh", buildPrCreateArgs(ref, issueTitle, serverUrl, ownerRepo, exitCode), { cwd: GH_CWD });
   return { status: "opened", prNumber: parsePrNumberFromUrl(url), url };
 }
 

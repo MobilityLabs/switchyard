@@ -196,6 +196,30 @@ describe("argv builders", () => {
     expect(buildPrTitle("SYD-9", "A title")).toBe("SYD-9: A title");
     expect(buildPrBody("SYD-9", "http://host:3300")).toContain("http://host:3300/issue/SYD-9");
   });
+
+  it("buildPrBody omits the exit-code warning on a clean exit or when the code is unknown", () => {
+    expect(buildPrBody("SYD-9", "http://host:3300")).not.toContain("non-zero");
+    expect(buildPrBody("SYD-9", "http://host:3300", null)).not.toContain("non-zero");
+    expect(buildPrBody("SYD-9", "http://host:3300", 0)).not.toContain("non-zero");
+  });
+
+  it("buildPrBody flags a non-clean exit (SYD-118)", () => {
+    const body = buildPrBody("SYD-9", "http://host:3300", 1);
+    expect(body).toContain("non-zero code (1)");
+    expect(body).toContain("review carefully");
+  });
+
+  it("buildPrCreateArgs threads the exit code into the PR body", () => {
+    const args = buildPrCreateArgs("SYD-9", "A title", "http://host:3300", "MobilityLabs/switchyard", 1);
+    const bodyArg = args[args.indexOf("--body") + 1];
+    expect(bodyArg).toContain("non-zero code (1)");
+  });
+
+  it("buildPrCreateArgs defaults to no exit-code warning when omitted", () => {
+    const args = buildPrCreateArgs("SYD-9", "A title", "http://host:3300", "MobilityLabs/switchyard");
+    const bodyArg = args[args.indexOf("--body") + 1];
+    expect(bodyArg).not.toContain("non-zero");
+  });
 });
 
 describe("auto-rebase argv builders (SYD-85)", () => {
