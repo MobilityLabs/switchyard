@@ -100,7 +100,8 @@ function isReachable(db: Db, fromId: number, toId: number): boolean {
   const visited = new Set<number>([fromId]);
   const queue = [fromId];
   while (queue.length > 0) {
-    const x = queue.shift()!;
+    const x = queue.shift();
+    if (x === undefined) break; // unreachable: queue.length > 0 guarantees a value
     const successors = db
       .select({ blockedId: dependencies.blockedId })
       .from(dependencies)

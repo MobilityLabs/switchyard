@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
-import { loginLinks } from "../../src/db/schema.js";
+import { loginLinks, actors } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { setSetting } from "../../src/services/settings.js";
 import {
@@ -43,5 +44,15 @@ describe("auth", () => {
     expect(row.expiresAt).toBeGreaterThanOrEqual(before + 60);
     expect(row.expiresAt).toBeLessThan(before + 15 * 60); // well under the 15m default
     expect(token).toMatch(/^syl_[0-9a-f]{48}$/);
+  });
+
+  it("redeemLoginLink throws SwitchyardError instead of crashing if the actor was deleted from under the link (SYD-146)", () => {
+    const { token } = createLoginLink(db, "sean");
+    const sean = db.select().from(actors).where(eq(actors.name, "sean")).get()!;
+    // FK enforcement would normally block this; simulate the data drifting out
+    // from under the link so the missing-actor guard in redeemLoginLink is reachable.
+    (db as unknown as { $client: { pragma(source: string): unknown } }).$client.pragma("foreign_keys = OFF");
+    db.delete(actors).where(eq(actors.id, sean.id)).run();
+    expect(() => redeemLoginLink(db, token)).toThrowError(/references a missing actor/i);
   });
 });

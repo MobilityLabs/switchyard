@@ -37,7 +37,10 @@ export function redeemLoginLink(db: Db, token: string): { sessionToken: string; 
   db.insert(sessions)
     .values({ tokenHash: hashToken(sessionToken), actorId: row.actorId, expiresAt: nowSec() + SESSION_TTL })
     .run();
-  const a = db.select().from(actors).where(eq(actors.id, row.actorId)).get()!;
+  const a = db.select().from(actors).where(eq(actors.id, row.actorId)).get();
+  if (!a) {
+    throw new SwitchyardError(`Login link references a missing actor (id ${row.actorId}).`);
+  }
   return { sessionToken, actor: { id: a.id, name: a.name, type: a.type } };
 }
 
