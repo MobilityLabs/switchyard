@@ -14,6 +14,25 @@ export type Provenance = {
   url?: string;
 };
 
+/**
+ * Status changes an agent may make on its own, keyed by the issue's current
+ * status. Anything not listed — including any transition out of `triage` or
+ * `done`, or into `done` — is human-only (SYD-124: previously only those
+ * three special cases were gated, so e.g. an agent could push someone else's
+ * `todo` straight to `in_review`, or reopen a `done` issue). `assigneeOnly`
+ * transitions additionally require the actor to be the current assignee.
+ */
+const AGENT_STATUS_TRANSITIONS: Partial<Record<Status, { to: Status; assigneeOnly?: boolean }[]>> = {
+  todo: [{ to: "in_progress" }], // assignee handling is claimIssue/assertClaimable's job
+  in_progress: [
+    { to: "in_review", assigneeOnly: true },
+    { to: "todo", assigneeOnly: true }, // releasing your own claim
+  ],
+  in_review: [
+    { to: "in_progress", assigneeOnly: true }, // reopening your own work after feedback
+  ],
+};
+
 export const SUMMARY_MAX_LENGTH = 280;
 
 function checkSummaryLength(summary: string | null | undefined): void {
@@ -148,28 +167,26 @@ function assertClaimable(db: Db, actor: Actor, current: IssueView): void {
   }
 }
 
+/** Used by assigneeOnly entries in AGENT_STATUS_TRANSITIONS. */
+function assertAssignee(db: Db, actor: Actor, current: IssueView, toStatus: Status): void {
+  if (current.assigneeId === actor.id) return;
+  if (current.assigneeId === null) {
+    throw new SwitchyardError(
+      `${current.ref} isn't assigned to anyone — only the assignee can move it to "${toStatus}". Claim it first.`
+    );
+  }
+  const assignee = db.select().from(actorsTable).where(eq(actorsTable.id, current.assigneeId)).get();
+  throw new SwitchyardError(
+    `${current.ref} is assigned to ${assignee?.name ?? "another actor"} — only the assignee can move it to "${toStatus}".`
+  );
+}
+
 export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssueInput): IssueView {
   checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
     const current = getIssue(tx as Db, ref);
     const changes: Partial<typeof issues.$inferInsert> = {};
     const toRecord: { type: string; payload: Record<string, unknown> }[] = [];
-
-    if (patch.status === "in_progress" && actor.type === "agent") {
-      // Same gates claimIssue enforces — without this, a PATCH straight to
-      // in_progress would let an agent start work a human deliberately
-      // blocked behind another issue, or duplicate a claim/PR already in
-      // flight (SYD-99). Runs even when patch.status === current.status
-      // (i.e. the issue is already in_progress) so a second agent's redundant
-      // PATCH is refused instead of silently no-op'ing past the gate (SYD-111).
-      const blockers = getOpenBlockers(tx as Db, current.id);
-      if (blockers.length > 0) {
-        throw new SwitchyardError(
-          `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
-        );
-      }
-      assertClaimable(tx as Db, actor, current);
-    }
 
     if (patch.status !== undefined && patch.status !== current.status) {
       if (!STATUSES.includes(patch.status)) {
@@ -187,6 +204,20 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
           "Only humans move issues to done — comment your verification evidence and move it to in_review instead."
         );
       }
+      if (actor.type === "agent") {
+        if (current.status === "done") {
+          throw new SwitchyardError(`${ref} is done — only humans reopen a done issue.`);
+        }
+        const allowed = AGENT_STATUS_TRANSITIONS[current.status]?.find((t) => t.to === patch.status);
+        if (!allowed) {
+          throw new SwitchyardError(
+            `Agents can't move ${ref} from "${current.status}" to "${patch.status}" — that transition is human-only.`
+          );
+        }
+        if (allowed.assigneeOnly) {
+          assertAssignee(tx as Db, actor, current, patch.status);
+        }
+      }
       changes.status = patch.status;
       toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
       // Mirror claimIssue: a bare PATCH to in_progress on an unclaimed issue
@@ -199,6 +230,27 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
         toRecord.push({ type: "assigned", payload: { to: actor.name } });
       }
     }
+
+    if (patch.status === "in_progress" && actor.type === "agent") {
+      // Same gates claimIssue enforces — without this, a PATCH straight to
+      // in_progress would let an agent start work a human deliberately
+      // blocked behind another issue, or duplicate a claim/PR already in
+      // flight (SYD-99). Runs even when patch.status === current.status
+      // (i.e. the issue is already in_progress) so a second agent's redundant
+      // PATCH is refused instead of silently no-op'ing past the gate (SYD-111).
+      // Placed after the allow-list/assignee-only check above so reopening
+      // in_review -> in_progress as a non-assignee surfaces assertAssignee's
+      // "only the assignee" message rather than this gate's generic
+      // "already claimed" one (SYD-124).
+      const blockers = getOpenBlockers(tx as Db, current.id);
+      if (blockers.length > 0) {
+        throw new SwitchyardError(
+          `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
+        );
+      }
+      assertClaimable(tx as Db, actor, current);
+    }
+
     if (patch.priority !== undefined && patch.priority !== current.priority) {
       if (!PRIORITIES.includes(patch.priority)) {
         throw new SwitchyardError(
