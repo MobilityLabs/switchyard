@@ -707,6 +707,10 @@ export function buildDockerArgs(
     "--memory", CONTAINER_MEMORY_LIMIT,
     "--cpus", CONTAINER_CPU_LIMIT,
     "--pids-limit", CONTAINER_PIDS_LIMIT,
+    // SYD-117: the image already drops to a non-root user (Dockerfile.worker),
+    // this stops a compromised session from regaining privilege via a setuid
+    // binary even so.
+    "--security-opt", "no-new-privileges",
     "-v", `${project.repo}:/origin`,
     "-e", `ISSUE_REF=${issue.ref}`,
     "-e", `SWITCHYARD_URL=${config.url}`,
