@@ -16,6 +16,17 @@ npx tsx src/cli.ts switchyard.db add-actor claude/worker agent
 npm run dev   # listens on :3300
 ```
 
+## Configuration
+
+The server reads its config from environment variables (or a `.env` file,
+gitignored, kept `0600`). See `.env.example` for the full list with defaults:
+`SWITCHYARD_DB`, `PORT`, `ATTACHMENTS_DIR`, `SWITCHYARD_URL`,
+`GITHUB_WEBHOOK_SECRET`, `STALE_CLAIM_HOURS`.
+
+```bash
+cp .env.example .env
+```
+
 ## Connect Claude Code
 
 ```bash
