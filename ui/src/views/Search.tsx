@@ -4,7 +4,7 @@ import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { href } from "../router";
 import { STATUSES, type Status } from "../types";
-import { projectKeyFromRef } from "./IssueDetail";
+import { projectKeyFromRef } from "../refs";
 
 function formatUpdatedAt(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
