@@ -93,6 +93,7 @@ export type PlannedIssue = {
 export type ImportPlan = {
   orgName: string;
   projects: { key: string; name: string; exists: boolean }[];
+  stateMappings: { teamKey: string; name: string; type: string; status: Status }[];
   actors: { name: string; exists: boolean }[];
   issues: PlannedIssue[];
   dependencies: { blockerRef: string; blockedRef: string }[];
@@ -227,12 +228,59 @@ export function buildImportPlan(db: Db, data: LinearExport): ImportPlan {
   return {
     orgName: data.orgName,
     projects: plannedProjects,
+    stateMappings: data.states.map((s) => ({
+      teamKey: s.teamKey,
+      name: s.name,
+      type: s.type,
+      status: mapStateToStatus(s),
+    })),
     actors: plannedActors,
     issues: planned,
     dependencies,
     skipped,
     warnings,
   };
+}
+
+/** The dry-run output: the full mapping, human-readable. */
+export function renderPlan(plan: ImportPlan): string {
+  const lines: string[] = [`Import plan for ${plan.orgName}`, "", "Projects:"];
+  for (const p of plan.projects) {
+    lines.push(`  ${p.key}: ${p.name} ${p.exists ? "(exists)" : "(new)"}`);
+  }
+  lines.push("", "Workflow states:");
+  for (const s of plan.stateMappings) {
+    lines.push(`  [${s.teamKey}] ${s.name} (${s.type}) → ${s.status}`);
+  }
+  lines.push("", "Actors (tokenless humans until minted):");
+  for (const a of plan.actors) {
+    lines.push(`  ${a.name} ${a.exists ? "(exists)" : "(new)"}`);
+  }
+  lines.push("", `Issues to import: ${plan.issues.length}`);
+  for (const i of plan.issues) {
+    const extras = [
+      i.comments.length && `${i.comments.length} comments`,
+      i.fileAttachments.length && `${i.fileAttachments.length} files`,
+      i.linkAttachments.length && `${i.linkAttachments.length} links`,
+      i.parentRef && `child of ${i.parentRef}`,
+    ].filter(Boolean);
+    lines.push(
+      `  ${i.ref} [${i.status}/${i.priority}] ${i.title}${extras.length ? ` (${extras.join(", ")})` : ""}`,
+    );
+  }
+  if (plan.dependencies.length) {
+    lines.push("", "Dependencies:");
+    for (const d of plan.dependencies) lines.push(`  ${d.blockerRef} blocks ${d.blockedRef}`);
+  }
+  if (plan.skipped.length) {
+    lines.push("", `Skipped: ${plan.skipped.length}`);
+    for (const s of plan.skipped) lines.push(`  ${s.ref}: ${s.reason}`);
+  }
+  if (plan.warnings.length) {
+    lines.push("", "Warnings:");
+    for (const w of plan.warnings) lines.push(`  ${w}`);
+  }
+  return lines.join("\n");
 }
 
 // ---- Execution ----

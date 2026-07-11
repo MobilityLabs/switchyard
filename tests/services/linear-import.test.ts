@@ -16,6 +16,7 @@ import {
   buildImportPlan,
   executeImportPlan,
   extractUploadEmbeds,
+  renderPlan,
   type LinearExport,
 } from "../../src/services/linear-import.js";
 
@@ -269,6 +270,22 @@ describe("buildImportPlan", () => {
     data.teams[0] = { id: "t1", key: "E2", name: "Engineering" };
     expect(() => buildImportPlan(db, data)).toThrowError(SwitchyardError);
     expect(() => buildImportPlan(db, data)).toThrowError(/E2/);
+  });
+});
+
+describe("renderPlan", () => {
+  it("prints the full mapping: projects, states, actors, issues, deps, skips, warnings", () => {
+    const db = openDb(":memory:");
+    const plan = buildImportPlan(db, fixture());
+    const text = renderPlan(plan);
+
+    expect(text).toContain("Acme Inc.");
+    expect(text).toContain("ENG: Engineering (new)");
+    expect(text).toContain("[ENG] In Review (started) → in_review");
+    expect(text).toContain("sean (new)");
+    expect(text).toMatch(/ENG-1 \[done\/high\] Ship the widget/);
+    expect(text).toContain("ENG-2 blocks OPS-7");
+    expect(text).toMatch(/related/); // warning listed
   });
 });
 
