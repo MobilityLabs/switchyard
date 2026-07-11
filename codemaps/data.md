@@ -32,5 +32,5 @@ issue.sourceType = "session" | "todo" | "ci" | "manual" | null
 
 - Issue ref format: `<PROJECT_KEY>-<number>` (`SYD-49`); parse via `parseRef` in `services/issues.ts`.
 - `IssueView` = issue row + computed `ref` — the shape services/REST/MCP return.
-- Issue state is derived history: mutate only via services so the matching event is recorded.
+- Issue state lives in mutable columns on `issues`; mutate only via services so the matching `events` row is co-written for the audit trail. `events` is not a fold/replay source — `description_changed`/`summary_changed` even carry empty payloads. Only attention, open-PR, and unanswered-questions are actually log-derived (queried from `events`, so they can't drift).
 - Schema change flow: edit `schema.ts` → `npm run db:generate` → commit generated SQL in `drizzle/`.

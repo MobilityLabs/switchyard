@@ -41,7 +41,7 @@ Actor `type: human | agent` drives enforcement — triage exit, `done` transitio
 
 ## Key invariants
 
-- Issue state = fold over append-only `events` table; every mutation records an actor-attributed event.
+- Issue state = mutable columns on `issues`, with `events` a co-written append-only audit log (not a fold/replay source); every mutation records an actor-attributed event alongside the column write. Only attention, open-PR, and unanswered-questions signals are actually derived by querying `events` (`services/attention.ts`, `pr-status.ts`, `events.ts`).
 - Agent-filed issues always land in `triage` with required provenance (`sourceType`/`sourceDetail`/`sourceUrl`).
 - Merging agent branches is a human decision; containers only ever push `agent/<ref>`.
 - Tokens never appear in argv (env or file handoff only).
