@@ -34,7 +34,7 @@ function issue(o: Partial<Issue> = {}): Issue {
     assigneeId: null, creatorId: 1, labels: [],
     sourceType: null, sourceDetail: null, sourceUrl: null,
     needsInput: false, snoozedUntil: null,
-    createdAt: 0, updatedAt: 0, attention: null,
+    createdAt: 0, updatedAt: 0, attention: null, openPr: null,
     ...o,
   };
 }
