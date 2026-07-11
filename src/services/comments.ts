@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -30,7 +30,7 @@ export function addComment(db: Db, actor: Actor, ref: string, body: string): voi
       tx.update(issues)
         .set({
           needsInput: false,
-          updatedAt: Math.floor(Date.now() / 1000),
+          updatedAt: sql`(unixepoch())`,
           ...(release ? { status: "todo" as const, assigneeId: null } : {}),
         })
         .where(eq(issues.id, issue.id))
