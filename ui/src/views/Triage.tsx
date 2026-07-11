@@ -121,6 +121,9 @@ export function TriageRow({
   return (
     <article
       className={`triage-row${expanded ? " expanded" : ""}`}
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
       onClick={(e) => {
         // Row toggles expansion, but interactive controls inside it (row
         // actions, the ref/source links, the composer) keep native behavior,
@@ -130,6 +133,18 @@ export function TriageRow({
         if (target.closest("button, select, a, textarea, input")) return;
         if (target.closest(".triage-expanded")) return;
         onToggleExpand();
+      }}
+      onKeyDown={(e) => {
+        // Same interactive-descendant exclusions as onClick, so Tab-ing to
+        // a button/select/link and pressing Enter/Space triggers that
+        // control instead of also toggling the row.
+        const target = e.target as HTMLElement;
+        if (target.closest("button, select, a, textarea, input")) return;
+        if (target.closest(".triage-expanded")) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggleExpand();
+        }
       }}
     >
       <div className="triage-main">

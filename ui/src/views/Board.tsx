@@ -46,7 +46,7 @@ export default function Board({ project }: { project: string }) {
             >
               <h3>{LABELS[col]} <span className="badge">{cards.length}</span></h3>
               <div className="column-cards">
-                {cards.map((issue) => <Card key={issue.ref} issue={issue} />)}
+                {cards.map((issue) => <Card key={issue.ref} issue={issue} onMove={move} />)}
               </div>
             </div>
           );
@@ -56,17 +56,28 @@ export default function Board({ project }: { project: string }) {
   );
 }
 
-export function Card({ issue }: { issue: Issue }) {
+export function Card({ issue, onMove }: { issue: Issue; onMove?: (ref: string, status: Status) => void }) {
+  const open = () => navigate({ view: "issue", ref: issue.ref });
   return (
     <article
       className="card"
       draggable
+      role="button"
+      tabIndex={0}
       onDragStart={(e) => e.dataTransfer.setData("text/plain", issue.ref)}
       onClick={(e) => {
-        // Whole card opens the issue; anchors inside keep native behavior
-        // (the App-level interceptor handles the ref link itself).
-        if ((e.target as HTMLElement).closest("a")) return;
-        navigate({ view: "issue", ref: issue.ref });
+        // Whole card opens the issue; anchors and the move select inside it
+        // keep native behavior (the App-level interceptor handles the ref
+        // link itself).
+        if ((e.target as HTMLElement).closest("a, select")) return;
+        open();
+      }}
+      onKeyDown={(e) => {
+        if ((e.target as HTMLElement).closest("a, select")) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
       }}
     >
       <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
@@ -80,6 +91,18 @@ export function Card({ issue }: { issue: Issue }) {
         <div className="label-chips-ro">
           {issue.labels.map((l) => <span key={l} className="badge label-badge">{l}</span>)}
         </div>
+      )}
+      {onMove && (
+        // Keyboard/AT path for the status move that's otherwise drag-only (SYD-131).
+        <select
+          className="card-move"
+          aria-label={`Move ${issue.ref} to a different status`}
+          value={issue.status}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => onMove(issue.ref, e.target.value as Status)}
+        >
+          {BOARD_COLUMNS.map((c) => <option key={c} value={c}>{LABELS[c]}</option>)}
+        </select>
       )}
     </article>
   );

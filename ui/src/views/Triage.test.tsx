@@ -84,6 +84,66 @@ describe("TriageRow accept → todo", () => {
   });
 });
 
+// SYD-131: the row is the primary click target for expanding a triage item,
+// which previously had no keyboard/AT path at all.
+describe("TriageRow keyboard accessibility", () => {
+  async function renderRow(expanded: boolean, onToggleExpand: () => void): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await reactAct(async () => {
+      root.render(
+        <TriageRow
+          issue={ISSUE}
+          act={() => {}}
+          knownActorNames={[]}
+          expanded={expanded}
+          onToggleExpand={onToggleExpand}
+        />
+      );
+    });
+    return container;
+  }
+
+  it("is a focusable button target that reflects expanded state", async () => {
+    const container = await renderRow(false, () => {});
+    const row = container.querySelector(".triage-row")!;
+    expect(row.getAttribute("role")).toBe("button");
+    expect(row.getAttribute("tabIndex")).toBe("0");
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("toggles expansion on Enter", async () => {
+    let toggled = 0;
+    const container = await renderRow(false, () => { toggled += 1; });
+    const row = container.querySelector(".triage-row")!;
+    await reactAct(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(toggled).toBe(1);
+  });
+
+  it("toggles expansion on Space", async () => {
+    let toggled = 0;
+    const container = await renderRow(false, () => { toggled += 1; });
+    const row = container.querySelector(".triage-row")!;
+    await reactAct(async () => {
+      row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+    });
+    expect(toggled).toBe(1);
+  });
+
+  it("leaves toggling to the control when Enter originates from a nested button", async () => {
+    let toggled = 0;
+    const container = await renderRow(false, () => { toggled += 1; });
+    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
+    await reactAct(async () => {
+      acceptButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    expect(toggled).toBe(0);
+  });
+});
+
 // SYD-77: Triage is project-scoped like Board, with a null project meaning
 // "All projects" — both the main inbox poll and the needs-input lane must
 // respect the current scope.
