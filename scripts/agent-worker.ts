@@ -256,6 +256,41 @@ async function fetchUnansweredQuestions(config: WorkerConfig, token: string): Pr
   return rows.map((r) => r.ref);
 }
 
+/**
+ * Pre-claims `ref` on the tracker host-side, before dispatch (SYD-122):
+ * closes the cross-machine race where two workers (or a worker and a
+ * coordinating human session) both select the same unassigned todo and spin
+ * up sessions before either calls claim_issue — selection and claim are now
+ * atomic from this worker's side, not just from the dispatched session's.
+ * The session still calls claim_issue itself per the prompt, but that just
+ * reclaims the same actor's own issue at that point (a no-op check) since
+ * the session authenticates with this same worker's token.
+ *
+ * A refusal (already claimed, now blocked) means another actor won the race
+ * — logged and treated as "skip this ref", not an error: it needs no retry
+ * bookkeeping here, since the issue's assigneeId will be non-null on the
+ * next poll and selectDispatchable naturally stops offering it. Network/5xx
+ * failures still retry across a self-deploy restart via withRetry, same as
+ * the other tracker writes.
+ */
+async function claimIssueHost(config: WorkerConfig, token: string, ref: string): Promise<boolean> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/claim`;
+  try {
+    await withRetry(async () => {
+      const res = await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new HttpStatusError(res.status, await res.text());
+    });
+    return true;
+  } catch (err) {
+    if (err instanceof HttpStatusError && err.status < 500) {
+      console.log(`skipping ${ref}: lost the claim race (${err.message})`);
+    } else {
+      console.error(`could not claim ${ref} before dispatch: ${(err as Error).message}`);
+    }
+    return false;
+  }
+}
+
 export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
   const resumedPreamble = opts.resumed
     ? `You previously escalated a question on Switchyard issue ${ref} and a human ` +
@@ -628,8 +663,11 @@ async function drainUnansweredQuestions(config: WorkerConfig, token: string, opt
  * unanswered-questions recheck only runs for "answer"/"all". A single tick
  * gate still serializes the whole thing so an event-poll-triggered tick
  * never races the interval tick, regardless of which halves are active.
+ * Each selected issue is claimed host-side (claimIssueHost, SYD-122) right
+ * before dispatch — a claim refusal means another actor won the race, so
+ * that ref is skipped rather than dispatched.
  */
-async function runTick(config: WorkerConfig, token: string, role: WorkerRole, opts: { dryRun: boolean }): Promise<void> {
+export async function runTick(config: WorkerConfig, token: string, role: WorkerRole, opts: { dryRun: boolean }): Promise<void> {
   await runGated(tickGate, async () => {
     if (roleRunsCode(role)) {
       try {
@@ -638,13 +676,16 @@ async function runTick(config: WorkerConfig, token: string, role: WorkerRole, op
         const selected = selectDispatchable(eligible, config, active.keys());
 
         for (const issue of selected) {
+          if (opts.dryRun) {
+            recordAttempt(retryState, issue.ref, issue.updatedAt);
+            const resumed = resumeRefs.delete(issue.ref);
+            console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
+            continue;
+          }
+          if (!(await claimIssueHost(config, token, issue.ref))) continue;
           recordAttempt(retryState, issue.ref, issue.updatedAt);
           const resumed = resumeRefs.delete(issue.ref);
-          if (opts.dryRun) {
-            console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
-          } else {
-            dispatch(issue, config, token, role, { resumed });
-          }
+          dispatch(issue, config, token, role, { resumed });
         }
       } catch (err) {
         console.error(`poll failed: ${(err as Error).message}`);
