@@ -66,6 +66,13 @@ describe("endAgentSession", () => {
   it("rejects an unknown session id", () => {
     expect(() => endAgentSession(db, agent, 999, 0)).toThrow(/does not exist/);
   });
+
+  it("rejects ending a session owned by another agent actor (SYD-123)", () => {
+    const otherAgent = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
+    expect(() => endAgentSession(db, otherAgent, s.id, 0)).toThrow(/belongs to another actor/i);
+    expect(listAgentSessions(db, { ref: "SYD-1" })[0].status).toBe("running");
+  });
 });
 
 describe("listAgentSessions", () => {
