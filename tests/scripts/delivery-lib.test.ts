@@ -52,7 +52,6 @@ import {
   buildOriginMainShaArgs,
   isQueueMode,
   type DeliveryFeedEvent,
-  type QueueDecision,
 } from "../../scripts/delivery-lib.js";
 import type { WorkerConfig, WorkerProject } from "../../scripts/worker-select.js";
 
@@ -604,11 +603,12 @@ describe("queue-mode comments and argv builders (SYD-164)", () => {
     expect(buildOriginMainShaArgs()).toEqual(["rev-parse", "origin/main"]);
   });
 
-  it("conflict bounce names the files and prescribes regeneration, not repair", () => {
-    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "conflict", files: ["src/a.ts", "ui/b.tsx"] });
+  it("conflict bounce names the files, the PR-close prerequisite, and prescribes regeneration, not repair", () => {
+    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "conflict", files: ["src/a.ts", "ui/b.tsx"] }, 41);
     expect(body).toContain("agent/SYD-9");
     expect(body).toContain("src/a.ts");
     expect(body).toContain("ui/b.tsx");
+    expect(body).toContain("close PR #41");
     expect(body.toLowerCase()).toContain("re-dispatch");
     expect(body.toLowerCase().indexOf("re-dispatch")).toBeLessThan(body.toLowerCase().indexOf("fix agent/"));
     expect(body.toLowerCase()).toContain("recommended");
@@ -616,18 +616,18 @@ describe("queue-mode comments and argv builders (SYD-164)", () => {
   });
 
   it("verify-failed bounce carries the tail and says main was not touched", () => {
-    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "verify-failed", tail: "FAIL src/x.test.ts" });
+    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "verify-failed", tail: "FAIL src/x.test.ts" }, 41);
     expect(body).toContain("FAIL src/x.test.ts");
     expect(body.toLowerCase()).toContain("main was not");
   });
 
   it("main-hot bounce reports the attempt count", () => {
-    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "main-hot", attempts: 3 });
+    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "main-hot", attempts: 3 }, 41);
     expect(body).toContain("3");
   });
 
   it("no-branch bounce mentions the missing branch", () => {
-    expect(queueBounceComment("SYD-9", { kind: "bounce", reason: "no-branch" })).toContain("agent/SYD-9");
+    expect(queueBounceComment("SYD-9", { kind: "bounce", reason: "no-branch" }, 41)).toContain("agent/SYD-9");
   });
 
   it("event messages are one-line and reason-tagged", () => {

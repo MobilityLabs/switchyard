@@ -624,10 +624,12 @@ export function buildOriginMainShaArgs(): string[] {
 /** Queue mode (SYD-164): the human-facing bounce comment. One formatter per
  * reason keeps the copy testable; the shared framing states what the queue
  * did, that main was never touched, and what to do next. */
-export function queueBounceComment(ref: string, d: Extract<QueueDecision, { kind: "bounce" }>): string {
+export function queueBounceComment(
+  ref: string, d: Extract<QueueDecision, { kind: "bounce" }>, prNumber: number
+): string {
   const branch = agentBranch(ref);
   const header = `⛔ Delivery bounced — main was not touched.`;
-  const retry = `To retry: re-dispatch this issue so a fresh session regenerates the change against current ${MAIN_BRANCH} (recommended), or fix ${branch} by hand — the queue re-verifies whatever lands there. Then stamp done again or hit Retry delivery.`;
+  const retry = `To retry: close PR #${prNumber} first (dispatch and claim are blocked while an open agent PR exists), then re-dispatch this issue so a fresh session regenerates the change against current ${MAIN_BRANCH} (recommended) — or fix ${branch} by hand and hit Retry delivery; the queue re-verifies whatever lands there.`;
   switch (d.reason) {
     case "conflict":
       return [
@@ -673,7 +675,7 @@ export function queueBounceEventMessage(d: Extract<QueueDecision, { kind: "bounc
 /** Prefix for the delivery comment when queue mode landed the PR. */
 export function queueDeliveredNote(ref: string, attempts: number): string {
   const cycles = attempts > 1 ? ` (took ${attempts} rebase cycles — ${MAIN_BRANCH} was moving)` : "";
-  return `🔁 ${agentBranch(ref)} was rebased onto main and verified pre-merge by queue mode${cycles}.`;
+  return `🔁 ${agentBranch(ref)} was rebased onto ${MAIN_BRANCH} and verified pre-merge by queue mode${cycles}.`;
 }
 
 /** Queue mode flag (SYD-164). */

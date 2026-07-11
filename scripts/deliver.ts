@@ -151,6 +151,7 @@ async function finishDelivery(
   project: WorkerProject, cloneDir: string, config: WorkerConfig, token: string
 ): Promise<void> {
   let deploy: Awaited<ReturnType<typeof runDeploy>> = { ran: false };
+  // NB: deploy: false also skips the verify backstop — queue mode's residual check-then-merge race is unguarded in that config.
   if (config.delivery?.deploy !== false) {
     await ensureCleanClone(project.repo, cloneDir);
     if (config.delivery?.verify !== false) {
@@ -199,7 +200,7 @@ async function deliverViaQueue(
     }
     if (decision.kind === "bounce") {
       console.log(`${ref}: queue bounce (${decision.reason})`);
-      await postComment(config, token, ref, queueBounceComment(ref, decision));
+      await postComment(config, token, ref, queueBounceComment(ref, decision, prNumber));
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed", message: queueBounceEventMessage(decision),
       }).catch((e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`));
@@ -226,7 +227,11 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
       return;
     }
     if (dryRun) {
-      console.log(`[dry-run] would merge PR #${prNumber} for ${ref}, deploy from a clean clone, and comment`);
+      console.log(
+        isQueueMode(config)
+          ? `[dry-run] would rebase agent/${ref} onto main, verify, merge PR #${prNumber} on green, and deploy for ${ref}`
+          : `[dry-run] would merge PR #${prNumber} for ${ref}, deploy from a clean clone, and comment`
+      );
       return;
     }
 

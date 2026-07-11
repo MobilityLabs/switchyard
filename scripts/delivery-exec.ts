@@ -235,7 +235,9 @@ export async function runVerification(cloneDir: string): Promise<{ ok: boolean; 
  * script doesn't have. Force-push only ever targets `agent/<ref>` branches.
  * Callers are expected to invoke this at most once per merge failure (a
  * failed retry falls through to the normal failure path) so a stuck PR can't
- * loop rebase attempts forever.
+ * loop rebase attempts forever — except queue mode (SYD-164), which calls
+ * this in a loop bounded by QUEUE_MAX_REBASE_ATTEMPTS in deliver.ts's
+ * deliverViaQueue.
  */
 export async function attemptAutoRebase(repo: string, cloneDir: string, ref: string): Promise<RebaseOutcome> {
   await ensureCleanClone(repo, cloneDir);
