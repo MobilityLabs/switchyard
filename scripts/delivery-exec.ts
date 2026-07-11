@@ -42,8 +42,12 @@ import type { WorkerConfig, WorkerProject } from "./worker-select.js";
 
 const execFileP = promisify(execFile);
 
-export async function run(cmd: string, args: string[], opts: { cwd?: string } = {}): Promise<string> {
-  const { stdout } = await execFileP(cmd, args, { cwd: opts.cwd, maxBuffer: 10 * 1024 * 1024 });
+export async function run(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
+): Promise<string> {
+  const { stdout } = await execFileP(cmd, args, { cwd: opts.cwd, env: opts.env, maxBuffer: 10 * 1024 * 1024 });
   return stdout.trim();
 }
 
@@ -203,6 +207,14 @@ export async function installDeps(cloneDir: string): Promise<string> {
   return run("npm", ["ci"], { cwd: cloneDir });
 }
 
+/** Whether the clone's package.json declares the named npm script. */
+function hasScript(cloneDir: string, name: string): boolean {
+  const pkgPath = path.join(cloneDir, "package.json");
+  if (!existsSync(pkgPath)) return false;
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { scripts?: Record<string, string> };
+  return Boolean(pkg.scripts?.[name]);
+}
+
 /**
  * Post-merge verification gate (SYD-78): a PR is reviewed and green in
  * isolation, but nothing previously confirmed that main *after* the merge
@@ -212,11 +224,22 @@ export async function installDeps(cloneDir: string): Promise<string> {
  * caller's working tree.
  */
 export async function runVerification(cloneDir: string): Promise<{ ok: boolean; tail: string }> {
+  // NO_COLOR keeps tsc/vitest output plain at the source so failure tails
+  // pasted into issue comments carry no escape codes (tailOf's ANSI strip
+  // stays as a backstop — SYD-161).
+  const env = { ...process.env, NO_COLOR: "1" };
   try {
     await installDeps(cloneDir);
-    const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir });
-    const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir });
-    return { ok: true, tail: tailOf(`${typecheck}\n${tests}`) };
+    const steps = [await run("npm", ["run", "typecheck"], { cwd: cloneDir, env })];
+    // SYD-168: tests that serve the SPA (spa-fallback) need dist/ui to exist,
+    // and the clean clone never has it — skipping this failed the gate on
+    // every tree. Conditional because not every delivered project (NOC) has
+    // a build:ui script.
+    if (hasScript(cloneDir, "build:ui")) {
+      steps.push(await run("npm", ["run", "build:ui"], { cwd: cloneDir, env }));
+    }
+    steps.push(await run("npx", ["vitest", "run"], { cwd: cloneDir, env }));
+    return { ok: true, tail: tailOf(steps.join("\n")) };
   } catch (err) {
     const e = err as Error & { stdout?: string; stderr?: string };
     return { ok: false, tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
@@ -324,10 +347,7 @@ export async function dispatchConflictResolution(
 export async function runDeploy(
   cloneDir: string
 ): Promise<{ ran: false } | { ran: true; ok: boolean; tail: string }> {
-  const pkgPath = path.join(cloneDir, "package.json");
-  if (!existsSync(pkgPath)) return { ran: false };
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { scripts?: Record<string, string> };
-  if (!pkg.scripts?.deploy) return { ran: false };
+  if (!hasScript(cloneDir, "deploy")) return { ran: false };
   try {
     const out = await run("npm", ["run", "deploy"], { cwd: cloneDir });
     return { ran: true, ok: true, tail: tailOf(out) };

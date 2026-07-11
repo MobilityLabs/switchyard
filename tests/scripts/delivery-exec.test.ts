@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { installDeps, run, runGit, pollUntilMergeable } from "../../scripts/delivery-exec.js";
+import { installDeps, run, runGit, pollUntilMergeable, runVerification } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
 
@@ -82,6 +82,87 @@ describe("installDeps", () => {
     await installDeps(workspace);
 
     expect(existsSync(staleModule)).toBe(false);
+  });
+});
+
+// SYD-168: the verify gate ran typecheck + vitest but never build:ui, so
+// tests needing dist/ui (spa-fallback) failed on EVERY clean-clone tree and
+// no delivery could pass the queue-mode pre-merge gate. These run the real
+// runVerification against fake npm/npx shims on PATH that record each
+// invocation (and NO_COLOR, so verify tails are born plain — SYD-161).
+describe("runVerification", () => {
+  function makeWorkspace(scripts: Record<string, string>): string {
+    const workspace = mkdtempSync(path.join(tmpdir(), "delivery-exec-verify-"));
+    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-v", version: "1.0.0", scripts }));
+    return workspace;
+  }
+
+  /** Fake `npm` and `npx` that log `<cmd> <args> NO_COLOR=<value>` per call. */
+  function makeFakeNpm(binDir: string): { callsFile: string } {
+    const callsFile = path.join(binDir, "calls");
+    writeFileSync(callsFile, "");
+    for (const cmd of ["npm", "npx"]) {
+      const shim = path.join(binDir, cmd);
+      writeFileSync(shim, `#!/bin/sh\necho "${cmd} $* NO_COLOR=\${NO_COLOR:-unset}" >> "${callsFile}"\n`);
+      chmodSync(shim, 0o755);
+    }
+    return { callsFile };
+  }
+
+  async function withFakeBinOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  function loggedCommands(callsFile: string): string[] {
+    return readFileSync(callsFile, "utf8").trim().split("\n").map((l) => l.replace(/ NO_COLOR=\S+$/, ""));
+  }
+
+  it("runs build:ui between typecheck and the tests when the project has that script (SYD-168)", async () => {
+    const workspace = makeWorkspace({ typecheck: "x", "build:ui": "x", test: "x" });
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-npm-"));
+    const { callsFile } = makeFakeNpm(binDir);
+
+    const result = await withFakeBinOnPath(binDir, () => runVerification(workspace));
+
+    expect(result.ok).toBe(true);
+    expect(loggedCommands(callsFile)).toEqual([
+      "npm ci",
+      "npm run typecheck",
+      "npm run build:ui",
+      "npx vitest run",
+    ]);
+  });
+
+  it("skips build:ui for a project without that script instead of failing (NOC has none)", async () => {
+    const workspace = makeWorkspace({ typecheck: "x", test: "x" });
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-npm-"));
+    const { callsFile } = makeFakeNpm(binDir);
+
+    const result = await withFakeBinOnPath(binDir, () => runVerification(workspace));
+
+    expect(result.ok).toBe(true);
+    expect(loggedCommands(callsFile)).toEqual(["npm ci", "npm run typecheck", "npx vitest run"]);
+  });
+
+  it("sets NO_COLOR=1 for every verify step so tails are born plain (SYD-161)", async () => {
+    const workspace = makeWorkspace({ typecheck: "x", "build:ui": "x", test: "x" });
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-npm-"));
+    const { callsFile } = makeFakeNpm(binDir);
+
+    await withFakeBinOnPath(binDir, () => runVerification(workspace));
+
+    const lines = readFileSync(callsFile, "utf8").trim().split("\n");
+    // npm ci (installDeps) is shared with non-verify callers; the gate steps
+    // after it must all run colorless.
+    for (const line of lines.slice(1)) {
+      expect(line).toMatch(/ NO_COLOR=1$/);
+    }
   });
 });
 
