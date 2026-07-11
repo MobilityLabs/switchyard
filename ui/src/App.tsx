@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getMe, ApiError, listProjects } from "./api";
+import { getMe, ApiError, listProjects, setUnauthorizedHandler } from "./api";
 import type { Actor } from "./types";
 import { isKnownPath, navigate, useRoute } from "./router";
 import { usePoll } from "./usePoll";
@@ -48,6 +48,14 @@ export default function App() {
     getMe()
       .then((a) => { setMe(a); setAuthState("in"); })
       .catch((e) => setAuthState(e instanceof ApiError && e.status === 401 ? "out" : "error"));
+  }, []);
+
+  // Any request past boot — not just getMe() — can outlive the session
+  // cookie. Route every 401 through this so an expired session bounces back
+  // to the login screen instead of stranding the app on an error bar.
+  useEffect(() => {
+    setUnauthorizedHandler(() => { setMe(null); setAuthState("out"); });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   if (authState === "loading") return <main className="center"><p>Loading…</p></main>;

@@ -4,14 +4,29 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
+// Set by the app root so any request — not just the boot-time getMe() — can
+// flip global auth state to "logged out" the moment a session expires, e.g.
+// leaving a tab open past the cookie TTL. Without this, subsequent polls and
+// mutations just throw ApiError(401) and strand the UI on an error bar.
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  onUnauthorized = handler;
+}
+
+async function toApiError(res: Response): Promise<ApiError> {
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) onUnauthorized?.();
+  return new ApiError(res.status, (data as { error?: string }).error ?? `HTTP ${res.status}`);
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: { "content-type": "application/json", ...init?.headers },
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `HTTP ${res.status}`);
-  return data as T;
+  if (!res.ok) throw await toApiError(res);
+  return (await res.json().catch(() => ({}))) as T;
 }
 
 export const getMe = () => api<Actor>("/api/me");
@@ -72,7 +87,6 @@ export async function uploadAttachment(ref: string, file: File): Promise<{ id: n
   // Don't route this through api() — it forces a JSON content-type header,
   // which would stop the browser from setting the multipart boundary.
   const res = await fetch(`/api/issues/${ref}/attachments`, { method: "POST", body: form });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `HTTP ${res.status}`);
-  return data as { id: number; url: string; markdown: string };
+  if (!res.ok) throw await toApiError(res);
+  return (await res.json().catch(() => ({}))) as { id: number; url: string; markdown: string };
 }
