@@ -4,8 +4,16 @@ import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/index.js";
 import { SwitchyardError } from "../services/errors.js";
-import { authenticate, listActors, type Actor } from "../services/actors.js";
-import { getSessionActor } from "../services/auth.js";
+import {
+  authenticate,
+  createActor,
+  getActorById,
+  listActorsWithStatus,
+  rotateActorToken,
+  revokeActorToken,
+  type Actor,
+} from "../services/actors.js";
+import { createLoginLink, getSessionActor } from "../services/auth.js";
 import { createProject, listProjects } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
@@ -40,6 +48,7 @@ import {
   issueUpdateBody,
   commentBody,
   deliveryEventBody,
+  actorCreateBody,
   agentSessionCreateBody,
   agentSessionEndBody,
   progressNoteBody,
@@ -55,6 +64,12 @@ import {
 } from "./schemas.js";
 
 type Env = { Variables: { actor: Actor } };
+
+function requireHumanCaller(actor: Actor, action: string): void {
+  if (actor.type === "agent") {
+    throw new SwitchyardError(`Only humans can ${action} — ask a human to do this.`);
+  }
+}
 
 export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmentsDir()) {
   const app = new Hono<Env>();
@@ -85,7 +100,36 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/projects", (c) => c.json(listProjects(db)));
   app.post("/projects", body(projectBody), (c) => c.json(createProject(db, c.req.valid("json"))));
-  app.get("/actors", (c) => c.json(listActors(db)));
+  app.get("/actors", (c) => c.json(listActorsWithStatus(db)));
+
+  app.post("/actors", body(actorCreateBody), (c) => {
+    requireHumanCaller(c.var.actor, "create an actor");
+    return c.json(createActor(db, c.req.valid("json")));
+  });
+
+  const parseActorId = (idParam: string): number => {
+    const id = Number(idParam);
+    if (!Number.isInteger(id)) throw new SwitchyardError(`There is no actor with id ${idParam}.`);
+    return id;
+  };
+
+  app.post("/actors/:id/rotate-token", (c) =>
+    c.json(rotateActorToken(db, c.var.actor, parseActorId(c.req.param("id"))))
+  );
+
+  app.delete("/actors/:id/token", (c) => {
+    revokeActorToken(db, c.var.actor, parseActorId(c.req.param("id")));
+    return c.json({ ok: true });
+  });
+
+  app.post("/actors/:id/login-link", (c) => {
+    requireHumanCaller(c.var.actor, "mint a login link");
+    const target = getActorById(db, parseActorId(c.req.param("id")));
+    const { path } = createLoginLink(db, target.name);
+    const base = process.env.SWITCHYARD_URL ?? "http://localhost:3300";
+    return c.json({ url: base + path });
+  });
+
   app.get("/me", (c) => c.json(c.var.actor));
 
   app.get("/issues", (c) => {
