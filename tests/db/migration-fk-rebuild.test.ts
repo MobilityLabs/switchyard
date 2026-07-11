@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, cpSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, cpSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -25,9 +25,14 @@ describe("openDb migrations on a database with live referencing rows", () => {
     cpSync(path.resolve("drizzle"), truncated, { recursive: true });
     const journalPath = path.join(truncated, "meta", "_journal.json");
     const journal = JSON.parse(readFileSync(journalPath, "utf8")) as { entries: { tag: string }[] };
-    journal.entries = journal.entries.filter((e) => !e.tag.startsWith("0009"));
+    // Cut at 0009 AND everything after: drizzle applies pending migrations by
+    // timestamp order, so leaving a later migration (0010+) in the fixture
+    // would mark 0009 as already-covered and it would never run in openDb.
+    journal.entries = journal.entries.filter((e) => Number(e.tag.slice(0, 4)) < 9);
     writeFileSync(journalPath, JSON.stringify(journal));
-    rmSync(path.join(truncated, "0009_parallel_hulk.sql"));
+    for (const f of readdirSync(truncated)) {
+      if (/^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) >= 9) rmSync(path.join(truncated, f));
+    }
 
     const dbPath = path.join(work, "prod-like.db");
     const sqlite = new Database(dbPath);

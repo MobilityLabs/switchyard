@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, primaryKey, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, primaryKey, index, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const STATUSES = [
@@ -27,27 +27,35 @@ export const projects = sqliteTable("projects", {
   createdAt: integer("created_at").notNull().default(now()),
 });
 
-export const issues = sqliteTable("issues", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  projectId: integer("project_id").notNull().references(() => projects.id),
-  number: integer("number").notNull(),
-  title: text("title").notNull(),
-  description: text("description").notNull().default(""),
-  summary: text("summary"),
-  status: text("status", { enum: STATUSES }).notNull(),
-  priority: text("priority", { enum: PRIORITIES }).notNull().default("none"),
-  assigneeId: integer("assignee_id").references(() => actors.id),
-  creatorId: integer("creator_id").notNull().references(() => actors.id),
-  parentId: integer("parent_id").references((): AnySQLiteColumn => issues.id),
-  labels: text("labels", { mode: "json" }).$type<string[]>().notNull().default([]),
-  sourceType: text("source_type", { enum: ["session", "todo", "ci", "manual"] }),
-  sourceDetail: text("source_detail"),
-  sourceUrl: text("source_url"),
-  needsInput: integer("needs_input", { mode: "boolean" }).notNull().default(false),
-  snoozedUntil: integer("snoozed_until"),
-  createdAt: integer("created_at").notNull().default(now()),
-  updatedAt: integer("updated_at").notNull().default(now()),
-});
+export const issues = sqliteTable(
+  "issues",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id").notNull().references(() => projects.id),
+    number: integer("number").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    summary: text("summary"),
+    status: text("status", { enum: STATUSES }).notNull(),
+    priority: text("priority", { enum: PRIORITIES }).notNull().default("none"),
+    assigneeId: integer("assignee_id").references(() => actors.id),
+    creatorId: integer("creator_id").notNull().references(() => actors.id),
+    parentId: integer("parent_id").references((): AnySQLiteColumn => issues.id),
+    labels: text("labels", { mode: "json" }).$type<string[]>().notNull().default([]),
+    sourceType: text("source_type", { enum: ["session", "todo", "ci", "manual"] }),
+    sourceDetail: text("source_detail"),
+    sourceUrl: text("source_url"),
+    needsInput: integer("needs_input", { mode: "boolean" }).notNull().default(false),
+    snoozedUntil: integer("snoozed_until"),
+    createdAt: integer("created_at").notNull().default(now()),
+    updatedAt: integer("updated_at").notNull().default(now()),
+  },
+  (t) => [
+    index("issues_project_id_idx").on(t.projectId),
+    index("issues_status_idx").on(t.status),
+    index("issues_assignee_id_idx").on(t.assigneeId),
+  ]
+);
 
 export const dependencies = sqliteTable(
   "dependencies",
@@ -58,14 +66,18 @@ export const dependencies = sqliteTable(
   (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] })]
 );
 
-export const events = sqliteTable("events", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  issueId: integer("issue_id").notNull().references(() => issues.id),
-  actorId: integer("actor_id").notNull().references(() => actors.id),
-  type: text("type").notNull(),
-  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: integer("created_at").notNull().default(now()),
-});
+export const events = sqliteTable(
+  "events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueId: integer("issue_id").notNull().references(() => issues.id),
+    actorId: integer("actor_id").notNull().references(() => actors.id),
+    type: text("type").notNull(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: integer("created_at").notNull().default(now()),
+  },
+  (t) => [index("events_issue_id_idx").on(t.issueId)]
+);
 
 export const sessions = sqliteTable("sessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -130,14 +142,18 @@ export const settings = sqliteTable("settings", {
 // Live agent-session lifecycle (SYD-43): worker-process state (pid, exit
 // code), not issue history — hence a table, unlike progress notes which ride
 // the events table.
-export const agentSessions = sqliteTable("agent_sessions", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  issueId: integer("issue_id").notNull().references(() => issues.id),
-  actorId: integer("actor_id").notNull().references(() => actors.id),
-  mode: text("mode", { enum: ["cli", "container", "sdk"] }).notNull(),
-  pid: integer("pid"),
-  status: text("status", { enum: ["running", "exited"] }).notNull().default("running"),
-  exitCode: integer("exit_code"),
-  startedAt: integer("started_at").notNull().default(now()),
-  endedAt: integer("ended_at"),
-});
+export const agentSessions = sqliteTable(
+  "agent_sessions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueId: integer("issue_id").notNull().references(() => issues.id),
+    actorId: integer("actor_id").notNull().references(() => actors.id),
+    mode: text("mode", { enum: ["cli", "container", "sdk"] }).notNull(),
+    pid: integer("pid"),
+    status: text("status", { enum: ["running", "exited"] }).notNull().default("running"),
+    exitCode: integer("exit_code"),
+    startedAt: integer("started_at").notNull().default(now()),
+    endedAt: integer("ended_at"),
+  },
+  (t) => [index("agent_sessions_issue_id_idx").on(t.issueId)]
+);

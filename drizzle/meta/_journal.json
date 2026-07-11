@@ -71,6 +71,13 @@
       "when": 1783733983226,
       "tag": "0009_parallel_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1783801682877,
+      "tag": "0010_lovely_sway",
+      "breakpoints": true
     }
   ]
 }
