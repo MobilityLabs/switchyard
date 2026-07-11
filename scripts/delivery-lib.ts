@@ -281,6 +281,39 @@ export type RebaseOutcome =
   | { status: "verify-failed"; tail: string }
   | { status: "rebased"; sha: string };
 
+/** Queue mode (SYD-164): how many rebase→verify cycles to attempt when main
+ * keeps moving between our verify and our merge (e.g. a human merging by
+ * hand). Beyond this we bounce rather than chase a hot main forever. */
+export const QUEUE_MAX_REBASE_ATTEMPTS = 3;
+
+/** Queue mode (SYD-164): the planner's verdict after one rebase attempt.
+ * Pure so every branch of the delivery loop is unit-testable; deliver.ts
+ * only executes these, it never decides. Bouncing (comment + delivery_failed,
+ * PR left open for the author to regenerate) is the ONLY failure handling —
+ * queue mode never dispatches conflict-resolution sessions (research:
+ * docs/2026-07-10-merge-queue-research.md, "eject and bounce, never repair"). */
+export type QueueDecision =
+  | { kind: "merge" }
+  | { kind: "retry-rebase"; attempt: number }
+  | { kind: "bounce"; reason: "conflict"; files: string[] }
+  | { kind: "bounce"; reason: "verify-failed"; tail: string }
+  | { kind: "bounce"; reason: "no-branch" }
+  | { kind: "bounce"; reason: "main-hot"; attempts: number };
+
+export function decideQueueAction(
+  outcome: RebaseOutcome,
+  mainMoved: boolean,
+  attempt: number,
+  maxAttempts: number = QUEUE_MAX_REBASE_ATTEMPTS
+): QueueDecision {
+  if (outcome.status === "no-branch") return { kind: "bounce", reason: "no-branch" };
+  if (outcome.status === "conflict") return { kind: "bounce", reason: "conflict", files: outcome.files };
+  if (outcome.status === "verify-failed") return { kind: "bounce", reason: "verify-failed", tail: outcome.tail };
+  if (!mainMoved) return { kind: "merge" };
+  if (attempt >= maxAttempts) return { kind: "bounce", reason: "main-hot", attempts: attempt };
+  return { kind: "retry-rebase", attempt: attempt + 1 };
+}
+
 /** Outcome of a publishAgentBranch call (delivery-exec.ts) — pure so the log-line
  * formatting and the decision to emit a pr_opened event are both testable. */
 export type PublishOutcome =

@@ -43,7 +43,10 @@ import {
   parsePrNumberFromUrl,
   parseCursorText,
   tailOf,
+  decideQueueAction,
+  QUEUE_MAX_REBASE_ATTEMPTS,
   type DeliveryFeedEvent,
+  type QueueDecision,
 } from "../../scripts/delivery-lib.js";
 import type { WorkerConfig, WorkerProject } from "../../scripts/worker-select.js";
 
@@ -586,5 +589,46 @@ describe("tailOf", () => {
   it("strips ANSI escape sequences so issue comments stay readable", () => {
     const colored = "\x1b[31mFAIL\x1b[39m \x1b[2mtests/foo.test.ts\x1b[22m > \x1b[1mbar\x1b[0m\n\x1b[32m- Expected\x1b[39m false";
     expect(tailOf(colored)).toBe("FAIL tests/foo.test.ts > bar\n- Expected false");
+  });
+});
+
+describe("decideQueueAction (SYD-164 queue mode planner)", () => {
+  const rebased = { status: "rebased", sha: "abc123", mainSha: "main111" } as const;
+
+  it("merges when the rebase verified clean and main has not moved", () => {
+    expect(decideQueueAction(rebased, false, 1)).toEqual({ kind: "merge" });
+  });
+
+  it("retries the rebase when main moved and attempts remain", () => {
+    expect(decideQueueAction(rebased, true, 1)).toEqual({ kind: "retry-rebase", attempt: 2 });
+    expect(decideQueueAction(rebased, true, 2)).toEqual({ kind: "retry-rebase", attempt: 3 });
+  });
+
+  it("bounces as main-hot when main moved on the final attempt", () => {
+    expect(decideQueueAction(rebased, true, QUEUE_MAX_REBASE_ATTEMPTS)).toEqual({
+      kind: "bounce", reason: "main-hot", attempts: QUEUE_MAX_REBASE_ATTEMPTS,
+    });
+  });
+
+  it("bounces conflicts with the conflicted files — never a resolver dispatch", () => {
+    expect(decideQueueAction({ status: "conflict", files: ["src/a.ts"] }, false, 1)).toEqual({
+      kind: "bounce", reason: "conflict", files: ["src/a.ts"],
+    });
+  });
+
+  it("bounces a failed verify with the tail (semantic-conflict rejection)", () => {
+    expect(decideQueueAction({ status: "verify-failed", tail: "FAIL foo" }, false, 1)).toEqual({
+      kind: "bounce", reason: "verify-failed", tail: "FAIL foo",
+    });
+  });
+
+  it("bounces a missing agent branch", () => {
+    expect(decideQueueAction({ status: "no-branch" }, false, 1)).toEqual({
+      kind: "bounce", reason: "no-branch",
+    });
+  });
+
+  it("mainMoved is irrelevant for non-rebased outcomes", () => {
+    expect(decideQueueAction({ status: "no-branch" }, true, 3).kind).toBe("bounce");
   });
 });
