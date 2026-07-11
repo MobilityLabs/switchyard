@@ -19,7 +19,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
-const { buildPrompt, dispatch, dispatchAnswer, active, answerState, reportSessionStart, reportSessionEnd } =
+const { buildPrompt, dispatch, dispatchAnswer, active, answerState, reportSessionStart, reportSessionEnd, runTick } =
   await import("../../scripts/agent-worker.js");
 
 describe("buildPrompt", () => {
@@ -370,5 +370,88 @@ describe("dispatch session-reporting wiring (SYD-105)", () => {
     logSpy.mockRestore();
     errorSpy.mockRestore();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("host-side pre-claim before dispatch (SYD-122)", () => {
+  const config: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 2,
+    projects: { SYD: { repo: "/repo/syd" } },
+  };
+
+  /** Routes fetch by URL suffix so a single mock can stand in for both the
+   * ready-issues poll and the claim POST. */
+  function fetchRouter(routes: Record<string, { ok: boolean; status?: number; body?: unknown; text?: string }>) {
+    return vi.fn(async (url: string) => {
+      for (const [suffix, resp] of Object.entries(routes)) {
+        if (url.endsWith(suffix)) {
+          return { ok: resp.ok, status: resp.status ?? 200, json: async () => resp.body ?? {}, text: async () => resp.text ?? "" };
+        }
+      }
+      throw new Error(`unexpected fetch to ${url}`);
+    });
+  }
+
+  beforeEach(() => {
+    active.clear();
+    spawnMock.mockReset();
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("claims the issue host-side and dispatches once the claim succeeds", async () => {
+    const ref = "SYD-122a";
+    const issue = { ref, title: "pre-claim", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 1 };
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const fetchMock = fetchRouter({
+      "/api/issues?status=todo": { ok: true, body: [issue] },
+      [`/api/issues/${ref}/claim`]: { ok: true, body: {} },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runTick(config, "tok", "code", { dryRun: false });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3300/api/issues/SYD-122a/claim",
+      expect.objectContaining({ method: "POST", headers: expect.objectContaining({ authorization: "Bearer tok" }) }),
+    );
+    expect(spawnMock).toHaveBeenCalled();
+  });
+
+  it("skips dispatch when another actor already claimed the issue", async () => {
+    const ref = "SYD-122b";
+    const issue = { ref, title: "lost the race", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 1 };
+    const fetchMock = fetchRouter({
+      "/api/issues?status=todo": { ok: true, body: [issue] },
+      [`/api/issues/${ref}/claim`]: { ok: false, status: 400, text: `${ref} is already claimed by someone-else` },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await runTick(config, "tok", "code", { dryRun: false });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`skipping ${ref}: lost the claim race`));
+    logSpy.mockRestore();
+  });
+
+  it("dry-run never calls the claim endpoint", async () => {
+    const ref = "SYD-122c";
+    const issue = { ref, title: "dry run", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 1 };
+    const fetchMock = fetchRouter({ "/api/issues?status=todo": { ok: true, body: [issue] } });
+    vi.stubGlobal("fetch", fetchMock);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await runTick(config, "tok", "code", { dryRun: true });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    for (const call of fetchMock.mock.calls) {
+      expect(String(call[0])).not.toContain("/claim");
+    }
+    logSpy.mockRestore();
   });
 });
