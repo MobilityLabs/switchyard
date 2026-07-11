@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { installDeps, run, runGit } from "../../scripts/delivery-exec.js";
+import { installDeps, run, runGit, pollUntilMergeable } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
 
@@ -83,4 +83,83 @@ describe("installDeps", () => {
 
     expect(existsSync(staleModule)).toBe(false);
   });
+});
+
+// SYD-152: pollUntilMergeable (SYD-103) had no direct test coverage of its
+// own — only the pure shouldRetryMergePoll stop-condition was tested. These
+// exercise the real poll loop (including the sleep between UNKNOWN reads)
+// against a fake `gh` on PATH, since it's now called before every merge
+// attempt in deliver.ts, not just post-force-push retries.
+describe("pollUntilMergeable", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "delivery-exec-poll-test-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", ["-C", repo, "remote", "add", "origin", "https://github.com/acme/widgets.git"]);
+    return repo;
+  }
+
+  /** Fake `gh` that answers `pr view --json mergeable --jq .mergeable` with
+   * "UNKNOWN" for the first `unknownCount` invocations, then `finalState`. */
+  function makeFakeGh(binDir: string, unknownCount: number, finalState: string): { callsFile: string } {
+    const callsFile = path.join(binDir, "calls");
+    writeFileSync(callsFile, "0");
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      "#!/bin/sh\n" +
+        `n=$(cat "${callsFile}")\n` +
+        "n=$((n + 1))\n" +
+        `echo "$n" > "${callsFile}"\n` +
+        `if [ "$n" -le ${unknownCount} ]; then echo UNKNOWN; else echo ${finalState}; fi\n`
+    );
+    chmodSync(ghPath, 0o755);
+    return { callsFile };
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  it("returns immediately when gh already reports a definitive state", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-gh-"));
+    const { callsFile } = makeFakeGh(binDir, 0, "MERGEABLE");
+
+    const state = await withFakeGhOnPath(binDir, () => pollUntilMergeable(repo, 42));
+
+    expect(state).toBe("MERGEABLE");
+    expect(readFileSync(callsFile, "utf8").trim()).toBe("1");
+  });
+
+  it("stops immediately on a real CONFLICTING verdict without retrying", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-gh-"));
+    const { callsFile } = makeFakeGh(binDir, 0, "CONFLICTING");
+
+    const state = await withFakeGhOnPath(binDir, () => pollUntilMergeable(repo, 42));
+
+    expect(state).toBe("CONFLICTING");
+    expect(readFileSync(callsFile, "utf8").trim()).toBe("1");
+  });
+
+  it(
+    "polls past a transient UNKNOWN (e.g. right after a push) until gh settles",
+    async () => {
+      const repo = await makeRepoWithOrigin();
+      const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-gh-"));
+      const { callsFile } = makeFakeGh(binDir, 1, "MERGEABLE");
+
+      const state = await withFakeGhOnPath(binDir, () => pollUntilMergeable(repo, 42));
+
+      expect(state).toBe("MERGEABLE");
+      expect(readFileSync(callsFile, "utf8").trim()).toBe("2");
+    },
+    15000
+  );
 });
