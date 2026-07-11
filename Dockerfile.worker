@@ -14,4 +14,14 @@ COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
 COPY scripts/npm-ci-guard.mjs /npm-ci-guard.mjs
 RUN chmod +x /entry.sh
 
+# Run as the image's built-in non-root `node` user (SYD-117) instead of root
+# -- narrows the blast radius of a compromised session and, combined with
+# --security-opt no-new-privileges (worker-select.ts buildDockerArgs), stops
+# it from regaining privilege inside the container. /work is where
+# container-entry.sh clones the repo, so it needs to be node-writable before
+# we drop root.
+RUN mkdir -p /work && chown node:node /work
+USER node
+WORKDIR /work
+
 ENTRYPOINT ["/bin/sh", "/entry.sh"]

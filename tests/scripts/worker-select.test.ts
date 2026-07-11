@@ -586,6 +586,13 @@ describe("buildDockerArgs", () => {
     expect(pidsIndex).toBeGreaterThan(-1);
     expect(args[pidsIndex + 1]).toBe("512");
   });
+
+  it("disables privilege escalation inside the container (SYD-117)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    const optIndex = args.indexOf("--security-opt");
+    expect(optIndex).toBeGreaterThan(-1);
+    expect(args[optIndex + 1]).toBe("no-new-privileges");
+  });
 });
 
 describe("stackChecksEnv", () => {
