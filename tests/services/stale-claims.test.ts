@@ -41,7 +41,9 @@ describe("releaseStaleClaims", () => {
     expect(types.at(-1)).toBe("claim_released");
     const releaseEvent = listIssueEvents(db, issue.id).at(-1)!;
     expect(releaseEvent.payload).toMatchObject({ idleSeconds: expect.any(Number) });
-    expect((releaseEvent.payload as { idleSeconds: number }).idleSeconds).toBeGreaterThanOrEqual(5 * 3600);
+    expect((releaseEvent.payload as { idleSeconds: number }).idleSeconds).toBeGreaterThanOrEqual(
+      5 * 3600,
+    );
     expect(releaseEvent.actorName).toBe("claude/worker"); // attributed to assignee
   });
 

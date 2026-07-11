@@ -20,7 +20,10 @@ describe("auth routes", () => {
     const sessionToken = /switchyard_session=([^;]+)/.exec(cookie)![1];
     expect(getSessionActor(db, sessionToken)?.name).toBe("sean");
 
-    const out = await app.request("/auth/logout", { method: "POST", headers: { cookie: `switchyard_session=${sessionToken}` } });
+    const out = await app.request("/auth/logout", {
+      method: "POST",
+      headers: { cookie: `switchyard_session=${sessionToken}` },
+    });
     expect(out.status).toBe(200);
     expect(getSessionActor(db, sessionToken)).toBeNull();
   });
@@ -31,7 +34,9 @@ describe("auth routes", () => {
     expect((await app.request("/auth/login")).status).toBe(400);
     const res = await app.request("/auth/login?token=syl_deadbeef");
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/invalid, expired, or already used/i);
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /invalid, expired, or already used/i,
+    );
   });
 
   it("omits the Secure flag by default (plain-http deployments keep working)", async () => {

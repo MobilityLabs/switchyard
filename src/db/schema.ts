@@ -2,7 +2,13 @@ import { sqliteTable, text, integer, primaryKey } from "drizzle-orm/sqlite-core"
 import { sql } from "drizzle-orm";
 
 export const STATUSES = [
-  "triage", "backlog", "todo", "in_progress", "in_review", "done", "canceled",
+  "triage",
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "done",
+  "canceled",
 ] as const;
 export type Status = (typeof STATUSES)[number];
 
@@ -29,7 +35,9 @@ export const projects = sqliteTable("projects", {
 
 export const issues = sqliteTable("issues", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  projectId: integer("project_id").notNull().references(() => projects.id),
+  projectId: integer("project_id")
+    .notNull()
+    .references(() => projects.id),
   number: integer("number").notNull(),
   title: text("title").notNull(),
   description: text("description").notNull().default(""),
@@ -37,7 +45,9 @@ export const issues = sqliteTable("issues", {
   status: text("status", { enum: STATUSES }).notNull(),
   priority: text("priority", { enum: PRIORITIES }).notNull().default("none"),
   assigneeId: integer("assignee_id").references(() => actors.id),
-  creatorId: integer("creator_id").notNull().references(() => actors.id),
+  creatorId: integer("creator_id")
+    .notNull()
+    .references(() => actors.id),
   parentId: integer("parent_id"),
   labels: text("labels", { mode: "json" }).$type<string[]>().notNull().default([]),
   sourceType: text("source_type", { enum: ["session", "todo", "ci", "manual"] }),
@@ -52,16 +62,24 @@ export const issues = sqliteTable("issues", {
 export const dependencies = sqliteTable(
   "dependencies",
   {
-    blockerId: integer("blocker_id").notNull().references(() => issues.id),
-    blockedId: integer("blocked_id").notNull().references(() => issues.id),
+    blockerId: integer("blocker_id")
+      .notNull()
+      .references(() => issues.id),
+    blockedId: integer("blocked_id")
+      .notNull()
+      .references(() => issues.id),
   },
-  (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] })]
+  (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] })],
 );
 
 export const events = sqliteTable("events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  issueId: integer("issue_id").notNull().references(() => issues.id),
-  actorId: integer("actor_id").notNull().references(() => actors.id),
+  issueId: integer("issue_id")
+    .notNull()
+    .references(() => issues.id),
+  actorId: integer("actor_id")
+    .notNull()
+    .references(() => actors.id),
   type: text("type").notNull(),
   payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
   createdAt: integer("created_at").notNull().default(now()),
@@ -70,7 +88,9 @@ export const events = sqliteTable("events", {
 export const sessions = sqliteTable("sessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   tokenHash: text("token_hash").notNull().unique(),
-  actorId: integer("actor_id").notNull().references(() => actors.id),
+  actorId: integer("actor_id")
+    .notNull()
+    .references(() => actors.id),
   expiresAt: integer("expires_at").notNull(),
   createdAt: integer("created_at").notNull().default(now()),
 });
@@ -78,7 +98,9 @@ export const sessions = sqliteTable("sessions", {
 export const loginLinks = sqliteTable("login_links", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   tokenHash: text("token_hash").notNull().unique(),
-  actorId: integer("actor_id").notNull().references(() => actors.id),
+  actorId: integer("actor_id")
+    .notNull()
+    .references(() => actors.id),
   expiresAt: integer("expires_at").notNull(),
   usedAt: integer("used_at"),
   createdAt: integer("created_at").notNull().default(now()),
@@ -86,8 +108,12 @@ export const loginLinks = sqliteTable("login_links", {
 
 export const attachments = sqliteTable("attachments", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  issueId: integer("issue_id").notNull().references(() => issues.id),
-  actorId: integer("actor_id").notNull().references(() => actors.id),
+  issueId: integer("issue_id")
+    .notNull()
+    .references(() => issues.id),
+  actorId: integer("actor_id")
+    .notNull()
+    .references(() => actors.id),
   filename: text("filename").notNull(),
   contentType: text("content_type").notNull(),
   size: integer("size").notNull(),
@@ -132,11 +158,17 @@ export const settings = sqliteTable("settings", {
 // the events table.
 export const agentSessions = sqliteTable("agent_sessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  issueId: integer("issue_id").notNull().references(() => issues.id),
-  actorId: integer("actor_id").notNull().references(() => actors.id),
+  issueId: integer("issue_id")
+    .notNull()
+    .references(() => issues.id),
+  actorId: integer("actor_id")
+    .notNull()
+    .references(() => actors.id),
   mode: text("mode", { enum: ["cli", "container", "sdk"] }).notNull(),
   pid: integer("pid"),
-  status: text("status", { enum: ["running", "exited"] }).notNull().default("running"),
+  status: text("status", { enum: ["running", "exited"] })
+    .notNull()
+    .default("running"),
   exitCode: integer("exit_code"),
   startedAt: integer("started_at").notNull().default(now()),
   endedAt: integer("ended_at"),

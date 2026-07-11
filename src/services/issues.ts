@@ -1,6 +1,14 @@
 import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { issues, projects, actors as actorsTable, STATUSES, PRIORITIES, type Status, type Priority } from "../db/schema.js";
+import {
+  issues,
+  projects,
+  actors as actorsTable,
+  STATUSES,
+  PRIORITIES,
+  type Status,
+  type Priority,
+} from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
@@ -22,23 +30,24 @@ export type Provenance = {
  * `todo` straight to `in_review`, or reopen a `done` issue). `assigneeOnly`
  * transitions additionally require the actor to be the current assignee.
  */
-const AGENT_STATUS_TRANSITIONS: Partial<Record<Status, { to: Status; assigneeOnly?: boolean }[]>> = {
-  todo: [{ to: "in_progress" }], // assignee handling is claimIssue/assertClaimable's job
-  in_progress: [
-    { to: "in_review", assigneeOnly: true },
-    { to: "todo", assigneeOnly: true }, // releasing your own claim
-  ],
-  in_review: [
-    { to: "in_progress", assigneeOnly: true }, // reopening your own work after feedback
-  ],
-};
+const AGENT_STATUS_TRANSITIONS: Partial<Record<Status, { to: Status; assigneeOnly?: boolean }[]>> =
+  {
+    todo: [{ to: "in_progress" }], // assignee handling is claimIssue/assertClaimable's job
+    in_progress: [
+      { to: "in_review", assigneeOnly: true },
+      { to: "todo", assigneeOnly: true }, // releasing your own claim
+    ],
+    in_review: [
+      { to: "in_progress", assigneeOnly: true }, // reopening your own work after feedback
+    ],
+  };
 
 export const SUMMARY_MAX_LENGTH = 280;
 
 function checkSummaryLength(summary: string | null | undefined): void {
   if (summary != null && summary.length > SUMMARY_MAX_LENGTH) {
     throw new SwitchyardError(
-      `Summary is ${summary.length} characters — summaries must be ${SUMMARY_MAX_LENGTH} or fewer. Keep it to one or two sentences; put the rest in the description.`
+      `Summary is ${summary.length} characters — summaries must be ${SUMMARY_MAX_LENGTH} or fewer. Keep it to one or two sentences; put the rest in the description.`,
     );
   }
 }
@@ -60,7 +69,7 @@ export function parseRef(ref: string): { key: string; number: number } {
   const m = /^([A-Z]{2,10})-(\d+)$/.exec(ref);
   if (!m) {
     throw new SwitchyardError(
-      `"${ref}" is not an issue ref — use the form <PROJECT_KEY>-<number>, like "AIPI-42".`
+      `"${ref}" is not an issue ref — use the form <PROJECT_KEY>-<number>, like "AIPI-42".`,
     );
   }
   return { key: m[1], number: Number(m[2]) };
@@ -81,7 +90,7 @@ export function getIssue(db: Db, ref: string): IssueView {
     .get();
   if (!row) {
     throw new SwitchyardError(
-      `Issue ${ref} does not exist — call search_issues to find valid issues.`
+      `Issue ${ref} does not exist — call search_issues to find valid issues.`,
     );
   }
   return toView(db, row);
@@ -91,18 +100,16 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
   if (actor.type === "agent" && !input.provenance) {
     throw new SwitchyardError(
       "Agent-created issues require provenance — pass sourceType " +
-        '("session" | "todo" | "ci" | "manual") plus a detail (e.g. "src/api.ts:88" or a session id) or url.'
+        '("session" | "todo" | "ci" | "manual") plus a detail (e.g. "src/api.ts:88" or a session id) or url.',
     );
   }
   if (actor.type === "agent" && !input.description?.trim()) {
     throw new SwitchyardError(
-      "Agent-filed issues need a description a human can triage from — say what's wrong, why it matters, and what you suggest doing."
+      "Agent-filed issues need a description a human can triage from — say what's wrong, why it matters, and what you suggest doing.",
     );
   }
   if (input.provenance?.url && !/^https?:\/\//.test(input.provenance.url)) {
-    throw new SwitchyardError(
-      `Provenance url must be http(s) — got "${input.provenance.url}".`
-    );
+    throw new SwitchyardError(`Provenance url must be http(s) — got "${input.provenance.url}".`);
   }
   checkSummaryLength(input.summary);
   return db.transaction((tx) => {
@@ -154,15 +161,19 @@ export type UpdateIssueInput = {
 function assertClaimable(db: Db, actor: Actor, current: IssueView): void {
   if (current.assigneeId === actor.id) return;
   if (current.assigneeId !== null) {
-    const assignee = db.select().from(actorsTable).where(eq(actorsTable.id, current.assigneeId)).get();
+    const assignee = db
+      .select()
+      .from(actorsTable)
+      .where(eq(actorsTable.id, current.assigneeId))
+      .get();
     throw new SwitchyardError(
-      `${current.ref} is already claimed by ${assignee?.name ?? "another actor"} — check with them before starting duplicate work, or call next_task for another issue.`
+      `${current.ref} is already claimed by ${assignee?.name ?? "another actor"} — check with them before starting duplicate work, or call next_task for another issue.`,
     );
   }
   const openPr = getOpenPr(db, current.id);
   if (openPr) {
     throw new SwitchyardError(
-      `${current.ref} already has an open PR (#${openPr.prNumber}: ${openPr.url}) from a prior claim — check it before starting duplicate work, or call next_task for another issue.`
+      `${current.ref} already has an open PR (#${openPr.prNumber}: ${openPr.url}) from a prior claim — check it before starting duplicate work, or call next_task for another issue.`,
     );
   }
 }
@@ -172,12 +183,16 @@ function assertAssignee(db: Db, actor: Actor, current: IssueView, toStatus: Stat
   if (current.assigneeId === actor.id) return;
   if (current.assigneeId === null) {
     throw new SwitchyardError(
-      `${current.ref} isn't assigned to anyone — only the assignee can move it to "${toStatus}". Claim it first.`
+      `${current.ref} isn't assigned to anyone — only the assignee can move it to "${toStatus}". Claim it first.`,
     );
   }
-  const assignee = db.select().from(actorsTable).where(eq(actorsTable.id, current.assigneeId)).get();
+  const assignee = db
+    .select()
+    .from(actorsTable)
+    .where(eq(actorsTable.id, current.assigneeId))
+    .get();
   throw new SwitchyardError(
-    `${current.ref} is assigned to ${assignee?.name ?? "another actor"} — only the assignee can move it to "${toStatus}".`
+    `${current.ref} is assigned to ${assignee?.name ?? "another actor"} — only the assignee can move it to "${toStatus}".`,
   );
 }
 
@@ -191,27 +206,29 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
     if (patch.status !== undefined && patch.status !== current.status) {
       if (!STATUSES.includes(patch.status)) {
         throw new SwitchyardError(
-          `"${patch.status}" is not a status — valid statuses are: ${STATUSES.join(", ")}.`
+          `"${patch.status}" is not a status — valid statuses are: ${STATUSES.join(", ")}.`,
         );
       }
       if (current.status === "triage" && actor.type === "agent") {
         throw new SwitchyardError(
-          `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`
+          `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`,
         );
       }
       if (patch.status === "done" && actor.type === "agent") {
         throw new SwitchyardError(
-          "Only humans move issues to done — comment your verification evidence and move it to in_review instead."
+          "Only humans move issues to done — comment your verification evidence and move it to in_review instead.",
         );
       }
       if (actor.type === "agent") {
         if (current.status === "done") {
           throw new SwitchyardError(`${ref} is done — only humans reopen a done issue.`);
         }
-        const allowed = AGENT_STATUS_TRANSITIONS[current.status]?.find((t) => t.to === patch.status);
+        const allowed = AGENT_STATUS_TRANSITIONS[current.status]?.find(
+          (t) => t.to === patch.status,
+        );
         if (!allowed) {
           throw new SwitchyardError(
-            `Agents can't move ${ref} from "${current.status}" to "${patch.status}" — that transition is human-only.`
+            `Agents can't move ${ref} from "${current.status}" to "${patch.status}" — that transition is human-only.`,
           );
         }
         if (allowed.assigneeOnly) {
@@ -219,13 +236,20 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
         }
       }
       changes.status = patch.status;
-      toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
+      toRecord.push({
+        type: "status_changed",
+        payload: { from: current.status, to: patch.status },
+      });
       // Mirror claimIssue: a bare PATCH to in_progress on an unclaimed issue
       // must assign the caller, or a second actor's identical PATCH would
       // pass assertClaimable (assigneeId still null) and both would believe
       // they own it (SYD-111 — the SYD-93 double-work gap, reachable via
       // update_issue instead of claim_issue).
-      if (patch.status === "in_progress" && current.assigneeId === null && patch.assigneeName === undefined) {
+      if (
+        patch.status === "in_progress" &&
+        current.assigneeId === null &&
+        patch.assigneeName === undefined
+      ) {
         changes.assigneeId = actor.id;
         toRecord.push({ type: "assigned", payload: { to: actor.name } });
       }
@@ -245,7 +269,7 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       const blockers = getOpenBlockers(tx as Db, current.id);
       if (blockers.length > 0) {
         throw new SwitchyardError(
-          `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
+          `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`,
         );
       }
       assertClaimable(tx as Db, actor, current);
@@ -254,11 +278,14 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
     if (patch.priority !== undefined && patch.priority !== current.priority) {
       if (!PRIORITIES.includes(patch.priority)) {
         throw new SwitchyardError(
-          `"${patch.priority}" is not a priority — valid priorities are: ${PRIORITIES.join(", ")}.`
+          `"${patch.priority}" is not a priority — valid priorities are: ${PRIORITIES.join(", ")}.`,
         );
       }
       changes.priority = patch.priority;
-      toRecord.push({ type: "priority_changed", payload: { from: current.priority, to: patch.priority } });
+      toRecord.push({
+        type: "priority_changed",
+        payload: { from: current.priority, to: patch.priority },
+      });
     }
     if (patch.title !== undefined && patch.title !== current.title) {
       changes.title = patch.title;
@@ -276,9 +303,13 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       patch.labels !== undefined &&
       JSON.stringify([...patch.labels].sort()) !== JSON.stringify([...current.labels].sort())
     ) {
-      if (actor.type === "agent" && patch.labels.includes("auto") && !current.labels.includes("auto")) {
+      if (
+        actor.type === "agent" &&
+        patch.labels.includes("auto") &&
+        !current.labels.includes("auto")
+      ) {
         throw new SwitchyardError(
-          `Only humans apply the "auto" label — it opts an issue into unattended dispatch.`
+          `Only humans apply the "auto" label — it opts an issue into unattended dispatch.`,
         );
       }
       changes.labels = patch.labels;
@@ -287,10 +318,14 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
     if (patch.assigneeName !== undefined) {
       let assigneeId: number | null = null;
       if (patch.assigneeName !== null) {
-        const a = tx.select().from(actorsTable).where(eq(actorsTable.name, patch.assigneeName)).get();
+        const a = tx
+          .select()
+          .from(actorsTable)
+          .where(eq(actorsTable.name, patch.assigneeName))
+          .get();
         if (!a) {
           throw new SwitchyardError(
-            `There is no actor named "${patch.assigneeName}" — check the name and try again.`
+            `There is no actor named "${patch.assigneeName}" — check the name and try again.`,
           );
         }
         assigneeId = a.id;
@@ -321,7 +356,7 @@ export function claimIssue(db: Db, actor: Actor, ref: string): IssueView {
   const blockers = getOpenBlockers(db, current.id);
   if (blockers.length > 0) {
     throw new SwitchyardError(
-      `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
+      `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`,
     );
   }
   assertClaimable(db, actor, current);

@@ -7,8 +7,11 @@ import type { Issue, Status } from "../types";
 
 const BOARD_COLUMNS: Status[] = ["backlog", "todo", "in_progress", "in_review", "done"];
 const LABELS: Record<string, string> = {
-  backlog: "Backlog", todo: "Todo", in_progress: "In progress",
-  in_review: "In review", done: "Done",
+  backlog: "Backlog",
+  todo: "Todo",
+  in_progress: "In progress",
+  in_review: "In review",
+  done: "Done",
 };
 
 export default function Board({ project }: { project: string }) {
@@ -20,14 +23,19 @@ export default function Board({ project }: { project: string }) {
 
   const move = (ref: string, status: Status) =>
     updateIssue(ref, { status }).then(
-      () => { setActionError(null); reload(); },
+      () => {
+        setActionError(null);
+        reload();
+      },
       (e) => setActionError(e.message),
     );
 
   return (
     <section className="board-view">
       {actionError && (
-        <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
+        <p className="error-bar">
+          {actionError} <button onClick={() => setActionError(null)}>×</button>
+        </p>
       )}
       <PollErrorBar error={error} />
       <div className="board">
@@ -44,9 +52,13 @@ export default function Board({ project }: { project: string }) {
                 if (ref) move(ref, col);
               }}
             >
-              <h3>{LABELS[col]} <span className="badge">{cards.length}</span></h3>
+              <h3>
+                {LABELS[col]} <span className="badge">{cards.length}</span>
+              </h3>
               <div className="column-cards">
-                {cards.map((issue) => <Card key={issue.ref} issue={issue} onMove={move} />)}
+                {cards.map((issue) => (
+                  <Card key={issue.ref} issue={issue} onMove={move} />
+                ))}
               </div>
             </div>
           );
@@ -56,7 +68,13 @@ export default function Board({ project }: { project: string }) {
   );
 }
 
-export function Card({ issue, onMove }: { issue: Issue; onMove?: (ref: string, status: Status) => void }) {
+export function Card({
+  issue,
+  onMove,
+}: {
+  issue: Issue;
+  onMove?: (ref: string, status: Status) => void;
+}) {
   const open = () => navigate({ view: "issue", ref: issue.ref });
   return (
     <article
@@ -80,16 +98,24 @@ export function Card({ issue, onMove }: { issue: Issue; onMove?: (ref: string, s
         }
       }}
     >
-      <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
+      <a className="ref" href={href({ view: "issue", ref: issue.ref })}>
+        {issue.ref}
+      </a>
       <p>{issue.title}</p>
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
       {issue.attention && (
-        <span className="badge danger" title={issue.attention.message}>⛔ delivery failed</span>
+        <span className="badge danger" title={issue.attention.message}>
+          ⛔ delivery failed
+        </span>
       )}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
       {issue.labels.length > 0 && (
         <div className="label-chips-ro">
-          {issue.labels.map((l) => <span key={l} className="badge label-badge">{l}</span>)}
+          {issue.labels.map((l) => (
+            <span key={l} className="badge label-badge">
+              {l}
+            </span>
+          ))}
         </div>
       )}
       {onMove && (
@@ -101,7 +127,11 @@ export function Card({ issue, onMove }: { issue: Issue; onMove?: (ref: string, s
           onClick={(e) => e.stopPropagation()}
           onChange={(e) => onMove(issue.ref, e.target.value as Status)}
         >
-          {BOARD_COLUMNS.map((c) => <option key={c} value={c}>{LABELS[c]}</option>)}
+          {BOARD_COLUMNS.map((c) => (
+            <option key={c} value={c}>
+              {LABELS[c]}
+            </option>
+          ))}
         </select>
       )}
     </article>

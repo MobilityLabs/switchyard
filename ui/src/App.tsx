@@ -46,7 +46,10 @@ export default function App() {
 
   useEffect(() => {
     getMe()
-      .then((a) => { setMe(a); setAuthState("in"); })
+      .then((a) => {
+        setMe(a);
+        setAuthState("in");
+      })
       .catch((e) => setAuthState(e instanceof ApiError && e.status === 401 ? "out" : "error"));
   }, []);
 
@@ -54,17 +57,27 @@ export default function App() {
   // cookie. Route every 401 through this so an expired session bounces back
   // to the login screen instead of stranding the app on an error bar.
   useEffect(() => {
-    setUnauthorizedHandler(() => { setMe(null); setAuthState("out"); });
+    setUnauthorizedHandler(() => {
+      setMe(null);
+      setAuthState("out");
+    });
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  if (authState === "loading") return <main className="center"><p>Loading…</p></main>;
+  if (authState === "loading")
+    return (
+      <main className="center">
+        <p>Loading…</p>
+      </main>
+    );
   if (authState === "error") {
     return (
       <main className="center login">
         <h1>Switchyard</h1>
-        <p className="error-bar">Can't reach the server. It may be restarting.</p>
-        <button className="primary" onClick={() => location.reload()}>Retry</button>
+        <p className="error-bar">Can&apos;t reach the server. It may be restarting.</p>
+        <button className="primary" onClick={() => location.reload()}>
+          Retry
+        </button>
       </main>
     );
   }
@@ -78,9 +91,7 @@ export default function App() {
       </main>
     );
   }
-  return (
-    <ShellRouter me={me} />
-  );
+  return <ShellRouter me={me} />;
 }
 
 function ShellRouter({ me }: { me: Actor }) {

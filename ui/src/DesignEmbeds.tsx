@@ -39,7 +39,9 @@ export function DesignEmbeds({ text }: { text: string }) {
   if (embeds.length === 0) return null;
   return (
     <div className="design-embeds">
-      {embeds.map((embed) => <DesignEmbedCard key={embed.url} embed={embed} />)}
+      {embeds.map((embed) => (
+        <DesignEmbedCard key={embed.url} embed={embed} />
+      ))}
     </div>
   );
 }
@@ -50,19 +52,26 @@ function DesignEmbedCard({ embed }: { embed: Embed }) {
   // These iframes are only ever built from URLs extracted above and matched
   // against the figma.com / paper.design allowlist — never from raw user
   // HTML, which the markdown sanitizer forbids from containing iframes at all.
-  const src = embed.kind === "figma"
-    ? `https://www.figma.com/embed?embed_host=switchyard&url=${encodeURIComponent(embed.url)}`
-    // paper.design has no embed endpoint; we frame the URL directly. If the
-    // target sends X-Frame-Options/CSP frame-ancestors that refuse framing,
-    // the iframe will just show blank — the card's link above still works.
-    : embed.url;
+  const src =
+    embed.kind === "figma"
+      ? `https://www.figma.com/embed?embed_host=switchyard&url=${encodeURIComponent(embed.url)}`
+      : // paper.design has no embed endpoint; we frame the URL directly. If the
+        // target sends X-Frame-Options/CSP frame-ancestors that refuse framing,
+        // the iframe will just show blank — the card's link above still works.
+        embed.url;
 
   return (
     <article className="design-embed panel">
       <header>
-        <span className={`design-embed-label design-embed-${embed.kind}`}>{KIND_LABEL[embed.kind]}</span>
-        <a href={embed.url} target="_blank" rel="noreferrer">{embed.url}</a>
-        <button onClick={() => setExpanded((e) => !e)}>{expanded ? "Hide preview" : "Show preview"}</button>
+        <span className={`design-embed-label design-embed-${embed.kind}`}>
+          {KIND_LABEL[embed.kind]}
+        </span>
+        <a href={embed.url} target="_blank" rel="noreferrer">
+          {embed.url}
+        </a>
+        <button onClick={() => setExpanded((e) => !e)}>
+          {expanded ? "Hide preview" : "Show preview"}
+        </button>
       </header>
       {expanded && (
         <iframe

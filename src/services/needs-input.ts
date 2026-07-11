@@ -13,7 +13,7 @@ import { recordEvent } from "./events.js";
 export function requestHumanInput(db: Db, actor: Actor, ref: string, question: string): IssueView {
   if (!question.trim()) {
     throw new SwitchyardError(
-      "A question is required — say what you need a human to decide or clarify."
+      "A question is required — say what you need a human to decide or clarify.",
     );
   }
   return db.transaction((tx) => {
@@ -24,7 +24,12 @@ export function requestHumanInput(db: Db, actor: Actor, ref: string, question: s
       .where(eq(issues.id, issue.id))
       .returning()
       .get();
-    recordEvent(tx as Db, { issueId: issue.id, actorId: actor.id, type: "comment", payload: { body: question } });
+    recordEvent(tx as Db, {
+      issueId: issue.id,
+      actorId: actor.id,
+      type: "comment",
+      payload: { body: question },
+    });
     recordEvent(tx as Db, { issueId: issue.id, actorId: actor.id, type: "needs_input_set" });
     return toView(tx as Db, row);
   });

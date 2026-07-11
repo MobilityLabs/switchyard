@@ -7,8 +7,12 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
 import {
-  startAgentSession, endAgentSession, listAgentSessions, recordProgressNote,
-  sweepOrphanedAgentSessions, AGENT_SESSION_STALE_SECONDS,
+  startAgentSession,
+  endAgentSession,
+  listAgentSessions,
+  recordProgressNote,
+  sweepOrphanedAgentSessions,
+  AGENT_SESSION_STALE_SECONDS,
 } from "../../src/services/agent-sessions.js";
 
 function ageSession(db: Db, id: number, secondsAgo: number) {
@@ -24,7 +28,9 @@ beforeEach(() => {
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, { key: "SYD", name: "Switchyard" });
   createIssue(db, agent, {
-    projectKey: "SYD", title: "Ship v1", description: "x",
+    projectKey: "SYD",
+    title: "Ship v1",
+    description: "x",
     provenance: { sourceType: "session" },
   });
 });
@@ -33,15 +39,22 @@ describe("startAgentSession", () => {
   it("creates a running session joined with the issue ref and title", () => {
     const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli", pid: 4242 });
     expect(s).toMatchObject({
-      ref: "SYD-1", issueTitle: "Ship v1", mode: "cli", pid: 4242,
-      status: "running", exitCode: null, endedAt: null, lastNote: null,
+      ref: "SYD-1",
+      issueTitle: "Ship v1",
+      mode: "cli",
+      pid: 4242,
+      status: "running",
+      exitCode: null,
+      endedAt: null,
+      lastNote: null,
     });
     expect(s.startedAt).toBeGreaterThan(0);
   });
 
   it("rejects human actors — only workers report sessions", () => {
-    expect(() => startAgentSession(db, human, { ref: "SYD-1", mode: "cli" }))
-      .toThrow(/agent actors/i);
+    expect(() => startAgentSession(db, human, { ref: "SYD-1", mode: "cli" })).toThrow(
+      /agent actors/i,
+    );
   });
 
   it("rejects an unknown ref", () => {
@@ -93,7 +106,9 @@ describe("listAgentSessions", () => {
 
   it("filters by ref", () => {
     createIssue(db, agent, {
-      projectKey: "SYD", title: "Other", description: "y",
+      projectKey: "SYD",
+      title: "Other",
+      description: "y",
       provenance: { sourceType: "session" },
     });
     startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
@@ -143,7 +158,10 @@ describe("recordProgressNote", () => {
     const ended = endAgentSession(db, agent, s.id, 0);
     // Force the note onto the exact second the session exits, regardless of
     // real wall-clock timing, to pin the strict `lt(endedAt)` bound.
-    db.update(events).set({ createdAt: ended.endedAt as number }).where(eq(events.type, "progress_note")).run();
+    db.update(events)
+      .set({ createdAt: ended.endedAt as number })
+      .where(eq(events.type, "progress_note"))
+      .run();
     const [view] = listAgentSessions(db, { ref: "SYD-1" });
     expect(view.lastNote).toBeNull();
   });

@@ -18,7 +18,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import {
-  projectKeyOf, newTickGate, runGated, withRetry, HttpStatusError, type WorkerConfig,
+  projectKeyOf,
+  newTickGate,
+  runGated,
+  withRetry,
+  HttpStatusError,
+  type WorkerConfig,
 } from "./worker-select.js";
 import {
   findDeliverableRefs,
@@ -41,7 +46,12 @@ import {
   type AttentionIssueRow,
 } from "./delivery-lib.js";
 import {
-  findOpenAgentPr, mergeAgentPr, ensureCleanClone, runVerification, runDeploy, attemptAutoRebase,
+  findOpenAgentPr,
+  mergeAgentPr,
+  ensureCleanClone,
+  runVerification,
+  runDeploy,
+  attemptAutoRebase,
   findMergedAgentPr,
   dispatchConflictResolution,
   pollUntilMergeable,
@@ -69,7 +79,8 @@ function loadConfig(): WorkerConfig {
   }
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
   const problems = validateWorkerConfig(raw);
-  if (problems.length > 0) throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
+  if (problems.length > 0)
+    throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
   return raw as WorkerConfig;
 }
 
@@ -101,7 +112,12 @@ function cloneRootOf(config: WorkerConfig): string {
  * window used to be silently lost). Logs each retry and, if every attempt is
  * exhausted, logs the payload so it isn't lost silently before rethrowing —
  * callers keep their existing catch/log handling on top of that. */
-async function postWithRetry(url: string, token: string, label: string, payload: unknown): Promise<void> {
+async function postWithRetry(
+  url: string,
+  token: string,
+  label: string,
+  payload: unknown,
+): Promise<void> {
   try {
     await withRetry(
       async () => {
@@ -110,20 +126,33 @@ async function postWithRetry(url: string, token: string, label: string, payload:
           headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new HttpStatusError(res.status, `${label} failed: ${res.status} ${await res.text()}`);
+        if (!res.ok)
+          throw new HttpStatusError(
+            res.status,
+            `${label} failed: ${res.status} ${await res.text()}`,
+          );
       },
       {
         onRetry: (attempt, err, delayMs) =>
-          console.error(`retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`),
-      }
+          console.error(
+            `retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`,
+          ),
+      },
     );
   } catch (err) {
-    console.error(`giving up on ${label} after retries: ${(err as Error).message}\n  payload: ${JSON.stringify(payload)}`);
+    console.error(
+      `giving up on ${label} after retries: ${(err as Error).message}\n  payload: ${JSON.stringify(payload)}`,
+    );
     throw err;
   }
 }
 
-async function postComment(config: WorkerConfig, token: string, ref: string, body: string): Promise<void> {
+async function postComment(
+  config: WorkerConfig,
+  token: string,
+  ref: string,
+  body: string,
+): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/comments`;
   await postWithRetry(url, token, `POST comment on ${ref}`, { body });
 }
@@ -131,13 +160,21 @@ async function postComment(config: WorkerConfig, token: string, ref: string, bod
 /** Records a structured delivery event (SYD-54) alongside the prose comment
  * so the issue UI can render a delivery strip without parsing text. */
 async function postDeliveryEvent(
-  config: WorkerConfig, token: string, ref: string, input: DeliveryEventInput
+  config: WorkerConfig,
+  token: string,
+  ref: string,
+  input: DeliveryEventInput,
 ): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/delivery-events`;
   await postWithRetry(url, token, `POST delivery-events on ${ref}`, input);
 }
 
-async function deliver(ref: string, config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {
+async function deliver(
+  ref: string,
+  config: WorkerConfig,
+  token: string,
+  dryRun: boolean,
+): Promise<void> {
   const project = config.projects[projectKeyOf(ref)];
   if (!project) return;
 
@@ -151,7 +188,9 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
       return;
     }
     if (dryRun) {
-      console.log(`[dry-run] would merge PR #${prNumber} for ${ref}, deploy from a clean clone, and comment`);
+      console.log(
+        `[dry-run] would merge PR #${prNumber} for ${ref}, deploy from a clean clone, and comment`,
+      );
       return;
     }
 
@@ -186,28 +225,51 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
       const rebase = await attemptAutoRebase(project.repo, cloneDir, ref);
       if (rebase.status === "no-branch") throw mergeErr;
       if (rebase.status === "conflict") {
-        console.log(`${ref}: auto-rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`);
+        console.log(
+          `${ref}: auto-rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`,
+        );
         if (!shouldDispatchConflictResolution(config)) {
-          await postComment(config, token, ref, autoRebaseConflictComment(ref, originalMessage, rebase.files));
-          await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message: originalMessage }).catch(
-            (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`)
+          await postComment(
+            config,
+            token,
+            ref,
+            autoRebaseConflictComment(ref, originalMessage, rebase.files),
+          );
+          await postDeliveryEvent(config, token, ref, {
+            type: "delivery_failed",
+            message: originalMessage,
+          }).catch((e: Error) =>
+            console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
           );
           return;
         }
         console.log(`${ref}: dispatching a conflict-resolution worker session`);
-        const resolution = await dispatchConflictResolution(cloneDir, ref, rebase.files, project, config);
+        const resolution = await dispatchConflictResolution(
+          cloneDir,
+          ref,
+          rebase.files,
+          project,
+          config,
+        );
         if (resolution.status !== "resolved") {
           console.log(`${ref}: conflict-resolution session did not produce a mergeable branch`);
           await postComment(
-            config, token, ref,
-            conflictResolutionFailedComment(ref, originalMessage, rebase.files, resolution.tail)
+            config,
+            token,
+            ref,
+            conflictResolutionFailedComment(ref, originalMessage, rebase.files, resolution.tail),
           );
-          await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message: originalMessage }).catch(
-            (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`)
+          await postDeliveryEvent(config, token, ref, {
+            type: "delivery_failed",
+            message: originalMessage,
+          }).catch((e: Error) =>
+            console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
           );
           return;
         }
-        console.log(`${ref}: conflict-resolution session resolved and pushed at ${resolution.sha}, retrying merge`);
+        console.log(
+          `${ref}: conflict-resolution session resolved and pushed at ${resolution.sha}, retrying merge`,
+        );
         const mergeable = await pollUntilMergeable(project.repo, prNumber);
         console.log(`${ref}: post-force-push mergeability=${mergeable}`);
         mergeSha = await mergeAgentPr(project.repo, prNumber);
@@ -219,7 +281,9 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
         await postDeliveryEvent(config, token, ref, {
           type: "delivery_failed",
           message: "auto-rebase applied cleanly but the post-rebase verify gate failed",
-        }).catch((e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`));
+        }).catch((e: Error) =>
+          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+        );
         return;
       } else {
         console.log(`${ref}: auto-rebased onto main at ${rebase.sha}, retrying merge`);
@@ -230,7 +294,9 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
       }
     }
     if (!resolvedConflict) {
-      console.log(`${ref}: merged PR #${prNumber} at ${mergeSha}${rebased ? " (after auto-rebase)" : ""}`);
+      console.log(
+        `${ref}: merged PR #${prNumber} at ${mergeSha}${rebased ? " (after auto-rebase)" : ""}`,
+      );
     }
     let deploy: Awaited<ReturnType<typeof runDeploy>> = { ran: false };
     if (config.delivery?.deploy !== false) {
@@ -240,33 +306,51 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
         const verify = await runVerification(cloneDir);
         if (!verify.ok) {
           console.error(`${ref}: post-merge verification FAILED — main is red, deploy skipped`);
-          await postComment(config, token, ref, verificationFailureComment(prNumber, mergeSha, verify.tail));
+          await postComment(
+            config,
+            token,
+            ref,
+            verificationFailureComment(prNumber, mergeSha, verify.tail),
+          );
           await postDeliveryEvent(config, token, ref, {
             type: "delivery_failed",
             message: `post-merge verification failed after merging PR #${prNumber} at ${mergeSha} — deploy skipped:\n${verify.tail}`,
-          }).catch((e: Error) => console.error(`could not record delivery_failed event for ${ref}: ${e.message}`));
+          }).catch((e: Error) =>
+            console.error(`could not record delivery_failed event for ${ref}: ${e.message}`),
+          );
           return;
         }
       }
 
       deploy = await runDeploy(cloneDir);
-      console.log(`${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`);
+      console.log(
+        `${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`,
+      );
     }
     const commentBody = deliveryComment({ prNumber, mergeSha, deploy });
-    const note = resolvedConflict ? conflictResolvedNote(ref) : rebased ? autoRebasedNote(ref) : null;
+    const note = resolvedConflict
+      ? conflictResolvedNote(ref)
+      : rebased
+        ? autoRebasedNote(ref)
+        : null;
     await postComment(config, token, ref, note ? `${note}\n\n${commentBody}` : commentBody);
-    await postDeliveryEvent(config, token, ref, { type: "delivered", prNumber, mergeSha, deploy }).catch((e: Error) =>
-      console.error(`could not record delivered event for ${ref}: ${e.message}`)
+    await postDeliveryEvent(config, token, ref, {
+      type: "delivered",
+      prNumber,
+      mergeSha,
+      deploy,
+    }).catch((e: Error) =>
+      console.error(`could not record delivered event for ${ref}: ${e.message}`),
     );
   } catch (err) {
     const message = (err as Error).message;
     console.error(`delivery failed for ${ref}: ${message}`);
     if (dryRun) return;
     await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
-      console.error(`could not comment the failure on ${ref}: ${e.message}`)
+      console.error(`could not comment the failure on ${ref}: ${e.message}`),
     );
-    await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch((e: Error) =>
-      console.error(`could not record delivery_failed event on ${ref}: ${e.message}`)
+    await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
+      (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
     );
   }
 }
@@ -274,10 +358,16 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
 /** Fetches the issues currently flagged `delivery_failed` (SYD-84's attention
  * derivation), restricted server-side via `?attention=` so this stays cheap
  * in steady state (zero flagged issues ⇒ one small response, no gh calls). */
-async function fetchAttentionFlaggedIssues(config: WorkerConfig, token: string): Promise<AttentionIssueRow[]> {
+async function fetchAttentionFlaggedIssues(
+  config: WorkerConfig,
+  token: string,
+): Promise<AttentionIssueRow[]> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues?attention=delivery_failed`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error(`GET /api/issues?attention=delivery_failed failed: ${res.status} ${await res.text()}`);
+  if (!res.ok)
+    throw new Error(
+      `GET /api/issues?attention=delivery_failed failed: ${res.status} ${await res.text()}`,
+    );
   return (await res.json()) as AttentionIssueRow[];
 }
 
@@ -291,27 +381,44 @@ async function fetchAttentionFlaggedIssues(config: WorkerConfig, token: string):
  * Left alone if the PR is still open or was closed unmerged — those are
  * genuinely unresolved.
  */
-async function reconcile(ref: string, config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {
+async function reconcile(
+  ref: string,
+  config: WorkerConfig,
+  token: string,
+  dryRun: boolean,
+): Promise<void> {
   const project = config.projects[projectKeyOf(ref)];
   if (!project) return;
   try {
     const merged = await findMergedAgentPr(project.repo, ref);
     if (!merged) return;
     if (dryRun) {
-      console.log(`[dry-run] would reconcile ${ref}: PR #${merged.prNumber} merged manually at ${merged.mergeSha}`);
+      console.log(
+        `[dry-run] would reconcile ${ref}: PR #${merged.prNumber} merged manually at ${merged.mergeSha}`,
+      );
       return;
     }
-    console.log(`${ref}: reconciling — PR #${merged.prNumber} was merged manually at ${merged.mergeSha}`);
+    console.log(
+      `${ref}: reconciling — PR #${merged.prNumber} was merged manually at ${merged.mergeSha}`,
+    );
     await postComment(config, token, ref, reconciledComment(merged.prNumber, merged.mergeSha));
     await postDeliveryEvent(config, token, ref, {
-      type: "delivered", prNumber: merged.prNumber, mergeSha: merged.mergeSha, deploy: { ran: false },
+      type: "delivered",
+      prNumber: merged.prNumber,
+      mergeSha: merged.mergeSha,
+      deploy: { ran: false },
     });
   } catch (err) {
     console.error(`reconciliation failed for ${ref}: ${(err as Error).message}`);
   }
 }
 
-async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof newTickGate>, dryRun: boolean): Promise<void> {
+async function tick(
+  config: WorkerConfig,
+  token: string,
+  gate: ReturnType<typeof newTickGate>,
+  dryRun: boolean,
+): Promise<void> {
   await runGated(gate, async () => {
     const url = `${config.url.replace(/\/$/, "")}/api/events?limit=500`;
     const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
@@ -323,10 +430,14 @@ async function tick(config: WorkerConfig, token: string, gate: ReturnType<typeof
     if (gap) {
       console.error(
         `WARNING: event feed window no longer reaches the cursor — events ${gap.from}..${gap.to} were missed. ` +
-        `Any done-stamps in that range were NOT delivered; check the board for stamped-but-unmerged issues.`
+          `Any done-stamps in that range were NOT delivered; check the board for stamped-but-unmerged issues.`,
       );
     }
-    const { refs: doneRefs, lastEventId } = findDeliverableRefs(feed, Object.keys(config.projects), cursor);
+    const { refs: doneRefs, lastEventId } = findDeliverableRefs(
+      feed,
+      Object.keys(config.projects),
+      cursor,
+    );
     const { refs: redeliverRefs } = findRedeliverRefs(feed, Object.keys(config.projects), cursor);
     const refs = [...new Set([...doneRefs, ...redeliverRefs])];
     for (const ref of refs) {
@@ -366,7 +477,9 @@ async function main(): Promise<void> {
   // Dry runs are non-mutating (never merge/deploy/comment/advance the
   // cursor), so they're safe to overlap with a live worker or each other —
   // only a real run (looped or --once) needs exclusivity.
-  const releaseLock = dryRun ? null : acquirePidLock(path.join(repoRoot(), ".superpowers", "deliver.pid"));
+  const releaseLock = dryRun
+    ? null
+    : acquirePidLock(path.join(repoRoot(), ".superpowers", "deliver.pid"));
 
   if (once) {
     try {
@@ -380,9 +493,13 @@ async function main(): Promise<void> {
   await tick(config, token, gate, dryRun);
 
   const pollSeconds = config.delivery?.pollSeconds ?? DEFAULT_POLL_SECONDS;
-  console.log(`delivery worker polling every ${pollSeconds}s (projects: ${Object.keys(config.projects).join(", ")})`);
+  console.log(
+    `delivery worker polling every ${pollSeconds}s (projects: ${Object.keys(config.projects).join(", ")})`,
+  );
   const timer = setInterval(() => {
-    tick(config, token, gate, dryRun).catch((err) => console.error(`delivery tick failed: ${(err as Error).message}`));
+    tick(config, token, gate, dryRun).catch((err) =>
+      console.error(`delivery tick failed: ${(err as Error).message}`),
+    );
   }, pollSeconds * 1000);
 
   const stop = () => {

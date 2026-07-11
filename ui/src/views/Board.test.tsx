@@ -17,12 +17,24 @@ import type { Issue } from "../types";
 
 function issue(o: Partial<Issue> = {}): Issue {
   return {
-    id: 1, ref: "SYD-1", title: "Ship it", description: "", summary: null,
-    status: "done", priority: "none",
-    assigneeId: null, creatorId: 1, labels: [],
-    sourceType: null, sourceDetail: null, sourceUrl: null,
-    needsInput: false, snoozedUntil: null,
-    createdAt: 0, updatedAt: 0, attention: null,
+    id: 1,
+    ref: "SYD-1",
+    title: "Ship it",
+    description: "",
+    summary: null,
+    status: "done",
+    priority: "none",
+    assigneeId: null,
+    creatorId: 1,
+    labels: [],
+    sourceType: null,
+    sourceDetail: null,
+    sourceUrl: null,
+    needsInput: false,
+    snoozedUntil: null,
+    createdAt: 0,
+    updatedAt: 0,
+    attention: null,
     ...o,
   };
 }
@@ -45,7 +57,10 @@ describe("Board Card attention badge", () => {
 
   it("renders an icon-only badge for an unresolved delivery_failed, with the message as a hover title", async () => {
     const container = await render(
-      issue({ status: "in_review", attention: { reason: "delivery_failed", message: "merge conflict" } })
+      issue({
+        status: "in_review",
+        attention: { reason: "delivery_failed", message: "merge conflict" },
+      }),
     );
     const badge = container.querySelector(".badge.danger");
     expect(badge).not.toBeNull();

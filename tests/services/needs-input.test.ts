@@ -43,7 +43,13 @@ describe("needsInput clearing", () => {
     expect(after.needsInput).toBe(false);
 
     const types = listIssueEvents(db, after.id).map((e) => e.type);
-    expect(types).toEqual(["created", "comment", "needs_input_set", "comment", "needs_input_cleared"]);
+    expect(types).toEqual([
+      "created",
+      "comment",
+      "needs_input_set",
+      "comment",
+      "needs_input_cleared",
+    ]);
   });
 
   it("a human answer on an in_progress issue releases the claim so the worker can re-dispatch", () => {

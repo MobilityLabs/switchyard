@@ -23,8 +23,11 @@ export default function NewIssue() {
   // Same shape as Triage/IssueDetail/Review, but there's no issue ref yet —
   // paste-to-upload only works once the issue exists, so it errors clearly
   // via uploadError if someone pastes before submitting.
-  const { onPaste, uploading, uploadError, setUploadError, textareaRef } =
-    usePasteUpload("", description, setDescription);
+  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
+    "",
+    description,
+    setDescription,
+  );
 
   // Falls back to the first loaded project until the user picks one
   // explicitly, same pattern as Shell's board-project fallback.
@@ -54,7 +57,10 @@ export default function NewIssue() {
       })
       .then(
         (issue) => navigate({ view: "issue", ref: issue.ref }),
-        (e) => { setSubmitting(false); setError(e instanceof Error ? e.message : String(e)); },
+        (e) => {
+          setSubmitting(false);
+          setError(e instanceof Error ? e.message : String(e));
+        },
       );
   }
 
@@ -62,20 +68,29 @@ export default function NewIssue() {
     <section className="new-issue">
       <h2>New issue</h2>
       {error && (
-        <p className="error-bar">{error} <button onClick={() => setError(null)}>×</button></p>
+        <p className="error-bar">
+          {error} <button onClick={() => setError(null)}>×</button>
+        </p>
       )}
       {uploadError && (
-        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
+        <p className="error-bar">
+          {uploadError} <button onClick={() => setUploadError(null)}>×</button>
+        </p>
       )}
       <form
         className="panel new-issue-form"
-        onSubmit={(e) => { e.preventDefault(); submit(); }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
       >
         <label>
           Project
           <select value={effectiveProjectKey} onChange={(e) => setProjectKey(e.target.value)}>
             {availableProjects.map((p) => (
-              <option key={p.key} value={p.key}>{p.key} — {p.name}</option>
+              <option key={p.key} value={p.key}>
+                {p.key} — {p.name}
+              </option>
             ))}
           </select>
         </label>
@@ -115,7 +130,11 @@ export default function NewIssue() {
         <label>
           Priority
           <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
-            {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+            {PRIORITIES.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
           </select>
         </label>
 
@@ -137,7 +156,11 @@ export default function NewIssue() {
           Start in todo (skip backlog)
         </label>
 
-        <button className="primary" type="submit" disabled={submitting || !trimmedTitle || uploading}>
+        <button
+          className="primary"
+          type="submit"
+          disabled={submitting || !trimmedTitle || uploading}
+        >
           {submitting ? "Creating…" : "Create issue"}
         </button>
       </form>

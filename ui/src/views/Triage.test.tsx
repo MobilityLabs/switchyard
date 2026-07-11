@@ -26,12 +26,24 @@ vi.mock("../api", () => ({
 import { listIssues, updateIssue } from "../api";
 
 const ISSUE: Issue = {
-  id: 1, ref: "SYD-1", title: "Do the thing", description: "", summary: null,
-  status: "triage", priority: "none",
-  assigneeId: null, creatorId: 1, labels: [],
-  sourceType: null, sourceDetail: null, sourceUrl: null,
-  needsInput: false, snoozedUntil: null,
-  createdAt: 0, updatedAt: 0, attention: null,
+  id: 1,
+  ref: "SYD-1",
+  title: "Do the thing",
+  description: "",
+  summary: null,
+  status: "triage",
+  priority: "none",
+  assigneeId: null,
+  creatorId: 1,
+  labels: [],
+  sourceType: null,
+  sourceDetail: null,
+  sourceUrl: null,
+  needsInput: false,
+  snoozedUntil: null,
+  createdAt: 0,
+  updatedAt: 0,
+  attention: null,
 };
 
 describe("defaultAcceptPriority", () => {
@@ -55,11 +67,13 @@ describe("TriageRow accept → todo", () => {
       root.render(
         <TriageRow
           issue={issue}
-          act={(fn: () => Promise<unknown>) => { fn(); }}
+          act={(fn: () => Promise<unknown>) => {
+            fn();
+          }}
           knownActorNames={[]}
           expanded={false}
           onToggleExpand={() => {}}
-        />
+        />,
       );
     });
     return container;
@@ -67,7 +81,9 @@ describe("TriageRow accept → todo", () => {
 
   it("accepts immediately with the default priority, leaving labels untouched", async () => {
     const container = await renderRow(ISSUE);
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
+    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Accept → todo",
+    )!;
 
     await reactAct(async () => acceptButton.click());
 
@@ -76,7 +92,9 @@ describe("TriageRow accept → todo", () => {
 
   it("keeps an already-set priority instead of overriding it", async () => {
     const container = await renderRow({ ...ISSUE, priority: "high", labels: ["backend"] });
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
+    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Accept → todo",
+    )!;
 
     await reactAct(async () => acceptButton.click());
 
@@ -161,13 +179,21 @@ describe("Triage project scoping", () => {
 
   it("passes the project filter through to both the inbox and needs-input polls", async () => {
     await renderTriage("SYD");
-    expect(listIssues).toHaveBeenCalledWith({ project: "SYD", status: "triage", excludeSnoozed: true });
+    expect(listIssues).toHaveBeenCalledWith({
+      project: "SYD",
+      status: "triage",
+      excludeSnoozed: true,
+    });
     expect(listIssues).toHaveBeenCalledWith({ project: "SYD", needsInput: true });
   });
 
   it("omits the project filter for All projects", async () => {
     await renderTriage(null);
-    expect(listIssues).toHaveBeenCalledWith({ project: undefined, status: "triage", excludeSnoozed: true });
+    expect(listIssues).toHaveBeenCalledWith({
+      project: undefined,
+      status: "triage",
+      excludeSnoozed: true,
+    });
     expect(listIssues).toHaveBeenCalledWith({ project: undefined, needsInput: true });
   });
 });

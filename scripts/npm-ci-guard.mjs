@@ -41,7 +41,7 @@ if (!hasLockfile) {
   console.error(
     "WARNING: npm ci skipped -- no package-lock.json or npm-shrinkwrap.json in this clone " +
       "(git clone only carries committed files, so an untracked lockfile in the target repo " +
-      "disappears here) -- continuing without installed dependencies"
+      "disappears here) -- continuing without installed dependencies",
   );
   process.exit(0);
 }
@@ -58,6 +58,6 @@ try {
   console.error(
     `WARNING: npm ci failed (node ${process.version}, npm ${npmVersion}) -- continuing without ` +
       "installed dependencies. Compare the target repo's package.json engines/packageManager " +
-      "field against this image's node/npm version (see Dockerfile.worker)."
+      "field against this image's node/npm version (see Dockerfile.worker).",
   );
 }

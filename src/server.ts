@@ -45,7 +45,7 @@ export function createApp(db: Db) {
     if (!actor) {
       return c.json(
         { error: "Missing or invalid bearer token — mint one with the switchyard CLI." },
-        401
+        401,
       );
     }
     const { req, res } = toReqRes(c.req.raw);
@@ -71,7 +71,7 @@ export function createApp(db: Db) {
   });
 
   app.on(["GET", "DELETE"], "/mcp", (c) =>
-    c.json({ error: "Method not allowed — POST JSON-RPC to /mcp." }, 405)
+    c.json({ error: "Method not allowed — POST JSON-RPC to /mcp." }, 405),
   );
 
   app.use("/*", serveStatic({ root: "./dist/ui" }));
@@ -97,7 +97,7 @@ export function createApp(db: Db) {
 
 export function startServer(db: Db, port: number) {
   return serve({ fetch: createApp(db).fetch, port }, (info) =>
-    console.log(`switchyard listening on :${info.port}`)
+    console.log(`switchyard listening on :${info.port}`),
   );
 }
 

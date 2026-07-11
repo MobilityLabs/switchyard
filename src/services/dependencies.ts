@@ -21,7 +21,7 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
     }
     if (isReachable(tx as Db, blocked.id, blocker.id)) {
       throw new SwitchyardError(
-        `Adding this dependency would create a cycle — ${blockedRef} already blocks ${blockerRef} (directly or transitively).`
+        `Adding this dependency would create a cycle — ${blockedRef} already blocks ${blockerRef} (directly or transitively).`,
       );
     }
     const inserted = tx
@@ -32,8 +32,10 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
       .get();
     if (inserted) {
       recordEvent(tx as Db, {
-        issueId: blocked.id, actorId: actor.id,
-        type: "blocked_by_added", payload: { blocker: blocker.ref },
+        issueId: blocked.id,
+        actorId: actor.id,
+        type: "blocked_by_added",
+        payload: { blocker: blocker.ref },
       });
     }
   });
@@ -43,10 +45,15 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
  * removal is mistake correction, so idempotency beats erroring. Human-only:
  * removing a blocker makes gated work claimable, so an agent allowed to
  * remove edges could unblock itself and take work a human deliberately held. */
-export function removeDependency(db: Db, actor: Actor, blockerRef: string, blockedRef: string): void {
+export function removeDependency(
+  db: Db,
+  actor: Actor,
+  blockerRef: string,
+  blockedRef: string,
+): void {
   if (actor.type === "agent") {
     throw new SwitchyardError(
-      "Only humans remove dependencies — if you believe a blocker is wrong, say so in a comment."
+      "Only humans remove dependencies — if you believe a blocker is wrong, say so in a comment.",
     );
   }
   db.transaction((tx) => {
@@ -59,8 +66,10 @@ export function removeDependency(db: Db, actor: Actor, blockerRef: string, block
       .get();
     if (deleted) {
       recordEvent(tx as Db, {
-        issueId: blocked.id, actorId: actor.id,
-        type: "blocked_by_removed", payload: { blocker: blocker.ref },
+        issueId: blocked.id,
+        actorId: actor.id,
+        type: "blocked_by_removed",
+        payload: { blocker: blocker.ref },
       });
     }
   });
@@ -73,7 +82,7 @@ export type DependencyView = { ref: string; title: string; status: string };
  * unlink) resolved blockers too. */
 export function listDependencies(
   db: Db,
-  ref: string
+  ref: string,
 ): { blockedBy: DependencyView[]; blocks: DependencyView[] } {
   const issue = getIssue(db, ref);
   const pick = (rows: { i: typeof issues.$inferSelect }[]): DependencyView[] =>

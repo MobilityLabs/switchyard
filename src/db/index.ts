@@ -7,9 +7,7 @@ import * as schema from "./schema.js";
 
 export type Db = BetterSQLite3Database<typeof schema>;
 
-const migrationsFolder = path.join(
-  path.dirname(fileURLToPath(import.meta.url)), "../../drizzle"
-);
+const migrationsFolder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
 
 export function openDb(dbPath: string): Db {
   const sqlite = new Database(dbPath);

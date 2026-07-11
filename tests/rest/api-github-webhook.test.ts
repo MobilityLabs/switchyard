@@ -25,7 +25,10 @@ beforeEach(() => {
   app = buildGithubWebhookRoutes(db, SECRET);
 });
 
-async function post(body: unknown, opts: { event?: string | null; signature?: string | null } = {}) {
+async function post(
+  body: unknown,
+  opts: { event?: string | null; signature?: string | null } = {},
+) {
   const raw = JSON.stringify(body);
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (opts.event !== null) headers["x-github-event"] = opts.event ?? "pull_request";
@@ -38,7 +41,11 @@ describe("POST /webhooks/github", () => {
   it("records a gh_pr_opened event for a validly signed delivery", async () => {
     const res = await post({
       action: "opened",
-      pull_request: { number: 7, html_url: "https://github.com/acme/widgets/pull/7", head: { ref: "agent/SYD-1" } },
+      pull_request: {
+        number: 7,
+        html_url: "https://github.com/acme/widgets/pull/7",
+        head: { ref: "agent/SYD-1" },
+      },
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; handled: boolean; ref: string; type: string };
@@ -48,7 +55,7 @@ describe("POST /webhooks/github", () => {
   it("rejects a missing signature", async () => {
     const res = await post(
       { action: "opened", pull_request: { number: 7, head: { ref: "agent/SYD-1" } } },
-      { signature: null }
+      { signature: null },
     );
     expect(res.status).toBe(401);
   });
@@ -56,7 +63,7 @@ describe("POST /webhooks/github", () => {
   it("rejects an invalid signature", async () => {
     const res = await post(
       { action: "opened", pull_request: { number: 7, head: { ref: "agent/SYD-1" } } },
-      { signature: "sha256=" + "0".repeat(64) }
+      { signature: "sha256=" + "0".repeat(64) },
     );
     expect(res.status).toBe(401);
   });
@@ -71,7 +78,11 @@ describe("POST /webhooks/github", () => {
     const raw = JSON.stringify({ action: "opened" });
     const res = await unconfigured.request("/webhooks/github", {
       method: "POST",
-      headers: { "content-type": "application/json", "x-github-event": "pull_request", "x-hub-signature-256": sign(raw) },
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(raw),
+      },
       body: raw,
     });
     expect(res.status).toBe(501);
@@ -85,7 +96,7 @@ describe("POST /webhooks/github", () => {
         compare: "https://github.com/acme/widgets/compare/a...b",
         commits: [{ message: "wip" }],
       },
-      { event: "push" }
+      { event: "push" },
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { ok: boolean; handled: boolean; ref: string; type: string };

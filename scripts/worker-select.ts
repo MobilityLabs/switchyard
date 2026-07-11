@@ -158,7 +158,15 @@ export type WorkerConfig = {
   sessionTimeoutSeconds?: number;
 };
 
-const DEFAULT_ALLOWED_TOOLS = ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+const DEFAULT_ALLOWED_TOOLS = [
+  "mcp__switchyard__*",
+  "Bash",
+  "Read",
+  "Edit",
+  "Write",
+  "Grep",
+  "Glob",
+];
 const DEFAULT_WORKER_IMAGE = "switchyard-worker";
 export const DEFAULT_MAX_ANSWER_CONCURRENT = 2;
 const DEFAULT_BASE_BRANCH = "main";
@@ -214,11 +222,13 @@ export function workerPidFileName(role: WorkerRole): string {
  */
 export function checkRoleLockConflict(
   role: WorkerRole,
-  locked: { all: boolean; code: boolean; answer: boolean }
+  locked: { all: boolean; code: boolean; answer: boolean },
 ): string | null {
   if (role === "all") {
-    if (locked.code) return "a --role code worker is already running — stop it first, or run this worker with a single role";
-    if (locked.answer) return "a --role answer worker is already running — stop it first, or run this worker with a single role";
+    if (locked.code)
+      return "a --role code worker is already running — stop it first, or run this worker with a single role";
+    if (locked.answer)
+      return "a --role answer worker is already running — stop it first, or run this worker with a single role";
     return null;
   }
   if (locked.all) {
@@ -242,7 +252,7 @@ export function checkRoleLockConflict(
 export function selectDispatchable<T extends WorkerIssue>(
   issues: T[],
   config: WorkerConfig,
-  activeRefs: Iterable<string>
+  activeRefs: Iterable<string>,
 ): T[] {
   const active = new Set(activeRefs);
   // maxConcurrent governs code-dispatch capacity only (SYD-67) — answer
@@ -302,7 +312,7 @@ function findRefsByEventType(
   feed: FeedEvent[],
   config: WorkerConfig,
   lastEventId: number | null,
-  eventType: string
+  eventType: string,
 ): { refs: string[]; lastEventId: number | null } {
   if (feed.length === 0) return { refs: [], lastEventId };
   const newestId = Math.max(...feed.map((e) => e.id));
@@ -327,7 +337,7 @@ function findRefsByEventType(
 export function findResumeRefs(
   feed: FeedEvent[],
   config: WorkerConfig,
-  lastEventId: number | null
+  lastEventId: number | null,
 ): { refs: string[]; lastEventId: number | null } {
   return findRefsByEventType(feed, config, lastEventId, "needs_input_cleared");
 }
@@ -341,7 +351,7 @@ export function findResumeRefs(
 export function findAnswerRefs(
   feed: FeedEvent[],
   config: WorkerConfig,
-  lastEventId: number | null
+  lastEventId: number | null,
 ): { refs: string[]; lastEventId: number | null } {
   return findRefsByEventType(feed, config, lastEventId, "agent_question");
 }
@@ -362,7 +372,7 @@ const DEFAULT_MAX_ANSWERS_PER_ISSUE = 3;
 export function filterAnswerCapped(
   refs: string[],
   answerState: ReadonlyMap<string, number>,
-  maxAnswers = DEFAULT_MAX_ANSWERS_PER_ISSUE
+  maxAnswers = DEFAULT_MAX_ANSWERS_PER_ISSUE,
 ): string[] {
   return refs.filter((ref) => (answerState.get(ref) ?? 0) < maxAnswers);
 }
@@ -400,8 +410,13 @@ function countWorkActive(activeKeys: Iterable<string>): number {
  * compete with code dispatch for the same pool, which caused SYD-60
  * deferrals under load).
  */
-export function remainingAnswerCapacity(config: WorkerConfig, activeKeys: Iterable<string>): number {
-  return (config.maxAnswerConcurrent ?? DEFAULT_MAX_ANSWER_CONCURRENT) - countAnswerActive(activeKeys);
+export function remainingAnswerCapacity(
+  config: WorkerConfig,
+  activeKeys: Iterable<string>,
+): number {
+  return (
+    (config.maxAnswerConcurrent ?? DEFAULT_MAX_ANSWER_CONCURRENT) - countAnswerActive(activeKeys)
+  );
 }
 
 /**
@@ -421,14 +436,14 @@ export function selectAnswerable(
   refs: string[],
   config: WorkerConfig,
   activeKeys: Iterable<string>,
-  answerState: ReadonlyMap<string, number>
+  answerState: ReadonlyMap<string, number>,
 ): string[] {
   const active = new Set(activeKeys);
   const capacity = remainingAnswerCapacity(config, active);
   if (capacity <= 0) return [];
 
   const eligible = refs.filter(
-    (ref) => projectKeyOf(ref) in config.projects && !active.has(answerKey(ref))
+    (ref) => projectKeyOf(ref) in config.projects && !active.has(answerKey(ref)),
   );
   return filterAnswerCapped(eligible, answerState, config.maxAnswersPerIssue).slice(0, capacity);
 }
@@ -503,7 +518,9 @@ export async function runGated(gate: TickGate, fn: () => Promise<void>): Promise
     gate.inFlight = false;
     if (gate.queued) {
       gate.queued = false;
-      void runGated(gate, fn).catch((err) => console.error(`re-armed tick failed: ${(err as Error).message}`));
+      void runGated(gate, fn).catch((err) =>
+        console.error(`re-armed tick failed: ${(err as Error).message}`),
+      );
     }
   }
 }
@@ -524,14 +541,14 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 export function filterRetryCapped<T extends WorkerIssue>(
   issues: T[],
   retryState: ReadonlyMap<string, RetryState>,
-  maxAttempts = DEFAULT_MAX_ATTEMPTS
+  maxAttempts = DEFAULT_MAX_ATTEMPTS,
 ): T[] {
   return issues.filter((issue) => {
     const state = retryState.get(issue.ref);
     if (!state || state.lastUpdatedAt !== issue.updatedAt) return true;
     if (state.attempts >= maxAttempts) {
       console.log(
-        `parking ${issue.ref}: ${state.attempts} dispatch attempts with no change since the last one`
+        `parking ${issue.ref}: ${state.attempts} dispatch attempts with no change since the last one`,
       );
       return false;
     }
@@ -545,7 +562,11 @@ export function filterRetryCapped<T extends WorkerIssue>(
  * attempt, otherwise starts a fresh count at 1 for the new `updatedAt`.
  * Mutates `retryState` in place.
  */
-export function recordAttempt(retryState: Map<string, RetryState>, ref: string, updatedAt: number): void {
+export function recordAttempt(
+  retryState: Map<string, RetryState>,
+  ref: string,
+  updatedAt: number,
+): void {
   const state = retryState.get(ref);
   if (state && state.lastUpdatedAt === updatedAt) {
     retryState.set(ref, { attempts: state.attempts + 1, lastUpdatedAt: updatedAt });
@@ -571,7 +592,7 @@ export function recordAttempt(retryState: Map<string, RetryState>, ref: string, 
  */
 export function buildContainerizedPrompt(
   ref: string,
-  opts: { resumed?: boolean; baseBranch?: string } = {}
+  opts: { resumed?: boolean; baseBranch?: string } = {},
 ): string {
   const baseBranch = opts.baseBranch ?? DEFAULT_BASE_BRANCH;
   const resumedPreamble = opts.resumed
@@ -644,10 +665,11 @@ export async function withRetry<T>(
     backoffsMs?: number[];
     onRetry?: (attempt: number, err: unknown, delayMs: number) => void;
     sleep?: (ms: number) => Promise<void>;
-  } = {}
+  } = {},
 ): Promise<T> {
   const backoffs = opts.backoffsMs ?? RETRY_BACKOFFS_MS;
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn();
@@ -686,11 +708,11 @@ export function buildDockerArgs(
   project: WorkerProject,
   config: WorkerConfig,
   env: NodeJS.ProcessEnv,
-  opts: { resumed?: boolean } = {}
+  opts: { resumed?: boolean } = {},
 ): string[] {
   if (!env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY) {
     throw new Error(
-      "containerized dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment"
+      "containerized dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment",
     );
   }
 
@@ -703,24 +725,38 @@ export function buildDockerArgs(
   return [
     "run",
     "--rm",
-    "--name", `syd-${issue.ref}`,
-    "--memory", CONTAINER_MEMORY_LIMIT,
-    "--cpus", CONTAINER_CPU_LIMIT,
-    "--pids-limit", CONTAINER_PIDS_LIMIT,
+    "--name",
+    `syd-${issue.ref}`,
+    "--memory",
+    CONTAINER_MEMORY_LIMIT,
+    "--cpus",
+    CONTAINER_CPU_LIMIT,
+    "--pids-limit",
+    CONTAINER_PIDS_LIMIT,
     // SYD-117: the image already drops to a non-root user (Dockerfile.worker),
     // this stops a compromised session from regaining privilege via a setuid
     // binary even so.
-    "--security-opt", "no-new-privileges",
-    "-v", `${project.repo}:/origin`,
-    "-e", `ISSUE_REF=${issue.ref}`,
-    "-e", `SWITCHYARD_URL=${config.url}`,
-    "-e", "SWITCHYARD_TOKEN",
-    "-e", "CLAUDE_CODE_OAUTH_TOKEN",
-    "-e", "ANTHROPIC_API_KEY",
-    "-e", `WORKER_PROMPT=${prompt}`,
-    "-e", `ALLOWED_TOOLS=${allowedTools.join(",")}`,
+    "--security-opt",
+    "no-new-privileges",
+    "-v",
+    `${project.repo}:/origin`,
+    "-e",
+    `ISSUE_REF=${issue.ref}`,
+    "-e",
+    `SWITCHYARD_URL=${config.url}`,
+    "-e",
+    "SWITCHYARD_TOKEN",
+    "-e",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "-e",
+    "ANTHROPIC_API_KEY",
+    "-e",
+    `WORKER_PROMPT=${prompt}`,
+    "-e",
+    `ALLOWED_TOOLS=${allowedTools.join(",")}`,
     ...(stackChecks ? ["-e", `STACK_CHECKS=${stackChecks}`] : []),
-    "-e", `BASE_BRANCH=${baseBranch}`,
+    "-e",
+    `BASE_BRANCH=${baseBranch}`,
     image,
   ];
 }

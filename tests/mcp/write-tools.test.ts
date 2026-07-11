@@ -46,7 +46,8 @@ describe("MCP write tools", () => {
       arguments: {
         project_key: "AIPI",
         title: "Flaky test in api suite",
-        description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
+        description:
+          "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
         source_type: "todo",
         source_detail: "src/api.ts:88",
       },
@@ -63,7 +64,8 @@ describe("MCP write tools", () => {
         project_key: "AIPI",
         title: "Flaky test in api suite",
         summary: "api_test.ts flakes intermittently under load.",
-        description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
+        description:
+          "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
         source_type: "todo",
         source_detail: "src/api.ts:88",
       },
@@ -72,16 +74,24 @@ describe("MCP write tools", () => {
     expect(issue.summary).toBe("api_test.ts flakes intermittently under load.");
     expect(getIssue(db, issue.ref).summary).toBe("api_test.ts flakes intermittently under load.");
 
-    const updated = JSON.parse(text(await client.callTool({
-      name: "update_issue",
-      arguments: { ref: issue.ref, summary: "Updated summary." },
-    })));
+    const updated = JSON.parse(
+      text(
+        await client.callTool({
+          name: "update_issue",
+          arguments: { ref: issue.ref, summary: "Updated summary." },
+        }),
+      ),
+    );
     expect(updated.summary).toBe("Updated summary.");
 
-    const cleared = JSON.parse(text(await client.callTool({
-      name: "update_issue",
-      arguments: { ref: issue.ref, summary: null },
-    })));
+    const cleared = JSON.parse(
+      text(
+        await client.callTool({
+          name: "update_issue",
+          arguments: { ref: issue.ref, summary: null },
+        }),
+      ),
+    );
     expect(cleared.summary).toBeNull();
   });
 
@@ -112,17 +122,27 @@ describe("MCP write tools", () => {
       name: "update_issue",
       arguments: { ref: "AIPI-1", status: "todo" },
     });
-    const claimed = JSON.parse(text(await client.callTool({
-      name: "claim_issue", arguments: { ref: "AIPI-1" },
-    })));
+    const claimed = JSON.parse(
+      text(
+        await client.callTool({
+          name: "claim_issue",
+          arguments: { ref: "AIPI-1" },
+        }),
+      ),
+    );
     expect(claimed.status).toBe("in_progress");
     await client.callTool({
       name: "comment",
       arguments: { ref: "AIPI-1", body: "Done, verified: 3 tests pass." },
     });
-    const reviewed = JSON.parse(text(await client.callTool({
-      name: "update_issue", arguments: { ref: "AIPI-1", status: "in_review" },
-    })));
+    const reviewed = JSON.parse(
+      text(
+        await client.callTool({
+          name: "update_issue",
+          arguments: { ref: "AIPI-1", status: "in_review" },
+        }),
+      ),
+    );
     expect(reviewed.status).toBe("in_review");
   });
 
@@ -147,9 +167,12 @@ describe("MCP write tools", () => {
     await client.callTool({
       name: "file_issue",
       arguments: {
-        project_key: "AIPI", title: "A",
-        description: "Noticed while working another task; needs a human to confirm scope before scheduling.",
-        source_type: "manual", source_detail: "x",
+        project_key: "AIPI",
+        title: "A",
+        description:
+          "Noticed while working another task; needs a human to confirm scope before scheduling.",
+        source_type: "manual",
+        source_detail: "x",
       },
     });
     const r = await client.callTool({ name: "triage_queue", arguments: {} });
@@ -162,20 +185,29 @@ describe("MCP write tools", () => {
     await client.callTool({
       name: "file_issue",
       arguments: {
-        project_key: "AIPI", title: "Snoozable",
+        project_key: "AIPI",
+        title: "Snoozable",
         description: "Needs a human to confirm scope before scheduling.",
-        source_type: "manual", source_detail: "x",
+        source_type: "manual",
+        source_detail: "x",
       },
     });
     const future = Math.floor(Date.now() / 1000) + 3600;
     snoozeIssue(db, human, "AIPI-1", future);
 
-    const defaultQueue = JSON.parse(text(await client.callTool({ name: "triage_queue", arguments: {} })));
+    const defaultQueue = JSON.parse(
+      text(await client.callTool({ name: "triage_queue", arguments: {} })),
+    );
     expect(defaultQueue).toHaveLength(0);
 
-    const withSnoozed = JSON.parse(text(await client.callTool({
-      name: "triage_queue", arguments: { include_snoozed: true },
-    })));
+    const withSnoozed = JSON.parse(
+      text(
+        await client.callTool({
+          name: "triage_queue",
+          arguments: { include_snoozed: true },
+        }),
+      ),
+    );
     expect(withSnoozed).toHaveLength(1);
     expect(withSnoozed[0].ref).toBe("AIPI-1");
   });
@@ -184,28 +216,44 @@ describe("MCP write tools", () => {
     await client.callTool({
       name: "file_issue",
       arguments: {
-        project_key: "AIPI", title: "Ambiguous requirement",
+        project_key: "AIPI",
+        title: "Ambiguous requirement",
         description: "Not sure whether to support multi-tenant here; needs a human decision.",
-        source_type: "manual", source_detail: "x",
+        source_type: "manual",
+        source_detail: "x",
       },
     });
-    const escalated = JSON.parse(text(await client.callTool({
-      name: "request_human_input",
-      arguments: { ref: "AIPI-1", question: "Should this support multi-tenant configs?" },
-    })));
+    const escalated = JSON.parse(
+      text(
+        await client.callTool({
+          name: "request_human_input",
+          arguments: { ref: "AIPI-1", question: "Should this support multi-tenant configs?" },
+        }),
+      ),
+    );
     expect(escalated.needsInput).toBe(true);
 
-    const fetched = JSON.parse(text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })));
+    const fetched = JSON.parse(
+      text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })),
+    );
     expect(fetched.needsInput).toBe(true);
     expect(fetched.activity.some((e: { type: string }) => e.type === "needs_input_set")).toBe(true);
-    expect(fetched.activity.some((e: { type: string; payload: { body: string } }) =>
-      e.type === "comment" && e.payload.body === "Should this support multi-tenant configs?"
-    )).toBe(true);
+    expect(
+      fetched.activity.some(
+        (e: { type: string; payload: { body: string } }) =>
+          e.type === "comment" && e.payload.body === "Should this support multi-tenant configs?",
+      ),
+    ).toBe(true);
 
     const humanClient = await connect(human);
-    await humanClient.callTool({ name: "comment", arguments: { ref: "AIPI-1", body: "No, single-tenant is fine." } });
+    await humanClient.callTool({
+      name: "comment",
+      arguments: { ref: "AIPI-1", body: "No, single-tenant is fine." },
+    });
 
-    const cleared = JSON.parse(text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })));
+    const cleared = JSON.parse(
+      text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })),
+    );
     expect(cleared.needsInput).toBe(false);
   });
 
@@ -221,7 +269,11 @@ describe("MCP write tools", () => {
       const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
       const r = await attachClient.callTool({
         name: "attach_file",
-        arguments: { ref: "AIPI-1", filename: "evidence.png", content_base64: png.toString("base64") },
+        arguments: {
+          ref: "AIPI-1",
+          filename: "evidence.png",
+          content_base64: png.toString("base64"),
+        },
       });
       const result = JSON.parse(text(r)) as { markdown: string; url: string };
       expect(result.url).toMatch(/^\/api\/attachments\/\d+\/evidence\.png$/);
@@ -231,8 +283,12 @@ describe("MCP write tools", () => {
       const onDisk = readFileSync(path.join(attachmentsDir, id));
       expect(onDisk.equals(png)).toBe(true);
 
-      const issue = JSON.parse(text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })));
-      expect(issue.activity.some((e: { type: string }) => e.type === "attachment_added")).toBe(true);
+      const issue = JSON.parse(
+        text(await client.callTool({ name: "get_issue", arguments: { ref: "AIPI-1" } })),
+      );
+      expect(issue.activity.some((e: { type: string }) => e.type === "attachment_added")).toBe(
+        true,
+      );
     } finally {
       rmSync(attachmentsDir, { recursive: true, force: true });
     }
@@ -249,7 +305,11 @@ describe("MCP write tools", () => {
       const attachClient = await connect(agent, attachmentsDir);
       const r = await attachClient.callTool({
         name: "attach_file",
-        arguments: { ref: "AIPI-1", filename: "evidence.png", content_base64: "not-valid-base64!!!" },
+        arguments: {
+          ref: "AIPI-1",
+          filename: "evidence.png",
+          content_base64: "not-valid-base64!!!",
+        },
       });
       expect(r.isError).toBe(true);
       expect(text(r)).toMatch(/not valid base64/i);
@@ -262,9 +322,11 @@ describe("MCP write tools", () => {
     await client.callTool({
       name: "file_issue",
       arguments: {
-        project_key: "AIPI", title: "Blocked on decision",
+        project_key: "AIPI",
+        title: "Blocked on decision",
         description: "Needs a human decision before proceeding.",
-        source_type: "manual", source_detail: "x",
+        source_type: "manual",
+        source_detail: "x",
       },
     });
     await client.callTool({
@@ -279,10 +341,19 @@ describe("MCP write tools", () => {
 
   describe("progress_note (SYD-43)", () => {
     it("records a progress_note event on the activity feed", async () => {
-      const filed = JSON.parse(text(await client.callTool({
-        name: "file_issue",
-        arguments: { project_key: "AIPI", title: "T", description: "d", source_type: "session" },
-      })));
+      const filed = JSON.parse(
+        text(
+          await client.callTool({
+            name: "file_issue",
+            arguments: {
+              project_key: "AIPI",
+              title: "T",
+              description: "d",
+              source_type: "session",
+            },
+          }),
+        ),
+      );
       const r = await client.callTool({
         name: "progress_note",
         arguments: { ref: filed.ref, note: "tests written, implementing the service" },
@@ -293,11 +364,23 @@ describe("MCP write tools", () => {
     });
 
     it("returns an isError result for an empty note", async () => {
-      const filed = JSON.parse(text(await client.callTool({
-        name: "file_issue",
-        arguments: { project_key: "AIPI", title: "T2", description: "d", source_type: "session" },
-      })));
-      const r = await client.callTool({ name: "progress_note", arguments: { ref: filed.ref, note: " " } });
+      const filed = JSON.parse(
+        text(
+          await client.callTool({
+            name: "file_issue",
+            arguments: {
+              project_key: "AIPI",
+              title: "T2",
+              description: "d",
+              source_type: "session",
+            },
+          }),
+        ),
+      );
+      const r = await client.callTool({
+        name: "progress_note",
+        arguments: { ref: filed.ref, note: " " },
+      });
       expect(r.isError).toBe(true);
     });
   });

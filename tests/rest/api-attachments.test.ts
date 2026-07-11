@@ -32,7 +32,8 @@ async function fileIssue() {
     method: "POST",
     headers: { ...agentH, "content-type": "application/json" },
     body: JSON.stringify({
-      projectKey: "SYD", title: "Needs a screenshot",
+      projectKey: "SYD",
+      title: "Needs a screenshot",
       description: "Repro needs visual evidence attached.",
       provenance: { sourceType: "manual", detail: "x" },
     }),
@@ -57,8 +58,17 @@ describe("attachment routes", () => {
     expect(json.markdown).toBe(`![screenshot.png](${json.url})`);
 
     const detail = await body<{
-      activity: { type: string; payload: { id: number; filename: string; size: number; contentType: string } }[];
-      attachments: { id: number; filename: string; contentType: string; size: number; actorName: string }[];
+      activity: {
+        type: string;
+        payload: { id: number; filename: string; size: number; contentType: string };
+      }[];
+      attachments: {
+        id: number;
+        filename: string;
+        contentType: string;
+        size: number;
+        actorName: string;
+      }[];
     }>(await app.request(`/issues/${ref}`, { headers: agentH }));
     const event = detail.activity.find((a) => a.type === "attachment_added");
     expect(event).toBeDefined();
@@ -68,7 +78,14 @@ describe("attachment routes", () => {
     expect(event!.payload.contentType).toBe("image/png");
 
     expect(detail.attachments).toEqual([
-      { id: json.id, filename: "screenshot.png", contentType: "image/png", size: data.length, actorName: "claude/dev", createdAt: expect.any(Number) },
+      {
+        id: json.id,
+        filename: "screenshot.png",
+        contentType: "image/png",
+        size: data.length,
+        actorName: "claude/dev",
+        createdAt: expect.any(Number),
+      },
     ]);
   });
 
@@ -78,7 +95,7 @@ describe("attachment routes", () => {
     const second = await body<{ id: number }>(await upload(ref, "two.png", Buffer.from([4, 5, 6])));
 
     const list = await body<{ id: number; filename: string }[]>(
-      await app.request(`/issues/${ref}/attachments`, { headers: agentH })
+      await app.request(`/issues/${ref}/attachments`, { headers: agentH }),
     );
     expect(list.map((a) => a.id)).toEqual([first.id, second.id]);
     expect(list.map((a) => a.filename)).toEqual(["one.png", "two.png"]);
@@ -142,7 +159,7 @@ describe("attachment routes", () => {
   it("requires auth on GET", async () => {
     const { ref } = await fileIssue();
     const uploaded = await body<{ id: number; url: string }>(
-      await upload(ref, "shot.png", Buffer.from([1, 2, 3]))
+      await upload(ref, "shot.png", Buffer.from([1, 2, 3])),
     );
     const res = await app.request(uploaded.url.replace(/^\/api/, ""));
     expect(res.status).toBe(401);

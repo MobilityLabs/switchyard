@@ -83,9 +83,7 @@ describe("DesignEmbeds iframe", () => {
     const container = await renderExpanded("https://figma.com/file/abc");
     const iframe = container.querySelector("iframe")!;
     expect(iframe).not.toBeNull();
-    expect(iframe.getAttribute("sandbox")).toBe(
-      "allow-scripts allow-same-origin allow-popups",
-    );
+    expect(iframe.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-popups");
   });
 
   it("routes figma URLs through the figma embed endpoint, encoded", async () => {

@@ -11,7 +11,13 @@ import { useActorNames } from "../useActorNames";
 import { navigate, redirect } from "../router";
 import { countNewArrivals, firstRef, pickAdjacentRef } from "./reviewQueue";
 
-export default function Review({ project, currentRef }: { project: string | null; currentRef: string | null }) {
+export default function Review({
+  project,
+  currentRef,
+}: {
+  project: string | null;
+  currentRef: string | null;
+}) {
   const { data, error, reload } = usePoll(
     () => listIssues({ project: project ?? undefined, status: "in_review" }),
     [project],
@@ -46,13 +52,15 @@ export default function Review({ project, currentRef }: { project: string | null
     // from it here would repopulate the just-cleared queue with the wrong
     // project's issues. Only accept it once every item actually belongs to
     // the current scope (vacuously true for "All" or an empty response).
-    const belongsToScope = project === null || data.every((i) => projectKeyFromRef(i.ref) === project);
+    const belongsToScope =
+      project === null || data.every((i) => projectKeyFromRef(i.ref) === project);
     if (belongsToScope) setQueue(data);
   }, [data, queue.length, project]);
 
   // Bare `/review` or `/review/:project` redirects to the first queued issue.
   useEffect(() => {
-    if (currentRef === null && queue.length > 0) redirect({ view: "review", project, ref: firstRef(queue) });
+    if (currentRef === null && queue.length > 0)
+      redirect({ view: "review", project, ref: firstRef(queue) });
   }, [currentRef, project, queue]);
 
   const list = data ?? [];
@@ -60,8 +68,11 @@ export default function Review({ project, currentRef }: { project: string | null
   const leftReview = currentRef !== null && data !== null && !current;
   const newArrivals = data ? countNewArrivals(data, queue) : 0;
 
-  const { onPaste, uploading, uploadError, setUploadError, textareaRef } =
-    usePasteUpload(current?.ref ?? "", draft, setDraft);
+  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
+    current?.ref ?? "",
+    draft,
+    setDraft,
+  );
 
   const detail = usePoll<IssueDetailType | null>(
     () => (current ? getIssue(current.ref) : Promise.resolve(null)),
@@ -95,19 +106,30 @@ export default function Review({ project, currentRef }: { project: string | null
     if (!current) return;
     const nextRef = pickAdjacentRef(queue, currentRef, 1);
     updateIssue(current.ref, { status: "done" }).then(
-      () => { setActionError(null); reload(); moveTo(nextRef); },
+      () => {
+        setActionError(null);
+        reload();
+        moveTo(nextRef);
+      },
       (e) => setActionError(e.message),
     );
   }
   function sendBack() {
     if (!current) return;
     const body = draft.trim();
-    if (!body) { setActionError("A comment is required to send an issue back — write what needs to change."); return; }
+    if (!body) {
+      setActionError("A comment is required to send an issue back — write what needs to change.");
+      return;
+    }
     const nextRef = pickAdjacentRef(queue, currentRef, 1);
     addComment(current.ref, body)
       .then(() => updateIssue(current.ref, { status: "todo" }))
       .then(
-        () => { setActionError(null); reload(); moveTo(nextRef); },
+        () => {
+          setActionError(null);
+          reload();
+          moveTo(nextRef);
+        },
         (e) => setActionError(e.message),
       );
   }
@@ -117,7 +139,11 @@ export default function Review({ project, currentRef }: { project: string | null
     const body = draft.trim();
     if (!body) return;
     addComment(current.ref, body).then(
-      () => { setActionError(null); setDraft(""); detail.reload(); },
+      () => {
+        setActionError(null);
+        setDraft("");
+        detail.reload();
+      },
       (e) => setActionError(e.message),
     );
   }
@@ -126,10 +152,19 @@ export default function Review({ project, currentRef }: { project: string | null
     function onKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "TEXTAREA" || tag === "INPUT") return;
-      if (e.key === "a") { e.preventDefault(); approve(); }
-      else if (e.key === "s") { e.preventDefault(); sendBack(); }
-      else if (e.key === "j" || e.key === "ArrowRight") { e.preventDefault(); next(); }
-      else if (e.key === "k" || e.key === "ArrowLeft") { e.preventDefault(); prev(); }
+      if (e.key === "a") {
+        e.preventDefault();
+        approve();
+      } else if (e.key === "s") {
+        e.preventDefault();
+        sendBack();
+      } else if (e.key === "j" || e.key === "ArrowRight") {
+        e.preventDefault();
+        next();
+      } else if (e.key === "k" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        prev();
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -153,19 +188,29 @@ export default function Review({ project, currentRef }: { project: string | null
   return (
     <section className="review">
       {actionError && (
-        <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
+        <p className="error-bar">
+          {actionError} <button onClick={() => setActionError(null)}>×</button>
+        </p>
       )}
       {uploadError && (
-        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
+        <p className="error-bar">
+          {uploadError} <button onClick={() => setUploadError(null)}>×</button>
+        </p>
       )}
       <PollErrorBar error={error} />
 
       <header className="review-head">
         <h2>{position >= 0 ? `Reviewing ${position + 1} of ${queue.length}` : "Reviewing"}</h2>
         <div className="review-nav">
-          {newArrivals > 0 && <span className="badge warn review-new-arrivals">{newArrivals} new</span>}
-          <button onClick={prev} disabled={!pickAdjacentRef(queue, currentRef, -1)}>‹ Prev</button>
-          <button onClick={next} disabled={!pickAdjacentRef(queue, currentRef, 1)}>Next ›</button>
+          {newArrivals > 0 && (
+            <span className="badge warn review-new-arrivals">{newArrivals} new</span>
+          )}
+          <button onClick={prev} disabled={!pickAdjacentRef(queue, currentRef, -1)}>
+            ‹ Prev
+          </button>
+          <button onClick={next} disabled={!pickAdjacentRef(queue, currentRef, 1)}>
+            Next ›
+          </button>
         </div>
       </header>
 
@@ -183,35 +228,51 @@ export default function Review({ project, currentRef }: { project: string | null
             <h3>{current.title}</h3>
             <span className={`badge prio prio-${current.priority}`}>{current.priority}</span>
             {current.attention && (
-              <span className="badge danger" title={current.attention.message}>⛔ delivery failed</span>
+              <span className="badge danger" title={current.attention.message}>
+                ⛔ delivery failed
+              </span>
             )}
           </div>
 
           {current.sourceType && (
             <div className="provenance panel">
               Filed from: {current.sourceType} · {current.sourceDetail ?? ""}
-              {current.sourceUrl && <> · <a href={current.sourceUrl} target="_blank" rel="noreferrer">link</a></>}
+              {current.sourceUrl && (
+                <>
+                  {" "}
+                  ·{" "}
+                  <a href={current.sourceUrl} target="_blank" rel="noreferrer">
+                    link
+                  </a>
+                </>
+              )}
             </div>
           )}
 
-          {current.description
-            ? (
-              <div className="description panel">
-                <Markdown
-                  text={current.description}
-                  projectKey={projectKeyFromRef(current.ref)}
-                  knownActorNames={actorNames}
-                />
-              </div>
-            )
-            : <p className="empty">No description.</p>}
+          {current.description ? (
+            <div className="description panel">
+              <Markdown
+                text={current.description}
+                projectKey={projectKeyFromRef(current.ref)}
+                knownActorNames={actorNames}
+              />
+            </div>
+          ) : (
+            <p className="empty">No description.</p>
+          )}
           {current.description && <DesignEmbeds text={current.description} />}
 
           <h4>Activity</h4>
           <div className="activity">
-            {detail.data
-              ? <ActivityFeed activity={detail.data.activity} projectKey={projectKeyFromRef(current.ref)} knownActorNames={actorNames} />
-              : <p className="empty">Loading activity…</p>}
+            {detail.data ? (
+              <ActivityFeed
+                activity={detail.data.activity}
+                projectKey={projectKeyFromRef(current.ref)}
+                knownActorNames={actorNames}
+              />
+            ) : (
+              <p className="empty">Loading activity…</p>
+            )}
           </div>
 
           <div className="composer">
@@ -226,9 +287,15 @@ export default function Review({ project, currentRef }: { project: string | null
           </div>
 
           <div className="review-verdicts">
-            <button className="primary" disabled={uploading} onClick={approve}>Approve → done <kbd>a</kbd></button>
-            <button disabled={uploading} onClick={sendBack}>Send back → todo <kbd>s</kbd></button>
-            <button disabled={!draft.trim() || uploading} onClick={postComment}>Comment</button>
+            <button className="primary" disabled={uploading} onClick={approve}>
+              Approve → done <kbd>a</kbd>
+            </button>
+            <button disabled={uploading} onClick={sendBack}>
+              Send back → todo <kbd>s</kbd>
+            </button>
+            <button disabled={!draft.trim() || uploading} onClick={postComment}>
+              Comment
+            </button>
           </div>
         </article>
       )}

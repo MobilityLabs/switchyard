@@ -20,7 +20,7 @@ export function usePasteUpload(ref: string, draft: string, setDraft: (value: str
     try {
       let next = draft;
       const el = textareaRef.current;
-      let cursor = el ? el.selectionStart ?? next.length : next.length;
+      let cursor = el ? (el.selectionStart ?? next.length) : next.length;
       for (const file of files) {
         const { markdown } = await uploadAttachment(ref, file);
         const insert = `${next.slice(0, cursor).trimEnd() ? " " : ""}${markdown} `;

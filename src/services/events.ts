@@ -4,7 +4,7 @@ import { events, actors, issues, projects } from "../db/schema.js";
 
 export function recordEvent(
   db: Db,
-  e: { issueId: number; actorId: number; type: string; payload?: Record<string, unknown> }
+  e: { issueId: number; actorId: number; type: string; payload?: Record<string, unknown> },
 ): void {
   db.insert(events)
     .values({ issueId: e.issueId, actorId: e.actorId, type: e.type, payload: e.payload ?? {} })

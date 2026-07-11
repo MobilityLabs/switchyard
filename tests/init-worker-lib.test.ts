@@ -31,14 +31,12 @@ import {
 
 describe("parseDotEnv", () => {
   it("parses flat KEY=VALUE lines, skipping comments and blanks", () => {
-    const env = parseDotEnv(
-      "# tokens\nSWITCHYARD_URL=http://x:3300\n\nSWITCHYARD_TOKEN=syd_abc\n"
-    );
+    const env = parseDotEnv("# tokens\nSWITCHYARD_URL=http://x:3300\n\nSWITCHYARD_TOKEN=syd_abc\n");
     expect(env).toEqual({ SWITCHYARD_URL: "http://x:3300", SWITCHYARD_TOKEN: "syd_abc" });
   });
 
   it("strips quotes and the export prefix", () => {
-    const env = parseDotEnv('export A="quoted value"\nB=\'single\'\nC=bare');
+    const env = parseDotEnv("export A=\"quoted value\"\nB='single'\nC=bare");
     expect(env).toEqual({ A: "quoted value", B: "single", C: "bare" });
   });
 
@@ -99,18 +97,24 @@ describe("validateWorkerConfig", () => {
   });
 
   it("accepts an optional per-project baseBranch and rejects an empty one", () => {
-    expect(validateWorkerConfig({
-      ...good,
-      projects: { SYD: { repo: "/repo", baseBranch: "develop" } },
-    })).toEqual([]);
-    expect(validateWorkerConfig({
-      ...good,
-      projects: { SYD: { repo: "/repo", baseBranch: "" } },
-    })).toHaveLength(1);
-    expect(validateWorkerConfig({
-      ...good,
-      projects: { SYD: { repo: "/repo", baseBranch: 5 } },
-    })).toHaveLength(1);
+    expect(
+      validateWorkerConfig({
+        ...good,
+        projects: { SYD: { repo: "/repo", baseBranch: "develop" } },
+      }),
+    ).toEqual([]);
+    expect(
+      validateWorkerConfig({
+        ...good,
+        projects: { SYD: { repo: "/repo", baseBranch: "" } },
+      }),
+    ).toHaveLength(1);
+    expect(
+      validateWorkerConfig({
+        ...good,
+        projects: { SYD: { repo: "/repo", baseBranch: 5 } },
+      }),
+    ).toHaveLength(1);
   });
 
   it("rejects a bare scheme url and a string containerized flag", () => {
@@ -160,13 +164,21 @@ describe("validateWorkerConfig", () => {
     };
 
     it("accepts a valid delivery block", () => {
-      expect(validateWorkerConfig({
-        ...base,
-        delivery: {
-          openPrs: true, pollSeconds: 30, cloneDir: "/tmp/clones", deploy: false, verify: false,
-          autoRebase: true, reconcile: true, conflictResolution: true,
-        },
-      })).toEqual([]);
+      expect(
+        validateWorkerConfig({
+          ...base,
+          delivery: {
+            openPrs: true,
+            pollSeconds: 30,
+            cloneDir: "/tmp/clones",
+            deploy: false,
+            verify: false,
+            autoRebase: true,
+            reconcile: true,
+            conflictResolution: true,
+          },
+        }),
+      ).toEqual([]);
     });
 
     it("accepts an absent delivery block", () => {
@@ -181,8 +193,14 @@ describe("validateWorkerConfig", () => {
       const problems = validateWorkerConfig({
         ...base,
         delivery: {
-          openPrs: "true", pollSeconds: -5, cloneDir: "", deploy: 1, verify: "yes",
-          autoRebase: "nope", reconcile: "nope", conflictResolution: "nope",
+          openPrs: "true",
+          pollSeconds: -5,
+          cloneDir: "",
+          deploy: 1,
+          verify: "yes",
+          autoRebase: "nope",
+          reconcile: "nope",
+          conflictResolution: "nope",
         },
       });
       expect(problems.some((p) => p.includes("delivery.openPrs"))).toBe(true);
@@ -209,54 +227,66 @@ describe("validateWorkerConfig", () => {
     });
 
     it("accepts a fully-populated stack block", () => {
-      expect(validateWorkerConfig({
-        ...base,
-        projects: {
-          SYD: {
-            repo: "/repo",
-            stack: {
-              node: "20",
-              cli: [{ name: "gh", check: "gh --version", install: "brew install gh" }],
-              ports: [3300],
+      expect(
+        validateWorkerConfig({
+          ...base,
+          projects: {
+            SYD: {
+              repo: "/repo",
+              stack: {
+                node: "20",
+                cli: [{ name: "gh", check: "gh --version", install: "brew install gh" }],
+                ports: [3300],
+              },
             },
           },
-        },
-      })).toEqual([]);
+        }),
+      ).toEqual([]);
     });
 
     it("rejects a non-object stack", () => {
-      const problems = validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo", stack: "yes" } } });
+      const problems = validateWorkerConfig({
+        ...base,
+        projects: { SYD: { repo: "/repo", stack: "yes" } },
+      });
       expect(problems.some((p) => p.includes("stack"))).toBe(true);
     });
 
     it("rejects a non-string node", () => {
       const problems = validateWorkerConfig({
-        ...base, projects: { SYD: { repo: "/repo", stack: { node: 20 } } },
+        ...base,
+        projects: { SYD: { repo: "/repo", stack: { node: 20 } } },
       });
       expect(problems.some((p) => p.includes("stack.node"))).toBe(true);
     });
 
     it("rejects a non-array ports and non-positive-integer entries", () => {
       expect(
-        validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo", stack: { ports: "3300" } } } })
-          .some((p) => p.includes("stack.ports"))
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", stack: { ports: "3300" } } },
+        }).some((p) => p.includes("stack.ports")),
       ).toBe(true);
       expect(
-        validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo", stack: { ports: [0, -1, 1.5] } } } })
-          .some((p) => p.includes("stack.ports"))
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", stack: { ports: [0, -1, 1.5] } } },
+        }).some((p) => p.includes("stack.ports")),
       ).toBe(true);
     });
 
     it("rejects a non-array cli", () => {
       const problems = validateWorkerConfig({
-        ...base, projects: { SYD: { repo: "/repo", stack: { cli: "gh" } } },
+        ...base,
+        projects: { SYD: { repo: "/repo", stack: { cli: "gh" } } },
       });
       expect(problems.some((p) => p.includes("stack.cli"))).toBe(true);
     });
 
     it("rejects a cli entry missing name or check", () => {
       const problems = validateWorkerConfig({
-        ...base, projects: { SYD: { repo: "/repo", stack: { cli: [{ install: "brew install gh" }] } } },
+        ...base,
+        projects: { SYD: { repo: "/repo", stack: { cli: [{ install: "brew install gh" }] } } },
       });
       expect(problems.some((p) => p.includes("stack.cli[0].name"))).toBe(true);
       expect(problems.some((p) => p.includes("stack.cli[0].check"))).toBe(true);
@@ -265,7 +295,12 @@ describe("validateWorkerConfig", () => {
     it("rejects a blank install string", () => {
       const problems = validateWorkerConfig({
         ...base,
-        projects: { SYD: { repo: "/repo", stack: { cli: [{ name: "gh", check: "gh --version", install: "" }] } } },
+        projects: {
+          SYD: {
+            repo: "/repo",
+            stack: { cli: [{ name: "gh", check: "gh --version", install: "" }] },
+          },
+        },
       });
       expect(problems.some((p) => p.includes("stack.cli[0].install"))).toBe(true);
     });
@@ -273,31 +308,31 @@ describe("validateWorkerConfig", () => {
 });
 
 describe("validateWorkerConfig githubPoll block (SYD-71)", () => {
-    const base = {
-      url: "http://localhost:3300",
-      label: "auto",
-      intervalSeconds: 300,
-      maxConcurrent: 1,
-      projects: { SYD: { repo: "/repo" } },
-    };
+  const base = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 1,
+    projects: { SYD: { repo: "/repo" } },
+  };
 
-    it("accepts a valid githubPoll block", () => {
-      expect(validateWorkerConfig({ ...base, githubPoll: { pollSeconds: 120 } })).toEqual([]);
-    });
-
-    it("accepts an absent githubPoll block", () => {
-      expect(validateWorkerConfig(base)).toEqual([]);
-    });
-
-    it("rejects a non-object githubPoll block", () => {
-      expect(validateWorkerConfig({ ...base, githubPoll: "yes" }).join()).toContain("githubPoll");
-    });
-
-    it("rejects a non-positive pollSeconds", () => {
-      const problems = validateWorkerConfig({ ...base, githubPoll: { pollSeconds: -5 } });
-      expect(problems.some((p) => p.includes("githubPoll.pollSeconds"))).toBe(true);
-    });
+  it("accepts a valid githubPoll block", () => {
+    expect(validateWorkerConfig({ ...base, githubPoll: { pollSeconds: 120 } })).toEqual([]);
   });
+
+  it("accepts an absent githubPoll block", () => {
+    expect(validateWorkerConfig(base)).toEqual([]);
+  });
+
+  it("rejects a non-object githubPoll block", () => {
+    expect(validateWorkerConfig({ ...base, githubPoll: "yes" }).join()).toContain("githubPoll");
+  });
+
+  it("rejects a non-positive pollSeconds", () => {
+    const problems = validateWorkerConfig({ ...base, githubPoll: { pollSeconds: -5 } });
+    expect(problems.some((p) => p.includes("githubPoll.pollSeconds"))).toBe(true);
+  });
+});
 
 describe("nodeVersionSatisfies", () => {
   it("accepts an actual version at or above the required major", () => {
@@ -355,7 +390,9 @@ describe("renderWorkerPlist", () => {
   it("execs tsx directly (no shell) and embeds no secret material", () => {
     expect(plist).toContain("<string>com.switchyard.worker</string>");
     expect(plist).toContain("<string>/Users/sean/sites/switchyard/node_modules/.bin/tsx</string>");
-    expect(plist).toContain("<string>/Users/sean/sites/switchyard/scripts/agent-worker.ts</string>");
+    expect(plist).toContain(
+      "<string>/Users/sean/sites/switchyard/scripts/agent-worker.ts</string>",
+    );
     expect(plist).not.toContain("/bin/bash");
     expect(plist).not.toContain(".env");
     // No secret material may ever appear in the plist (world-readable).
@@ -364,7 +401,7 @@ describe("renderWorkerPlist", () => {
 
   it("restarts on crash only — a clean exit must stay down", () => {
     expect(plist).toMatch(
-      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/
+      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/,
     );
     expect(plist).not.toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
   });
@@ -431,13 +468,24 @@ describe("parsePlistPath", () => {
       extraPathDirs: ["/Users/sean/.local/bin"],
     });
     expect(parsePlistPath(plist)).toEqual([
-      "/n", "/Users/sean/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+      "/n",
+      "/Users/sean/.local/bin",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
     ]);
   });
 
   it("omits extraPathDirs entirely when none were given, matching the pre-SYD-74 default", () => {
     const plist = renderWorkerPlist({ repoRoot: "/r", nodeBinDir: "/n", home: "/h" });
-    expect(parsePlistPath(plist)).toEqual(["/n", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]);
+    expect(parsePlistPath(plist)).toEqual([
+      "/n",
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+    ]);
   });
 
   it("returns an empty list for XML with no PATH key", () => {
@@ -450,7 +498,11 @@ describe("workerLaunchdLabel", () => {
     expect(workerLaunchdLabel("all")).toBe(WORKER_LAUNCHD_LABEL);
     expect(workerLaunchdLabel("code")).toBe(WORKER_CODE_LAUNCHD_LABEL);
     expect(workerLaunchdLabel("answer")).toBe(WORKER_ANSWER_LAUNCHD_LABEL);
-    const labels = new Set([workerLaunchdLabel("all"), workerLaunchdLabel("code"), workerLaunchdLabel("answer")]);
+    const labels = new Set([
+      workerLaunchdLabel("all"),
+      workerLaunchdLabel("code"),
+      workerLaunchdLabel("answer"),
+    ]);
     expect(labels.size).toBe(3);
   });
 });
@@ -510,7 +562,7 @@ describe("insertProjectIntoConfigText", () => {
       NOC: { repo: "/Users/sean/sites/piano-game" },
     });
     expect(updated).toContain(
-      '    "SYD": { "repo": "/Users/sean/sites/switchyard" },\n    "NOC": { "repo": "/Users/sean/sites/piano-game" }'
+      '    "SYD": { "repo": "/Users/sean/sites/switchyard" },\n    "NOC": { "repo": "/Users/sean/sites/piano-game" }',
     );
     // Everything outside the projects block is untouched, character for character.
     expect(updated).toContain('  "url": "http://x:3300",');
@@ -539,7 +591,8 @@ describe("insertProjectIntoConfigText", () => {
   });
 
   it("handles an object with multiple existing projects, inserting after the last", () => {
-    const text = '{\n  "projects": {\n    "A": { "repo": "/a" },\n    "B": { "repo": "/b" }\n  }\n}\n';
+    const text =
+      '{\n  "projects": {\n    "A": { "repo": "/a" },\n    "B": { "repo": "/b" }\n  }\n}\n';
     const updated = insertProjectIntoConfigText(text, "C", "/c");
     const parsed = JSON.parse(updated);
     expect(Object.keys(parsed.projects)).toEqual(["A", "B", "C"]);
@@ -568,7 +621,7 @@ describe("insertProjectIntoConfigText", () => {
         delivery: { openPrs: true },
       },
       null,
-      2
+      2,
     );
     const updated = insertProjectIntoConfigText(text, "NOC", "/repo/noc");
     const parsed = JSON.parse(updated);
@@ -627,7 +680,7 @@ describe("renderDeliverPlist", () => {
 
   it("restarts on crash only, same as the worker plist", () => {
     expect(plist).toMatch(
-      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/
+      /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>/,
     );
   });
 
@@ -713,18 +766,23 @@ describe("parseDebateAcpxReviewers (SYD-82)", () => {
 
   it("accepts an array of objects using name, cli, or command", () => {
     expect(
-      parseDebateAcpxReviewers([{ name: "codex" }, { cli: "gemini" }, { command: "claude" }])
+      parseDebateAcpxReviewers([{ name: "codex" }, { cli: "gemini" }, { command: "claude" }]),
     ).toEqual(["codex", "gemini", "claude"]);
   });
 
   it("accepts reviewers/agents/cli wrapper properties", () => {
-    expect(parseDebateAcpxReviewers({ reviewers: ["codex", "gemini"] })).toEqual(["codex", "gemini"]);
+    expect(parseDebateAcpxReviewers({ reviewers: ["codex", "gemini"] })).toEqual([
+      "codex",
+      "gemini",
+    ]);
     expect(parseDebateAcpxReviewers({ agents: [{ name: "codex" }] })).toEqual(["codex"]);
     expect(parseDebateAcpxReviewers({ cli: ["gemini"] })).toEqual(["gemini"]);
   });
 
   it("dedupes and trims, and drops blank/unnamed entries", () => {
-    expect(parseDebateAcpxReviewers([" codex ", "codex", "", {}, { name: "  " }])).toEqual(["codex"]);
+    expect(parseDebateAcpxReviewers([" codex ", "codex", "", {}, { name: "  " }])).toEqual([
+      "codex",
+    ]);
   });
 
   it("returns an empty list for missing files, null, or an unrecognized shape", () => {
@@ -738,12 +796,17 @@ describe("parseDebateAcpxReviewers (SYD-82)", () => {
 describe("parseEnabledPlugins (SYD-82)", () => {
   it("keeps only true entries from the marketplace map form", () => {
     expect(
-      parseEnabledPlugins({ enabledPlugins: { "superpowers@marketplace": true, "old@marketplace": false } })
+      parseEnabledPlugins({
+        enabledPlugins: { "superpowers@marketplace": true, "old@marketplace": false },
+      }),
     ).toEqual(["superpowers@marketplace"]);
   });
 
   it("accepts a bare array of plugin names", () => {
-    expect(parseEnabledPlugins({ enabledPlugins: ["superpowers", "debate"] })).toEqual(["superpowers", "debate"]);
+    expect(parseEnabledPlugins({ enabledPlugins: ["superpowers", "debate"] })).toEqual([
+      "superpowers",
+      "debate",
+    ]);
   });
 
   it("returns an empty list when enabledPlugins is absent or the input is malformed", () => {
@@ -755,10 +818,9 @@ describe("parseEnabledPlugins (SYD-82)", () => {
 
 describe("parseMcpServerNames (SYD-82)", () => {
   it("returns the keys of a top-level mcpServers map", () => {
-    expect(parseMcpServerNames({ mcpServers: { switchyard: { type: "http" }, github: {} } })).toEqual([
-      "switchyard",
-      "github",
-    ]);
+    expect(
+      parseMcpServerNames({ mcpServers: { switchyard: { type: "http" }, github: {} } }),
+    ).toEqual(["switchyard", "github"]);
   });
 
   it("returns an empty list when mcpServers is absent, an array, or the input is malformed", () => {
@@ -798,7 +860,7 @@ describe("formatUserStackCapture (SYD-82)", () => {
       sources: ["~/.claude/debate-acpx.json", "~/.claude/settings.json"],
     };
     expect(formatUserStackCapture(capture)).toBe(
-      "cli: codex, gemini; mcp: switchyard (from ~/.claude/debate-acpx.json, ~/.claude/settings.json)"
+      "cli: codex, gemini; mcp: switchyard (from ~/.claude/debate-acpx.json, ~/.claude/settings.json)",
     );
   });
 });
@@ -834,8 +896,8 @@ describe("formatDockerfileStackGuidance (SYD-87)", () => {
     expect(
       formatDockerfileStackGuidance(
         [{ name: "gh", check: "gh --version", install: "brew install gh" }],
-        ["codex", "some-internal-tool"]
-      )
+        ["codex", "some-internal-tool"],
+      ),
     ).toEqual([
       "  - gh: brew install gh",
       "  - codex (captured, not yet in stack.cli): npm install -g @openai/codex",

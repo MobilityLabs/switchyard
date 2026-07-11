@@ -16,12 +16,17 @@ function requireHuman(actor: Actor, action: string): void {
 /**
  * Snoozes an issue until a future unix timestamp. Human-only.
  */
-export function snoozeIssue(db: Db, actor: Actor, ref: string, untilUnixSeconds: number): IssueView {
+export function snoozeIssue(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  untilUnixSeconds: number,
+): IssueView {
   requireHuman(actor, "snooze an issue");
   const now = Math.floor(Date.now() / 1000);
   if (untilUnixSeconds <= now) {
     throw new SwitchyardError(
-      `Snooze time must be in the future — got ${untilUnixSeconds}, now is ${now}.`
+      `Snooze time must be in the future — got ${untilUnixSeconds}, now is ${now}.`,
     );
   }
   return db.transaction((tx) => {
@@ -33,8 +38,10 @@ export function snoozeIssue(db: Db, actor: Actor, ref: string, untilUnixSeconds:
       .returning()
       .get();
     recordEvent(tx as Db, {
-      issueId: current.id, actorId: actor.id,
-      type: "snoozed", payload: { until: untilUnixSeconds },
+      issueId: current.id,
+      actorId: actor.id,
+      type: "snoozed",
+      payload: { until: untilUnixSeconds },
     });
     return toView(tx as Db, row);
   });
@@ -60,13 +67,17 @@ export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string):
       .get();
     if (current.status !== "canceled") {
       recordEvent(tx as Db, {
-        issueId: current.id, actorId: actor.id,
-        type: "status_changed", payload: { from: current.status, to: "canceled" },
+        issueId: current.id,
+        actorId: actor.id,
+        type: "status_changed",
+        payload: { from: current.status, to: "canceled" },
       });
     }
     recordEvent(tx as Db, {
-      issueId: current.id, actorId: actor.id,
-      type: "marked_duplicate", payload: { of: of.ref },
+      issueId: current.id,
+      actorId: actor.id,
+      type: "marked_duplicate",
+      payload: { of: of.ref },
     });
     return toView(tx as Db, row);
   });
@@ -86,10 +97,13 @@ export function redeliverIssue(db: Db, actor: Actor, ref: string): IssueView {
   const current = getIssue(db, ref);
   const attention = getAttention(db, current.id);
   if (attention?.reason !== "delivery_failed") {
-    throw new SwitchyardError(
-      `${ref} has no unresolved delivery failure to retry.`
-    );
+    throw new SwitchyardError(`${ref} has no unresolved delivery failure to retry.`);
   }
-  recordEvent(db, { issueId: current.id, actorId: actor.id, type: "redeliver_requested", payload: {} });
+  recordEvent(db, {
+    issueId: current.id,
+    actorId: actor.id,
+    type: "redeliver_requested",
+    payload: {},
+  });
   return getIssue(db, ref);
 }

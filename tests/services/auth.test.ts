@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import {
-  createLoginLink, redeemLoginLink, getSessionActor, deleteSession,
+  createLoginLink,
+  redeemLoginLink,
+  getSessionActor,
+  deleteSession,
 } from "../../src/services/auth.js";
 
 let db: Db;
@@ -28,7 +31,9 @@ describe("auth", () => {
   });
 
   it("rejects agents and unknown actors", () => {
-    expect(() => createLoginLink(db, "claude/dev")).toThrowError(/agents authenticate with their bearer token/i);
+    expect(() => createLoginLink(db, "claude/dev")).toThrowError(
+      /agents authenticate with their bearer token/i,
+    );
     expect(() => createLoginLink(db, "ghost")).toThrowError(/no actor named "ghost"/i);
     expect(getSessionActor(db, "sys_" + "0".repeat(64))).toBeNull();
   });

@@ -15,7 +15,10 @@ export function buildAuthRoutes(db: Db) {
     try {
       const { sessionToken, actor } = redeemLoginLink(db, token);
       setCookie(c, SESSION_COOKIE, sessionToken, {
-        httpOnly: true, sameSite: "Lax", path: "/", maxAge: 30 * 24 * 3600,
+        httpOnly: true,
+        sameSite: "Lax",
+        path: "/",
+        maxAge: 30 * 24 * 3600,
         secure: process.env.SWITCHYARD_COOKIE_SECURE === "1",
       });
       return c.json({ ok: true, actor: actor.name });

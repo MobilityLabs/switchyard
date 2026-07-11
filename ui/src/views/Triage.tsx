@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { addComment, getIssue, listActors, listIssues, markDuplicate, snoozeIssue, updateIssue } from "../api";
+import {
+  addComment,
+  getIssue,
+  listActors,
+  listIssues,
+  markDuplicate,
+  snoozeIssue,
+  updateIssue,
+} from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
@@ -31,7 +39,10 @@ export default function Triage({ project }: { project: string | null }) {
     () => listIssues({ project: project ?? undefined, status: "triage", excludeSnoozed: true }),
     [project],
   );
-  const needsInput = usePoll(() => listIssues({ project: project ?? undefined, needsInput: true }), [project]);
+  const needsInput = usePoll(
+    () => listIssues({ project: project ?? undefined, needsInput: true }),
+    [project],
+  );
   const actors = usePoll(listActors, [], 60000);
   const [actionError, setActionError] = useState<string | null>(null);
   // Single expanded row at a time; clicking the same ref again collapses it.
@@ -39,7 +50,14 @@ export default function Triage({ project }: { project: string | null }) {
   const toggleExpanded = (ref: string) => setExpandedRef((cur) => (cur === ref ? null : ref));
 
   const act = (fn: () => Promise<unknown>) =>
-    fn().then(() => { setActionError(null); reload(); needsInput.reload(); }, (e) => setActionError(e.message));
+    fn().then(
+      () => {
+        setActionError(null);
+        reload();
+        needsInput.reload();
+      },
+      (e) => setActionError(e.message),
+    );
 
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
@@ -50,45 +68,64 @@ export default function Triage({ project }: { project: string | null }) {
   return (
     <section className="triage">
       {actionError && (
-        <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
+        <p className="error-bar">
+          {actionError} <button onClick={() => setActionError(null)}>×</button>
+        </p>
       )}
       <PollErrorBar error={error} />
 
       {needsInput.data && needsInput.data.length > 0 && (
         <section className="needs-input-lane">
-          <h2>Waiting on humans <span className="badge warn">{needsInput.data.length}</span></h2>
+          <h2>
+            Waiting on humans <span className="badge warn">{needsInput.data.length}</span>
+          </h2>
           {needsInput.data.map((issue) => (
-            <a key={issue.ref} className="needs-input-row" href={href({ view: "issue", ref: issue.ref })}>
+            <a
+              key={issue.ref}
+              className="needs-input-row"
+              href={href({ view: "issue", ref: issue.ref })}
+            >
               <span className="ref">{issue.ref}</span>
               <span className="title">{issue.title}</span>
               <span className="hint">has a question — open to answer</span>
-              <span className="assignee">{actorNames.get(issue.assigneeId ?? -1) ?? "unassigned"}</span>
+              <span className="assignee">
+                {actorNames.get(issue.assigneeId ?? -1) ?? "unassigned"}
+              </span>
               <span className="age">{age(issue.updatedAt)}</span>
             </a>
           ))}
         </section>
       )}
 
-      <h2>Triage inbox <span className="badge">{data.length}</span></h2>
-      {data.length === 0
-        ? <p className="empty">Nothing in triage. The yard is clear.</p>
-        : data.map((issue) => (
-            <TriageRow
-              key={issue.ref}
-              issue={issue}
-              act={act}
-              creatorName={actorNames.get(issue.creatorId)}
-              knownActorNames={actorNameList}
-              expanded={expandedRef === issue.ref}
-              onToggleExpand={() => toggleExpanded(issue.ref)}
-            />
-          ))}
+      <h2>
+        Triage inbox <span className="badge">{data.length}</span>
+      </h2>
+      {data.length === 0 ? (
+        <p className="empty">Nothing in triage. The yard is clear.</p>
+      ) : (
+        data.map((issue) => (
+          <TriageRow
+            key={issue.ref}
+            issue={issue}
+            act={act}
+            creatorName={actorNames.get(issue.creatorId)}
+            knownActorNames={actorNameList}
+            expanded={expandedRef === issue.ref}
+            onToggleExpand={() => toggleExpanded(issue.ref)}
+          />
+        ))
+      )}
     </section>
   );
 }
 
 export function TriageRow({
-  issue, act, creatorName, knownActorNames, expanded, onToggleExpand,
+  issue,
+  act,
+  creatorName,
+  knownActorNames,
+  expanded,
+  onToggleExpand,
 }: {
   issue: Issue;
   act: (fn: () => Promise<unknown>) => void;
@@ -100,7 +137,11 @@ export function TriageRow({
   const projectKey = projectKeyFromRef(issue.ref);
   const [draft, setDraft] = useState("");
   const [commentError, setCommentError] = useState<string | null>(null);
-  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(issue.ref, draft, setDraft);
+  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
+    issue.ref,
+    draft,
+    setDraft,
+  );
 
   // Only fetches while this row is the expanded one; collapsed rows resolve
   // to null immediately, same shape as Review's per-issue detail poll.
@@ -113,7 +154,11 @@ export function TriageRow({
     const body = draft.trim();
     if (!body) return;
     addComment(issue.ref, body).then(
-      () => { setCommentError(null); setDraft(""); detail.reload(); },
+      () => {
+        setCommentError(null);
+        setDraft("");
+        detail.reload();
+      },
       (e) => setCommentError(e.message),
     );
   }
@@ -148,22 +193,39 @@ export function TriageRow({
       }}
     >
       <div className="triage-main">
-        <a className="ref" href={href({ view: "issue", ref: issue.ref })}>{issue.ref}</a>
+        <a className="ref" href={href({ view: "issue", ref: issue.ref })}>
+          {issue.ref}
+        </a>
         <span className="title">{issue.title}</span>
         <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
         {issue.labels.length > 0 && (
           <div className="label-chips-ro">
-            {issue.labels.map((l) => <span key={l} className="badge label-badge">{l}</span>)}
+            {issue.labels.map((l) => (
+              <span key={l} className="badge label-badge">
+                {l}
+              </span>
+            ))}
           </div>
         )}
       </div>
-      {!expanded && summaryText(issue) && (
-        <div className="triage-desc">{summaryText(issue)}</div>
-      )}
+      {!expanded && summaryText(issue) && <div className="triage-desc">{summaryText(issue)}</div>}
       <div className="provenance">
         filed by {creatorName ?? "?"} · {age(issue.createdAt)}
-        {issue.sourceType && <> · {issue.sourceType} · {issue.sourceDetail ?? ""}</>}
-        {issue.sourceUrl && <> · <a href={issue.sourceUrl} target="_blank" rel="noreferrer">link</a></>}
+        {issue.sourceType && (
+          <>
+            {" "}
+            · {issue.sourceType} · {issue.sourceDetail ?? ""}
+          </>
+        )}
+        {issue.sourceUrl && (
+          <>
+            {" "}
+            ·{" "}
+            <a href={issue.sourceUrl} target="_blank" rel="noreferrer">
+              link
+            </a>
+          </>
+        )}
       </div>
 
       {expanded && (
@@ -176,16 +238,26 @@ export function TriageRow({
 
           <h4>Activity</h4>
           <div className="activity triage-activity">
-            {detail.data
-              ? <ActivityFeed activity={detail.data.activity} projectKey={projectKey} knownActorNames={knownActorNames} />
-              : <p className="empty">Loading activity…</p>}
+            {detail.data ? (
+              <ActivityFeed
+                activity={detail.data.activity}
+                projectKey={projectKey}
+                knownActorNames={knownActorNames}
+              />
+            ) : (
+              <p className="empty">Loading activity…</p>
+            )}
           </div>
 
           {commentError && (
-            <p className="error-bar">{commentError} <button onClick={() => setCommentError(null)}>×</button></p>
+            <p className="error-bar">
+              {commentError} <button onClick={() => setCommentError(null)}>×</button>
+            </p>
           )}
           {uploadError && (
-            <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
+            <p className="error-bar">
+              {uploadError} <button onClick={() => setUploadError(null)}>×</button>
+            </p>
           )}
           <div className="composer">
             <textarea
@@ -195,7 +267,9 @@ export function TriageRow({
               onChange={(e) => setDraft(e.target.value)}
               onPaste={onPaste}
             />
-            <button disabled={!draft.trim() || uploading} onClick={postComment}>Comment</button>
+            <button disabled={!draft.trim() || uploading} onClick={postComment}>
+              Comment
+            </button>
             {uploading && <span className="uploading-note">uploading…</span>}
           </div>
         </div>
@@ -204,7 +278,14 @@ export function TriageRow({
       <div className="triage-actions">
         <button
           className="primary"
-          onClick={() => act(() => updateIssue(issue.ref, { status: "todo", priority: defaultAcceptPriority(issue.priority) }))}
+          onClick={() =>
+            act(() =>
+              updateIssue(issue.ref, {
+                status: "todo",
+                priority: defaultAcceptPriority(issue.priority),
+              }),
+            )
+          }
         >
           Accept → todo
         </button>
@@ -213,14 +294,24 @@ export function TriageRow({
         </button>
         <select
           value={issue.priority}
-          onChange={(e) => act(() => updateIssue(issue.ref, { priority: e.target.value as Priority }))}
+          onChange={(e) =>
+            act(() => updateIssue(issue.ref, { priority: e.target.value as Priority }))
+          }
         >
-          {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+          {PRIORITIES.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
         </select>
-        <button onClick={() => act(() => snoozeIssue(issue.ref, Math.floor(Date.now() / 1000) + 86400))}>
+        <button
+          onClick={() => act(() => snoozeIssue(issue.ref, Math.floor(Date.now() / 1000) + 86400))}
+        >
           Snooze 1d
         </button>
-        <button onClick={() => act(() => snoozeIssue(issue.ref, Math.floor(Date.now() / 1000) + 604800))}>
+        <button
+          onClick={() => act(() => snoozeIssue(issue.ref, Math.floor(Date.now() / 1000) + 604800))}
+        >
           Snooze 1w
         </button>
         <button
@@ -233,7 +324,10 @@ export function TriageRow({
         </button>
         <button
           className="danger"
-          onClick={() => { if (confirm(`Dismiss ${issue.ref}?`)) act(() => updateIssue(issue.ref, { status: "canceled" })); }}
+          onClick={() => {
+            if (confirm(`Dismiss ${issue.ref}?`))
+              act(() => updateIssue(issue.ref, { status: "canceled" }));
+          }}
         >
           Dismiss
         </button>

@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  chmodSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -88,7 +96,7 @@ describe("scripts/dreamer.sh", () => {
     const date = today();
     const claude = writeStubClaude(
       binDir,
-      `printf '# digest\\n' > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`
+      `printf '# digest\\n' > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`,
     );
 
     const rc = runDreamer(dreamsDir, claude);

@@ -56,7 +56,13 @@ export type GithubWebhookOutcome =
  * payload on a schedule, so without this every redelivery would append
  * another gh_pr_opened/gh_pushed/etc and inflate push commit counts.
  */
-function isDuplicate(db: Db, issueId: number, type: string, jsonPath: string, value: string | number | null): boolean {
+function isDuplicate(
+  db: Db,
+  issueId: number,
+  type: string,
+  jsonPath: string,
+  value: string | number | null,
+): boolean {
   if (value === null) return false;
   const [row] = db.all<{ hit: number }>(sql`
     SELECT 1 AS hit FROM events
@@ -71,7 +77,7 @@ function record(
   ref: string,
   type: string,
   payload: Record<string, unknown>,
-  dedupe?: { jsonPath: string; value: string | number | null }
+  dedupe?: { jsonPath: string; value: string | number | null },
 ): GithubWebhookOutcome {
   let issueId: number;
   try {
@@ -98,11 +104,23 @@ function handlePullRequest(db: Db, payload: any): GithubWebhookOutcome {
 
   const byPrNumber = { jsonPath: "$.prNumber", value: prNumber };
   if (payload.action === "opened") {
-    return record(db, ref, "gh_pr_opened", { prNumber, url, branch: pr.head?.ref ?? null }, byPrNumber);
+    return record(
+      db,
+      ref,
+      "gh_pr_opened",
+      { prNumber, url, branch: pr.head?.ref ?? null },
+      byPrNumber,
+    );
   }
   if (payload.action === "closed") {
     return pr.merged
-      ? record(db, ref, "gh_pr_merged", { prNumber, url, mergeSha: pr.merge_commit_sha ?? null }, byPrNumber)
+      ? record(
+          db,
+          ref,
+          "gh_pr_merged",
+          { prNumber, url, mergeSha: pr.merge_commit_sha ?? null },
+          byPrNumber,
+        )
       : record(db, ref, "gh_pr_closed", { prNumber, url }, byPrNumber);
   }
   return { handled: false, reason: `ignored pull_request action "${payload.action}"` };
@@ -129,8 +147,13 @@ function handlePush(db: Db, payload: any): GithubWebhookOutcome {
     db,
     ref,
     "gh_pushed",
-    { commitCount: commits.length, headSha, branch, url: typeof payload.compare === "string" ? payload.compare : null },
-    { jsonPath: "$.headSha", value: headSha }
+    {
+      commitCount: commits.length,
+      headSha,
+      branch,
+      url: typeof payload.compare === "string" ? payload.compare : null,
+    },
+    { jsonPath: "$.headSha", value: headSha },
   );
 }
 
@@ -140,7 +163,9 @@ function handleCheckSuite(db: Db, payload: any): GithubWebhookOutcome {
   if (payload.action !== "completed") {
     return { handled: false, reason: `ignored check_suite action "${payload.action}"` };
   }
-  const prBranches = Array.isArray(suite.pull_requests) ? suite.pull_requests.map((p: any) => p?.head?.ref) : [];
+  const prBranches = Array.isArray(suite.pull_requests)
+    ? suite.pull_requests.map((p: any) => p?.head?.ref)
+    : [];
   const ref = resolveRef([suite.head_branch, ...prBranches]);
   if (!ref) return { handled: false, reason: "no issue ref found in check_suite branch" };
 
@@ -150,7 +175,11 @@ function handleCheckSuite(db: Db, payload: any): GithubWebhookOutcome {
   return record(db, ref, type, { conclusion, headSha }, { jsonPath: "$.headSha", value: headSha });
 }
 
-export function handleGithubWebhook(db: Db, githubEvent: string, payload: any): GithubWebhookOutcome {
+export function handleGithubWebhook(
+  db: Db,
+  githubEvent: string,
+  payload: any,
+): GithubWebhookOutcome {
   switch (githubEvent) {
     case "pull_request":
       return handlePullRequest(db, payload);

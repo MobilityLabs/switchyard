@@ -26,7 +26,10 @@ describe("getAttention", () => {
     const { db, agent } = setup();
     const issue = getIssue(db, "SYD-1");
     recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
-    expect(getAttention(db, issue.id)).toEqual({ reason: "delivery_failed", message: "merge conflict" });
+    expect(getAttention(db, issue.id)).toEqual({
+      reason: "delivery_failed",
+      message: "merge conflict",
+    });
   });
 
   it("clears the flag once a later delivered event fires", () => {
@@ -34,7 +37,10 @@ describe("getAttention", () => {
     const issue = getIssue(db, "SYD-1");
     recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
     recordDeliveryEvent(db, agent, "SYD-1", {
-      type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false },
+      type: "delivered",
+      prNumber: 7,
+      mergeSha: "abc123",
+      deploy: { ran: false },
     });
     expect(getAttention(db, issue.id)).toBeNull();
   });
@@ -43,10 +49,16 @@ describe("getAttention", () => {
     const { db, agent } = setup();
     const issue = getIssue(db, "SYD-1");
     recordDeliveryEvent(db, agent, "SYD-1", {
-      type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false },
+      type: "delivered",
+      prNumber: 7,
+      mergeSha: "abc123",
+      deploy: { ran: false },
     });
     recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "deploy broke" });
-    expect(getAttention(db, issue.id)).toEqual({ reason: "delivery_failed", message: "deploy broke" });
+    expect(getAttention(db, issue.id)).toEqual({
+      reason: "delivery_failed",
+      message: "deploy broke",
+    });
   });
 });
 
@@ -67,7 +79,10 @@ describe("listAttentionByIssueId", () => {
     const { db, agent } = setup();
     recordDeliveryEvent(db, agent, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
     recordDeliveryEvent(db, agent, "SYD-1", {
-      type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false },
+      type: "delivered",
+      prNumber: 7,
+      mergeSha: "abc123",
+      deploy: { ran: false },
     });
     expect(listAttentionByIssueId(db).size).toBe(0);
   });

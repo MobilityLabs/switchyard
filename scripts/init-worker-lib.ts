@@ -51,12 +51,18 @@ export function validateWorkerConfig(raw: unknown): string[] {
     problems.push('`runner` must be "cli" or "sdk"');
   }
   if (runner === "sdk" && c.containerized === true) {
-    problems.push('`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)');
+    problems.push(
+      '`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)',
+    );
   }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
   }
-  if (typeof c.maxConcurrent !== "number" || !Number.isInteger(c.maxConcurrent) || c.maxConcurrent < 1) {
+  if (
+    typeof c.maxConcurrent !== "number" ||
+    !Number.isInteger(c.maxConcurrent) ||
+    c.maxConcurrent < 1
+  ) {
     problems.push("`maxConcurrent` must be an integer >= 1");
   }
   const policy = c.dispatchPolicy ?? "labeled";
@@ -66,7 +72,11 @@ export function validateWorkerConfig(raw: unknown): string[] {
   if (policy === "labeled" && (typeof c.label !== "string" || c.label.trim() === "")) {
     problems.push('`label` is required when dispatchPolicy is "labeled"');
   }
-  if (typeof c.projects !== "object" || c.projects === null || Object.keys(c.projects).length === 0) {
+  if (
+    typeof c.projects !== "object" ||
+    c.projects === null ||
+    Object.keys(c.projects).length === 0
+  ) {
     problems.push("`projects` must map at least one project key to { repo }");
   } else {
     for (const [key, project] of Object.entries(c.projects)) {
@@ -86,13 +96,17 @@ export function validateWorkerConfig(raw: unknown): string[] {
   }
   if (
     c.maxAnswersPerIssue !== undefined &&
-    (typeof c.maxAnswersPerIssue !== "number" || !Number.isInteger(c.maxAnswersPerIssue) || c.maxAnswersPerIssue < 1)
+    (typeof c.maxAnswersPerIssue !== "number" ||
+      !Number.isInteger(c.maxAnswersPerIssue) ||
+      c.maxAnswersPerIssue < 1)
   ) {
     problems.push("`maxAnswersPerIssue` must be an integer >= 1");
   }
   if (
     c.maxAnswerConcurrent !== undefined &&
-    (typeof c.maxAnswerConcurrent !== "number" || !Number.isInteger(c.maxAnswerConcurrent) || c.maxAnswerConcurrent < 1)
+    (typeof c.maxAnswerConcurrent !== "number" ||
+      !Number.isInteger(c.maxAnswerConcurrent) ||
+      c.maxAnswerConcurrent < 1)
   ) {
     problems.push("`maxAnswerConcurrent` must be an integer >= 1");
   }
@@ -101,13 +115,26 @@ export function validateWorkerConfig(raw: unknown): string[] {
       problems.push("`delivery` must be an object");
     } else {
       const d = c.delivery as Record<string, unknown>;
-      if (d.pollSeconds !== undefined && (typeof d.pollSeconds !== "number" || !(d.pollSeconds > 0))) {
+      if (
+        d.pollSeconds !== undefined &&
+        (typeof d.pollSeconds !== "number" || !(d.pollSeconds > 0))
+      ) {
         problems.push("`delivery.pollSeconds` must be a positive number");
       }
-      if (d.cloneDir !== undefined && (typeof d.cloneDir !== "string" || d.cloneDir.trim() === "")) {
+      if (
+        d.cloneDir !== undefined &&
+        (typeof d.cloneDir !== "string" || d.cloneDir.trim() === "")
+      ) {
         problems.push("`delivery.cloneDir` must be a non-empty path");
       }
-      for (const key of ["openPrs", "deploy", "verify", "autoRebase", "reconcile", "conflictResolution"] as const) {
+      for (const key of [
+        "openPrs",
+        "deploy",
+        "verify",
+        "autoRebase",
+        "reconcile",
+        "conflictResolution",
+      ] as const) {
         if (d[key] !== undefined && typeof d[key] !== "boolean") {
           problems.push(`\`delivery.${key}\` must be true or false`);
         }
@@ -125,7 +152,10 @@ export function validateWorkerConfig(raw: unknown): string[] {
       problems.push("`githubPoll` must be an object");
     } else {
       const g = c.githubPoll as Record<string, unknown>;
-      if (g.pollSeconds !== undefined && (typeof g.pollSeconds !== "number" || !(g.pollSeconds > 0))) {
+      if (
+        g.pollSeconds !== undefined &&
+        (typeof g.pollSeconds !== "number" || !(g.pollSeconds > 0))
+      ) {
         problems.push("`githubPoll.pollSeconds` must be a positive number");
       }
     }
@@ -148,8 +178,10 @@ function validateWorkerStack(projectKey: string, raw: unknown): string[] {
   if (stack.ports !== undefined) {
     const ports = stack.ports;
     const bad =
-      !Array.isArray(ports) || ports.some((p) => typeof p !== "number" || !Number.isInteger(p) || p <= 0);
-    if (bad) problems.push(`projects.${projectKey}.stack.ports must be an array of positive integers`);
+      !Array.isArray(ports) ||
+      ports.some((p) => typeof p !== "number" || !Number.isInteger(p) || p <= 0);
+    if (bad)
+      problems.push(`projects.${projectKey}.stack.ports must be an array of positive integers`);
   }
 
   if (stack.cli !== undefined) {
@@ -166,10 +198,14 @@ function validateWorkerStack(projectKey: string, raw: unknown): string[] {
           problems.push(`projects.${projectKey}.stack.cli[${i}].name must be a non-empty string`);
         }
         if (typeof e.check !== "string" || e.check.trim() === "") {
-          problems.push(`projects.${projectKey}.stack.cli[${i}].check must be a non-empty command string`);
+          problems.push(
+            `projects.${projectKey}.stack.cli[${i}].check must be a non-empty command string`,
+          );
         }
         if (e.install !== undefined && (typeof e.install !== "string" || e.install.trim() === "")) {
-          problems.push(`projects.${projectKey}.stack.cli[${i}].install must be a non-empty string if set`);
+          problems.push(
+            `projects.${projectKey}.stack.cli[${i}].install must be a non-empty string if set`,
+          );
         }
       });
     }
@@ -263,7 +299,14 @@ function renderLaunchdPlist(opts: {
 }): string {
   const repo = escapeXml(opts.repoRoot);
   const path = escapeXml(
-    [opts.nodeBinDir, ...(opts.extraPathDirs ?? []), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].join(":")
+    [
+      opts.nodeBinDir,
+      ...(opts.extraPathDirs ?? []),
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/usr/bin",
+      "/bin",
+    ].join(":"),
   );
   const argLines = (opts.extraArgs ?? [])
     .map((a) => `        <string>${escapeXml(a)}</string>`)
@@ -491,13 +534,18 @@ export type RoleStatus = { role: WorkerRole; running: boolean; installed: boolea
 export function summarizeRoleStatus(statuses: RoleStatus[]): CheckResult {
   const anyRunning = statuses.some((s) => s.running);
   const note = statuses
-    .map((s) => `${s.role}: ${s.running ? "running" : s.installed ? "installed, not running" : "not installed"}`)
+    .map(
+      (s) =>
+        `${s.role}: ${s.running ? "running" : s.installed ? "installed, not running" : "not installed"}`,
+    )
     .join(", ");
   return {
     name: "worker roles",
     ok: true,
     warn: !anyRunning,
-    note: anyRunning ? note : `${note} — nothing is running; install a LaunchAgent or start a loop by hand`,
+    note: anyRunning
+      ? note
+      : `${note} — nothing is running; install a LaunchAgent or start a loop by hand`,
   };
 }
 
@@ -628,7 +676,10 @@ export function parseMcpServerNames(raw: unknown): string[] {
  * gap: tools the human works with that this project's workers wouldn't get.
  * An undeclared `stack.cli` (undefined) means everything captured is a gap.
  */
-export function stackParityGaps(capturedCli: string[], declared: WorkerStackCli[] | undefined): string[] {
+export function stackParityGaps(
+  capturedCli: string[],
+  declared: WorkerStackCli[] | undefined,
+): string[] {
   const declaredNames = new Set((declared ?? []).map((c) => c.name.toLowerCase()));
   return capturedCli.filter((name) => !declaredNames.has(name.toLowerCase()));
 }
@@ -672,7 +723,9 @@ export function wellKnownCliInstall(name: string): string | undefined {
 export function suggestStackCli(names: string[]): WorkerStackCli[] {
   return names.map((name) => {
     const install = wellKnownCliInstall(name);
-    return install ? { name, check: `${name} --version`, install } : { name, check: `${name} --version` };
+    return install
+      ? { name, check: `${name} --version`, install }
+      : { name, check: `${name} --version` };
   });
 }
 
@@ -685,10 +738,17 @@ export function suggestStackCli(names: string[]): WorkerStackCli[] {
  * still needs to add them there (e.g. via `--capture-stack`) for the parity
  * warning to stop firing.
  */
-export function formatDockerfileStackGuidance(declared: WorkerStackCli[], capturedGaps: string[]): string[] {
-  const lines = declared.map((c) => `  - ${c.name}: ${c.install ?? "(no install command declared)"}`);
+export function formatDockerfileStackGuidance(
+  declared: WorkerStackCli[],
+  capturedGaps: string[],
+): string[] {
+  const lines = declared.map(
+    (c) => `  - ${c.name}: ${c.install ?? "(no install command declared)"}`,
+  );
   for (const c of suggestStackCli(capturedGaps)) {
-    lines.push(`  - ${c.name} (captured, not yet in stack.cli): ${c.install ?? "(no install command known)"}`);
+    lines.push(
+      `  - ${c.name} (captured, not yet in stack.cli): ${c.install ?? "(no install command known)"}`,
+    );
   }
   return lines;
 }
@@ -699,7 +759,10 @@ export function formatDockerfileStackGuidance(declared: WorkerStackCli[], captur
  * docs/onboarding-a-project.md step 4). Required reviews stay off until
  * there's a second GitHub identity to review with (SYD-19).
  */
-export function buildProtectMainArgs(owner: string, repo: string): { args: string[]; input: string } {
+export function buildProtectMainArgs(
+  owner: string,
+  repo: string,
+): { args: string[]; input: string } {
   return {
     args: ["api", "-X", "PUT", `repos/${owner}/${repo}/branches/main/protection`, "--input", "-"],
     input:
@@ -713,7 +776,7 @@ export function buildProtectMainArgs(owner: string, repo: string): { args: strin
           allow_deletions: false,
         },
         null,
-        2
+        2,
       ) + "\n",
   };
 }

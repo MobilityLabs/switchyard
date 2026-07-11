@@ -18,7 +18,9 @@ beforeEach(() => {
 describe("api auth + projects", () => {
   it("401s without credentials, works with bearer or cookie", async () => {
     expect((await app.request("/projects")).status).toBe(401);
-    const viaBearer = await app.request("/projects", { headers: { authorization: `Bearer ${bearer}` } });
+    const viaBearer = await app.request("/projects", {
+      headers: { authorization: `Bearer ${bearer}` },
+    });
     expect(viaBearer.status).toBe(200);
     const created = await app.request("/projects", {
       method: "POST",
@@ -47,7 +49,7 @@ describe("api auth + projects", () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe(
-      "Request body is not valid JSON — send a JSON object."
+      "Request body is not valid JSON — send a JSON object.",
     );
   });
 

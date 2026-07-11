@@ -64,7 +64,10 @@ describe("runGit", () => {
 describe("installDeps", () => {
   it("wipes a stale node_modules before installing", async () => {
     const workspace = mkdtempSync(path.join(tmpdir(), "delivery-exec-test-"));
-    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-x", version: "1.0.0" }));
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
+    );
     writeFileSync(
       path.join(workspace, "package-lock.json"),
       JSON.stringify({
@@ -73,11 +76,14 @@ describe("installDeps", () => {
         lockfileVersion: 3,
         requires: true,
         packages: { "": { name: "tmp-x", version: "1.0.0" } },
-      })
+      }),
     );
     const staleModule = path.join(workspace, "node_modules", "stale-native-module");
     mkdirSync(staleModule, { recursive: true });
-    writeFileSync(path.join(staleModule, "binding.node"), "stale binary compiled for the wrong node ABI");
+    writeFileSync(
+      path.join(staleModule, "binding.node"),
+      "stale binary compiled for the wrong node ABI",
+    );
 
     await installDeps(workspace);
 

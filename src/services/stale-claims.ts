@@ -16,11 +16,7 @@ export function releaseStaleClaims(db: Db, maxIdleSeconds = 4 * 3600): number {
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - maxIdleSeconds;
 
-  const inProgress = db
-    .select()
-    .from(issues)
-    .where(eq(issues.status, "in_progress"))
-    .all();
+  const inProgress = db.select().from(issues).where(eq(issues.status, "in_progress")).all();
 
   let released = 0;
   for (const issue of inProgress) {

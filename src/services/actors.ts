@@ -15,12 +15,12 @@ function requireHuman(actor: Actor, action: string): void {
 
 export function createActor(
   db: Db,
-  input: { name: string; type: "human" | "agent" }
+  input: { name: string; type: "human" | "agent" },
 ): { actor: Actor; token: string } {
   const existing = db.select().from(actors).where(eq(actors.name, input.name)).get();
   if (existing) {
     throw new SwitchyardError(
-      `An actor named "${input.name}" already exists — pick a different name or use the existing actor's token.`
+      `An actor named "${input.name}" already exists — pick a different name or use the existing actor's token.`,
     );
   }
   const token = mintToken("syd");
@@ -33,7 +33,11 @@ export function createActor(
 }
 
 export function authenticate(db: Db, token: string): Actor | null {
-  const row = db.select().from(actors).where(eq(actors.tokenHash, hashToken(token))).get();
+  const row = db
+    .select()
+    .from(actors)
+    .where(eq(actors.tokenHash, hashToken(token)))
+    .get();
   return row ? { id: row.id, name: row.name, type: row.type } : null;
 }
 
@@ -60,7 +64,13 @@ export function listActorsWithStatus(db: Db): ActorWithStatus[] {
     .select()
     .from(actors)
     .all()
-    .map((r) => ({ id: r.id, name: r.name, type: r.type, createdAt: r.createdAt, hasToken: r.tokenHash !== null }));
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      createdAt: r.createdAt,
+      hasToken: r.tokenHash !== null,
+    }));
 }
 
 /** Mints a fresh token for an existing actor, invalidating the old one. Human-only. */
@@ -68,7 +78,10 @@ export function rotateActorToken(db: Db, actor: Actor, actorId: number): { token
   requireHuman(actor, "rotate an actor's token");
   getActorById(db, actorId);
   const token = mintToken("syd");
-  db.update(actors).set({ tokenHash: hashToken(token) }).where(eq(actors.id, actorId)).run();
+  db.update(actors)
+    .set({ tokenHash: hashToken(token) })
+    .where(eq(actors.id, actorId))
+    .run();
   return { token };
 }
 
@@ -77,7 +90,7 @@ export function revokeActorToken(db: Db, actor: Actor, actorId: number): void {
   requireHuman(actor, "revoke an actor's token");
   if (actorId === actor.id) {
     throw new SwitchyardError(
-      "You cannot revoke your own actor's token — sign in as a different human actor to do this."
+      "You cannot revoke your own actor's token — sign in as a different human actor to do this.",
     );
   }
   getActorById(db, actorId);
