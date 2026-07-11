@@ -316,7 +316,11 @@ the issue `done`. Three pieces (SYD-49):
    deployed and not commented — on restart the ref is skipped (its PR is no
    longer open), so if an issue is stamped done and its PR shows merged but no
    delivery comment ever lands, re-run the deploy manually (`npm run deploy`)
-   or re-deliver by hand. If delivery fails, re-stamping an already-`done`
+   or re-deliver by hand. If a deploy ships a broken build, roll back with
+   `scripts/deploy-nas.sh <previous-good-sha>` — ships that commit's tree
+   instead of the working tree and rebuilds, no NAS access needed. The NAS
+   host defaults to its Tailscale IP; override with `SWITCHYARD_NAS_HOST`. If
+   delivery fails, re-stamping an already-`done`
    issue done is a no-op (unchanged status emits no event) — instead click
    **Retry delivery** on the issue's attention banner, which fires a
    `redeliver_requested` event the worker also polls for (SYD-102).
