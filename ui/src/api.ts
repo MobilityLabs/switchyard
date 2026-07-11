@@ -35,7 +35,11 @@ export const listProjects = () => api<Project[]>("/api/projects");
 export const createProject = (input: { key: string; name: string }) =>
   api<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });
 export const listIssues = (
-  filters: { project?: string; status?: Status; label?: string; text?: string; needsInput?: boolean; excludeSnoozed?: boolean } = {},
+  filters: {
+    project?: string; status?: Status; label?: string; text?: string;
+    needsInput?: boolean; excludeSnoozed?: boolean;
+    attention?: "delivery_failed"; openPr?: boolean;
+  } = {},
 ) => {
   const q = new URLSearchParams();
   if (filters.project) q.set("project", filters.project);
@@ -44,6 +48,8 @@ export const listIssues = (
   if (filters.text) q.set("text", filters.text);
   if (filters.needsInput) q.set("needs_input", "true");
   if (filters.excludeSnoozed) q.set("exclude_snoozed", "true");
+  if (filters.attention) q.set("attention", filters.attention);
+  if (filters.openPr !== undefined) q.set("open_pr", String(filters.openPr));
   const qs = q.toString();
   return api<Issue[]>(`/api/issues${qs ? `?${qs}` : ""}`);
 };

@@ -142,6 +142,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       needsInput: c.req.query("needs_input") === "true" ? true : undefined,
       excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
       attention: (c.req.query("attention") as SearchFilters["attention"]) || undefined,
+      openPr: c.req.query("open_pr") === "true" ? true : c.req.query("open_pr") === "false" ? false : undefined,
     });
     const attention = listAttentionByIssueId(db);
     const openPrs = listOpenPrByIssueId(db);

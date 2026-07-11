@@ -7,13 +7,19 @@
 // SYD-131: the card is the primary click target for opening an issue, and
 // (when a move handler is supplied) also carries the only non-drag way to
 // change an issue's status — both need to work from the keyboard.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { Card } from "./Board";
+import Board, { Card } from "./Board";
+import { listIssues } from "../api";
 import type { Issue } from "../types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock("../api", () => ({
+  listIssues: vi.fn(() => Promise.resolve([])),
+  updateIssue: vi.fn(() => Promise.resolve({})),
+}));
 
 function issue(o: Partial<Issue> = {}): Issue {
   return {
@@ -22,7 +28,7 @@ function issue(o: Partial<Issue> = {}): Issue {
     assigneeId: null, creatorId: 1, labels: [],
     sourceType: null, sourceDetail: null, sourceUrl: null,
     needsInput: false, snoozedUntil: null,
-    createdAt: 0, updatedAt: 0, attention: null,
+    createdAt: 0, updatedAt: 0, attention: null, openPr: null,
     ...o,
   };
 }
@@ -114,5 +120,80 @@ describe("Board Card keyboard accessibility", () => {
     expect(moves).toEqual([["SYD-10", "in_review"]]);
     // Choosing from the select must not also open the card.
     expect(location.pathname).not.toBe("/issue/SYD-10");
+  });
+});
+
+// SYD-171: with the queue flow bouncing instead of repairing, spotting a
+// delivery_failed or not-yet-merged card in a crowded done column needs to
+// be one glance (a toggle), not opening every card.
+describe("Board done-column filter chips", () => {
+  const DONE_ISSUES: Issue[] = [
+    issue({ ref: "SYD-1", title: "Clean ship" }),
+    issue({ ref: "SYD-2", title: "Bounced", attention: { reason: "delivery_failed", message: "merge conflict" } }),
+    issue({ ref: "SYD-3", title: "Not merged yet", openPr: { prNumber: 41, url: "https://github.com/acme/widgets/pull/41" } }),
+  ];
+
+  async function renderBoard(): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<Board project="SYD" />);
+    });
+    await act(async () => {}); // flush the usePoll effect
+    return container;
+  }
+
+  beforeEach(() => {
+    vi.mocked(listIssues).mockClear();
+    vi.mocked(listIssues).mockResolvedValue(DONE_ISSUES);
+  });
+
+  it("shows every done card with both filter chips off", async () => {
+    const container = await renderBoard();
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
+    expect(doneColumn.querySelectorAll(".card")).toHaveLength(3);
+  });
+
+  it("narrows to delivery_failed cards when the errors chip is toggled on", async () => {
+    const container = await renderBoard();
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
+    const errorsChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "⛔ errors")!;
+
+    await act(async () => errorsChip.click());
+
+    const refs = [...doneColumn.querySelectorAll(".card .ref")].map((el) => el.textContent);
+    expect(refs).toEqual(["SYD-2"]);
+    expect(errorsChip.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("narrows to open-PR cards when the not-merged chip is toggled on", async () => {
+    const container = await renderBoard();
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
+    const notMergedChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "🔀 not merged")!;
+
+    await act(async () => notMergedChip.click());
+
+    const refs = [...doneColumn.querySelectorAll(".card .ref")].map((el) => el.textContent);
+    expect(refs).toEqual(["SYD-3"]);
+  });
+
+  it("combines both chips with OR semantics", async () => {
+    const container = await renderBoard();
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
+    const errorsChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "⛔ errors")!;
+    const notMergedChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "🔀 not merged")!;
+
+    await act(async () => errorsChip.click());
+    await act(async () => notMergedChip.click());
+
+    const refs = [...doneColumn.querySelectorAll(".card .ref")].map((el) => el.textContent);
+    expect(refs.sort()).toEqual(["SYD-2", "SYD-3"]);
+  });
+
+  it("does not add filter chips to other columns", async () => {
+    const container = await renderBoard();
+    const todoColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Todo"))!;
+    expect(todoColumn.querySelector(".done-filters")).toBeNull();
   });
 });
