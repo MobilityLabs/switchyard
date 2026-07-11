@@ -561,6 +561,19 @@ describe("buildDockerArgs", () => {
     const promptArg = args.find((a) => a.startsWith("WORKER_PROMPT="));
     expect(promptArg).toContain("origin/develop");
   });
+
+  it("caps memory, cpus, and pids so a runaway session can't exhaust the host (SYD-116)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    const memIndex = args.indexOf("--memory");
+    expect(memIndex).toBeGreaterThan(-1);
+    expect(args[memIndex + 1]).toBe("4g");
+    const cpusIndex = args.indexOf("--cpus");
+    expect(cpusIndex).toBeGreaterThan(-1);
+    expect(args[cpusIndex + 1]).toBe("2");
+    const pidsIndex = args.indexOf("--pids-limit");
+    expect(pidsIndex).toBeGreaterThan(-1);
+    expect(args[pidsIndex + 1]).toBe("512");
+  });
 });
 
 describe("stackChecksEnv", () => {
