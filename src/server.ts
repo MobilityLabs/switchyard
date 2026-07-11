@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { bodyLimit } from "hono/body-limit";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { toReqRes, toFetchResponse } from "fetch-to-node";
 import { promises as fs } from "node:fs";
@@ -15,6 +16,23 @@ import { buildGithubWebhookRoutes } from "./rest/github-routes.js";
 // Paths the client-side router never owns — anything under these should 404
 // as JSON (or be handled by their own route) rather than fall back to the SPA shell.
 const SPA_EXCLUDED_PREFIXES = ["/api", "/auth", "/mcp", "/health", "/attachments", "/webhooks"];
+
+// Modest cap for JSON/RPC traffic (issue bodies, MCP tool calls, GitHub webhook
+// deliveries). better-sqlite3 is synchronous and Node is single-threaded, so an
+// oversized body — or the heavy query/tool call it drives — can stall the whole
+// server; this is generous for any legitimate payload while blocking that. The
+// attachment upload route sets its own larger limit (see api-routes.ts) and is
+// exempted below since it's mounted under the same /api/* prefix.
+const JSON_BODY_LIMIT = 1024 * 1024; // 1MB
+
+const ATTACHMENT_UPLOAD_PATH = /^\/api\/issues\/[^/]+\/attachments$/;
+
+function jsonBodyLimit() {
+  return bodyLimit({
+    maxSize: JSON_BODY_LIMIT,
+    onError: (c) => c.json({ error: "Request body too large — the limit is 1MB." }, 413),
+  });
+}
 
 // Cached lazily: undefined = not yet attempted, null = build missing.
 let cachedIndexHtml: string | null | undefined;
@@ -35,9 +53,16 @@ export function createApp(db: Db) {
   app.get("/health", (c) => c.json({ ok: true }));
 
   app.route("/", buildAuthRoutes(db));
+
+  app.use("/webhooks/github", jsonBodyLimit());
   app.route("/", buildGithubWebhookRoutes(db));
+
+  app.use("/api/*", (c, next) =>
+    ATTACHMENT_UPLOAD_PATH.test(c.req.path) ? next() : jsonBodyLimit()(c, next)
+  );
   app.route("/api", buildApiRoutes(db));
 
+  app.use("/mcp", jsonBodyLimit());
   app.post("/mcp", async (c) => {
     const auth = c.req.header("authorization") ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
