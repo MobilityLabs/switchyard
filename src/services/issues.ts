@@ -155,6 +155,22 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
     const changes: Partial<typeof issues.$inferInsert> = {};
     const toRecord: { type: string; payload: Record<string, unknown> }[] = [];
 
+    if (patch.status === "in_progress" && actor.type === "agent") {
+      // Same gates claimIssue enforces — without this, a PATCH straight to
+      // in_progress would let an agent start work a human deliberately
+      // blocked behind another issue, or duplicate a claim/PR already in
+      // flight (SYD-99). Runs even when patch.status === current.status
+      // (i.e. the issue is already in_progress) so a second agent's redundant
+      // PATCH is refused instead of silently no-op'ing past the gate (SYD-111).
+      const blockers = getOpenBlockers(tx as Db, current.id);
+      if (blockers.length > 0) {
+        throw new SwitchyardError(
+          `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
+        );
+      }
+      assertClaimable(tx as Db, actor, current);
+    }
+
     if (patch.status !== undefined && patch.status !== current.status) {
       if (!STATUSES.includes(patch.status)) {
         throw new SwitchyardError(
@@ -171,21 +187,17 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
           "Only humans move issues to done — comment your verification evidence and move it to in_review instead."
         );
       }
-      if (patch.status === "in_progress" && actor.type === "agent") {
-        // Same gates claimIssue enforces — without this, a PATCH straight to
-        // in_progress would let an agent start work a human deliberately
-        // blocked behind another issue, or duplicate a claim/PR already in
-        // flight (SYD-99).
-        const blockers = getOpenBlockers(tx as Db, current.id);
-        if (blockers.length > 0) {
-          throw new SwitchyardError(
-            `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`
-          );
-        }
-        assertClaimable(tx as Db, actor, current);
-      }
       changes.status = patch.status;
       toRecord.push({ type: "status_changed", payload: { from: current.status, to: patch.status } });
+      // Mirror claimIssue: a bare PATCH to in_progress on an unclaimed issue
+      // must assign the caller, or a second actor's identical PATCH would
+      // pass assertClaimable (assigneeId still null) and both would believe
+      // they own it (SYD-111 — the SYD-93 double-work gap, reachable via
+      // update_issue instead of claim_issue).
+      if (patch.status === "in_progress" && current.assigneeId === null && patch.assigneeName === undefined) {
+        changes.assigneeId = actor.id;
+        toRecord.push({ type: "assigned", payload: { to: actor.name } });
+      }
     }
     if (patch.priority !== undefined && patch.priority !== current.priority) {
       if (!PRIORITIES.includes(patch.priority)) {

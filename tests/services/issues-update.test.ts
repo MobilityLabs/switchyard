@@ -193,4 +193,43 @@ describe("claimIssue", () => {
     expect(moved.status).toBe("in_progress");
     expect(moved.assigneeId).toBe(agent.id); // human overrode the gate, didn't reassign
   });
+
+  // SYD-111: a bare PATCH to in_progress skipped assignment entirely, so two
+  // agents could both move the same unclaimed issue to in_progress and both
+  // believe they owned it — the SYD-93 double-work gap, reachable via
+  // update_issue instead of claim_issue.
+  it("a direct PATCH to in_progress on an unclaimed issue auto-assigns the caller", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    const moved = updateIssue(db, agent, "AIPI-1", { status: "in_progress" });
+    expect(moved.status).toBe("in_progress");
+    expect(moved.assigneeId).toBe(agent.id);
+    const types = listIssueEvents(db, moved.id).map((e) => e.type);
+    expect(types).toContain("assigned");
+  });
+
+  it("a second agent's identical PATCH to in_progress is refused, not a silent no-op", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    updateIssue(db, agent, "AIPI-1", { status: "in_progress" });
+    const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" }))
+      .toThrowError(/already claimed by claude\/worker/i);
+    expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
+  });
+
+  it("re-PATCHing to in_progress by the same agent that already owns it is a no-op success", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    updateIssue(db, agent, "AIPI-1", { status: "in_progress" });
+    const again = updateIssue(db, agent, "AIPI-1", { status: "in_progress" });
+    expect(again.status).toBe("in_progress");
+    expect(again.assigneeId).toBe(agent.id);
+  });
+
+  it("an explicit assigneeName on the in_progress PATCH is respected over auto-assignment", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    // A human pre-assigning to someone else while moving it to in_progress
+    // must not get overwritten by auto-assigning the calling actor.
+    const moved = updateIssue(db, human, "AIPI-1", { status: "in_progress", assigneeName: "claude/other" });
+    expect(moved.assigneeId).toBe(other.id);
+  });
 });
