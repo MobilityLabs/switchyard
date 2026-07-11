@@ -33,4 +33,32 @@ describe("auth routes", () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toMatch(/invalid, expired, or already used/i);
   });
+
+  it("omits the Secure flag by default (plain-http deployments keep working)", async () => {
+    delete process.env.SWITCHYARD_COOKIE_SECURE;
+    const db = openDb(":memory:");
+    createActor(db, { name: "sean", type: "human" });
+    const app = buildAuthRoutes(db);
+    const { path } = createLoginLink(db, "sean");
+
+    const res = await app.request(path);
+    const cookie = res.headers.get("set-cookie")!;
+    expect(cookie).not.toMatch(/secure/i);
+  });
+
+  it("sets the Secure flag when SWITCHYARD_COOKIE_SECURE=1", async () => {
+    process.env.SWITCHYARD_COOKIE_SECURE = "1";
+    try {
+      const db = openDb(":memory:");
+      createActor(db, { name: "sean", type: "human" });
+      const app = buildAuthRoutes(db);
+      const { path } = createLoginLink(db, "sean");
+
+      const res = await app.request(path);
+      const cookie = res.headers.get("set-cookie")!;
+      expect(cookie).toMatch(/secure/i);
+    } finally {
+      delete process.env.SWITCHYARD_COOKIE_SECURE;
+    }
+  });
 });
