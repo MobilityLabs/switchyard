@@ -117,14 +117,31 @@ export function buildPrTitle(ref: string, issueTitle: string): string {
   return `${ref}: ${issueTitle}`;
 }
 
-export function buildPrBody(ref: string, serverUrl: string): string {
-  return [
+/**
+ * `exitCode` is the dispatched session's own exit code (SYD-118): a
+ * containerized session pushes agent/<ref> whenever it produced any commits,
+ * independent of whether the session itself errored or was killed by the
+ * watchdog, so a non-clean exit can still open a PR carrying partial work.
+ * Surfacing that in the PR body itself — rather than only in the worker log —
+ * is what makes a reviewer aware without them having to go look; the merge
+ * decision stays a human's regardless, this is not a merge gate.
+ */
+export function buildPrBody(ref: string, serverUrl: string, exitCode: number | null = null): string {
+  const lines = [
     `Agent work for Switchyard issue **${ref}**.`,
     "",
     `Issue: ${serverUrl.replace(/\/$/, "")}/issue/${ref}`,
     "",
     "Merged automatically by scripts/deliver.ts when a human moves the issue to done.",
-  ].join("\n");
+  ];
+  if (exitCode !== null && exitCode !== 0) {
+    lines.push(
+      "",
+      `⚠️ **Session exited with a non-zero code (${exitCode}).** This branch may carry ` +
+        "partial or incomplete work from an errored or killed session — review carefully."
+    );
+  }
+  return lines.join("\n");
 }
 
 // argv builders are pure so tests can assert exact argument vectors; every
@@ -144,14 +161,20 @@ export function buildPrListArgs(ref: string, ownerRepo: string): string[] {
   return ["pr", "list", "-R", ownerRepo, "--head", agentBranch(ref), "--state", "open", "--json", "number"];
 }
 
-export function buildPrCreateArgs(ref: string, issueTitle: string, serverUrl: string, ownerRepo: string): string[] {
+export function buildPrCreateArgs(
+  ref: string,
+  issueTitle: string,
+  serverUrl: string,
+  ownerRepo: string,
+  exitCode: number | null = null
+): string[] {
   return [
     "pr", "create",
     "-R", ownerRepo,
     "--base", MAIN_BRANCH,
     "--head", agentBranch(ref),
     "--title", buildPrTitle(ref, issueTitle),
-    "--body", buildPrBody(ref, serverUrl),
+    "--body", buildPrBody(ref, serverUrl, exitCode),
   ];
 }
 

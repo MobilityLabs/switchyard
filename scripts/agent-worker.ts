@@ -437,9 +437,12 @@ export function dispatch(
     // Delivery gate (SYD-49): a containerized session that pushed agent/<ref>
     // gets its branch published to GitHub as a PR, host-side (gh + git auth
     // live here, never in the container). Merging still waits for a human
-    // done-stamp via scripts/deliver.ts.
+    // done-stamp via scripts/deliver.ts. Publish fires on commit count alone,
+    // independent of a clean exit (SYD-118) — an errored/killed session that
+    // still committed partial work opens a PR too, so `code` is passed
+    // through to mark the PR body when it isn't a clean exit.
     if (config.containerized && config.delivery && config.delivery.openPrs !== false) {
-      publishAgentBranch(project.repo, issue.ref, issue.title, config.url)
+      publishAgentBranch(project.repo, issue.ref, issue.title, config.url, code)
         .then((outcome) => {
           const line = formatPublishOutcome(agentBranch(issue.ref), outcome);
           console.log(`${issue.ref}: ${line}`);
