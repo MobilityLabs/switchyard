@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 //
+// useActorNames wraps listActors in a slow (60s) usePoll and projects it down
+// to a plain array of names for the @mention highlighter (SYD-57).
+//
 // SYD-130: useActorNames used to `.map()` a fresh array on every render, so
 // an unrelated 60s poll tick (or any parent re-render) handed consumers a
 // new array reference even when the actor names hadn't changed. That fed
@@ -17,6 +20,7 @@ vi.mock("./api", () => ({
 
 import { listActors } from "./api";
 import { useActorNames } from "./useActorNames";
+import type { Actor } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,7 +36,7 @@ async function flush(): Promise<void> {
   await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 }
 
-describe("useActorNames", () => {
+describe("useActorNames reference stability (SYD-130)", () => {
   let container: HTMLElement;
 
   beforeEach(() => {
@@ -89,5 +93,41 @@ describe("useActorNames", () => {
     await flush();
     expect(seen.at(-1)).toEqual(["sean", "claude/dev"]);
     expect(seen.at(-1)).not.toBe(first);
+  });
+});
+
+function Probe({ expose }: { expose: (names: string[]) => void }) {
+  expose(useActorNames());
+  return null;
+}
+
+async function render(expose: (names: string[]) => void): Promise<void> {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => { root.render(<Probe expose={expose} />); });
+}
+
+describe("useActorNames (SYD-134)", () => {
+  afterEach(() => {
+    vi.mocked(listActors).mockReset();
+  });
+
+  it("returns an empty array before the poll resolves", async () => {
+    vi.mocked(listActors).mockImplementationOnce(() => new Promise(() => {}));
+    let names: string[] = ["unset"];
+    await render((n) => { names = n; });
+    expect(names).toEqual([]);
+  });
+
+  it("returns the actor names once listActors resolves", async () => {
+    const actors: Actor[] = [
+      { id: 1, name: "sean", type: "human" },
+      { id: 2, name: "claude/worker", type: "agent" },
+    ];
+    vi.mocked(listActors).mockResolvedValueOnce(actors);
+    let names: string[] = [];
+    await render((n) => { names = n; });
+    expect(names).toEqual(["sean", "claude/worker"]);
   });
 });
