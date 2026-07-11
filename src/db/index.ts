@@ -14,8 +14,16 @@ const migrationsFolder = path.join(
 export function openDb(dbPath: string): Db {
   const sqlite = new Database(dbPath);
   sqlite.pragma("journal_mode = WAL");
-  sqlite.pragma("foreign_keys = ON");
   const db = drizzle(sqlite, { schema });
+  // Foreign keys must be OFF around migrate (better-sqlite3 turns them on at
+  // open): drizzle's table-rebuild migrations (e.g. 0009) emit their own
+  // `PRAGMA foreign_keys=OFF`, but pragmas are no-ops inside the migration
+  // transaction — with enforcement on, the rebuild's `DROP TABLE` fails on
+  // any database whose other tables hold rows referencing the rebuilt one
+  // (fine on fresh test DBs, fatal on the production NAS — SYD-172). Only a
+  // pragma issued OUTSIDE the transaction, like these, actually applies.
+  sqlite.pragma("foreign_keys = OFF");
   migrate(db, { migrationsFolder });
+  sqlite.pragma("foreign_keys = ON");
   return db;
 }
