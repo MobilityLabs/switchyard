@@ -88,6 +88,33 @@ describe("searchIssues", () => {
     }
   });
 
+  it("openPr filter (SYD-171) restricts to issues with a still-open agent PR", () => {
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+    expect(searchIssues(db, { openPr: true }).map((i) => i.ref)).toEqual(["AIPI-2"]);
+    expect(searchIssues(db, { openPr: false }).map((i) => i.ref).sort()).toEqual(["AIPI-1", "HAND-1"]);
+  });
+
+  it("openPr filter returns nothing when no issue has an open PR", () => {
+    expect(searchIssues(db, { openPr: true })).toEqual([]);
+  });
+
+  it("openPr filter clears once the PR is delivered", () => {
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivered", prNumber: 41, mergeSha: "abc123", deploy: { ran: false } });
+    expect(searchIssues(db, { openPr: true })).toEqual([]);
+  });
+
+  it("openPr filter combines (ANDed) with status, e.g. done-but-not-yet-merged", () => {
+    const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
+    updateIssue(db, human, "AIPI-2", { status: "todo" });
+    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+    updateIssue(db, human, "AIPI-2", { status: "done" });
+    expect(searchIssues(db, { status: "done", openPr: true }).map((i) => i.ref)).toEqual(["AIPI-2"]);
+    expect(searchIssues(db, { status: "todo", openPr: true })).toEqual([]);
+  });
+
   it("treats %, _ and ~ in text as literals", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Progress at 50% done" });
     createIssue(db, human, { projectKey: "AIPI", title: "snake_case naming" });

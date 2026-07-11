@@ -240,6 +240,10 @@ h2 { display: flex; align-items: center; gap: 8px; }
 }
 .pill:hover { border-color: var(--muted); }
 .auto-pill.active { background: var(--accent); border-color: var(--accent); color: #14161a; font-weight: 600; }
+.done-filters { display: inline-flex; gap: 4px; margin-left: auto; }
+.filter-pill { font-size: 11px; padding: 2px 8px; }
+.filter-pill.filter-danger.active { background: var(--danger); border-color: var(--danger); color: #14161a; font-weight: 600; }
+.filter-pill.filter-warn.active { background: var(--warn); border-color: var(--warn); color: #14161a; font-weight: 600; }
 .labels-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 14px; }
 .chip.label-chip {
   display: inline-flex; align-items: center; gap: 4px;

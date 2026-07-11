@@ -5,6 +5,7 @@ import { type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
 import { SwitchyardError } from "./errors.js";
 import { listAttentionByIssueId, type AttentionFlag } from "./attention.js";
+import { listOpenPrByIssueId } from "./pr-status.js";
 
 export type SearchFilters = {
   projectKey?: string;
@@ -18,6 +19,10 @@ export type SearchFilters = {
    * lets callers like deliver.ts's reconciliation pass fetch just the
    * handful of flagged issues instead of paging through everything. */
   attention?: AttentionFlag["reason"];
+  /** Restrict to issues with (true) or without (false) a still-open agent PR
+   * (SYD-171) — combine with status: "done" to find done cards whose PR
+   * hasn't merged yet. */
+  openPr?: boolean;
 };
 
 export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
@@ -45,6 +50,15 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
       .map(([issueId]) => issueId);
     if (flagged.length === 0) return [];
     conditions.push(inArray(issues.id, flagged));
+  }
+  if (filters.openPr !== undefined) {
+    const withOpenPr = [...listOpenPrByIssueId(db).keys()];
+    if (filters.openPr) {
+      if (withOpenPr.length === 0) return [];
+      conditions.push(inArray(issues.id, withOpenPr));
+    } else if (withOpenPr.length > 0) {
+      conditions.push(sql`${issues.id} NOT IN (${sql.join(withOpenPr.map((id) => sql`${id}`), sql`, `)})`);
+    }
   }
   if (filters.text) {
     // Escape SQL wildcard characters (%, _, and ~) so they're treated as literals

@@ -14,6 +14,7 @@ export type Issue = {
   needsInput: boolean; snoozedUntil: number | null;
   createdAt: number; updatedAt: number;
   attention: { reason: "delivery_failed"; message: string } | null;
+  openPr: { prNumber: number; url: string } | null;
 };
 export type Activity = { type: string; actorName: string; payload: Record<string, unknown>; createdAt: number };
 export type DeployResult = { ran: false } | { ran: true; ok: boolean; tail: string };

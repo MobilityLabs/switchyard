@@ -114,6 +114,35 @@ describe("issue routes", () => {
     expect((await body<{ error: string }>(denied)).error).toMatch(/already claimed by claude\/dev/i);
   });
 
+  it("filters the list to done-but-not-yet-merged via ?open_pr=true (SYD-171)", async () => {
+    await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title: "Ship it" }) });
+    await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title: "Already merged" }) });
+    for (const ref of ["SYD-1", "SYD-2"]) {
+      await app.request(`/issues/${ref}`, { method: "PATCH", headers: humanH, body: JSON.stringify({ status: "todo" }) });
+      await app.request(`/issues/${ref}/claim`, { method: "POST", headers: agentH });
+    }
+    await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({ type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" }),
+    });
+    await app.request("/issues/SYD-2/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({ type: "pr_opened", prNumber: 42, url: "https://github.com/acme/widgets/pull/42" }),
+    });
+    await app.request("/issues/SYD-2/delivery-events", {
+      method: "POST", headers: agentH,
+      body: JSON.stringify({ type: "delivered", prNumber: 42, mergeSha: "abc123", deploy: { ran: false } }),
+    });
+    for (const ref of ["SYD-1", "SYD-2"]) {
+      await app.request(`/issues/${ref}`, { method: "PATCH", headers: humanH, body: JSON.stringify({ status: "done" }) });
+    }
+
+    const list = await body<{ ref: string }[]>(
+      await app.request("/issues?project=SYD&status=done&open_pr=true", { headers: humanH })
+    );
+    expect(list.map((i) => i.ref)).toEqual(["SYD-1"]);
+  });
+
   it("flags a blocked issue in the todo list feed the dispatcher reads (SYD-160)", async () => {
     for (const title of ["Schema", "API"]) {
       await app.request("/issues", { method: "POST", headers: humanH, body: JSON.stringify({ projectKey: "SYD", title }) });
