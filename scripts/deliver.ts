@@ -207,7 +207,7 @@ async function finishDelivery(
  * the full cycle against the newer main rather than retrying a merge that
  * was only verified against a now-stale one.
  */
-async function deliverQueue(
+export async function deliverQueue(
   ref: string,
   project: WorkerProject,
   config: WorkerConfig,
@@ -242,18 +242,26 @@ async function deliverQueue(
     console.log(`${ref}: queue-mode rebased onto ${MAIN_BRANCH} at ${rebase.sha} (attempt ${attempt}/${MAX_QUEUE_MERGE_ATTEMPTS})`);
     const mergeable = await pollUntilMergeable(project.repo, prNumber);
     console.log(`${ref}: post-rebase mergeability=${mergeable}`);
+    let mergeSha: string;
     try {
-      const mergeSha = await mergeAgentPr(project.repo, prNumber);
-      console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (queue mode)`);
-      await finishDelivery(ref, project, config, token, cloneDir, prNumber, mergeSha, queueDeliveredNote(ref));
-      return;
+      mergeSha = await mergeAgentPr(project.repo, prNumber);
     } catch (mergeErr) {
       if (!shouldRetryQueueRebase(attempt)) throw mergeErr;
       console.log(
         `${ref}: queue-mode merge failed after rebase (${(mergeErr as Error).message}) — ` +
           `${MAIN_BRANCH} moved again, re-rebasing`
       );
+      continue;
     }
+    // Outside the retry catch (SYD-174): main already has the commit at this
+    // point, so a finishDelivery failure (deploy, comment, or event POST) is a
+    // post-merge problem, not a lost merge race — re-rebasing here would only
+    // hit "no branch found" against the PR's now-deleted branch. Let it
+    // propagate to deliver()'s outer per-ref handler, which logs and moves on;
+    // the reconciliation pass (SYD-94) clears the flag once things settle.
+    console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (queue mode)`);
+    await finishDelivery(ref, project, config, token, cloneDir, prNumber, mergeSha, queueDeliveredNote(ref));
+    return;
   }
 }
 
