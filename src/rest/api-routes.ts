@@ -277,52 +277,27 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   const redact = ({ secret, ...rest }: Webhook) => ({ ...rest, hasSecret: secret !== null });
 
   app.get("/webhooks", (c) => c.json(listWebhooks(db).map(redact)));
-  app.post("/webhooks", body(webhookCreateBody), (c) => {
-    if (c.var.actor.type === "agent") {
-      throw new SwitchyardError(
-        "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
-      );
-    }
-    return c.json(redact(addWebhook(db, c.req.valid("json"))));
-  });
+  app.post("/webhooks", body(webhookCreateBody), (c) =>
+    c.json(redact(addWebhook(db, c.var.actor, c.req.valid("json"))))
+  );
   app.delete("/webhooks/:id", (c) => {
-    if (c.var.actor.type === "agent") {
-      throw new SwitchyardError(
-        "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
-      );
-    }
-    removeWebhook(db, Number(c.req.param("id")));
+    removeWebhook(db, c.var.actor, Number(c.req.param("id")));
     return c.json({ ok: true });
   });
   app.patch("/webhooks/:id", body(webhookPatchBody), (c) => {
-    if (c.var.actor.type === "agent") {
-      throw new SwitchyardError(
-        "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
-      );
-    }
     const { active } = c.req.valid("json");
-    return c.json(redact(setWebhookActive(db, Number(c.req.param("id")), active)));
+    return c.json(redact(setWebhookActive(db, c.var.actor, Number(c.req.param("id")), active)));
   });
 
   // Redact secret from linked-repo objects for safe API responses
   const redactRepo = ({ secret, ...rest }: GithubRepo) => ({ ...rest, hasSecret: secret !== null });
 
   app.get("/github-repos", (c) => c.json(listGithubRepos(db).map(redactRepo)));
-  app.post("/github-repos", body(githubRepoCreateBody), (c) => {
-    if (c.var.actor.type === "agent") {
-      throw new SwitchyardError(
-        "Only humans manage linked GitHub repos — ask a human to link or unlink a repo."
-      );
-    }
-    return c.json(redactRepo(addGithubRepo(db, c.req.valid("json"))));
-  });
+  app.post("/github-repos", body(githubRepoCreateBody), (c) =>
+    c.json(redactRepo(addGithubRepo(db, c.var.actor, c.req.valid("json"))))
+  );
   app.delete("/github-repos/:id", (c) => {
-    if (c.var.actor.type === "agent") {
-      throw new SwitchyardError(
-        "Only humans manage linked GitHub repos — ask a human to link or unlink a repo."
-      );
-    }
-    removeGithubRepo(db, Number(c.req.param("id")));
+    removeGithubRepo(db, c.var.actor, Number(c.req.param("id")));
     return c.json({ ok: true });
   });
 

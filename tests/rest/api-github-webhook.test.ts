@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
-import { createActor } from "../../src/services/actors.js";
+import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
@@ -15,10 +15,11 @@ function sign(body: string, secret: string = SECRET): string {
 
 let db: Db;
 let app: ReturnType<typeof buildGithubWebhookRoutes>;
+let human: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createActor(db, { name: "sean", type: "human" }).actor;
   createProject(db, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
   app = buildGithubWebhookRoutes(db, SECRET);
@@ -105,7 +106,7 @@ describe("POST /webhooks/github", () => {
 describe("POST /webhooks/github with a per-repo secret", () => {
   it("verifies against the linked repo's own secret, not the global one", async () => {
     const repoSecret = "repo-only-secret";
-    addGithubRepo(db, { fullName: "acme/widgets", secret: repoSecret });
+    addGithubRepo(db, human, { fullName: "acme/widgets", secret: repoSecret });
     const raw = JSON.stringify({
       action: "opened",
       repository: { full_name: "acme/widgets" },
@@ -125,7 +126,7 @@ describe("POST /webhooks/github with a per-repo secret", () => {
   });
 
   it("rejects a delivery signed with the global secret once the repo has its own", async () => {
-    addGithubRepo(db, { fullName: "acme/widgets", secret: "repo-only-secret" });
+    addGithubRepo(db, human, { fullName: "acme/widgets", secret: "repo-only-secret" });
     const raw = JSON.stringify({
       action: "opened",
       repository: { full_name: "acme/widgets" },
@@ -144,7 +145,7 @@ describe("POST /webhooks/github with a per-repo secret", () => {
   });
 
   it("falls back to the global secret for a repo linked without its own", async () => {
-    addGithubRepo(db, { fullName: "acme/widgets" });
+    addGithubRepo(db, human, { fullName: "acme/widgets" });
     const raw = JSON.stringify({
       action: "opened",
       repository: { full_name: "acme/widgets" },

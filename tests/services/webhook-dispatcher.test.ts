@@ -25,7 +25,7 @@ describe("webhook dispatcher", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
-    addWebhook(db, { url: `http://127.0.0.1:${port}/hook`, secret: "s3cret" });
+    addWebhook(db, human, { url: `http://127.0.0.1:${port}/hook`, secret: "s3cret" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });          // 1 event
     updateIssue(db, human, "SYD-1", { status: "todo" });                       // 1 event
 
@@ -48,7 +48,7 @@ describe("webhook dispatcher", () => {
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     createProject(db, { key: "AIPI", name: "aipi" });
-    addWebhook(db, { url: "http://127.0.0.1:1/dead", projectKey: "AIPI" }); // scoped elsewhere + dead
+    addWebhook(db, human, { url: "http://127.0.0.1:1/dead", projectKey: "AIPI" }); // scoped elsewhere + dead
     createIssue(db, human, { projectKey: "SYD", title: "One" });
     expect(await dispatchPending(db)).toBe(0); // no matching hook, no throw
   });
@@ -68,7 +68,7 @@ describe("webhook dispatcher", () => {
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
-    addWebhook(db, { url: `http://127.0.0.1:${port}/hook` });
+    addWebhook(db, human, { url: `http://127.0.0.1:${port}/hook` });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event: created
     recordProgressNote(db, agent, "SYD-1", "compiling");             // 1 event: progress_note
     updateIssue(db, human, "SYD-1", { status: "todo" });              // 1 event: status_changed
@@ -94,7 +94,7 @@ describe("webhook dispatcher", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
-    addWebhook(db, { url: `http://127.0.0.1:${port}/fail` });
+    addWebhook(db, human, { url: `http://127.0.0.1:${port}/fail` });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event
 
     expect(await dispatchPending(db)).toBe(0); // hook responded 500, not counted as delivered
