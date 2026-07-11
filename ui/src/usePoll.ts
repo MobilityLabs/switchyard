@@ -10,14 +10,34 @@ export function usePoll<T>(fn: () => Promise<T>, deps: unknown[], intervalMs = 1
 
   useEffect(() => {
     let live = true;
+    let timer: ReturnType<typeof setInterval> | null = null;
     const run = () =>
       fnRef.current().then(
         (d) => { if (live) { setData(d); setError(null); } },
         (e) => { if (live) setError(e instanceof Error ? e.message : String(e)); },
       );
+    const start = () => {
+      if (timer === null) timer = setInterval(run, intervalMs);
+    };
+    const stop = () => {
+      if (timer !== null) { clearInterval(timer); timer = null; }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        stop();
+      } else {
+        run();
+        start();
+      }
+    };
     run();
-    const timer = setInterval(run, intervalMs);
-    return () => { live = false; clearInterval(timer); };
+    if (document.visibilityState !== "hidden") start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      live = false;
+      stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick, intervalMs]);
 
