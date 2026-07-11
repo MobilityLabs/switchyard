@@ -18,7 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import {
-  projectKeyOf, newTickGate, runGated, withRetry, HttpStatusError, type WorkerConfig,
+  projectKeyOf, newTickGate, runGated, withRetry, HttpStatusError, type WorkerConfig, type WorkerProject,
 } from "./worker-select.js";
 import {
   findDeliverableRefs,
@@ -36,6 +36,11 @@ import {
   shouldDispatchConflictResolution,
   conflictResolutionFailedComment,
   conflictResolvedNote,
+  decideQueueAction,
+  queueBounceComment,
+  queueBounceEventMessage,
+  queueDeliveredNote,
+  isQueueMode,
   type DeliveryEventInput,
   type DeliveryFeedEvent,
   type AttentionIssueRow,
@@ -45,6 +50,7 @@ import {
   findMergedAgentPr,
   dispatchConflictResolution,
   pollUntilMergeable,
+  currentOriginMainSha,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
@@ -137,6 +143,75 @@ async function postDeliveryEvent(
   await postWithRetry(url, token, `POST delivery-events on ${ref}`, input);
 }
 
+/** Post-merge steps shared by both delivery modes: verify-backstop (unless
+ * delivery.verify === false), deploy, then the delivery comment + event.
+ * `note` prefixes the comment (rebase/resolution/queue provenance). */
+async function finishDelivery(
+  ref: string, prNumber: number, mergeSha: string, note: string | null,
+  project: WorkerProject, cloneDir: string, config: WorkerConfig, token: string
+): Promise<void> {
+  let deploy: Awaited<ReturnType<typeof runDeploy>> = { ran: false };
+  if (config.delivery?.deploy !== false) {
+    await ensureCleanClone(project.repo, cloneDir);
+    if (config.delivery?.verify !== false) {
+      const verify = await runVerification(cloneDir);
+      if (!verify.ok) {
+        console.error(`${ref}: post-merge verification FAILED — main is red, deploy skipped`);
+        await postComment(config, token, ref, verificationFailureComment(prNumber, mergeSha, verify.tail));
+        await postDeliveryEvent(config, token, ref, {
+          type: "delivery_failed",
+          message: `post-merge verification failed after merging PR #${prNumber} at ${mergeSha} — deploy skipped:\n${verify.tail}`,
+        }).catch((e: Error) => console.error(`could not record delivery_failed event for ${ref}: ${e.message}`));
+        return;
+      }
+    }
+    deploy = await runDeploy(cloneDir);
+    console.log(`${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`);
+  }
+  const commentBody = deliveryComment({ prNumber, mergeSha, deploy });
+  await postComment(config, token, ref, note ? `${note}\n\n${commentBody}` : commentBody);
+  await postDeliveryEvent(config, token, ref, { type: "delivered", prNumber, mergeSha, deploy }).catch((e: Error) =>
+    console.error(`could not record delivered event for ${ref}: ${e.message}`)
+  );
+}
+
+/** Queue-mode delivery (SYD-164): rebase → verify → merge → deploy. Every
+ * decision comes from decideQueueAction (pure, tested); this loop only
+ * executes. Bounces leave main untouched and the PR open. */
+async function deliverViaQueue(
+  ref: string, prNumber: number, project: WorkerProject, cloneDir: string,
+  config: WorkerConfig, token: string
+): Promise<void> {
+  let attempt = 1;
+  for (;;) {
+    const outcome = await attemptAutoRebase(project.repo, cloneDir, ref);
+    let mainMoved = false;
+    if (outcome.status === "rebased") {
+      const mergeable = await pollUntilMergeable(project.repo, prNumber);
+      console.log(`${ref}: queue attempt ${attempt} rebased at ${outcome.sha}, mergeability=${mergeable}`);
+      mainMoved = (await currentOriginMainSha(cloneDir)) !== outcome.mainSha;
+    }
+    const decision = decideQueueAction(outcome, mainMoved, attempt);
+    if (decision.kind === "retry-rebase") {
+      console.log(`${ref}: main moved during verify — retrying rebase (attempt ${decision.attempt})`);
+      attempt = decision.attempt;
+      continue;
+    }
+    if (decision.kind === "bounce") {
+      console.log(`${ref}: queue bounce (${decision.reason})`);
+      await postComment(config, token, ref, queueBounceComment(ref, decision));
+      await postDeliveryEvent(config, token, ref, {
+        type: "delivery_failed", message: queueBounceEventMessage(decision),
+      }).catch((e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`));
+      return;
+    }
+    const mergeSha = await mergeAgentPr(project.repo, prNumber);
+    console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (queue mode)`);
+    await finishDelivery(ref, prNumber, mergeSha, queueDeliveredNote(ref, attempt), project, cloneDir, config, token);
+    return;
+  }
+}
+
 async function deliver(ref: string, config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {
   const project = config.projects[projectKeyOf(ref)];
   if (!project) return;
@@ -156,6 +231,12 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
     }
 
     const cloneDir = path.join(cloneRootOf(config), projectKeyOf(ref));
+
+    if (isQueueMode(config)) {
+      await deliverViaQueue(ref, prNumber, project, cloneDir, config, token);
+      return;
+    }
+
     let mergeSha: string;
     let rebased = false;
     let resolvedConflict = false;
@@ -232,32 +313,8 @@ async function deliver(ref: string, config: WorkerConfig, token: string, dryRun:
     if (!resolvedConflict) {
       console.log(`${ref}: merged PR #${prNumber} at ${mergeSha}${rebased ? " (after auto-rebase)" : ""}`);
     }
-    let deploy: Awaited<ReturnType<typeof runDeploy>> = { ran: false };
-    if (config.delivery?.deploy !== false) {
-      await ensureCleanClone(project.repo, cloneDir);
-
-      if (config.delivery?.verify !== false) {
-        const verify = await runVerification(cloneDir);
-        if (!verify.ok) {
-          console.error(`${ref}: post-merge verification FAILED — main is red, deploy skipped`);
-          await postComment(config, token, ref, verificationFailureComment(prNumber, mergeSha, verify.tail));
-          await postDeliveryEvent(config, token, ref, {
-            type: "delivery_failed",
-            message: `post-merge verification failed after merging PR #${prNumber} at ${mergeSha} — deploy skipped:\n${verify.tail}`,
-          }).catch((e: Error) => console.error(`could not record delivery_failed event for ${ref}: ${e.message}`));
-          return;
-        }
-      }
-
-      deploy = await runDeploy(cloneDir);
-      console.log(`${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`);
-    }
-    const commentBody = deliveryComment({ prNumber, mergeSha, deploy });
     const note = resolvedConflict ? conflictResolvedNote(ref) : rebased ? autoRebasedNote(ref) : null;
-    await postComment(config, token, ref, note ? `${note}\n\n${commentBody}` : commentBody);
-    await postDeliveryEvent(config, token, ref, { type: "delivered", prNumber, mergeSha, deploy }).catch((e: Error) =>
-      console.error(`could not record delivered event for ${ref}: ${e.message}`)
-    );
+    await finishDelivery(ref, prNumber, mergeSha, note, project, cloneDir, config, token);
   } catch (err) {
     const message = (err as Error).message;
     console.error(`delivery failed for ${ref}: ${message}`);
