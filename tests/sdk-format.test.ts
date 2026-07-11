@@ -23,14 +23,15 @@ describe("formatSdkEvent", () => {
 
   it("truncates long assistant text and skips empty messages", () => {
     const long = "x".repeat(300);
-    expect(formatSdkEvent({ type: "assistant", message: { content: [{ type: "text", text: long }] } }))
-      .toBe(`[sdk] ${"x".repeat(200)}…`);
+    expect(
+      formatSdkEvent({ type: "assistant", message: { content: [{ type: "text", text: long }] } }),
+    ).toBe(`[sdk] ${"x".repeat(200)}…`);
     expect(formatSdkEvent({ type: "assistant", message: { content: [] } })).toBeNull();
   });
 
   it("logs the result with turns and cost, and ignores user events", () => {
     expect(
-      formatSdkEvent({ type: "result", subtype: "success", num_turns: 12, total_cost_usd: 0.5432 })
+      formatSdkEvent({ type: "result", subtype: "success", num_turns: 12, total_cost_usd: 0.5432 }),
     ).toBe("[sdk] result: success turns=12 cost=$0.5432");
     expect(formatSdkEvent({ type: "user" })).toBeNull();
   });

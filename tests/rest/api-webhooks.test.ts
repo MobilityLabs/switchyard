@@ -19,7 +19,12 @@ describe("webhook routes", () => {
       body: JSON.stringify({ url: "http://example.com/hook" }),
     });
     expect(createdRes.status).toBe(200);
-    const created = (await createdRes.json()) as { id: number; url: string; hasSecret?: boolean; secret?: unknown };
+    const created = (await createdRes.json()) as {
+      id: number;
+      url: string;
+      hasSecret?: boolean;
+      secret?: unknown;
+    };
     expect(created.id).toBeDefined();
     expect(created.url).toBe("http://example.com/hook");
     expect(created.hasSecret).toBe(false);
@@ -32,14 +37,23 @@ describe("webhook routes", () => {
       body: JSON.stringify({ url: "http://example.com/secure", secret: "s3cret" }),
     });
     expect(withSecretRes.status).toBe(200);
-    const withSecret = (await withSecretRes.json()) as { id: number; url: string; hasSecret?: boolean; secret?: unknown };
+    const withSecret = (await withSecretRes.json()) as {
+      id: number;
+      url: string;
+      hasSecret?: boolean;
+      secret?: unknown;
+    };
     expect(withSecret.hasSecret).toBe(true);
     expect(withSecret.secret).toBeUndefined();
 
     // List webhooks and verify secrets are redacted
     const listRes = await app.request("/webhooks", { headers: h });
     expect(listRes.status).toBe(200);
-    const webhooks = (await listRes.json()) as Array<{ id: number; hasSecret?: boolean; secret?: unknown }>;
+    const webhooks = (await listRes.json()) as Array<{
+      id: number;
+      hasSecret?: boolean;
+      secret?: unknown;
+    }>;
     expect(webhooks).toHaveLength(2);
     for (const webhook of webhooks) {
       expect(webhook.secret).toBeUndefined();
@@ -73,14 +87,18 @@ describe("webhook routes", () => {
       body: JSON.stringify({ url: "http://example.com/hook" }),
     });
     expect(createRes.status).toBe(400);
-    expect(((await createRes.json()) as { error: string }).error).toMatch(/only humans manage webhooks/i);
+    expect(((await createRes.json()) as { error: string }).error).toMatch(
+      /only humans manage webhooks/i,
+    );
 
     const deleteRes = await app.request("/webhooks/1", {
       method: "DELETE",
       headers: agentH,
     });
     expect(deleteRes.status).toBe(400);
-    expect(((await deleteRes.json()) as { error: string }).error).toMatch(/only humans manage webhooks/i);
+    expect(((await deleteRes.json()) as { error: string }).error).toMatch(
+      /only humans manage webhooks/i,
+    );
 
     const listRes = await app.request("/webhooks", { headers: agentH });
     expect(listRes.status).toBe(200);
@@ -97,19 +115,29 @@ describe("webhook routes", () => {
       "content-type": "application/json",
     };
     const app = buildApiRoutes(db);
-    const { id } = (await (await app.request("/webhooks", {
-      method: "POST", headers: humanH, body: JSON.stringify({ url: "http://example.com/h" }),
-    })).json()) as { id: number };
+    const { id } = (await (
+      await app.request("/webhooks", {
+        method: "POST",
+        headers: humanH,
+        body: JSON.stringify({ url: "http://example.com/h" }),
+      })
+    ).json()) as { id: number };
 
     const off = await app.request(`/webhooks/${id}`, {
-      method: "PATCH", headers: humanH, body: JSON.stringify({ active: false }),
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ active: false }),
     });
     expect(((await off.json()) as { active: boolean }).active).toBe(false);
 
     const denied = await app.request(`/webhooks/${id}`, {
-      method: "PATCH", headers: agentH, body: JSON.stringify({ active: true }),
+      method: "PATCH",
+      headers: agentH,
+      body: JSON.stringify({ active: true }),
     });
     expect(denied.status).toBe(400);
-    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans manage webhooks/i);
+    expect(((await denied.json()) as { error: string }).error).toMatch(
+      /only humans manage webhooks/i,
+    );
   });
 });

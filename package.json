@@ -14,7 +14,10 @@
     "db:generate": "drizzle-kit generate",
     "deploy": "sh scripts/deploy-nas.sh",
     "init-worker": "tsx scripts/init-worker.ts",
-    "build:worker-image": "docker build -f Dockerfile.worker -t switchyard-worker ."
+    "build:worker-image": "docker build -f Dockerfile.worker -t switchyard-worker .",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@hono/node-server": "^2.0.8",
@@ -33,15 +36,23 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
     "jsdom": "^29.1.1",
+    "prettier": "^3.9.5",
     "tsx": "^4.23.0",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.63.0",
     "vite": "^8.1.3",
     "vitest": "^4.1.10"
   }

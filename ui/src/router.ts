@@ -61,8 +61,10 @@ function setLastProject(key: string): void {
 function matchRoute(pathname: string, search: string): Route | null {
   const parts = pathname.split("/").filter(Boolean);
   if (parts.length === 0) return { view: "triage", project: null };
-  if (parts[0] === "board" && parts.length === 2 && parts[1]) return { view: "board", project: parts[1] };
-  if (parts[0] === "issue" && parts.length === 2 && parts[1]) return { view: "issue", ref: parts[1] };
+  if (parts[0] === "board" && parts.length === 2 && parts[1])
+    return { view: "board", project: parts[1] };
+  if (parts[0] === "issue" && parts.length === 2 && parts[1])
+    return { view: "issue", ref: parts[1] };
   if (parts[0] === "triage") {
     if (parts.length === 1) return { view: "triage", project: null };
     if (parts.length === 2 && isProjectKey(parts[1])) return { view: "triage", project: parts[1] };
@@ -70,7 +72,8 @@ function matchRoute(pathname: string, search: string): Route | null {
   }
   if (parts[0] === "review") {
     if (parts.length === 1) return { view: "review", project: null, ref: null };
-    if (parts.length === 2 && isProjectKey(parts[1])) return { view: "review", project: parts[1], ref: null };
+    if (parts.length === 2 && isProjectKey(parts[1]))
+      return { view: "review", project: parts[1], ref: null };
     if (parts.length === 2 && isIssueRef(parts[1])) {
       return { view: "review", project: projectKeyFromRef(parts[1]), ref: parts[1] };
     }
@@ -101,7 +104,8 @@ export function href(route: Route): string {
     return route.project ? `/review/${route.project}` : "/review";
   }
   if (route.view === "new-issue") return `/new`;
-  if (route.view === "search") return route.query ? `/search?q=${encodeURIComponent(route.query)}` : "/search";
+  if (route.view === "search")
+    return route.query ? `/search?q=${encodeURIComponent(route.query)}` : "/search";
   if (route.view === "agents") return "/agents";
   return "/";
 }

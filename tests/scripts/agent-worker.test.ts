@@ -21,9 +21,19 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const {
-  buildPrompt, dispatch, dispatchAnswer, active, activeMode, answerState,
-  reportSessionStart, reportSessionEnd, runTick, refreshDispatchPolicy,
-  killActiveSessions, adoptContainerSession, reconcileContainerSessions,
+  buildPrompt,
+  dispatch,
+  dispatchAnswer,
+  active,
+  activeMode,
+  answerState,
+  reportSessionStart,
+  reportSessionEnd,
+  runTick,
+  refreshDispatchPolicy,
+  killActiveSessions,
+  adoptContainerSession,
+  reconcileContainerSessions,
 } = await import("../../scripts/agent-worker.js");
 
 describe("buildPrompt", () => {
@@ -106,7 +116,9 @@ describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
     expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("pid undefined"));
     expect(answerState.get(ref)).toBeUndefined();
     expect(active.has(answerKey(ref))).toBe(false);
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("failed to spawn answer session"));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to spawn answer session"),
+    );
 
     logSpy.mockRestore();
     errorSpy.mockRestore();
@@ -115,7 +127,14 @@ describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
 
 describe("session watchdog (SYD-115)", () => {
   const ref = "SYD-115";
-  const issue = { ref, title: "Bundle", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 0 };
+  const issue = {
+    ref,
+    title: "Bundle",
+    labels: ["auto"],
+    assigneeId: null,
+    needsInput: false,
+    updatedAt: 0,
+  };
   const config: WorkerConfig = {
     url: "http://localhost:3300",
     label: "auto",
@@ -177,7 +196,11 @@ describe("session watchdog (SYD-115)", () => {
     const child = new FakeChildProcess();
     spawnMock.mockReturnValue(child);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+      text: async () => "",
+    }));
     vi.stubGlobal("fetch", fetchMock);
 
     dispatch(issue, config, "tok", "code");
@@ -223,7 +246,11 @@ describe("session watchdog (SYD-115)", () => {
   it("clears the watchdog on a normal exit so a slow-but-finished session is never killed", () => {
     const child = new FakeChildProcess();
     spawnMock.mockReturnValue(child);
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+      text: async () => "",
+    }));
     vi.stubGlobal("fetch", fetchMock);
 
     dispatch(issue, config, "tok", "code");
@@ -250,7 +277,7 @@ describe("session watchdog (SYD-115)", () => {
 
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(`answer session for ${ref} exceeded 30s watchdog timeout`)
+      expect.stringContaining(`answer session for ${ref} exceeded 30s watchdog timeout`),
     );
 
     errorSpy.mockRestore();
@@ -275,7 +302,11 @@ describe("session lifecycle reporting (SYD-43)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("POSTs the session start and resolves the new id", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ id: 12 }), text: async () => "" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ id: 12 }),
+      text: async () => "",
+    }));
     vi.stubGlobal("fetch", fetchMock);
     const id = await reportSessionStart(config, "tok", { ref: "SYD-7", mode: "cli", pid: 4242 });
     expect(id).toBe(12);
@@ -287,7 +318,12 @@ describe("session lifecycle reporting (SYD-43)", () => {
 
   it("resolves null instead of throwing when the server rejects the report", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const fetchMock = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({}), text: async () => "no" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+      text: async () => "no",
+    }));
     vi.stubGlobal("fetch", fetchMock);
     const id = await reportSessionStart(config, "tok", { ref: "SYD-7", mode: "cli", pid: null });
     expect(id).toBeNull();
@@ -295,7 +331,11 @@ describe("session lifecycle reporting (SYD-43)", () => {
   });
 
   it("PATCHes the exit code once the session id resolves", async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+      text: async () => "",
+    }));
     vi.stubGlobal("fetch", fetchMock);
     await reportSessionEnd(config, "tok", Promise.resolve(12), 0);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -315,12 +355,24 @@ describe("session lifecycle reporting (SYD-43)", () => {
     // 400 (not 5xx/network) so withRetry's isRetryableError treats it as
     // terminal and this resolves on the first attempt, no real backoff delay.
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const fetchMock = vi.fn(async () => ({ ok: false, status: 400, json: async () => ({}), text: async () => "bad" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({}),
+      text: async () => "bad",
+    }));
     vi.stubGlobal("fetch", fetchMock);
     const onError = vi.fn();
-    const id = await reportSessionStart(config, "tok", { ref: "SYD-7", mode: "cli", pid: null }, onError);
+    const id = await reportSessionStart(
+      config,
+      "tok",
+      { ref: "SYD-7", mode: "cli", pid: null },
+      onError,
+    );
     expect(id).toBeNull();
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining("could not report session start for SYD-7"));
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining("could not report session start for SYD-7"),
+    );
     errorSpy.mockRestore();
   });
 });
@@ -341,14 +393,22 @@ describe("refreshDispatchPolicy (SYD-155)", () => {
   it("overlays a successful fetch onto the config, overriding the file's values", async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
-      json: async () => ({ maxConcurrent: 5, maxAnswerConcurrent: 8, intervalSeconds: 60, eventPollSeconds: 5 }),
+      json: async () => ({
+        maxConcurrent: 5,
+        maxAnswerConcurrent: 8,
+        intervalSeconds: 60,
+        eventPollSeconds: 5,
+      }),
       text: async () => "",
     }));
     vi.stubGlobal("fetch", fetchMock);
     const config = baseConfig();
     await refreshDispatchPolicy(config, "tok");
     expect(config).toMatchObject({
-      maxConcurrent: 5, maxAnswerConcurrent: 8, intervalSeconds: 60, eventPollSeconds: 5,
+      maxConcurrent: 5,
+      maxAnswerConcurrent: 8,
+      intervalSeconds: 60,
+      eventPollSeconds: 5,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "http://localhost:3300/api/dispatch-policy",
@@ -358,12 +418,20 @@ describe("refreshDispatchPolicy (SYD-155)", () => {
 
   it("keeps the last-known (file) values on a fetch failure", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const fetchMock = vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => "down" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+      text: async () => "down",
+    }));
     vi.stubGlobal("fetch", fetchMock);
     const config = baseConfig();
     await refreshDispatchPolicy(config, "tok");
     expect(config).toMatchObject({
-      maxConcurrent: 1, maxAnswerConcurrent: 2, intervalSeconds: 300, eventPollSeconds: 15,
+      maxConcurrent: 1,
+      maxAnswerConcurrent: 2,
+      intervalSeconds: 300,
+      eventPollSeconds: 15,
     });
     errorSpy.mockRestore();
   });
@@ -372,24 +440,49 @@ describe("refreshDispatchPolicy (SYD-155)", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const config = baseConfig();
 
-    vi.stubGlobal("fetch", vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ maxConcurrent: 9, maxAnswerConcurrent: 9, intervalSeconds: 30, eventPollSeconds: 3 }),
-      text: async () => "",
-    })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          maxConcurrent: 9,
+          maxAnswerConcurrent: 9,
+          intervalSeconds: 30,
+          eventPollSeconds: 3,
+        }),
+        text: async () => "",
+      })),
+    );
     await refreshDispatchPolicy(config, "tok");
     expect(config.maxConcurrent).toBe(9);
 
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED"); }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      }),
+    );
     await refreshDispatchPolicy(config, "tok");
-    expect(config).toMatchObject({ maxConcurrent: 9, maxAnswerConcurrent: 9, intervalSeconds: 30, eventPollSeconds: 3 });
+    expect(config).toMatchObject({
+      maxConcurrent: 9,
+      maxAnswerConcurrent: 9,
+      intervalSeconds: 30,
+      eventPollSeconds: 3,
+    });
     errorSpy.mockRestore();
   });
 });
 
 describe("dispatch session-reporting wiring (SYD-105)", () => {
   const ref = "SYD-105";
-  const issue = { ref, title: "Bundle", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 0 };
+  const issue = {
+    ref,
+    title: "Bundle",
+    labels: ["auto"],
+    assigneeId: null,
+    needsInput: false,
+    updatedAt: 0,
+  };
   const config: WorkerConfig = {
     url: "http://localhost:3300",
     label: "auto",
@@ -423,8 +516,11 @@ describe("dispatch session-reporting wiring (SYD-105)", () => {
     await vi.waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://localhost:3300/api/agent-sessions",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ ref, mode: "cli", pid: 555 }) }),
-      )
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ ref, mode: "cli", pid: 555 }),
+        }),
+      ),
     );
 
     child.emit("exit", 0);
@@ -433,7 +529,7 @@ describe("dispatch session-reporting wiring (SYD-105)", () => {
       expect(fetchMock).toHaveBeenCalledWith(
         "http://localhost:3300/api/agent-sessions/77",
         expect.objectContaining({ method: "PATCH", body: JSON.stringify({ exitCode: 0 }) }),
-      )
+      ),
     );
 
     logSpy.mockRestore();
@@ -453,11 +549,18 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
 
   /** Routes fetch by URL suffix so a single mock can stand in for both the
    * ready-issues poll and the claim POST. */
-  function fetchRouter(routes: Record<string, { ok: boolean; status?: number; body?: unknown; text?: string }>) {
+  function fetchRouter(
+    routes: Record<string, { ok: boolean; status?: number; body?: unknown; text?: string }>,
+  ) {
     return vi.fn(async (url: string) => {
       for (const [suffix, resp] of Object.entries(routes)) {
         if (url.endsWith(suffix)) {
-          return { ok: resp.ok, status: resp.status ?? 200, json: async () => resp.body ?? {}, text: async () => resp.text ?? "" };
+          return {
+            ok: resp.ok,
+            status: resp.status ?? 200,
+            json: async () => resp.body ?? {},
+            text: async () => resp.text ?? "",
+          };
         }
       }
       throw new Error(`unexpected fetch to ${url}`);
@@ -473,7 +576,14 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
 
   it("claims the issue host-side and dispatches once the claim succeeds", async () => {
     const ref = "SYD-122a";
-    const issue = { ref, title: "pre-claim", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 1 };
+    const issue = {
+      ref,
+      title: "pre-claim",
+      labels: ["auto"],
+      assigneeId: null,
+      needsInput: false,
+      updatedAt: 1,
+    };
     const child = new FakeChildProcess();
     spawnMock.mockReturnValue(child);
     const fetchMock = fetchRouter({
@@ -486,17 +596,31 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://localhost:3300/api/issues/SYD-122a/claim",
-      expect.objectContaining({ method: "POST", headers: expect.objectContaining({ authorization: "Bearer tok" }) }),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ authorization: "Bearer tok" }),
+      }),
     );
     expect(spawnMock).toHaveBeenCalled();
   });
 
   it("skips dispatch when another actor already claimed the issue", async () => {
     const ref = "SYD-122b";
-    const issue = { ref, title: "lost the race", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 1 };
+    const issue = {
+      ref,
+      title: "lost the race",
+      labels: ["auto"],
+      assigneeId: null,
+      needsInput: false,
+      updatedAt: 1,
+    };
     const fetchMock = fetchRouter({
       "/api/issues?status=todo": { ok: true, body: [issue] },
-      [`/api/issues/${ref}/claim`]: { ok: false, status: 400, text: `${ref} is already claimed by someone-else` },
+      [`/api/issues/${ref}/claim`]: {
+        ok: false,
+        status: 400,
+        text: `${ref} is already claimed by someone-else`,
+      },
     });
     vi.stubGlobal("fetch", fetchMock);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -504,13 +628,22 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
     await runTick(config, "tok", "code", { dryRun: false });
 
     expect(spawnMock).not.toHaveBeenCalled();
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(`skipping ${ref}: lost the claim race`));
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`skipping ${ref}: lost the claim race`),
+    );
     logSpy.mockRestore();
   });
 
   it("dry-run never calls the claim endpoint", async () => {
     const ref = "SYD-122c";
-    const issue = { ref, title: "dry run", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 1 };
+    const issue = {
+      ref,
+      title: "dry run",
+      labels: ["auto"],
+      assigneeId: null,
+      needsInput: false,
+      updatedAt: 1,
+    };
     const fetchMock = fetchRouter({ "/api/issues?status=todo": { ok: true, body: [issue] } });
     vi.stubGlobal("fetch", fetchMock);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -529,7 +662,9 @@ describe("killActiveSessions (SYD-121)", () => {
   it("sends SIGTERM to a cli session's process group and resolves once it exits — no SIGKILL needed", async () => {
     const child = new FakeChildProcess();
     child.pid = 4242;
-    const active = new Map<string, ChildProcess | "sdk">([["SYD-1", child as unknown as ChildProcess]]);
+    const active = new Map<string, ChildProcess | "sdk">([
+      ["SYD-1", child as unknown as ChildProcess],
+    ]);
     const activeMode = new Map<string, "cli" | "container">([["SYD-1", "cli"]]);
     const killFn = vi.fn();
 
@@ -546,7 +681,9 @@ describe("killActiveSessions (SYD-121)", () => {
     try {
       const child = new FakeChildProcess();
       child.pid = 99;
-      const active = new Map<string, ChildProcess | "sdk">([["SYD-2", child as unknown as ChildProcess]]);
+      const active = new Map<string, ChildProcess | "sdk">([
+        ["SYD-2", child as unknown as ChildProcess],
+      ]);
       const activeMode = new Map<string, "cli" | "container">([["SYD-2", "cli"]]);
       const killFn = vi.fn();
 
@@ -564,7 +701,9 @@ describe("killActiveSessions (SYD-121)", () => {
   it("leaves a containerized session's child alone — it's the sandbox and should survive the restart", async () => {
     const child = new FakeChildProcess();
     child.pid = 123;
-    const active = new Map<string, ChildProcess | "sdk">([["SYD-3", child as unknown as ChildProcess]]);
+    const active = new Map<string, ChildProcess | "sdk">([
+      ["SYD-3", child as unknown as ChildProcess],
+    ]);
     const activeMode = new Map<string, "cli" | "container">([["SYD-3", "container"]]);
     const killFn = vi.fn();
 
@@ -604,12 +743,20 @@ describe("adoptContainerSession (SYD-121)", () => {
   it("watches a still-running container via `docker wait` and reports its exit code once it stops", async () => {
     const child = new FakeChildProcess();
     spawnMock.mockReturnValue(child);
-    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+      text: async () => "",
+    }));
     vi.stubGlobal("fetch", fetchMock);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    adoptContainerSession({ id: 88, ref: "SYD-9", mode: "container", issueTitle: "Adopted work" }, config, "tok");
+    adoptContainerSession(
+      { id: 88, ref: "SYD-9", mode: "container", issueTitle: "Adopted work" },
+      config,
+      "tok",
+    );
 
     expect(spawnMock).toHaveBeenCalledWith("docker", ["wait", "syd-SYD-9"], expect.anything());
     expect(active.get("SYD-9")).toBe(child);
@@ -622,7 +769,7 @@ describe("adoptContainerSession (SYD-121)", () => {
       expect(fetchMock).toHaveBeenCalledWith(
         "http://localhost:3300/api/agent-sessions/88",
         expect.objectContaining({ method: "PATCH", body: JSON.stringify({ exitCode: 0 }) }),
-      )
+      ),
     );
     expect(active.has("SYD-9")).toBe(false);
     expect(activeMode.has("SYD-9")).toBe(false);
@@ -685,7 +832,9 @@ describe("reconcileContainerSessions (SYD-121)", () => {
     });
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(reconcileContainerSessions(config, "tok", { listLiveContainerNames })).resolves.toBeUndefined();
+    await expect(
+      reconcileContainerSessions(config, "tok", { listLiveContainerNames }),
+    ).resolves.toBeUndefined();
 
     errorSpy.mockRestore();
   });

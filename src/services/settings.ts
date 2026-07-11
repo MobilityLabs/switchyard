@@ -54,7 +54,7 @@ export type SettingView = {
 function requireHuman(actor: Actor): void {
   if (actor.type === "agent") {
     throw new SwitchyardError(
-      "Settings are human-only — ask a human to change instance config or dispatch policy."
+      "Settings are human-only — ask a human to change instance config or dispatch policy.",
     );
   }
 }
@@ -62,7 +62,7 @@ function requireHuman(actor: Actor): void {
 function requireKnownKey(key: string): asserts key is SettingKey {
   if (!(key in REGISTRY)) {
     throw new SwitchyardError(
-      `Unknown setting "${key}" — see GET /api/settings for the list of valid keys.`
+      `Unknown setting "${key}" — see GET /api/settings for the list of valid keys.`,
     );
   }
 }
@@ -74,7 +74,12 @@ function validateValue(key: SettingKey, value: unknown): void {
       throw new SwitchyardError(`Setting "${key}" must be a non-empty string.`);
     }
   } else if (entry.type === "number") {
-    if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      !Number.isInteger(value) ||
+      value <= 0
+    ) {
       throw new SwitchyardError(`Setting "${key}" must be a positive integer.`);
     }
   } else {
@@ -91,7 +96,13 @@ export function getSetting<K extends SettingKey>(db: Db, key: K): SettingValue<K
 }
 
 export function getAllSettings(db: Db): SettingView[] {
-  const overrides = new Map(db.select().from(settings).all().map((r) => [r.key, r.value]));
+  const overrides = new Map(
+    db
+      .select()
+      .from(settings)
+      .all()
+      .map((r) => [r.key, r.value]),
+  );
   return (Object.keys(REGISTRY) as SettingKey[]).map((key) => {
     const entry = REGISTRY[key] as RegistryEntry;
     const hasOverride = overrides.has(key);
@@ -112,9 +123,18 @@ export function setSetting(db: Db, actor: Actor, key: string, value: unknown): S
   const entry = REGISTRY[key] as RegistryEntry;
   db.insert(settings)
     .values({ key, value, updatedByActorId: actor.id })
-    .onConflictDoUpdate({ target: settings.key, set: { value, updatedByActorId: actor.id, updatedAt: Math.floor(Date.now() / 1000) } })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: { value, updatedByActorId: actor.id, updatedAt: Math.floor(Date.now() / 1000) },
+    })
     .run();
-  return { key, value, default: entry.default, isDefault: false, description: entry.description ?? null };
+  return {
+    key,
+    value,
+    default: entry.default,
+    isDefault: false,
+    description: entry.description ?? null,
+  };
 }
 
 export function resetSetting(db: Db, actor: Actor, key: string): SettingView {
@@ -122,7 +142,13 @@ export function resetSetting(db: Db, actor: Actor, key: string): SettingView {
   requireKnownKey(key);
   const entry = REGISTRY[key] as RegistryEntry;
   db.delete(settings).where(eq(settings.key, key)).run();
-  return { key, value: entry.default, default: entry.default, isDefault: true, description: entry.description ?? null };
+  return {
+    key,
+    value: entry.default,
+    default: entry.default,
+    isDefault: true,
+    description: entry.description ?? null,
+  };
 }
 
 export type DispatchPolicy = {

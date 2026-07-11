@@ -20,7 +20,12 @@ export function addComment(db: Db, actor: Actor, ref: string, body: string): voi
       // Read-only signal for the worker's answerer mode: no issue-state change,
       // just a marker event the event poll can watch for (same shape as
       // needs_input_cleared below) — works on any status, including triage.
-      recordEvent(tx, { issueId: issue.id, actorId: actor.id, type: "agent_question", payload: { body } });
+      recordEvent(tx, {
+        issueId: issue.id,
+        actorId: actor.id,
+        type: "agent_question",
+        payload: { body },
+      });
     }
     if (actor.type === "human" && issue.needsInput) {
       // The agent that escalated stopped its session, so an in_progress claim is

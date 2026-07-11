@@ -13,10 +13,9 @@ let db: Db, server: ServerType, port: number;
 let humanToken: string, agentToken: string;
 
 async function mcpClient(token: string) {
-  const transport = new StreamableHTTPClientTransport(
-    new URL(`http://127.0.0.1:${port}/mcp`),
-    { requestInit: { headers: { Authorization: `Bearer ${token}` } } }
-  );
+  const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+    requestInit: { headers: { Authorization: `Bearer ${token}` } },
+  });
   const c = new Client({ name: "test", version: "0.0.0" });
   await c.connect(transport);
   return c;
@@ -60,14 +59,21 @@ describe("core loop over HTTP", () => {
     const agent = await mcpClient(agentToken);
     const human = await mcpClient(humanToken);
 
-    const filed = JSON.parse(text(await agent.callTool({
-      name: "file_issue",
-      arguments: {
-        project_key: "AIPI", title: "Flaky retry test",
-        description: "The retry helper occasionally times out under CI load; likely a race in the backoff timer. Suggest adding a deterministic clock in tests.",
-        source_type: "session", source_detail: "session-abc123",
-      },
-    })));
+    const filed = JSON.parse(
+      text(
+        await agent.callTool({
+          name: "file_issue",
+          arguments: {
+            project_key: "AIPI",
+            title: "Flaky retry test",
+            description:
+              "The retry helper occasionally times out under CI load; likely a race in the backoff timer. Suggest adding a deterministic clock in tests.",
+            source_type: "session",
+            source_detail: "session-abc123",
+          },
+        }),
+      ),
+    );
     expect(filed.status).toBe("triage");
 
     await human.callTool({

@@ -31,7 +31,11 @@ function validSignature(secret: string, rawBody: string, header: string | undefi
  * repo that's linked with no secret of its own, or isn't linked at all,
  * falls back to the instance-wide GITHUB_WEBHOOK_SECRET.
  */
-function resolveSecret(db: Db, globalSecret: string | undefined, fullName: string | undefined): string | undefined {
+function resolveSecret(
+  db: Db,
+  globalSecret: string | undefined,
+  fullName: string | undefined,
+): string | undefined {
   if (fullName) {
     const repo = findGithubRepo(db, fullName);
     if (repo?.secret) return repo.secret;
@@ -39,7 +43,10 @@ function resolveSecret(db: Db, globalSecret: string | undefined, fullName: strin
   return globalSecret;
 }
 
-export function buildGithubWebhookRoutes(db: Db, secret: string | undefined = defaultGithubWebhookSecret()) {
+export function buildGithubWebhookRoutes(
+  db: Db,
+  secret: string | undefined = defaultGithubWebhookSecret(),
+) {
   const app = new Hono();
 
   app.post("/webhooks/github", async (c) => {
@@ -59,10 +66,15 @@ export function buildGithubWebhookRoutes(db: Db, secret: string | undefined = de
     }
     const effectiveSecret = resolveSecret(db, secret, repositoryFullName(payload));
     if (!effectiveSecret) {
-      console.error("github webhook: no secret configured for this repo, and GITHUB_WEBHOOK_SECRET is not set — rejecting delivery");
+      console.error(
+        "github webhook: no secret configured for this repo, and GITHUB_WEBHOOK_SECRET is not set — rejecting delivery",
+      );
       return c.json(
-        { error: "GitHub webhook receiver is not configured — link this repo or set GITHUB_WEBHOOK_SECRET." },
-        501
+        {
+          error:
+            "GitHub webhook receiver is not configured — link this repo or set GITHUB_WEBHOOK_SECRET.",
+        },
+        501,
       );
     }
     if (!validSignature(effectiveSecret, raw, c.req.header("x-hub-signature-256"))) {

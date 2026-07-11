@@ -15,7 +15,10 @@ export function buildAuthRoutes(db: Db) {
     try {
       const { sessionToken } = redeemLoginLink(db, token);
       setCookie(c, SESSION_COOKIE, sessionToken, {
-        httpOnly: true, sameSite: "Lax", path: "/", maxAge: 30 * 24 * 3600,
+        httpOnly: true,
+        sameSite: "Lax",
+        path: "/",
+        maxAge: 30 * 24 * 3600,
         secure: process.env.SWITCHYARD_COOKIE_SECURE === "1",
       });
       // Redirect immediately so the token doesn't linger in browser history

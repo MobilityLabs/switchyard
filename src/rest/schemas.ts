@@ -5,7 +5,10 @@ import { SUMMARY_MAX_LENGTH } from "../services/issues.js";
 import { AGENT_SESSION_MODES } from "../services/agent-sessions.js";
 
 export const projectBody = z.object({ key: z.string(), name: z.string() });
-export const actorCreateBody = z.object({ name: z.string().min(1), type: z.enum(["human", "agent"]) });
+export const actorCreateBody = z.object({
+  name: z.string().min(1),
+  type: z.enum(["human", "agent"]),
+});
 
 const provenance = z.object({
   sourceType: z.enum(["session", "todo", "ci", "manual"]),
@@ -40,7 +43,11 @@ const deployResult = z.union([
   z.object({ ran: z.literal(true), ok: z.boolean(), tail: z.string() }),
 ]);
 export const deliveryEventBody = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("pr_opened"), prNumber: z.number().int().positive(), url: z.string().url() }),
+  z.object({
+    type: z.literal("pr_opened"),
+    prNumber: z.number().int().positive(),
+    url: z.string().url(),
+  }),
   z.object({
     type: z.literal("delivered"),
     prNumber: z.number().int().positive(),
@@ -84,6 +91,9 @@ export const body = <T extends z.ZodTypeAny>(schema: T) =>
     if (!result.success) {
       const first = result.error.issues[0];
       const path = first.path.join(".");
-      return c.json({ error: `Invalid request body${path ? ` at "${path}"` : ""}: ${first.message}` }, 400);
+      return c.json(
+        { error: `Invalid request body${path ? ` at "${path}"` : ""}: ${first.message}` },
+        400,
+      );
     }
   });

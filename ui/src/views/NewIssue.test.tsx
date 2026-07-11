@@ -29,17 +29,33 @@ const PROJECTS: Project[] = [
 
 function issue(o: Partial<Issue> = {}): Issue {
   return {
-    id: 1, ref: "SYD-9", title: "t", description: "", summary: null,
-    status: "triage", priority: "none",
-    assigneeId: null, creatorId: 1, labels: [],
-    sourceType: null, sourceDetail: null, sourceUrl: null,
-    needsInput: false, snoozedUntil: null,
-    createdAt: 0, updatedAt: 0, attention: null, openPr: null,
+    id: 1,
+    ref: "SYD-9",
+    title: "t",
+    description: "",
+    summary: null,
+    status: "triage",
+    priority: "none",
+    assigneeId: null,
+    creatorId: 1,
+    labels: [],
+    sourceType: null,
+    sourceDetail: null,
+    sourceUrl: null,
+    needsInput: false,
+    snoozedUntil: null,
+    createdAt: 0,
+    updatedAt: 0,
+    attention: null,
+    openPr: null,
     ...o,
   };
 }
 
-function setValue(el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement, value: string): void {
+function setValue(
+  el: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  value: string,
+): void {
   const proto = Object.getPrototypeOf(el);
   const setter = Object.getOwnPropertyDescriptor(proto, "value")!.set!;
   setter.call(el, value);
@@ -51,7 +67,9 @@ async function render(): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<NewIssue />); });
+  await act(async () => {
+    root.render(<NewIssue />);
+  });
   await act(async () => {}); // flush listProjects()
   return container;
 }
@@ -84,8 +102,12 @@ describe("NewIssue", () => {
     const submit = container.querySelector("button[type=submit]") as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
 
-    const titleInput = container.querySelector("input[placeholder='Short summary']") as HTMLInputElement;
-    await act(async () => { setValue(titleInput, "Fix the thing"); });
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      setValue(titleInput, "Fix the thing");
+    });
     expect(submit.disabled).toBe(false);
   });
 
@@ -93,10 +115,16 @@ describe("NewIssue", () => {
     vi.mocked(createIssue).mockResolvedValueOnce(issue({ ref: "SYD-9" }));
     const container = await render();
 
-    const titleInput = container.querySelector("input[placeholder='Short summary']") as HTMLInputElement;
-    await act(async () => { setValue(titleInput, "  Fix the thing  "); });
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      setValue(titleInput, "  Fix the thing  ");
+    });
     const description = container.querySelector("textarea") as HTMLTextAreaElement;
-    await act(async () => { setValue(description, "  details  "); });
+    await act(async () => {
+      setValue(description, "  details  ");
+    });
 
     await submitForm(container);
 
@@ -116,12 +144,22 @@ describe("NewIssue", () => {
     vi.mocked(updateIssue).mockResolvedValueOnce(issue({ ref: "SYD-9" }));
     const container = await render();
 
-    const titleInput = container.querySelector("input[placeholder='Short summary']") as HTMLInputElement;
-    await act(async () => { setValue(titleInput, "Fix the thing"); });
-    const labelsInput = container.querySelector("input[placeholder='comma, separated, labels']") as HTMLInputElement;
-    await act(async () => { setValue(labelsInput, "bug, ui, bug"); });
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      setValue(titleInput, "Fix the thing");
+    });
+    const labelsInput = container.querySelector(
+      "input[placeholder='comma, separated, labels']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      setValue(labelsInput, "bug, ui, bug");
+    });
     const startInTodo = container.querySelector("input[type=checkbox]") as HTMLInputElement;
-    await act(async () => { startInTodo.click(); });
+    await act(async () => {
+      startInTodo.click();
+    });
 
     await submitForm(container);
 
@@ -133,8 +171,12 @@ describe("NewIssue", () => {
     vi.mocked(createIssue).mockRejectedValueOnce(new Error("title already exists"));
     const container = await render();
 
-    const titleInput = container.querySelector("input[placeholder='Short summary']") as HTMLInputElement;
-    await act(async () => { setValue(titleInput, "Fix the thing"); });
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      setValue(titleInput, "Fix the thing");
+    });
 
     await submitForm(container);
 
@@ -148,13 +190,19 @@ describe("NewIssue", () => {
   it("dismisses the error bar when its close button is clicked", async () => {
     vi.mocked(createIssue).mockRejectedValueOnce(new Error("boom"));
     const container = await render();
-    const titleInput = container.querySelector("input[placeholder='Short summary']") as HTMLInputElement;
-    await act(async () => { setValue(titleInput, "Fix the thing"); });
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      setValue(titleInput, "Fix the thing");
+    });
     await submitForm(container);
     expect(container.textContent).toContain("boom");
 
     const dismiss = container.querySelector(".error-bar button") as HTMLButtonElement;
-    await act(async () => { dismiss.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await act(async () => {
+      dismiss.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
     expect(container.querySelector(".error-bar")).toBeNull();
   });
 });

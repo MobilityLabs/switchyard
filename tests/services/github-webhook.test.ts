@@ -4,7 +4,12 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
-import { handleGithubWebhook, refFromBranch, refFromText, repositoryFullName } from "../../src/services/github-webhook.js";
+import {
+  handleGithubWebhook,
+  refFromBranch,
+  refFromText,
+  repositoryFullName,
+} from "../../src/services/github-webhook.js";
 
 function setup() {
   const db = openDb(":memory:");
@@ -37,14 +42,21 @@ describe("handleGithubWebhook / pull_request", () => {
     const outcome = handleGithubWebhook(db, "pull_request", {
       action: "opened",
       pull_request: {
-        number: 12, html_url: "https://github.com/acme/widgets/pull/12",
-        head: { ref: "agent/SYD-1" }, title: "unrelated title", body: null,
+        number: 12,
+        html_url: "https://github.com/acme/widgets/pull/12",
+        head: { ref: "agent/SYD-1" },
+        title: "unrelated title",
+        body: null,
       },
     });
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
     const activity = getActivity(db, "SYD-1");
     const ev = activity.find((a) => a.type === "gh_pr_opened")!;
-    expect(ev.payload).toEqual({ prNumber: 12, url: "https://github.com/acme/widgets/pull/12", branch: "agent/SYD-1" });
+    expect(ev.payload).toEqual({
+      prNumber: 12,
+      url: "https://github.com/acme/widgets/pull/12",
+      branch: "agent/SYD-1",
+    });
     expect(ev.actorName).toBe("github");
   });
 
@@ -53,8 +65,11 @@ describe("handleGithubWebhook / pull_request", () => {
     const outcome = handleGithubWebhook(db, "pull_request", {
       action: "opened",
       pull_request: {
-        number: 3, html_url: "https://github.com/acme/widgets/pull/3",
-        head: { ref: "feature/manual-branch" }, title: "SYD-1: manual PR", body: null,
+        number: 3,
+        html_url: "https://github.com/acme/widgets/pull/3",
+        head: { ref: "feature/manual-branch" },
+        title: "SYD-1: manual PR",
+        body: null,
       },
     });
     expect(outcome).toMatchObject({ handled: true, ref: "SYD-1" });
@@ -65,13 +80,20 @@ describe("handleGithubWebhook / pull_request", () => {
     const outcome = handleGithubWebhook(db, "pull_request", {
       action: "closed",
       pull_request: {
-        number: 12, html_url: "https://github.com/acme/widgets/pull/12", merged: true,
-        merge_commit_sha: "abc123", head: { ref: "agent/SYD-1" },
+        number: 12,
+        html_url: "https://github.com/acme/widgets/pull/12",
+        merged: true,
+        merge_commit_sha: "abc123",
+        head: { ref: "agent/SYD-1" },
       },
     });
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_merged" });
     const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_merged")!;
-    expect(ev.payload).toEqual({ prNumber: 12, url: "https://github.com/acme/widgets/pull/12", mergeSha: "abc123" });
+    expect(ev.payload).toEqual({
+      prNumber: 12,
+      url: "https://github.com/acme/widgets/pull/12",
+      mergeSha: "abc123",
+    });
   });
 
   it("records gh_pr_closed on a non-merged close", () => {
@@ -79,7 +101,9 @@ describe("handleGithubWebhook / pull_request", () => {
     const outcome = handleGithubWebhook(db, "pull_request", {
       action: "closed",
       pull_request: {
-        number: 12, html_url: "https://github.com/acme/widgets/pull/12", merged: false,
+        number: 12,
+        html_url: "https://github.com/acme/widgets/pull/12",
+        merged: false,
         head: { ref: "agent/SYD-1" },
       },
     });
@@ -92,7 +116,10 @@ describe("handleGithubWebhook / pull_request", () => {
       action: "synchronize",
       pull_request: { number: 12, head: { ref: "agent/SYD-1" } },
     });
-    expect(outcome).toEqual({ handled: false, reason: 'ignored pull_request action "synchronize"' });
+    expect(outcome).toEqual({
+      handled: false,
+      reason: 'ignored pull_request action "synchronize"',
+    });
   });
 
   it("reports unhandled when no ref can be resolved", () => {
@@ -101,7 +128,10 @@ describe("handleGithubWebhook / pull_request", () => {
       action: "opened",
       pull_request: { number: 12, head: { ref: "main" }, title: "no ref", body: null },
     });
-    expect(outcome).toEqual({ handled: false, reason: "no issue ref found in branch, title, or body" });
+    expect(outcome).toEqual({
+      handled: false,
+      reason: "no issue ref found in branch, title, or body",
+    });
   });
 
   it("reports unhandled when the matched ref doesn't exist in Switchyard", () => {
@@ -140,7 +170,8 @@ describe("handleGithubWebhook / check_suite", () => {
     const outcome = handleGithubWebhook(db, "check_suite", {
       action: "completed",
       check_suite: {
-        head_branch: "some-fork-branch", conclusion: "success",
+        head_branch: "some-fork-branch",
+        conclusion: "success",
         pull_requests: [{ head: { ref: "agent/SYD-1" } }],
       },
     });
@@ -190,7 +221,10 @@ describe("handleGithubWebhook / push", () => {
   it("ignores a branch-deletion push", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "push", {
-      ref: "refs/heads/agent/SYD-1", deleted: true, after: "0".repeat(40), commits: [],
+      ref: "refs/heads/agent/SYD-1",
+      deleted: true,
+      after: "0".repeat(40),
+      commits: [],
     });
     expect(outcome).toEqual({ handled: false, reason: "ignored branch-deletion push" });
     expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
@@ -206,15 +240,20 @@ describe("handleGithubWebhook / push", () => {
   it("reports unhandled when no ref can be resolved", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "push", {
-      ref: "refs/heads/main", commits: [{ message: "no ref here" }],
+      ref: "refs/heads/main",
+      commits: [{ message: "no ref here" }],
     });
-    expect(outcome).toEqual({ handled: false, reason: "no issue ref found in branch or commit messages" });
+    expect(outcome).toEqual({
+      handled: false,
+      reason: "no issue ref found in branch or commit messages",
+    });
   });
 
   it("reports unhandled when the matched ref doesn't exist in Switchyard", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "push", {
-      ref: "refs/heads/agent/SYD-999", commits: [{ message: "wip" }],
+      ref: "refs/heads/agent/SYD-999",
+      commits: [{ message: "wip" }],
     });
     expect(outcome).toEqual({ handled: false, reason: "no Switchyard issue matches ref SYD-999" });
   });
@@ -226,14 +265,22 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
     const payload = {
       action: "opened",
       pull_request: {
-        number: 12, html_url: "https://github.com/acme/widgets/pull/12",
-        head: { ref: "agent/SYD-1" }, title: null, body: null,
+        number: 12,
+        html_url: "https://github.com/acme/widgets/pull/12",
+        head: { ref: "agent/SYD-1" },
+        title: null,
+        body: null,
       },
     };
     const first = handleGithubWebhook(db, "pull_request", payload);
     const redelivery = handleGithubWebhook(db, "pull_request", payload);
     expect(first).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
-    expect(redelivery).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened", duplicate: true });
+    expect(redelivery).toEqual({
+      handled: true,
+      ref: "SYD-1",
+      type: "gh_pr_opened",
+      duplicate: true,
+    });
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 
@@ -245,7 +292,12 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
     });
     const outcome = handleGithubWebhook(db, "pull_request", {
       action: "closed",
-      pull_request: { number: 12, html_url: "https://x/12", merged: false, head: { ref: "agent/SYD-1" } },
+      pull_request: {
+        number: 12,
+        html_url: "https://x/12",
+        merged: false,
+        head: { ref: "agent/SYD-1" },
+      },
     });
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_closed" });
   });
@@ -253,7 +305,9 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
   it("ignores a redelivered push with the same head sha", () => {
     const db = setup();
     const payload = {
-      ref: "refs/heads/agent/SYD-1", after: "deadbeef", commits: [{ message: "wip" }],
+      ref: "refs/heads/agent/SYD-1",
+      after: "deadbeef",
+      commits: [{ message: "wip" }],
     };
     handleGithubWebhook(db, "push", payload);
     const redelivery = handleGithubWebhook(db, "push", payload);
@@ -264,7 +318,9 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
   it("does not inflate the commit count when the same push is redelivered", () => {
     const db = setup();
     const payload = {
-      ref: "refs/heads/agent/SYD-1", after: "deadbeef", commits: [{ message: "one" }, { message: "two" }],
+      ref: "refs/heads/agent/SYD-1",
+      after: "deadbeef",
+      commits: [{ message: "one" }, { message: "two" }],
     };
     handleGithubWebhook(db, "push", payload);
     handleGithubWebhook(db, "push", payload);
@@ -366,10 +422,12 @@ describe("handleGithubWebhook / actor reuse", () => {
   it("reuses the same github actor across deliveries instead of erroring on the second create", () => {
     const db = setup();
     handleGithubWebhook(db, "pull_request", {
-      action: "opened", pull_request: { number: 1, head: { ref: "agent/SYD-1" } },
+      action: "opened",
+      pull_request: { number: 1, head: { ref: "agent/SYD-1" } },
     });
     handleGithubWebhook(db, "check_suite", {
-      action: "completed", check_suite: { head_branch: "agent/SYD-1", conclusion: "success" },
+      action: "completed",
+      check_suite: { head_branch: "agent/SYD-1", conclusion: "success" },
     });
     const names = getActivity(db, "SYD-1").map((a) => a.actorName);
     expect(names).toEqual(["sean", "github", "github"]);

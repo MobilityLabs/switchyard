@@ -18,10 +18,7 @@ export function useActorNames(): string[] {
   const { data } = usePoll(listActors, [], 60000);
   const prev = useRef(EMPTY);
   const names = data?.map((a) => a.name) ?? EMPTY;
-  if (
-    names.length !== prev.current.length ||
-    names.some((n, i) => n !== prev.current[i])
-  ) {
+  if (names.length !== prev.current.length || names.some((n, i) => n !== prev.current[i])) {
     prev.current = names;
   }
   return prev.current;

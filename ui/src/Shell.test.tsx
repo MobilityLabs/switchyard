@@ -23,7 +23,11 @@ async function renderShell(projects: Project[] = PROJECTS): Promise<HTMLElement>
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Shell me={ME} projects={projects}>{null}</Shell>);
+    root.render(
+      <Shell me={ME} projects={projects}>
+        {null}
+      </Shell>,
+    );
   });
   return container;
 }
@@ -53,7 +57,9 @@ function findButton(container: HTMLElement, label: string): HTMLButtonElement {
 }
 
 async function click(el: HTMLElement): Promise<void> {
-  await act(async () => { el.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+  await act(async () => {
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
 }
 
 async function type(input: HTMLInputElement, value: string): Promise<void> {
@@ -172,7 +178,10 @@ describe("Shell triage/review project scoping", () => {
     });
     const container = await renderShell();
     const select = projectSelect(container)!;
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      "value",
+    )!.set!;
     await act(async () => {
       nativeSetter.call(select, "SYD");
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -186,7 +195,10 @@ describe("Shell triage/review project scoping", () => {
     });
     const container = await renderShell();
     const select = projectSelect(container)!;
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      "value",
+    )!.set!;
     await act(async () => {
       nativeSetter.call(select, "");
       select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -208,7 +220,9 @@ describe("Shell triage/review project scoping", () => {
       await renderShell();
       await act(async () => {});
       const issuesCalls = calls.filter((u) => u.startsWith("/api/issues?"));
-      expect(issuesCalls.some((u) => u.includes("status=in_review") && u.includes("project=SYD"))).toBe(true);
+      expect(
+        issuesCalls.some((u) => u.includes("status=in_review") && u.includes("project=SYD")),
+      ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -238,20 +252,28 @@ describe("Shell new project form", () => {
     const container = await renderShell();
     await click(findButton(container, "+ Project"));
 
-    const keyInput = container.querySelector('.new-project-popover input[placeholder="ACME"]') as HTMLInputElement;
-    const nameInput = container.querySelector('.new-project-popover input[placeholder="Acme Corp"]') as HTMLInputElement;
+    const keyInput = container.querySelector(
+      '.new-project-popover input[placeholder="ACME"]',
+    ) as HTMLInputElement;
+    const nameInput = container.querySelector(
+      '.new-project-popover input[placeholder="Acme Corp"]',
+    ) as HTMLInputElement;
     const submit = findButton(container, "Create project");
     expect(submit.disabled).toBe(true);
 
     // lowercase input is uppercased automatically; single letter is too short
     await type(keyInput, "a");
     expect(keyInput.value).toBe("A");
-    expect(container.querySelector(".new-project-popover")!.textContent).toContain("2–10 uppercase letters");
+    expect(container.querySelector(".new-project-popover")!.textContent).toContain(
+      "2–10 uppercase letters",
+    );
     expect(submit.disabled).toBe(true);
 
     // a key already in use is flagged and blocks submit even once well-formed
     await type(keyInput, "acme");
-    expect(container.querySelector(".new-project-popover")!.textContent).toContain('key "ACME" already exists');
+    expect(container.querySelector(".new-project-popover")!.textContent).toContain(
+      'key "ACME" already exists',
+    );
     expect(submit.disabled).toBe(true);
 
     await type(keyInput, "foo");
@@ -271,37 +293,57 @@ describe("Shell new project form", () => {
     try {
       const container = await renderShell();
       await click(findButton(container, "+ Project"));
-      const keyInput = container.querySelector('.new-project-popover input[placeholder="ACME"]') as HTMLInputElement;
-      const nameInput = container.querySelector('.new-project-popover input[placeholder="Acme Corp"]') as HTMLInputElement;
+      const keyInput = container.querySelector(
+        '.new-project-popover input[placeholder="ACME"]',
+      ) as HTMLInputElement;
+      const nameInput = container.querySelector(
+        '.new-project-popover input[placeholder="Acme Corp"]',
+      ) as HTMLInputElement;
       await type(keyInput, "foo");
       await type(nameInput, "Foo Inc");
 
       await click(findButton(container, "Create project"));
 
-      expect(fetchMock).toHaveBeenCalledWith("/api/projects", expect.objectContaining({ method: "POST" }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/projects",
+        expect.objectContaining({ method: "POST" }),
+      );
       expect(container.querySelector(".new-project-popover")).toBeNull();
       expect(location.pathname).toBe("/board/FOO");
       // optimistic splice: the new project shows up in the switcher immediately,
       // without waiting for the next projects poll.
-      expect([...container.querySelectorAll("select option")].some((o) => o.textContent === "FOO — Foo Inc")).toBe(true);
+      expect(
+        [...container.querySelectorAll("select option")].some(
+          (o) => o.textContent === "FOO — Foo Inc",
+        ),
+      ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
   it("surfaces a server error inline and leaves the popover open", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: false,
-      status: 400,
-      json: async () => ({ error: 'A project with key "ACME" already exists — call list_projects to see it.' }),
-    } as Response));
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 400,
+          json: async () => ({
+            error: 'A project with key "ACME" already exists — call list_projects to see it.',
+          }),
+        }) as Response,
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     try {
       const container = await renderShell();
       await click(findButton(container, "+ Project"));
-      const keyInput = container.querySelector('.new-project-popover input[placeholder="ACME"]') as HTMLInputElement;
-      const nameInput = container.querySelector('.new-project-popover input[placeholder="Acme Corp"]') as HTMLInputElement;
+      const keyInput = container.querySelector(
+        '.new-project-popover input[placeholder="ACME"]',
+      ) as HTMLInputElement;
+      const nameInput = container.querySelector(
+        '.new-project-popover input[placeholder="Acme Corp"]',
+      ) as HTMLInputElement;
       // key isn't in the local `projects` prop, so client-side validation passes;
       // the server still rejects it (e.g. another actor claimed it moments earlier)
       await type(keyInput, "zzz");

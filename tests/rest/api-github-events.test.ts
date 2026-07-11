@@ -28,14 +28,22 @@ describe("POST /github-events", () => {
         payload: {
           action: "opened",
           pull_request: {
-            number: 5, html_url: "https://github.com/acme/widgets/pull/5",
-            head: { ref: "agent/SYD-1" }, title: "unrelated", body: null,
+            number: 5,
+            html_url: "https://github.com/acme/widgets/pull/5",
+            head: { ref: "agent/SYD-1" },
+            title: "unrelated",
+            body: null,
           },
         },
       }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, handled: true, ref: "SYD-1", type: "gh_pr_opened" });
+    expect(await res.json()).toEqual({
+      ok: true,
+      handled: true,
+      ref: "SYD-1",
+      type: "gh_pr_opened",
+    });
     const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
     expect(ev.actorName).toBe("github");
   });
@@ -54,7 +62,12 @@ describe("POST /github-events", () => {
       }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, handled: true, ref: "SYD-1", type: "gh_checks_failed" });
+    expect(await res.json()).toEqual({
+      ok: true,
+      handled: true,
+      ref: "SYD-1",
+      type: "gh_checks_failed",
+    });
   });
 
   it("returns handled:false without erroring when no ref matches", async () => {
@@ -64,11 +77,18 @@ describe("POST /github-events", () => {
       headers: { authorization: `Bearer ${humanToken}`, "content-type": "application/json" },
       body: JSON.stringify({
         event: "pull_request",
-        payload: { action: "opened", pull_request: { number: 1, head: { ref: "main" }, title: "no ref", body: null } },
+        payload: {
+          action: "opened",
+          pull_request: { number: 1, head: { ref: "main" }, title: "no ref", body: null },
+        },
       }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, handled: false, reason: "no issue ref found in branch, title, or body" });
+    expect(await res.json()).toEqual({
+      ok: true,
+      handled: false,
+      reason: "no issue ref found in branch, title, or body",
+    });
   });
 
   it("requires authentication", async () => {
@@ -101,8 +121,12 @@ describe("POST /github-events", () => {
         payload: {
           action: "closed",
           pull_request: {
-            number: 5, html_url: "https://github.com/acme/widgets/pull/5", merged: true,
-            head: { ref: "agent/SYD-1" }, title: "unrelated", body: null,
+            number: 5,
+            html_url: "https://github.com/acme/widgets/pull/5",
+            merged: true,
+            head: { ref: "agent/SYD-1" },
+            title: "unrelated",
+            body: null,
           },
         },
       }),

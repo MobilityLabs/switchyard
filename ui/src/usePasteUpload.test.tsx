@@ -24,16 +24,28 @@ function Harness({ initialDraft, expose }: { initialDraft: string; expose: (s: S
   return <textarea ref={paste.textareaRef} defaultValue={initialDraft} />;
 }
 
-function HarnessNoTextarea({ initialDraft, expose }: { initialDraft: string; expose: (s: State) => void }) {
+function HarnessNoTextarea({
+  initialDraft,
+  expose,
+}: {
+  initialDraft: string;
+  expose: (s: State) => void;
+}) {
   const [draft, setDraft] = useState(initialDraft);
   const paste = usePasteUpload("SYD-1", draft, setDraft);
   expose({ draft, ...paste });
   return null;
 }
 
-function fakePaste(files: File[]): { event: ClipboardEvent<HTMLTextAreaElement>; preventDefault: ReturnType<typeof vi.fn> } {
+function fakePaste(files: File[]): {
+  event: ClipboardEvent<HTMLTextAreaElement>;
+  preventDefault: ReturnType<typeof vi.fn>;
+} {
   const preventDefault = vi.fn();
-  const event = { clipboardData: { files }, preventDefault } as unknown as ClipboardEvent<HTMLTextAreaElement>;
+  const event = {
+    clipboardData: { files },
+    preventDefault,
+  } as unknown as ClipboardEvent<HTMLTextAreaElement>;
   return { event, preventDefault };
 }
 
@@ -47,10 +59,21 @@ describe("usePasteUpload", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<Harness initialDraft="hi" expose={(s) => { state = s; }} />); });
+    await act(async () => {
+      root.render(
+        <Harness
+          initialDraft="hi"
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
 
     const { event, preventDefault } = fakePaste([]);
-    await act(async () => { await state!.onPaste(event); });
+    await act(async () => {
+      await state!.onPaste(event);
+    });
 
     expect(preventDefault).not.toHaveBeenCalled();
     expect(uploadAttachment).not.toHaveBeenCalled();
@@ -63,14 +86,25 @@ describe("usePasteUpload", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<Harness initialDraft="hello world" expose={(s) => { state = s; }} />); });
+    await act(async () => {
+      root.render(
+        <Harness
+          initialDraft="hello world"
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
 
     const textarea = container.querySelector("textarea")!;
     textarea.selectionStart = textarea.selectionEnd = 5; // right after "hello"
 
     const file = new File(["x"], "x.png", { type: "image/png" });
     const { event, preventDefault } = fakePaste([file]);
-    await act(async () => { await state!.onPaste(event); });
+    await act(async () => {
+      await state!.onPaste(event);
+    });
 
     expect(preventDefault).toHaveBeenCalledTimes(1);
     expect(uploadAttachment).toHaveBeenCalledWith("SYD-1", file);
@@ -85,11 +119,22 @@ describe("usePasteUpload", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<HarnessNoTextarea initialDraft="hello" expose={(s) => { state = s; }} />); });
+    await act(async () => {
+      root.render(
+        <HarnessNoTextarea
+          initialDraft="hello"
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
 
     const file = new File(["x"], "x.png", { type: "image/png" });
     const { event } = fakePaste([file]);
-    await act(async () => { await state!.onPaste(event); });
+    await act(async () => {
+      await state!.onPaste(event);
+    });
 
     expect(state!.draft).toBe("hello ![img](u) ");
   });
@@ -102,7 +147,16 @@ describe("usePasteUpload", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<Harness initialDraft="" expose={(s) => { state = s; }} />); });
+    await act(async () => {
+      root.render(
+        <Harness
+          initialDraft=""
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
 
     const textarea = container.querySelector("textarea")!;
     textarea.selectionStart = textarea.selectionEnd = 0;
@@ -110,7 +164,9 @@ describe("usePasteUpload", () => {
     const fileA = new File(["a"], "a.png", { type: "image/png" });
     const fileB = new File(["b"], "b.png", { type: "image/png" });
     const { event } = fakePaste([fileA, fileB]);
-    await act(async () => { await state!.onPaste(event); });
+    await act(async () => {
+      await state!.onPaste(event);
+    });
 
     expect(uploadAttachment).toHaveBeenNthCalledWith(1, "SYD-1", fileA);
     expect(uploadAttachment).toHaveBeenNthCalledWith(2, "SYD-1", fileB);
@@ -119,20 +175,39 @@ describe("usePasteUpload", () => {
 
   it("sets uploading while the request is in flight", async () => {
     let resolve: ((v: { id: number; url: string; markdown: string }) => void) | null = null;
-    vi.mocked(uploadAttachment).mockImplementationOnce(() => new Promise((res) => { resolve = res; }));
+    vi.mocked(uploadAttachment).mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolve = res;
+        }),
+    );
     let state: State | null = null;
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<Harness initialDraft="" expose={(s) => { state = s; }} />); });
+    await act(async () => {
+      root.render(
+        <Harness
+          initialDraft=""
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
 
     const file = new File(["x"], "x.png", { type: "image/png" });
     const { event } = fakePaste([file]);
     let pastePromise!: Promise<void>;
-    await act(async () => { pastePromise = state!.onPaste(event); });
+    await act(async () => {
+      pastePromise = state!.onPaste(event);
+    });
     expect(state!.uploading).toBe(true);
 
-    await act(async () => { resolve!({ id: 1, url: "/a", markdown: "![a](1)" }); await pastePromise; });
+    await act(async () => {
+      resolve!({ id: 1, url: "/a", markdown: "![a](1)" });
+      await pastePromise;
+    });
     expect(state!.uploading).toBe(false);
   });
 
@@ -142,11 +217,22 @@ describe("usePasteUpload", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<Harness initialDraft="hello" expose={(s) => { state = s; }} />); });
+    await act(async () => {
+      root.render(
+        <Harness
+          initialDraft="hello"
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
 
     const file = new File(["x"], "x.png", { type: "image/png" });
     const { event } = fakePaste([file]);
-    await act(async () => { await state!.onPaste(event); });
+    await act(async () => {
+      await state!.onPaste(event);
+    });
 
     expect(state!.uploading).toBe(false);
     expect(state!.uploadError).toBe("upload failed");
@@ -159,14 +245,27 @@ describe("usePasteUpload", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<Harness initialDraft="hello" expose={(s) => { state = s; }} />); });
+    await act(async () => {
+      root.render(
+        <Harness
+          initialDraft="hello"
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
 
     const file = new File(["x"], "x.png", { type: "image/png" });
     const { event } = fakePaste([file]);
-    await act(async () => { await state!.onPaste(event); });
+    await act(async () => {
+      await state!.onPaste(event);
+    });
     expect(state!.uploadError).toBe("upload failed");
 
-    await act(async () => { state!.setUploadError(null); });
+    await act(async () => {
+      state!.setUploadError(null);
+    });
     expect(state!.uploadError).toBeNull();
   });
 });

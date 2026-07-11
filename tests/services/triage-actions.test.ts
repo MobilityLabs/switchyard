@@ -45,15 +45,27 @@ describe("snoozeIssue", () => {
     const future = Math.floor(Date.now() / 1000) + 3600;
     const snoozed = snoozeIssue(db, human, "AIPI-1", future);
 
-    expect(searchIssues(db, { excludeSnoozed: true }).map((i) => i.ref).sort()).toEqual(["AIPI-2"]);
-    expect(searchIssues(db, {}).map((i) => i.ref).sort()).toEqual(["AIPI-1", "AIPI-2"]);
+    expect(
+      searchIssues(db, { excludeSnoozed: true })
+        .map((i) => i.ref)
+        .sort(),
+    ).toEqual(["AIPI-2"]);
+    expect(
+      searchIssues(db, {})
+        .map((i) => i.ref)
+        .sort(),
+    ).toEqual(["AIPI-1", "AIPI-2"]);
 
     // simulate the passage of time by pushing snoozedUntil into the past directly (test setup only —
     // the service itself only accepts future timestamps)
     const past = Math.floor(Date.now() / 1000) - 10;
     db.update(issues).set({ snoozedUntil: past }).where(eq(issues.id, snoozed.id)).run();
 
-    expect(searchIssues(db, { excludeSnoozed: true }).map((i) => i.ref).sort()).toEqual(["AIPI-1", "AIPI-2"]);
+    expect(
+      searchIssues(db, { excludeSnoozed: true })
+        .map((i) => i.ref)
+        .sort(),
+    ).toEqual(["AIPI-1", "AIPI-2"]);
   });
 });
 
@@ -83,24 +95,40 @@ describe("markDuplicate", () => {
 
 describe("redeliverIssue", () => {
   it("rejects agents legibly", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, agent, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
     expect(() => redeliverIssue(db, agent, "AIPI-1")).toThrowError(/human/i);
   });
 
   it("rejects an issue with no unresolved delivery failure", () => {
-    expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(/no unresolved delivery failure/i);
+    expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(
+      /no unresolved delivery failure/i,
+    );
   });
 
   it("rejects an issue whose delivery_failed was already resolved", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
     recordDeliveryEvent(db, agent, "AIPI-1", {
-      type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false },
+      type: "delivery_failed",
+      message: "merge conflict",
     });
-    expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(/no unresolved delivery failure/i);
+    recordDeliveryEvent(db, agent, "AIPI-1", {
+      type: "delivered",
+      prNumber: 7,
+      mergeSha: "abc123",
+      deploy: { ran: false },
+    });
+    expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(
+      /no unresolved delivery failure/i,
+    );
   });
 
   it("records a redeliver_requested event without changing issue status", () => {
-    recordDeliveryEvent(db, agent, "AIPI-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, agent, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
     const before = getIssue(db, "AIPI-1");
     const updated = redeliverIssue(db, human, "AIPI-1");
     expect(updated.status).toBe(before.status);

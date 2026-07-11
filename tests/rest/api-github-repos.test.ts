@@ -18,7 +18,12 @@ describe("github repo routes", () => {
       body: JSON.stringify({ fullName: "acme/widgets" }),
     });
     expect(createdRes.status).toBe(200);
-    const created = (await createdRes.json()) as { id: number; fullName: string; hasSecret?: boolean; secret?: unknown };
+    const created = (await createdRes.json()) as {
+      id: number;
+      fullName: string;
+      hasSecret?: boolean;
+      secret?: unknown;
+    };
     expect(created.fullName).toBe("acme/widgets");
     expect(created.hasSecret).toBe(false);
     expect(created.secret).toBeUndefined();
@@ -38,9 +43,14 @@ describe("github repo routes", () => {
     expect(repos).toHaveLength(2);
     for (const repo of repos) expect(repo.secret).toBeUndefined();
 
-    const deleteRes = await app.request(`/github-repos/${created.id}`, { method: "DELETE", headers: h });
+    const deleteRes = await app.request(`/github-repos/${created.id}`, {
+      method: "DELETE",
+      headers: h,
+    });
     expect(deleteRes.status).toBe(200);
-    const remaining = (await (await app.request("/github-repos", { headers: h })).json()) as Array<{ id: number }>;
+    const remaining = (await (await app.request("/github-repos", { headers: h })).json()) as Array<{
+      id: number;
+    }>;
     expect(remaining).toHaveLength(1);
   });
 
@@ -58,11 +68,15 @@ describe("github repo routes", () => {
       body: JSON.stringify({ fullName: "acme/widgets" }),
     });
     expect(createRes.status).toBe(400);
-    expect(((await createRes.json()) as { error: string }).error).toMatch(/only humans manage linked github repos/i);
+    expect(((await createRes.json()) as { error: string }).error).toMatch(
+      /only humans manage linked github repos/i,
+    );
 
     const deleteRes = await app.request("/github-repos/1", { method: "DELETE", headers: agentH });
     expect(deleteRes.status).toBe(400);
-    expect(((await deleteRes.json()) as { error: string }).error).toMatch(/only humans manage linked github repos/i);
+    expect(((await deleteRes.json()) as { error: string }).error).toMatch(
+      /only humans manage linked github repos/i,
+    );
 
     const listRes = await app.request("/github-repos", { headers: agentH });
     expect(listRes.status).toBe(200);

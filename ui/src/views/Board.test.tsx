@@ -23,17 +23,33 @@ vi.mock("../api", () => ({
 
 function issue(o: Partial<Issue> = {}): Issue {
   return {
-    id: 1, ref: "SYD-1", title: "Ship it", description: "", summary: null,
-    status: "done", priority: "none",
-    assigneeId: null, creatorId: 1, labels: [],
-    sourceType: null, sourceDetail: null, sourceUrl: null,
-    needsInput: false, snoozedUntil: null,
-    createdAt: 0, updatedAt: 0, attention: null, openPr: null,
+    id: 1,
+    ref: "SYD-1",
+    title: "Ship it",
+    description: "",
+    summary: null,
+    status: "done",
+    priority: "none",
+    assigneeId: null,
+    creatorId: 1,
+    labels: [],
+    sourceType: null,
+    sourceDetail: null,
+    sourceUrl: null,
+    needsInput: false,
+    snoozedUntil: null,
+    createdAt: 0,
+    updatedAt: 0,
+    attention: null,
+    openPr: null,
     ...o,
   };
 }
 
-async function render(i: Issue, onMove?: (ref: string, status: Issue["status"]) => void): Promise<HTMLElement> {
+async function render(
+  i: Issue,
+  onMove?: (ref: string, status: Issue["status"]) => void,
+): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -51,7 +67,10 @@ describe("Board Card attention badge", () => {
 
   it("renders an icon-only badge for an unresolved delivery_failed, with the message as a hover title", async () => {
     const container = await render(
-      issue({ status: "in_review", attention: { reason: "delivery_failed", message: "merge conflict" } })
+      issue({
+        status: "in_review",
+        attention: { reason: "delivery_failed", message: "merge conflict" },
+      }),
     );
     const badge = container.querySelector(".badge.danger");
     expect(badge).not.toBeNull();
@@ -75,7 +94,9 @@ describe("Board Card keyboard accessibility", () => {
     const container = await render(issue({ ref: "SYD-7" }));
     const card = container.querySelector(".card")!;
     await act(async () => {
-      card.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(location.pathname).toBe("/issue/SYD-7");
   });
@@ -84,7 +105,9 @@ describe("Board Card keyboard accessibility", () => {
     const container = await render(issue({ ref: "SYD-8" }));
     const card = container.querySelector(".card")!;
     await act(async () => {
-      card.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      card.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+      );
     });
     expect(location.pathname).toBe("/issue/SYD-8");
   });
@@ -93,7 +116,9 @@ describe("Board Card keyboard accessibility", () => {
     const container = await render(issue({ ref: "SYD-9" }), () => {});
     const link = container.querySelector("a.ref")!;
     await act(async () => {
-      link.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      link.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(location.pathname).not.toBe("/issue/SYD-9");
   });
@@ -105,9 +130,8 @@ describe("Board Card keyboard accessibility", () => {
 
   it("offers a keyboard-reachable select to move the card without dragging", async () => {
     const moves: Array<[string, string]> = [];
-    const container = await render(
-      issue({ ref: "SYD-10", status: "todo" }),
-      (ref, status) => moves.push([ref, status]),
+    const container = await render(issue({ ref: "SYD-10", status: "todo" }), (ref, status) =>
+      moves.push([ref, status]),
     );
     const select = container.querySelector<HTMLSelectElement>(".card-move")!;
     expect(select.getAttribute("aria-label")).toContain("SYD-10");
@@ -129,8 +153,16 @@ describe("Board Card keyboard accessibility", () => {
 describe("Board done-column filter chips", () => {
   const DONE_ISSUES: Issue[] = [
     issue({ ref: "SYD-1", title: "Clean ship" }),
-    issue({ ref: "SYD-2", title: "Bounced", attention: { reason: "delivery_failed", message: "merge conflict" } }),
-    issue({ ref: "SYD-3", title: "Not merged yet", openPr: { prNumber: 41, url: "https://github.com/acme/widgets/pull/41" } }),
+    issue({
+      ref: "SYD-2",
+      title: "Bounced",
+      attention: { reason: "delivery_failed", message: "merge conflict" },
+    }),
+    issue({
+      ref: "SYD-3",
+      title: "Not merged yet",
+      openPr: { prNumber: 41, url: "https://github.com/acme/widgets/pull/41" },
+    }),
   ];
 
   async function renderBoard(): Promise<HTMLElement> {
@@ -151,14 +183,20 @@ describe("Board done-column filter chips", () => {
 
   it("shows every done card with both filter chips off", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Done"),
+    )!;
     expect(doneColumn.querySelectorAll(".card")).toHaveLength(3);
   });
 
   it("narrows to delivery_failed cards when the errors chip is toggled on", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
-    const errorsChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "⛔ errors")!;
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Done"),
+    )!;
+    const errorsChip = [...doneColumn.querySelectorAll("button")].find(
+      (b) => b.textContent === "⛔ errors",
+    )!;
 
     await act(async () => errorsChip.click());
 
@@ -169,8 +207,12 @@ describe("Board done-column filter chips", () => {
 
   it("narrows to open-PR cards when the not-merged chip is toggled on", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
-    const notMergedChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "🔀 not merged")!;
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Done"),
+    )!;
+    const notMergedChip = [...doneColumn.querySelectorAll("button")].find(
+      (b) => b.textContent === "🔀 not merged",
+    )!;
 
     await act(async () => notMergedChip.click());
 
@@ -180,9 +222,15 @@ describe("Board done-column filter chips", () => {
 
   it("combines both chips with OR semantics", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Done"))!;
-    const errorsChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "⛔ errors")!;
-    const notMergedChip = [...doneColumn.querySelectorAll("button")].find((b) => b.textContent === "🔀 not merged")!;
+    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Done"),
+    )!;
+    const errorsChip = [...doneColumn.querySelectorAll("button")].find(
+      (b) => b.textContent === "⛔ errors",
+    )!;
+    const notMergedChip = [...doneColumn.querySelectorAll("button")].find(
+      (b) => b.textContent === "🔀 not merged",
+    )!;
 
     await act(async () => errorsChip.click());
     await act(async () => notMergedChip.click());
@@ -193,7 +241,9 @@ describe("Board done-column filter chips", () => {
 
   it("does not add filter chips to other columns", async () => {
     const container = await renderBoard();
-    const todoColumn = [...container.querySelectorAll(".column")].find((c) => c.querySelector("h3")?.textContent?.includes("Todo"))!;
+    const todoColumn = [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Todo"),
+    )!;
     expect(todoColumn.querySelector(".done-filters")).toBeNull();
   });
 });

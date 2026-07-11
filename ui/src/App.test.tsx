@@ -38,9 +38,10 @@ describe("App session expiry", () => {
   });
 
   it("shows the app after a successful boot getMe()", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) =>
-      url === "/api/me" ? okJson(ME) : okJson([]),
-    ));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))),
+    );
 
     const container = await renderApp();
     expect(container.textContent).not.toContain("You need a login link");
@@ -54,8 +55,9 @@ describe("App session expiry", () => {
     expect(container.textContent).not.toContain("You need a login link");
 
     // Simulate a poll or mutation hitting an expired session sometime later.
-    fetchMock.mockImplementationOnce(async () =>
-      ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
+    fetchMock.mockImplementationOnce(
+      async () =>
+        ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
     );
     await act(async () => {
       await api("/api/issues").catch(() => {});
@@ -70,8 +72,8 @@ describe("App session expiry", () => {
 
     const container = await renderApp();
 
-    fetchMock.mockImplementationOnce(async () =>
-      ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
+    fetchMock.mockImplementationOnce(
+      async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
     );
     await act(async () => {
       await api("/api/issues").catch(() => {});
@@ -96,8 +98,9 @@ describe("App session expiry", () => {
       root.unmount();
     });
 
-    fetchMock.mockImplementationOnce(async () =>
-      ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
+    fetchMock.mockImplementationOnce(
+      async () =>
+        ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
     );
     // Should not throw despite no mounted App to receive the state update.
     await expect(api("/api/issues")).rejects.toBeTruthy();
@@ -111,7 +114,10 @@ describe("App boot states", () => {
   });
 
   it("shows a loading screen while the boot getMe() is in flight", async () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -122,38 +128,58 @@ describe("App boot states", () => {
   });
 
   it("shows the login screen when the boot getMe() 401s", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
-    ));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          ({ ok: false, status: 401, json: async () => ({ error: "unauthorized" }) }) as Response,
+      ),
+    );
     const container = await renderApp();
     expect(container.textContent).toContain("You need a login link");
   });
 
   it("shows an unreachable-server screen when the boot getMe() fails with a non-401 error", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
-    ));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
+      ),
+    );
     const container = await renderApp();
     expect(container.textContent).toContain("Can't reach the server");
     expect(container.textContent).not.toContain("You need a login link");
   });
 
   it("shows the unreachable-server screen when the boot fetch itself rejects", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("network down"); }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("network down");
+      }),
+    );
     const container = await renderApp();
     expect(container.textContent).toContain("Can't reach the server");
   });
 
   it("reloads the page when Retry is clicked on the unreachable-server screen", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
-    ));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => ({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as Response,
+      ),
+    );
     const container = await renderApp();
     const originalLocation = Object.getOwnPropertyDescriptor(window, "location")!;
     const reload = vi.fn();
-    Object.defineProperty(window, "location", { configurable: true, value: { ...window.location, reload } });
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...window.location, reload },
+    });
     try {
-      const button = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Retry");
+      const button = Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent === "Retry",
+      );
       await act(async () => {
         button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
@@ -170,18 +196,30 @@ describe("App internal link interceptor", () => {
     history.replaceState(null, "", "/");
   });
 
-  function clickAnchor(container: HTMLElement, attrs: Record<string, string>, eventInit: MouseEventInit = {}): MouseEvent {
+  function clickAnchor(
+    container: HTMLElement,
+    attrs: Record<string, string>,
+    eventInit: MouseEventInit = {},
+  ): MouseEvent {
     const anchor = document.createElement("a");
     for (const [k, v] of Object.entries(attrs)) anchor.setAttribute(k, v);
     anchor.textContent = "link";
     container.appendChild(anchor);
-    const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, ...eventInit });
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      ...eventInit,
+    });
     anchor.dispatchEvent(event);
     return event;
   }
 
   it("intercepts a click on a known-path internal link, preventing the default navigation and routing client-side", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))),
+    );
     const container = await renderApp();
 
     const event = await act(async () => clickAnchor(container, { href: "/new" }));
@@ -191,7 +229,10 @@ describe("App internal link interceptor", () => {
   });
 
   it("does not intercept a click on an unknown path (falls through to a full navigation)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))),
+    );
     const container = await renderApp();
 
     const event = await act(async () => clickAnchor(container, { href: "/not-a-route" }));
@@ -200,7 +241,10 @@ describe("App internal link interceptor", () => {
   });
 
   it("does not intercept a click on a target=_blank link", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))),
+    );
     const container = await renderApp();
 
     const event = await act(async () => clickAnchor(container, { href: "/new", target: "_blank" }));
@@ -209,10 +253,15 @@ describe("App internal link interceptor", () => {
   });
 
   it("does not intercept a modified click (e.g. cmd/ctrl-click to open in a new tab)", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (url === "/api/me" ? okJson(ME) : okJson([]))),
+    );
     const container = await renderApp();
 
-    const event = await act(async () => clickAnchor(container, { href: "/new" }, { ctrlKey: true }));
+    const event = await act(async () =>
+      clickAnchor(container, { href: "/new" }, { ctrlKey: true }),
+    );
     expect(event.defaultPrevented).toBe(false);
     expect(location.pathname).not.toBe("/new");
   });

@@ -83,6 +83,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const port = Number(process.env.PORT ?? 3301);
   const app = buildApp({ slackWebhookUrl, secret });
   serve({ fetch: app.fetch, port }, (info) =>
-    console.log(`slack notifier listening on :${info.port}`)
+    console.log(`slack notifier listening on :${info.port}`),
   );
 }

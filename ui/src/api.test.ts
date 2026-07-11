@@ -3,7 +3,14 @@
 // error bar. api() (and the multipart uploadAttachment() path, which bypasses
 // it) both need to notify a registered handler before throwing.
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { api, ApiError, listAgentSessions, listIssues, setUnauthorizedHandler, uploadAttachment } from "./api";
+import {
+  api,
+  ApiError,
+  listAgentSessions,
+  listIssues,
+  setUnauthorizedHandler,
+  uploadAttachment,
+} from "./api";
 
 function jsonResponse(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
@@ -16,7 +23,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("calls the registered handler on a 401 response", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(401, { error: "unauthorized" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(401, { error: "unauthorized" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -25,7 +35,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("does not call the handler on a non-401 error", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(500, { error: "boom" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(500, { error: "boom" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -34,7 +47,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("does not call the handler on success", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { id: 1 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(200, { id: 1 })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -43,7 +59,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("stops notifying once the handler is unregistered", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(401, { error: "unauthorized" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(401, { error: "unauthorized" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
     setUnauthorizedHandler(null);
@@ -53,7 +72,10 @@ describe("api() unauthorized handling", () => {
   });
 
   it("also notifies on a 401 from uploadAttachment's standalone fetch", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(401, { error: "unauthorized" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(401, { error: "unauthorized" })),
+    );
     const handler = vi.fn();
     setUnauthorizedHandler(handler);
 
@@ -70,19 +92,34 @@ describe("api() error message mapping", () => {
   });
 
   it("uses the response body's error field as the message", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(400, { error: "bad title" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(400, { error: "bad title" })),
+    );
     await expect(api("/api/issues")).rejects.toMatchObject({ status: 400, message: "bad title" });
   });
 
   it("falls back to 'HTTP <status>' when the body has no error field", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(500, { oops: true })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(500, { oops: true })),
+    );
     await expect(api("/api/issues")).rejects.toMatchObject({ status: 500, message: "HTTP 500" });
   });
 
   it("falls back to 'HTTP <status>' when the body isn't valid JSON", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError("Unexpected token"); } }) as unknown as Response),
+      vi.fn(
+        async () =>
+          ({
+            ok: false,
+            status: 502,
+            json: async () => {
+              throw new SyntaxError("Unexpected token");
+            },
+          }) as unknown as Response,
+      ),
     );
     await expect(api("/api/issues")).rejects.toMatchObject({ status: 502, message: "HTTP 502" });
   });
@@ -90,13 +127,25 @@ describe("api() error message mapping", () => {
   it("resolves to {} on a successful response with an empty body", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: true, status: 204, json: async () => { throw new SyntaxError("Unexpected end of input"); } }) as unknown as Response),
+      vi.fn(
+        async () =>
+          ({
+            ok: true,
+            status: 204,
+            json: async () => {
+              throw new SyntaxError("Unexpected end of input");
+            },
+          }) as unknown as Response,
+      ),
     );
     await expect(api("/api/issues")).resolves.toEqual({});
   });
 
   it("resolves with the parsed JSON body on success", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(200, { id: 1, ref: "SYD-1" })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse(200, { id: 1, ref: "SYD-1" })),
+    );
     await expect(api("/api/issues/SYD-1")).resolves.toEqual({ id: 1, ref: "SYD-1" });
   });
 });
@@ -116,7 +165,14 @@ describe("query string building", () => {
   it("listIssues encodes every provided filter", async () => {
     const fetchMock = vi.fn(async (_url: string) => jsonResponse(200, []));
     vi.stubGlobal("fetch", fetchMock);
-    await listIssues({ project: "SYD", status: "todo", label: "bug", text: "foo bar", needsInput: true, excludeSnoozed: true });
+    await listIssues({
+      project: "SYD",
+      status: "todo",
+      label: "bug",
+      text: "foo bar",
+      needsInput: true,
+      excludeSnoozed: true,
+    });
     const url = new URL(fetchMock.mock.calls[0][0], "http://x");
     expect(url.pathname).toBe("/api/issues");
     expect(url.searchParams.get("project")).toBe("SYD");

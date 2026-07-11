@@ -15,18 +15,28 @@ describe("recordDeliveryEvent", () => {
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
     recordDeliveryEvent(db, worker, "SYD-1", {
-      type: "pr_opened", prNumber: 12, url: "https://github.com/acme/widgets/pull/12",
+      type: "pr_opened",
+      prNumber: 12,
+      url: "https://github.com/acme/widgets/pull/12",
     });
     recordDeliveryEvent(db, worker, "SYD-1", {
-      type: "delivered", prNumber: 12, mergeSha: "abc123", deploy: { ran: true, ok: true, tail: "done" },
+      type: "delivered",
+      prNumber: 12,
+      mergeSha: "abc123",
+      deploy: { ran: true, ok: true, tail: "done" },
     });
 
     const activity = getActivity(db, "SYD-1");
     expect(activity.map((a) => a.type)).toEqual(["created", "pr_opened", "delivered"]);
-    expect(activity[1].payload).toEqual({ prNumber: 12, url: "https://github.com/acme/widgets/pull/12" });
+    expect(activity[1].payload).toEqual({
+      prNumber: 12,
+      url: "https://github.com/acme/widgets/pull/12",
+    });
     expect(activity[1].actorName).toBe("claude/worker");
     expect(activity[2].payload).toEqual({
-      prNumber: 12, mergeSha: "abc123", deploy: { ran: true, ok: true, tail: "done" },
+      prNumber: 12,
+      mergeSha: "abc123",
+      deploy: { ran: true, ok: true, tail: "done" },
     });
   });
 
@@ -37,10 +47,16 @@ describe("recordDeliveryEvent", () => {
     createProject(db, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
-    recordDeliveryEvent(db, worker, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, worker, "SYD-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
 
     const activity = getActivity(db, "SYD-1");
-    expect(activity[1]).toMatchObject({ type: "delivery_failed", payload: { message: "merge conflict" } });
+    expect(activity[1]).toMatchObject({
+      type: "delivery_failed",
+      payload: { message: "merge conflict" },
+    });
   });
 
   it("throws for an unknown issue ref", () => {
@@ -48,7 +64,7 @@ describe("recordDeliveryEvent", () => {
     const worker = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, { key: "SYD", name: "Switchyard" });
     expect(() =>
-      recordDeliveryEvent(db, worker, "SYD-9", { type: "delivery_failed", message: "boom" })
+      recordDeliveryEvent(db, worker, "SYD-9", { type: "delivery_failed", message: "boom" }),
     ).toThrowError(/does not exist/);
   });
 });

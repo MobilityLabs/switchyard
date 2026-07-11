@@ -13,15 +13,14 @@ import { getSetting } from "./settings.js";
  * `claim_released` event is recorded (attributed to the assignee if set, else
  * the creator). Returns the number of issues released.
  */
-export function releaseStaleClaims(db: Db, maxIdleSeconds: number = getSetting(db, "claims.stale_seconds")): number {
+export function releaseStaleClaims(
+  db: Db,
+  maxIdleSeconds: number = getSetting(db, "claims.stale_seconds"),
+): number {
   const now = Math.floor(Date.now() / 1000);
   const cutoff = now - maxIdleSeconds;
 
-  const inProgress = db
-    .select()
-    .from(issues)
-    .where(eq(issues.status, "in_progress"))
-    .all();
+  const inProgress = db.select().from(issues).where(eq(issues.status, "in_progress")).all();
 
   let released = 0;
   for (const issue of inProgress) {

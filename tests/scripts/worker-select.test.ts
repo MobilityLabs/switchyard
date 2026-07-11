@@ -3,7 +3,7 @@ import {
   selectDispatchable,
   filterRetryCapped,
   recordAttempt,
-findResumeRefs,
+  findResumeRefs,
   findAnswerRefs,
   filterAnswerCapped,
   recordAnswerAttempt,
@@ -43,7 +43,11 @@ findResumeRefs,
 } from "../../scripts/worker-select.js";
 
 /** A promise plus its resolve/reject, for controlling when async work settles in tests. */
-function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (v: T) => void;
+  reject: (e: unknown) => void;
+} {
   let resolve!: (v: T) => void;
   let reject!: (e: unknown) => void;
   const promise = new Promise<T>((res, rej) => {
@@ -72,7 +76,10 @@ const issue = (overrides: Partial<WorkerIssue>): WorkerIssue => ({
 
 describe("selectDispatchable", () => {
   it("only selects issues carrying the configured label", () => {
-    const issues = [issue({ ref: "SYD-1", labels: ["auto"] }), issue({ ref: "SYD-2", labels: ["manual"] })];
+    const issues = [
+      issue({ ref: "SYD-1", labels: ["auto"] }),
+      issue({ ref: "SYD-2", labels: ["manual"] }),
+    ];
     expect(selectDispatchable(issues, config, [])).toEqual([issues[0]]);
   });
 
@@ -82,7 +89,10 @@ describe("selectDispatchable", () => {
   });
 
   it("skips issues that already have an assignee", () => {
-    const issues = [issue({ ref: "SYD-1", assigneeId: null }), issue({ ref: "SYD-2", assigneeId: 7 })];
+    const issues = [
+      issue({ ref: "SYD-1", assigneeId: null }),
+      issue({ ref: "SYD-2", assigneeId: 7 }),
+    ];
     expect(selectDispatchable(issues, config, [])).toEqual([issues[0]]);
   });
 
@@ -99,7 +109,9 @@ describe("selectDispatchable", () => {
 
   it("caps selection so active + selected never exceeds maxConcurrent", () => {
     const issues = [issue({ ref: "SYD-1" }), issue({ ref: "SYD-2" }), issue({ ref: "SYD-3" })];
-    expect(selectDispatchable(issues, { ...config, maxConcurrent: 2 }, ["SYD-9"])).toEqual([issues[0]]);
+    expect(selectDispatchable(issues, { ...config, maxConcurrent: 2 }, ["SYD-9"])).toEqual([
+      issues[0],
+    ]);
     expect(selectDispatchable(issues, { ...config, maxConcurrent: 1 }, [])).toEqual([issues[0]]);
   });
 
@@ -111,7 +123,9 @@ describe("selectDispatchable", () => {
   it("does not count active answer sessions against maxConcurrent (SYD-67: separate pools)", () => {
     const issues = [issue({ ref: "SYD-1" }), issue({ ref: "SYD-2" })];
     // config.maxConcurrent is 2; two answer sessions are active but that pool is separate.
-    expect(selectDispatchable(issues, config, [answerKey("SYD-8"), answerKey("SYD-9")])).toEqual(issues);
+    expect(selectDispatchable(issues, config, [answerKey("SYD-8"), answerKey("SYD-9")])).toEqual(
+      issues,
+    );
   });
 
   it("returns nothing when already at capacity", () => {
@@ -120,12 +134,18 @@ describe("selectDispatchable", () => {
   });
 
   it("skips issues with needsInput set, even if otherwise eligible", () => {
-    const issues = [issue({ ref: "SYD-1", needsInput: true }), issue({ ref: "SYD-2", needsInput: false })];
+    const issues = [
+      issue({ ref: "SYD-1", needsInput: true }),
+      issue({ ref: "SYD-2", needsInput: false }),
+    ];
     expect(selectDispatchable(issues, config, [])).toEqual([issues[1]]);
   });
 
   it("skips issues with an open blocker, even if otherwise eligible (SYD-160)", () => {
-    const issues = [issue({ ref: "SYD-1", blocked: true }), issue({ ref: "SYD-2", blocked: false })];
+    const issues = [
+      issue({ ref: "SYD-1", blocked: true }),
+      issue({ ref: "SYD-2", blocked: false }),
+    ];
     expect(selectDispatchable(issues, config, [])).toEqual([issues[1]]);
   });
 
@@ -136,7 +156,9 @@ describe("selectDispatchable", () => {
       issue({ ref: "SYD-2", priority: "urgent" }),
       issue({ ref: "SYD-1", priority: "medium" }),
     ];
-    expect(selectDispatchable(issues, { ...config, maxConcurrent: 1 }, []).map((i) => i.ref)).toEqual(["SYD-2"]);
+    expect(
+      selectDispatchable(issues, { ...config, maxConcurrent: 1 }, []).map((i) => i.ref),
+    ).toEqual(["SYD-2"]);
   });
 
   it("orders selection by priority, then oldest-first within a priority (SYD-160)", () => {
@@ -145,14 +167,16 @@ describe("selectDispatchable", () => {
       issue({ ref: "SYD-2", priority: "high", createdAt: 100 }),
       issue({ ref: "SYD-3", priority: "urgent", createdAt: 300 }),
     ];
-    expect(selectDispatchable(issues, { ...config, maxConcurrent: 5 }, []).map((i) => i.ref)).toEqual([
-      "SYD-3", "SYD-2", "SYD-1",
-    ]);
+    expect(
+      selectDispatchable(issues, { ...config, maxConcurrent: 5 }, []).map((i) => i.ref),
+    ).toEqual(["SYD-3", "SYD-2", "SYD-1"]);
   });
 
   it("treats an unset priority as lowest, below any ranked priority (SYD-160)", () => {
     const issues = [issue({ ref: "SYD-1" }), issue({ ref: "SYD-2", priority: "low" })];
-    expect(selectDispatchable(issues, { ...config, maxConcurrent: 1 }, []).map((i) => i.ref)).toEqual(["SYD-2"]);
+    expect(
+      selectDispatchable(issues, { ...config, maxConcurrent: 1 }, []).map((i) => i.ref),
+    ).toEqual(["SYD-2"]);
   });
 });
 
@@ -315,15 +339,17 @@ describe("selectAnswerable", () => {
     // config.maxConcurrent is 2, but that no longer bounds answer capacity —
     // only maxAnswerConcurrent (default 2) does, and only one answer session
     // (answerKey("SYD-9")) is active here, so there's still room.
-    expect(selectAnswerable(["SYD-2"], config, ["SYD-1", answerKey("SYD-9")], new Map())).toEqual(["SYD-2"]);
+    expect(selectAnswerable(["SYD-2"], config, ["SYD-1", answerKey("SYD-9")], new Map())).toEqual([
+      "SYD-2",
+    ]);
   });
 
   it("caps the number selected to remaining maxAnswerConcurrent capacity, ignoring active work sessions", () => {
     const roomy = { ...config, maxConcurrent: 4 };
     // Two work sessions active — irrelevant to answer capacity (default maxAnswerConcurrent 2).
-    expect(selectAnswerable(["SYD-1", "SYD-2", "SYD-3"], roomy, ["SYD-9", "SYD-8"], new Map())).toEqual([
-      "SYD-1", "SYD-2",
-    ]);
+    expect(
+      selectAnswerable(["SYD-1", "SYD-2", "SYD-3"], roomy, ["SYD-9", "SYD-8"], new Map()),
+    ).toEqual(["SYD-1", "SYD-2"]);
   });
 
   it("excludes refs that already hit maxAnswersPerIssue", () => {
@@ -332,7 +358,9 @@ describe("selectAnswerable", () => {
   });
 
   it("returns nothing when already at maxAnswerConcurrent capacity", () => {
-    expect(selectAnswerable(["SYD-1"], config, [answerKey("SYD-8"), answerKey("SYD-9")], new Map())).toEqual([]);
+    expect(
+      selectAnswerable(["SYD-1"], config, [answerKey("SYD-8"), answerKey("SYD-9")], new Map()),
+    ).toEqual([]);
   });
 
   it("respects a configured maxAnswerConcurrent", () => {
@@ -385,12 +413,14 @@ describe("remainingAnswerCapacity", () => {
 
   it("only counts answer-keyed active entries, not work sessions", () => {
     expect(remainingAnswerCapacity(config, ["SYD-1", "SYD-2", answerKey("SYD-3")])).toBe(
-      DEFAULT_MAX_ANSWER_CONCURRENT - 1
+      DEFAULT_MAX_ANSWER_CONCURRENT - 1,
     );
   });
 
   it("respects a configured maxAnswerConcurrent", () => {
-    expect(remainingAnswerCapacity({ ...config, maxAnswerConcurrent: 5 }, [answerKey("SYD-1")])).toBe(4);
+    expect(
+      remainingAnswerCapacity({ ...config, maxAnswerConcurrent: 5 }, [answerKey("SYD-1")]),
+    ).toBe(4);
   });
 });
 
@@ -456,7 +486,9 @@ describe("checkRoleLockConflict", () => {
 
   it("refuses all when a single-role worker is already running", () => {
     expect(checkRoleLockConflict("all", { all: false, code: true, answer: false })).toMatch(/code/);
-    expect(checkRoleLockConflict("all", { all: false, code: false, answer: true })).toMatch(/answer/);
+    expect(checkRoleLockConflict("all", { all: false, code: false, answer: true })).toMatch(
+      /answer/,
+    );
   });
 
   it("allows a single role to start alongside the other single role", () => {
@@ -466,7 +498,9 @@ describe("checkRoleLockConflict", () => {
 
   it("refuses a single role when an all worker is already running", () => {
     expect(checkRoleLockConflict("code", { all: true, code: false, answer: false })).toMatch(/all/);
-    expect(checkRoleLockConflict("answer", { all: true, code: false, answer: false })).toMatch(/all/);
+    expect(checkRoleLockConflict("answer", { all: true, code: false, answer: false })).toMatch(
+      /all/,
+    );
   });
 });
 
@@ -552,7 +586,12 @@ describe("buildDockerArgs", () => {
   });
 
   it("respects a custom image", () => {
-    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, { ...config, image: "custom/worker-image" }, oauthEnv);
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, image: "custom/worker-image" },
+      oauthEnv,
+    );
     expect(args[args.length - 1]).toBe("custom/worker-image");
   });
 
@@ -563,13 +602,15 @@ describe("buildDockerArgs", () => {
 
   it("throws when neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is present", () => {
     expect(() => buildDockerArgs(issue({ ref: "SYD-1" }), project, config, {})).toThrow(
-      /CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/
+      /CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/,
     );
   });
 
   it("accepts ANTHROPIC_API_KEY as an alternative to the OAuth token", () => {
     expect(() =>
-      buildDockerArgs(issue({ ref: "SYD-1" }), project, config, { ANTHROPIC_API_KEY: "sk-ant-secret" })
+      buildDockerArgs(issue({ ref: "SYD-1" }), project, config, {
+        ANTHROPIC_API_KEY: "sk-ant-secret",
+      }),
     ).not.toThrow();
   });
 
@@ -690,7 +731,10 @@ describe("partitionContainerSessions (SYD-121)", () => {
 
 describe("dispatchPolicy all-todo", () => {
   const base = {
-    url: "http://x", label: "auto", intervalSeconds: 300, maxConcurrent: 5,
+    url: "http://x",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 5,
     projects: { SYD: { repo: "/tmp/syd" } },
   };
   const issue = (ref: string, labels: string[] = []) =>
@@ -699,7 +743,9 @@ describe("dispatchPolicy all-todo", () => {
   it("dispatches unlabeled todos and respects hold", () => {
     const cfg = { ...base, dispatchPolicy: "all-todo" as const };
     const out = selectDispatchable(
-      [issue("SYD-1"), issue("SYD-2", ["hold"]), issue("SYD-3", ["auto"])], cfg, [].values(),
+      [issue("SYD-1"), issue("SYD-2", ["hold"]), issue("SYD-3", ["auto"])],
+      cfg,
+      [].values(),
     );
     expect(out.map((i: { ref: string }) => i.ref)).toEqual(["SYD-1", "SYD-3"]);
   });
@@ -752,7 +798,9 @@ describe("buildDockerArgs resumed threading", () => {
   const oauthEnv = { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret" };
 
   it("threads opts.resumed into the containerized WORKER_PROMPT", () => {
-    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv, { resumed: true });
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv, {
+      resumed: true,
+    });
     const promptArg = args.find((a) => a.startsWith("WORKER_PROMPT="));
     expect(promptArg).toMatch(/escalat/i);
     expect(promptArg).toMatch(/answer/i);
@@ -808,9 +856,15 @@ describe("runGated / newTickGate", () => {
       await first.promise;
     });
 
-    await runGated(gate, async () => { calls++; });
-    await runGated(gate, async () => { calls++; });
-    await runGated(gate, async () => { calls++; });
+    await runGated(gate, async () => {
+      calls++;
+    });
+    await runGated(gate, async () => {
+      calls++;
+    });
+    await runGated(gate, async () => {
+      calls++;
+    });
     expect(calls).toBe(1);
 
     first.resolve();
@@ -824,7 +878,7 @@ describe("runGated / newTickGate", () => {
     await expect(
       runGated(gate, async () => {
         throw new Error("boom");
-      })
+      }),
     ).rejects.toThrow("boom");
   });
 
@@ -833,7 +887,7 @@ describe("runGated / newTickGate", () => {
     await expect(
       runGated(gate, async () => {
         throw new Error("boom");
-      })
+      }),
     ).rejects.toThrow("boom");
 
     let ran = false;

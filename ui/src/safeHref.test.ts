@@ -32,7 +32,9 @@ describe("isSafeUrl", () => {
 
 describe("safeHref", () => {
   it("passes through safe urls", () => {
-    expect(safeHref("https://github.com/org/repo/pull/1")).toBe("https://github.com/org/repo/pull/1");
+    expect(safeHref("https://github.com/org/repo/pull/1")).toBe(
+      "https://github.com/org/repo/pull/1",
+    );
   });
 
   it("returns undefined for unsafe schemes", () => {

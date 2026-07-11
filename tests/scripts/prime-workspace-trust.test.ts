@@ -39,14 +39,17 @@ describe("prime-workspace-trust.mjs", () => {
       JSON.stringify({
         someOtherSetting: "keep-me",
         projects: { "/elsewhere": { hasTrustDialogAccepted: false, extra: "keep-me-too" } },
-      })
+      }),
     );
 
     run(home, "/work");
 
     const config = readConfig(home);
     expect(config.someOtherSetting).toBe("keep-me");
-    expect(config.projects["/elsewhere"]).toEqual({ hasTrustDialogAccepted: false, extra: "keep-me-too" });
+    expect(config.projects["/elsewhere"]).toEqual({
+      hasTrustDialogAccepted: false,
+      extra: "keep-me-too",
+    });
     expect(config.projects["/work"].hasTrustDialogAccepted).toBe(true);
   });
 
@@ -54,13 +57,18 @@ describe("prime-workspace-trust.mjs", () => {
     const home = mkdtempSync(path.join(tmpdir(), "trust-test-"));
     writeFileSync(
       path.join(home, ".claude.json"),
-      JSON.stringify({ projects: { "/work": { hasTrustDialogAccepted: false, allowedTools: ["Read"] } } })
+      JSON.stringify({
+        projects: { "/work": { hasTrustDialogAccepted: false, allowedTools: ["Read"] } },
+      }),
     );
 
     run(home, "/work");
 
     const config = readConfig(home);
-    expect(config.projects["/work"]).toEqual({ hasTrustDialogAccepted: true, allowedTools: ["Read"] });
+    expect(config.projects["/work"]).toEqual({
+      hasTrustDialogAccepted: true,
+      allowedTools: ["Read"],
+    });
   });
 
   it("is idempotent", () => {

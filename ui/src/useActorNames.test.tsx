@@ -33,7 +33,10 @@ function Reader({ onRender }: { onRender: (names: string[]) => void }) {
 // Mounting resolves the poll's initial fetch in a microtask, after the
 // synchronous render act() has already returned — flush it before asserting.
 async function flush(): Promise<void> {
-  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 describe("useActorNames reference stability (SYD-130)", () => {
@@ -60,12 +63,16 @@ describe("useActorNames reference stability (SYD-130)", () => {
     );
     const seen: string[][] = [];
     const root = createRoot(container);
-    await act(async () => { root.render(<Reader onRender={(n) => seen.push(n)} />); });
+    await act(async () => {
+      root.render(<Reader onRender={(n) => seen.push(n)} />);
+    });
     await flush();
     expect(seen.at(-1)).toEqual(["sean", "claude/dev"]);
     const first = seen.at(-1);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     await flush();
     // A second poll resolved with equal (but distinct) array/objects; the
     // hook must hand back the exact same array reference.
@@ -78,7 +85,9 @@ describe("useActorNames reference stability (SYD-130)", () => {
     );
     const seen: string[][] = [];
     const root = createRoot(container);
-    await act(async () => { root.render(<Reader onRender={(n) => seen.push(n)} />); });
+    await act(async () => {
+      root.render(<Reader onRender={(n) => seen.push(n)} />);
+    });
     await flush();
     expect(seen.at(-1)).toEqual(["sean"]);
     const first = seen.at(-1);
@@ -89,7 +98,9 @@ describe("useActorNames reference stability (SYD-130)", () => {
         { id: 2, name: "claude/dev", type: "agent" },
       ]),
     );
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     await flush();
     expect(seen.at(-1)).toEqual(["sean", "claude/dev"]);
     expect(seen.at(-1)).not.toBe(first);
@@ -105,7 +116,9 @@ async function render(expose: (names: string[]) => void): Promise<void> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<Probe expose={expose} />); });
+  await act(async () => {
+    root.render(<Probe expose={expose} />);
+  });
 }
 
 describe("useActorNames (SYD-134)", () => {
@@ -116,7 +129,9 @@ describe("useActorNames (SYD-134)", () => {
   it("returns an empty array before the poll resolves", async () => {
     vi.mocked(listActors).mockImplementationOnce(() => new Promise(() => {}));
     let names: string[] = ["unset"];
-    await render((n) => { names = n; });
+    await render((n) => {
+      names = n;
+    });
     expect(names).toEqual([]);
   });
 
@@ -127,7 +142,9 @@ describe("useActorNames (SYD-134)", () => {
     ];
     vi.mocked(listActors).mockResolvedValueOnce(actors);
     let names: string[] = [];
-    await render((n) => { names = n; });
+    await render((n) => {
+      names = n;
+    });
     expect(names).toEqual(["sean", "claude/worker"]);
   });
 });

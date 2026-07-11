@@ -40,8 +40,16 @@ describe("openDb migrations on a database with live referencing rows", () => {
     migrate(drizzle(sqlite), { migrationsFolder: truncated });
     sqlite.prepare("INSERT INTO projects (key, name) VALUES ('SYD','switchyard')").run();
     sqlite.prepare("INSERT INTO actors (name, type) VALUES ('sean','human')").run();
-    sqlite.prepare("INSERT INTO issues (project_id, number, title, status, creator_id) VALUES (1, 1, 'x', 'todo', 1)").run();
-    sqlite.prepare("INSERT INTO events (issue_id, actor_id, type, payload) VALUES (1, 1, 'created', '{}')").run();
+    sqlite
+      .prepare(
+        "INSERT INTO issues (project_id, number, title, status, creator_id) VALUES (1, 1, 'x', 'todo', 1)",
+      )
+      .run();
+    sqlite
+      .prepare(
+        "INSERT INTO events (issue_id, actor_id, type, payload) VALUES (1, 1, 'created', '{}')",
+      )
+      .run();
     sqlite.close();
     return dbPath;
   }
@@ -56,7 +64,9 @@ describe("openDb migrations on a database with live referencing rows", () => {
     // error, so the FK detail lives on `cause`).
     let refused: unknown;
     try {
-      db.run(sql`INSERT INTO events (issue_id, actor_id, type, payload) VALUES (999, 1, 'x', '{}')`);
+      db.run(
+        sql`INSERT INTO events (issue_id, actor_id, type, payload) VALUES (999, 1, 'x', '{}')`,
+      );
     } catch (e) {
       refused = e;
     }

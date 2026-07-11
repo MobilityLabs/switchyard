@@ -13,14 +13,17 @@ describe("issues.parent_id foreign key", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
     expect(() =>
-      db.insert(issues).values({
-        projectId: 1,
-        number: 999,
-        title: "dangling child",
-        status: "backlog",
-        creatorId: human.id,
-        parentId: 9999,
-      }).run()
+      db
+        .insert(issues)
+        .values({
+          projectId: 1,
+          number: 999,
+          title: "dangling child",
+          status: "backlog",
+          creatorId: human.id,
+          parentId: 9999,
+        })
+        .run(),
     ).toThrowError(/FOREIGN KEY constraint failed/i);
   });
 

@@ -20,12 +20,18 @@ function SessionRow({ s }: { s: AgentSession }) {
   const elapsed = formatElapsed(s.startedAt, s.endedAt);
   return (
     <li className="session-row panel">
-      <a className="ref" href={href({ view: "issue", ref: s.ref })}>{s.ref}</a>{" "}
+      <a className="ref" href={href({ view: "issue", ref: s.ref })}>
+        {s.ref}
+      </a>{" "}
       {s.issueTitle}
       <span className="badge">{s.mode}</span>
-      {s.status === "running"
-        ? <span className="badge session-live">live · {elapsed}</span>
-        : <span className="badge">exit {s.exitCode ?? "?"} · ran {elapsed}</span>}
+      {s.status === "running" ? (
+        <span className="badge session-live">live · {elapsed}</span>
+      ) : (
+        <span className="badge">
+          exit {s.exitCode ?? "?"} · ran {elapsed}
+        </span>
+      )}
       {s.lastNote && <span className="session-note">“{s.lastNote.note}”</span>}
     </li>
   );
@@ -46,10 +52,22 @@ export default function Agents() {
       <PollErrorBar error={error} />
       <h2>Active sessions</h2>
       {running.length === 0 && <p className="empty">No agent sessions running.</p>}
-      {running.length > 0 && <ul className="session-list">{running.map((s) => <SessionRow key={s.id} s={s} />)}</ul>}
+      {running.length > 0 && (
+        <ul className="session-list">
+          {running.map((s) => (
+            <SessionRow key={s.id} s={s} />
+          ))}
+        </ul>
+      )}
       <h2>Recent</h2>
       {exited.length === 0 && <p className="empty">No finished sessions yet.</p>}
-      {exited.length > 0 && <ul className="session-list">{exited.map((s) => <SessionRow key={s.id} s={s} />)}</ul>}
+      {exited.length > 0 && (
+        <ul className="session-list">
+          {exited.map((s) => (
+            <SessionRow key={s.id} s={s} />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

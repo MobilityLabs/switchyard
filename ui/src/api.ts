@@ -1,7 +1,21 @@
-import type { Actor, AgentSession, Attachment, Issue, IssueDetail, Priority, Project, Status } from "./types";
+import type {
+  Actor,
+  AgentSession,
+  Attachment,
+  Issue,
+  IssueDetail,
+  Priority,
+  Project,
+  Status,
+} from "./types";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 // Set by the app root so any request — not just the boot-time getMe() — can
@@ -36,9 +50,14 @@ export const createProject = (input: { key: string; name: string }) =>
   api<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });
 export const listIssues = (
   filters: {
-    project?: string; status?: Status; label?: string; text?: string;
-    needsInput?: boolean; excludeSnoozed?: boolean;
-    attention?: "delivery_failed"; openPr?: boolean;
+    project?: string;
+    status?: Status;
+    label?: string;
+    text?: string;
+    needsInput?: boolean;
+    excludeSnoozed?: boolean;
+    attention?: "delivery_failed";
+    openPr?: boolean;
   } = {},
 ) => {
   const q = new URLSearchParams();
@@ -57,22 +76,46 @@ export const getIssue = (ref: string) => api<IssueDetail>(`/api/issues/${ref}`);
 export const listAttachments = (ref: string) => api<Attachment[]>(`/api/issues/${ref}/attachments`);
 export const updateIssue = (
   ref: string,
-  patch: Partial<{ status: Status; priority: Priority; title: string; description: string; summary: string | null; assigneeName: string | null; labels: string[] }>,
+  patch: Partial<{
+    status: Status;
+    priority: Priority;
+    title: string;
+    description: string;
+    summary: string | null;
+    assigneeName: string | null;
+    labels: string[];
+  }>,
 ) => api<Issue>(`/api/issues/${ref}`, { method: "PATCH", body: JSON.stringify(patch) });
-export const createIssue = (input: { projectKey: string; title: string; description?: string; summary?: string; priority?: Priority }) =>
-  api<Issue>("/api/issues", { method: "POST", body: JSON.stringify(input) });
-export const claimIssue = (ref: string) => api<Issue>(`/api/issues/${ref}/claim`, { method: "POST" });
+export const createIssue = (input: {
+  projectKey: string;
+  title: string;
+  description?: string;
+  summary?: string;
+  priority?: Priority;
+}) => api<Issue>("/api/issues", { method: "POST", body: JSON.stringify(input) });
+export const claimIssue = (ref: string) =>
+  api<Issue>(`/api/issues/${ref}/claim`, { method: "POST" });
 export const addComment = (ref: string, body: string) =>
-  api<{ ok: true }>(`/api/issues/${ref}/comments`, { method: "POST", body: JSON.stringify({ body }) });
+  api<{ ok: true }>(`/api/issues/${ref}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
+  });
 export const requestInput = (ref: string, question: string) =>
-  api<Issue>(`/api/issues/${ref}/request-input`, { method: "POST", body: JSON.stringify({ question }) });
+  api<Issue>(`/api/issues/${ref}/request-input`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
 export const snoozeIssue = (ref: string, until: number) =>
   api<Issue>(`/api/issues/${ref}/snooze`, { method: "POST", body: JSON.stringify({ until }) });
 export const markDuplicate = (ref: string, of: string) =>
   api<Issue>(`/api/issues/${ref}/duplicate`, { method: "POST", body: JSON.stringify({ of }) });
-export const redeliverIssue = (ref: string) => api<Issue>(`/api/issues/${ref}/redeliver`, { method: "POST" });
+export const redeliverIssue = (ref: string) =>
+  api<Issue>(`/api/issues/${ref}/redeliver`, { method: "POST" });
 export const addDependency = (blockerRef: string, blockedRef: string) =>
-  api<{ ok: true }>("/api/dependencies", { method: "POST", body: JSON.stringify({ blockerRef, blockedRef }) });
+  api<{ ok: true }>("/api/dependencies", {
+    method: "POST",
+    body: JSON.stringify({ blockerRef, blockedRef }),
+  });
 export const removeDependency = (blockerRef: string, blockedRef: string) =>
   api<{ ok: true }>(
     `/api/dependencies?blockerRef=${encodeURIComponent(blockerRef)}&blockedRef=${encodeURIComponent(blockedRef)}`,
@@ -87,7 +130,10 @@ export const listAgentSessions = (filters: { active?: boolean; ref?: string } = 
   return api<AgentSession[]>(`/api/agent-sessions${qs ? `?${qs}` : ""}`);
 };
 
-export async function uploadAttachment(ref: string, file: File): Promise<{ id: number; url: string; markdown: string }> {
+export async function uploadAttachment(
+  ref: string,
+  file: File,
+): Promise<{ id: number; url: string; markdown: string }> {
   const form = new FormData();
   form.set("file", file);
   // Don't route this through api() — it forces a JSON content-type header,

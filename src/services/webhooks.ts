@@ -10,7 +10,7 @@ export type Webhook = typeof webhooks.$inferSelect;
 function requireHuman(actor: Actor): void {
   if (actor.type === "agent") {
     throw new SwitchyardError(
-      "Only humans manage webhooks — ask a human to add or remove webhook endpoints."
+      "Only humans manage webhooks — ask a human to add or remove webhook endpoints.",
     );
   }
 }
@@ -18,7 +18,7 @@ function requireHuman(actor: Actor): void {
 export function addWebhook(
   db: Db,
   actor: Actor,
-  input: { url: string; projectKey?: string; secret?: string }
+  input: { url: string; projectKey?: string; secret?: string },
 ): Webhook {
   requireHuman(actor);
   if (!/^https?:\/\//.test(input.url)) {
@@ -39,12 +39,18 @@ export function listWebhooks(db: Db): Webhook[] {
 export function removeWebhook(db: Db, actor: Actor, id: number): void {
   requireHuman(actor);
   const gone = db.delete(webhooks).where(eq(webhooks.id, id)).returning().get();
-  if (!gone) throw new SwitchyardError(`There is no webhook with id ${id} — list them with GET /api/webhooks.`);
+  if (!gone)
+    throw new SwitchyardError(
+      `There is no webhook with id ${id} — list them with GET /api/webhooks.`,
+    );
 }
 
 export function setWebhookActive(db: Db, actor: Actor, id: number, active: boolean): Webhook {
   requireHuman(actor);
   const row = db.update(webhooks).set({ active }).where(eq(webhooks.id, id)).returning().get();
-  if (!row) throw new SwitchyardError(`There is no webhook with id ${id} — list them with GET /api/webhooks.`);
+  if (!row)
+    throw new SwitchyardError(
+      `There is no webhook with id ${id} — list them with GET /api/webhooks.`,
+    );
   return row;
 }

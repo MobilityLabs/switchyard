@@ -6,10 +6,14 @@ import { useEffect, useState } from "react";
  * stale dismissal. */
 export function PollErrorBar({ error }: { error: string | null }) {
   const [dismissed, setDismissed] = useState(false);
-  useEffect(() => { setDismissed(false); }, [error]);
+  useEffect(() => {
+    setDismissed(false);
+  }, [error]);
 
   if (!error || dismissed) return null;
   return (
-    <p className="error-bar">{error} <button onClick={() => setDismissed(true)}>×</button></p>
+    <p className="error-bar">
+      {error} <button onClick={() => setDismissed(true)}>×</button>
+    </p>
   );
 }

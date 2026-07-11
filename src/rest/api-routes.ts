@@ -18,20 +18,47 @@ import { createProject, listProjects } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
 import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
-import { addDependency, listBlockedIssueIds, listDependencies, nextTask, removeDependency } from "../services/dependencies.js";
+import {
+  addDependency,
+  listBlockedIssueIds,
+  listDependencies,
+  nextTask,
+  removeDependency,
+} from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
-import { startAgentSession, endAgentSession, listAgentSessions, recordProgressNote } from "../services/agent-sessions.js";
+import {
+  startAgentSession,
+  endAgentSession,
+  listAgentSessions,
+  recordProgressNote,
+} from "../services/agent-sessions.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { getOpenPr, listOpenPrByIssueId } from "../services/pr-status.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-actions.js";
-import { addWebhook, listWebhooks, removeWebhook, setWebhookActive, type Webhook } from "../services/webhooks.js";
-import { addGithubRepo, listGithubRepos, removeGithubRepo, type GithubRepo } from "../services/github-repos.js";
+import {
+  addWebhook,
+  listWebhooks,
+  removeWebhook,
+  setWebhookActive,
+  type Webhook,
+} from "../services/webhooks.js";
+import {
+  addGithubRepo,
+  listGithubRepos,
+  removeGithubRepo,
+  type GithubRepo,
+} from "../services/github-repos.js";
 import { handleGithubWebhook } from "../services/github-webhook.js";
-import { getAllSettings, setSetting, resetSetting, getDispatchPolicy } from "../services/settings.js";
+import {
+  getAllSettings,
+  setSetting,
+  resetSetting,
+  getDispatchPolicy,
+} from "../services/settings.js";
 import {
   saveAttachment,
   getAttachment,
@@ -83,7 +110,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       if (st) actor = getSessionActor(db, st);
     }
     if (!actor) {
-      return c.json({ error: "Authentication required — pass a bearer token or log in via a login link." }, 401);
+      return c.json(
+        { error: "Authentication required — pass a bearer token or log in via a login link." },
+        401,
+      );
     }
     c.set("actor", actor);
     await next();
@@ -91,7 +121,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.onError((err, c) => {
     if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
-    if (err instanceof SyntaxError || (err instanceof HTTPException && /malformed json/i.test(err.message))) {
+    if (
+      err instanceof SyntaxError ||
+      (err instanceof HTTPException && /malformed json/i.test(err.message))
+    ) {
       return c.json({ error: "Request body is not valid JSON — send a JSON object." }, 400);
     }
     console.error(err);
@@ -114,7 +147,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   };
 
   app.post("/actors/:id/rotate-token", (c) =>
-    c.json(rotateActorToken(db, c.var.actor, parseActorId(c.req.param("id"))))
+    c.json(rotateActorToken(db, c.var.actor, parseActorId(c.req.param("id")))),
   );
 
   app.delete("/actors/:id/token", (c) => {
@@ -142,7 +175,12 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       needsInput: c.req.query("needs_input") === "true" ? true : undefined,
       excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
       attention: (c.req.query("attention") as SearchFilters["attention"]) || undefined,
-      openPr: c.req.query("open_pr") === "true" ? true : c.req.query("open_pr") === "false" ? false : undefined,
+      openPr:
+        c.req.query("open_pr") === "true"
+          ? true
+          : c.req.query("open_pr") === "false"
+            ? false
+            : undefined,
     });
     const attention = listAttentionByIssueId(db);
     const openPrs = listOpenPrByIssueId(db);
@@ -153,12 +191,12 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
         attention: attention.get(r.id) ?? null,
         openPr: openPrs.get(r.id) ?? null,
         blocked: blocked.has(r.id),
-      }))
+      })),
     );
   });
 
   app.post("/issues", body(issueCreateBody), (c) =>
-    c.json(createIssue(db, c.var.actor, c.req.valid("json")))
+    c.json(createIssue(db, c.var.actor, c.req.valid("json"))),
   );
 
   app.get("/issues/:ref", (c) => {
@@ -175,7 +213,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.patch("/issues/:ref", body(issueUpdateBody), (c) =>
-    c.json(updateIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json")))
+    c.json(updateIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
   );
 
   app.post("/issues/:ref/claim", (c) => c.json(claimIssue(db, c.var.actor, c.req.param("ref"))));
@@ -191,20 +229,23 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.get("/agent-sessions", (c) =>
-    c.json(listAgentSessions(db, {
-      active: c.req.query("active") === "true" ? true : undefined,
-      ref: c.req.query("ref") || undefined,
-    }))
+    c.json(
+      listAgentSessions(db, {
+        active: c.req.query("active") === "true" ? true : undefined,
+        ref: c.req.query("ref") || undefined,
+      }),
+    ),
   );
 
   app.post("/agent-sessions", body(agentSessionCreateBody), (c) =>
-    c.json(startAgentSession(db, c.var.actor, c.req.valid("json")))
+    c.json(startAgentSession(db, c.var.actor, c.req.valid("json"))),
   );
 
   app.patch("/agent-sessions/:id", body(agentSessionEndBody), (c) => {
     const idParam = c.req.param("id");
     const id = Number(idParam);
-    if (!Number.isInteger(id)) throw new SwitchyardError(`Agent session ${idParam} does not exist.`);
+    if (!Number.isInteger(id))
+      throw new SwitchyardError(`Agent session ${idParam} does not exist.`);
     return c.json(endAgentSession(db, c.var.actor, id, c.req.valid("json").exitCode));
   });
 
@@ -217,8 +258,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     "/issues/:ref/attachments",
     bodyLimit({
       maxSize: 21 * 1024 * 1024,
-      onError: (c) =>
-        c.json({ error: "Attachment too large — the limit is 20MB." }, 413),
+      onError: (c) => c.json({ error: "Attachment too large — the limit is 20MB." }, 413),
     }),
     async (c) => {
       const parsed = await c.req.parseBody();
@@ -231,23 +271,29 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       // the bodyLimit middleware above already rejects oversized bodies pre-buffer.)
       if (file.size > MAX_ATTACHMENT_SIZE) {
         throw new SwitchyardError(
-          `Attachment is ${(file.size / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`
+          `Attachment is ${(file.size / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`,
         );
       }
       const data = Buffer.from(await file.arrayBuffer());
       const { attachment, markdown } = await saveAttachment(
-        db, c.var.actor, c.req.param("ref"), file.name, data, attachmentsDir
+        db,
+        c.var.actor,
+        c.req.param("ref"),
+        file.name,
+        data,
+        attachmentsDir,
       );
       const url = `/api/attachments/${attachment.id}/${attachment.filename}`;
       return c.json({ id: attachment.id, url, markdown });
-    }
+    },
   );
 
   app.get("/issues/:ref/attachments", (c) => c.json(listAttachments(db, c.req.param("ref"))));
 
   app.get("/attachments/:id/:filename", async (c) => {
     const id = Number(c.req.param("id"));
-    const notFound = () => c.json({ error: `Attachment ${c.req.param("id")} does not exist.` }, 404);
+    const notFound = () =>
+      c.json({ error: `Attachment ${c.req.param("id")} does not exist.` }, 404);
     if (!Number.isInteger(id)) return notFound();
     let row;
     try {
@@ -273,20 +319,24 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.post("/issues/:ref/request-input", body(requestInputBody), (c) =>
-    c.json(requestHumanInput(db, c.var.actor, c.req.param("ref"), c.req.valid("json").question))
+    c.json(requestHumanInput(db, c.var.actor, c.req.param("ref"), c.req.valid("json").question)),
   );
 
   app.post("/issues/:ref/snooze", body(snoozeBody), (c) =>
-    c.json(snoozeIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").until))
+    c.json(snoozeIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").until)),
   );
 
   app.post("/issues/:ref/duplicate", body(duplicateBody), (c) =>
-    c.json(markDuplicate(db, c.var.actor, c.req.param("ref"), c.req.valid("json").of))
+    c.json(markDuplicate(db, c.var.actor, c.req.param("ref"), c.req.valid("json").of)),
   );
 
-  app.post("/issues/:ref/redeliver", (c) => c.json(redeliverIssue(db, c.var.actor, c.req.param("ref"))));
+  app.post("/issues/:ref/redeliver", (c) =>
+    c.json(redeliverIssue(db, c.var.actor, c.req.param("ref"))),
+  );
 
-  app.get("/next-task", (c) => c.json(nextTask(db, c.var.actor, c.req.query("project") || undefined)));
+  app.get("/next-task", (c) =>
+    c.json(nextTask(db, c.var.actor, c.req.query("project") || undefined)),
+  );
 
   app.post("/dependencies", body(dependencyBody), (c) => {
     const { blockerRef, blockedRef } = c.req.valid("json");
@@ -325,7 +375,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/webhooks", (c) => c.json(listWebhooks(db).map(redact)));
   app.post("/webhooks", body(webhookCreateBody), (c) =>
-    c.json(redact(addWebhook(db, c.var.actor, c.req.valid("json"))))
+    c.json(redact(addWebhook(db, c.var.actor, c.req.valid("json")))),
   );
   app.delete("/webhooks/:id", (c) => {
     removeWebhook(db, c.var.actor, Number(c.req.param("id")));
@@ -341,7 +391,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/github-repos", (c) => c.json(listGithubRepos(db).map(redactRepo)));
   app.post("/github-repos", body(githubRepoCreateBody), (c) =>
-    c.json(redactRepo(addGithubRepo(db, c.var.actor, c.req.valid("json"))))
+    c.json(redactRepo(addGithubRepo(db, c.var.actor, c.req.valid("json")))),
   );
   app.delete("/github-repos/:id", (c) => {
     removeGithubRepo(db, c.var.actor, Number(c.req.param("id")));
@@ -366,7 +416,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // agent's.
   app.get("/settings", (c) => c.json(getAllSettings(db)));
   app.put("/settings/:key", body(settingPutBody), (c) =>
-    c.json(setSetting(db, c.var.actor, c.req.param("key"), c.req.valid("json").value))
+    c.json(setSetting(db, c.var.actor, c.req.param("key"), c.req.valid("json").value)),
   );
   app.delete("/settings/:key", (c) => c.json(resetSetting(db, c.var.actor, c.req.param("key"))));
 
@@ -378,7 +428,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   app.post("/github-events", body(githubEventBody), (c) => {
     if (c.var.actor.type === "agent") {
       throw new SwitchyardError(
-        "Only a trusted human-authenticated poller may post GitHub events — agents cannot call /github-events."
+        "Only a trusted human-authenticated poller may post GitHub events — agents cannot call /github-events.",
       );
     }
     const { event, payload } = c.req.valid("json");

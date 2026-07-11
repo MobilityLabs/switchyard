@@ -14,7 +14,7 @@ describe("formatNotification", () => {
         actor: "claude/worker",
         project: "SYD",
         at: 0,
-      })
+      }),
     ).toBe("🆕 SYD-1 filed by claude/worker: Fix flaky test");
   });
 
@@ -28,7 +28,7 @@ describe("formatNotification", () => {
         actor: "claude/worker",
         project: "SYD",
         at: 0,
-      })
+      }),
     ).toBe("⚠️ claude/worker needs a human answer on SYD-2: Ambiguous spec");
   });
 
@@ -43,7 +43,7 @@ describe("formatNotification", () => {
         actor: "claude/worker",
         project: "SYD",
         at: 0,
-      })
+      }),
     ).toBe("👀 SYD-3 ready for review: Ship it");
   });
 
@@ -58,7 +58,7 @@ describe("formatNotification", () => {
         actor: "claude/worker",
         project: "SYD",
         at: 0,
-      })
+      }),
     ).toBeNull();
     expect(
       formatNotification({
@@ -69,7 +69,7 @@ describe("formatNotification", () => {
         actor: "sean",
         project: "SYD",
         at: 0,
-      })
+      }),
     ).toBeNull();
     expect(
       formatNotification({
@@ -80,7 +80,7 @@ describe("formatNotification", () => {
         actor: "sean",
         project: "SYD",
         at: 0,
-      })
+      }),
     ).toBeNull();
   });
 });

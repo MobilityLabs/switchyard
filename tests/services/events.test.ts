@@ -49,7 +49,10 @@ describe("listRecentEvents", () => {
     const cutoff = all[0].createdAt; // timestamp of the newest (status change) event
 
     // Backdate the older "created" event so since-filtering has something to exclude.
-    db.update(events).set({ createdAt: cutoff - 100 }).where(eq(events.id, all[1].id)).run();
+    db.update(events)
+      .set({ createdAt: cutoff - 100 })
+      .where(eq(events.id, all[1].id))
+      .run();
 
     const recent = listRecentEvents(db, { since: cutoff - 50 });
     expect(recent).toHaveLength(1);
@@ -63,7 +66,9 @@ describe("listRecentEvents", () => {
     createIssue(db, human, { projectKey: "SYD", title: "Only issue" });
 
     expect(listRecentEvents(db, {}).length).toBeLessThanOrEqual(DEFAULT_RECENT_EVENTS_LIMIT);
-    expect(listRecentEvents(db, { limit: 10000 }).length).toBeLessThanOrEqual(MAX_RECENT_EVENTS_LIMIT);
+    expect(listRecentEvents(db, { limit: 10000 }).length).toBeLessThanOrEqual(
+      MAX_RECENT_EVENTS_LIMIT,
+    );
 
     // A small explicit limit is honored.
     updateIssue(db, human, "SYD-1", { status: "todo" });

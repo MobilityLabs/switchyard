@@ -8,7 +8,10 @@ function Overlay({ children, onDismiss }: { children: ReactNode; onDismiss: () =
   return (
     <div
       className="modal-overlay"
-      onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onDismiss();
+      }}
     >
       <div className="modal panel" onClick={(e) => e.stopPropagation()}>
         {children}
@@ -18,7 +21,10 @@ function Overlay({ children, onDismiss }: { children: ReactNode; onDismiss: () =
 }
 
 export function ConfirmModal({
-  title, confirmLabel = "Confirm", onConfirm, onCancel,
+  title,
+  confirmLabel = "Confirm",
+  onConfirm,
+  onCancel,
 }: {
   title: string;
   confirmLabel?: string;
@@ -30,14 +36,19 @@ export function ConfirmModal({
       <p className="modal-title">{title}</p>
       <div className="modal-actions">
         <button onClick={onCancel}>Cancel</button>
-        <button className="danger" onClick={onConfirm} autoFocus>{confirmLabel}</button>
+        <button className="danger" onClick={onConfirm} autoFocus>
+          {confirmLabel}
+        </button>
       </div>
     </Overlay>
   );
 }
 
 export function PromptModal({
-  title, placeholder, onSubmit, onCancel,
+  title,
+  placeholder,
+  onSubmit,
+  onCancel,
 }: {
   title: string;
   placeholder?: string;
@@ -64,7 +75,9 @@ export function PromptModal({
       />
       <div className="modal-actions">
         <button onClick={onCancel}>Cancel</button>
-        <button className="primary" disabled={!value.trim()} onClick={submit}>OK</button>
+        <button className="primary" disabled={!value.trim()} onClick={submit}>
+          OK
+        </button>
       </div>
     </Overlay>
   );

@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { openDb } from "../../src/db/index.js";
 import {
-  createProject, listProjects, getProjectByKey, reserveIssueNumber,
+  createProject,
+  listProjects,
+  getProjectByKey,
+  reserveIssueNumber,
 } from "../../src/services/projects.js";
 
 describe("projects", () => {
@@ -16,8 +19,9 @@ describe("projects", () => {
 
   it("rejects malformed keys", () => {
     const db = openDb(":memory:");
-    expect(() => createProject(db, { key: "bad key", name: "x" }))
-      .toThrowError(/2–10 uppercase letters/);
+    expect(() => createProject(db, { key: "bad key", name: "x" })).toThrowError(
+      /2–10 uppercase letters/,
+    );
   });
 
   it("hands out sequential issue numbers", () => {
@@ -30,7 +34,8 @@ describe("projects", () => {
   it("rejects duplicate keys with an agent-legible error", () => {
     const db = openDb(":memory:");
     createProject(db, { key: "AIPI", name: "aipi" });
-    expect(() => createProject(db, { key: "AIPI", name: "again" }))
-      .toThrowError(/project with key "AIPI" already exists/i);
+    expect(() => createProject(db, { key: "AIPI", name: "again" })).toThrowError(
+      /project with key "AIPI" already exists/i,
+    );
   });
 });

@@ -5,7 +5,10 @@ import { loginLinks, actors } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { setSetting } from "../../src/services/settings.js";
 import {
-  createLoginLink, redeemLoginLink, getSessionActor, deleteSession,
+  createLoginLink,
+  redeemLoginLink,
+  getSessionActor,
+  deleteSession,
 } from "../../src/services/auth.js";
 
 let db: Db, human: Actor;
@@ -31,7 +34,9 @@ describe("auth", () => {
   });
 
   it("rejects agents and unknown actors", () => {
-    expect(() => createLoginLink(db, "claude/dev")).toThrowError(/agents authenticate with their bearer token/i);
+    expect(() => createLoginLink(db, "claude/dev")).toThrowError(
+      /agents authenticate with their bearer token/i,
+    );
     expect(() => createLoginLink(db, "ghost")).toThrowError(/no actor named "ghost"/i);
     expect(getSessionActor(db, "sys_" + "0".repeat(64))).toBeNull();
   });
@@ -40,7 +45,11 @@ describe("auth", () => {
     setSetting(db, human, "auth.login_link_ttl_seconds", 60);
     const before = Math.floor(Date.now() / 1000);
     const { token } = createLoginLink(db, "sean");
-    const row = db.select().from(loginLinks).all().find((r) => r.actorId === human.id)!;
+    const row = db
+      .select()
+      .from(loginLinks)
+      .all()
+      .find((r) => r.actorId === human.id)!;
     expect(row.expiresAt).toBeGreaterThanOrEqual(before + 60);
     expect(row.expiresAt).toBeLessThan(before + 15 * 60); // well under the 15m default
     expect(token).toMatch(/^syl_[0-9a-f]{48}$/);
@@ -51,7 +60,9 @@ describe("auth", () => {
     const sean = db.select().from(actors).where(eq(actors.name, "sean")).get()!;
     // FK enforcement would normally block this; simulate the data drifting out
     // from under the link so the missing-actor guard in redeemLoginLink is reachable.
-    (db as unknown as { $client: { pragma(source: string): unknown } }).$client.pragma("foreign_keys = OFF");
+    (db as unknown as { $client: { pragma(source: string): unknown } }).$client.pragma(
+      "foreign_keys = OFF",
+    );
     db.delete(actors).where(eq(actors.id, sean.id)).run();
     expect(() => redeemLoginLink(db, token)).toThrowError(/references a missing actor/i);
   });

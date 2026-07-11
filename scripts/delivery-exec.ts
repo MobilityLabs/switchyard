@@ -45,7 +45,7 @@ const execFileP = promisify(execFile);
 export async function run(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<string> {
   const { stdout } = await execFileP(cmd, args, {
     cwd: opts.cwd,
@@ -99,7 +99,7 @@ export async function publishAgentBranch(
   ref: string,
   issueTitle: string,
   serverUrl: string,
-  exitCode: number | null = null
+  exitCode: number | null = null,
 ): Promise<PublishOutcome> {
   const branch = agentBranch(ref);
   try {
@@ -117,13 +117,17 @@ export async function publishAgentBranch(
     const url = await run("gh", buildPrViewUrlArgs(prNumber, ownerRepo), { cwd: GH_CWD });
     return { status: "already-open", prNumber, url };
   }
-  const url = await run("gh", buildPrCreateArgs(ref, issueTitle, serverUrl, ownerRepo, exitCode), { cwd: GH_CWD });
+  const url = await run("gh", buildPrCreateArgs(ref, issueTitle, serverUrl, ownerRepo, exitCode), {
+    cwd: GH_CWD,
+  });
   return { status: "opened", prNumber: parsePrNumberFromUrl(url), url };
 }
 
 export async function findOpenAgentPr(repo: string, ref: string): Promise<number | null> {
   const ownerRepo = await originOwnerRepo(repo);
-  const open = JSON.parse(await run("gh", buildPrListArgs(ref, ownerRepo), { cwd: GH_CWD })) as { number: number }[];
+  const open = JSON.parse(await run("gh", buildPrListArgs(ref, ownerRepo), { cwd: GH_CWD })) as {
+    number: number;
+  }[];
   return open.length > 0 ? open[0].number : null;
 }
 
@@ -131,10 +135,13 @@ export async function findOpenAgentPr(repo: string, ref: string): Promise<number
  * agent/<ref> PRs that were merged outside the gate (manual merge after a
  * delivery_failed) so the stale attention flag can be cleared. Returns null
  * if no merged PR exists for the branch (still open, or closed unmerged). */
-export async function findMergedAgentPr(repo: string, ref: string): Promise<{ prNumber: number; mergeSha: string } | null> {
+export async function findMergedAgentPr(
+  repo: string,
+  ref: string,
+): Promise<{ prNumber: number; mergeSha: string } | null> {
   const ownerRepo = await originOwnerRepo(repo);
   const merged = JSON.parse(
-    await run("gh", buildMergedPrForBranchArgs(ref, ownerRepo), { cwd: GH_CWD })
+    await run("gh", buildMergedPrForBranchArgs(ref, ownerRepo), { cwd: GH_CWD }),
   ) as { number: number; mergeCommit: { oid: string } | null }[];
   const hit = merged[0];
   if (!hit || !hit.mergeCommit) return null;
@@ -257,7 +264,11 @@ export async function runVerification(cloneDir: string): Promise<{ ok: boolean; 
  * failed retry falls through to the normal failure path) so a stuck PR can't
  * loop rebase attempts forever.
  */
-export async function attemptAutoRebase(repo: string, cloneDir: string, ref: string): Promise<RebaseOutcome> {
+export async function attemptAutoRebase(
+  repo: string,
+  cloneDir: string,
+  ref: string,
+): Promise<RebaseOutcome> {
   await ensureCleanClone(repo, cloneDir);
   try {
     await runGit(["-C", cloneDir, ...buildFetchAgentBranchArgs(ref)]);
@@ -269,7 +280,10 @@ export async function attemptAutoRebase(repo: string, cloneDir: string, ref: str
     await runGit(["-C", cloneDir, ...buildRebaseOntoMainArgs()]);
   } catch {
     const filesOut = await runGit(["-C", cloneDir, ...buildConflictFilesArgs()]).catch(() => "");
-    const files = filesOut.split("\n").map((f) => f.trim()).filter(Boolean);
+    const files = filesOut
+      .split("\n")
+      .map((f) => f.trim())
+      .filter(Boolean);
     await runGit(["-C", cloneDir, ...buildRebaseAbortArgs()]).catch(() => {});
     return { status: "conflict", files };
   }
@@ -307,14 +321,21 @@ export async function dispatchConflictResolution(
   ref: string,
   conflictFiles: string[],
   project: WorkerProject,
-  config: WorkerConfig
+  config: WorkerConfig,
 ): Promise<ConflictResolutionOutcome> {
   const originalSha = await runGit(["-C", cloneDir, "rev-parse", agentBranch(ref)]);
 
   await runGit(["-C", cloneDir, ...buildSyncLocalMainArgs()]);
   await runGit(["-C", cloneDir, ...buildDetachOntoMainArgs()]);
 
-  const dockerArgs = buildConflictResolutionDockerArgs(ref, conflictFiles, cloneDir, project, config, process.env);
+  const dockerArgs = buildConflictResolutionDockerArgs(
+    ref,
+    conflictFiles,
+    cloneDir,
+    project,
+    config,
+    process.env,
+  );
   let dockerOutput: string;
   try {
     dockerOutput = await run("docker", dockerArgs);
@@ -327,7 +348,9 @@ export async function dispatchConflictResolution(
   if (resolvedSha === originalSha) {
     return {
       status: "failed",
-      tail: tailOf(`${dockerOutput}\nthe session left ${agentBranch(ref)} unchanged — see its own comment on the issue for why`),
+      tail: tailOf(
+        `${dockerOutput}\nthe session left ${agentBranch(ref)} unchanged — see its own comment on the issue for why`,
+      ),
     };
   }
 
@@ -336,7 +359,9 @@ export async function dispatchConflictResolution(
   } catch (err) {
     return {
       status: "failed",
-      tail: tailOf(`${dockerOutput}\ncould not push the resolved branch to GitHub: ${(err as Error).message}`),
+      tail: tailOf(
+        `${dockerOutput}\ncould not push the resolved branch to GitHub: ${(err as Error).message}`,
+      ),
     };
   }
   return { status: "resolved", sha: resolvedSha };
@@ -344,7 +369,7 @@ export async function dispatchConflictResolution(
 
 /** Runs the project's `npm run deploy` from the clean clone, if it has one. */
 export async function runDeploy(
-  cloneDir: string
+  cloneDir: string,
 ): Promise<{ ran: false } | { ran: true; ok: boolean; tail: string }> {
   const pkgPath = path.join(cloneDir, "package.json");
   if (!existsSync(pkgPath)) return { ran: false };

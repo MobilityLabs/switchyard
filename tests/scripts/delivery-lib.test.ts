@@ -121,12 +121,18 @@ describe("findRedeliverRefs", () => {
   });
 
   it("ignores a done-stamp (that's findDeliverableRefs's job, not this one's)", () => {
-    const feed = [ev({ id: 11, type: "status_changed", payload: { from: "in_review", to: "done" } })];
+    const feed = [
+      ev({ id: 11, type: "status_changed", payload: { from: "in_review", to: "done" } }),
+    ];
     expect(findRedeliverRefs(feed, keys, 5).refs).toEqual([]);
   });
 
   it("ignores unconfigured projects and dedupes refs", () => {
-    const feed = [redeliver({ id: 11, issue: "OTHER-1" }), redeliver({ id: 12 }), redeliver({ id: 13 })];
+    const feed = [
+      redeliver({ id: 11, issue: "OTHER-1" }),
+      redeliver({ id: 12 }),
+      redeliver({ id: 13 }),
+    ];
     expect(findRedeliverRefs(feed, keys, 5).refs).toEqual(["SYD-9"]);
   });
 });
@@ -164,12 +170,26 @@ describe("argv builders", () => {
 
   it("buildPrListArgs carries -R so gh never needs to be run inside the repo", () => {
     expect(buildPrListArgs("SYD-9", "MobilityLabs/switchyard")).toEqual([
-      "pr", "list", "-R", "MobilityLabs/switchyard", "--head", "agent/SYD-9", "--state", "open", "--json", "number",
+      "pr",
+      "list",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--head",
+      "agent/SYD-9",
+      "--state",
+      "open",
+      "--json",
+      "number",
     ]);
   });
 
   it("buildPrCreateArgs embeds title, body, and -R as discrete argv entries", () => {
-    const args = buildPrCreateArgs("SYD-9", "Fix the; thing `rm -rf`", "http://host:3300/", "MobilityLabs/switchyard");
+    const args = buildPrCreateArgs(
+      "SYD-9",
+      "Fix the; thing `rm -rf`",
+      "http://host:3300/",
+      "MobilityLabs/switchyard",
+    );
     expect(args.slice(0, 5)).toEqual(["pr", "create", "-R", "MobilityLabs/switchyard", "--base"]);
     expect(args).toContain("agent/SYD-9");
     expect(args).toContain("SYD-9: Fix the; thing `rm -rf`");
@@ -178,24 +198,56 @@ describe("argv builders", () => {
 
   it("buildPrMergeArgs", () => {
     expect(buildPrMergeArgs(41, "MobilityLabs/switchyard")).toEqual([
-      "pr", "merge", "41", "-R", "MobilityLabs/switchyard", "--merge", "--delete-branch",
+      "pr",
+      "merge",
+      "41",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--merge",
+      "--delete-branch",
     ]);
   });
 
   it("buildPrViewMergeShaArgs", () => {
     expect(buildPrViewMergeShaArgs(41, "MobilityLabs/switchyard")).toEqual([
-      "pr", "view", "41", "-R", "MobilityLabs/switchyard", "--json", "mergeCommit", "--jq", ".mergeCommit.oid",
+      "pr",
+      "view",
+      "41",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--json",
+      "mergeCommit",
+      "--jq",
+      ".mergeCommit.oid",
     ]);
   });
 
   it("buildPrViewMergeableArgs", () => {
     expect(buildPrViewMergeableArgs(41, "MobilityLabs/switchyard")).toEqual([
-      "pr", "view", "41", "-R", "MobilityLabs/switchyard", "--json", "mergeable", "--jq", ".mergeable",
+      "pr",
+      "view",
+      "41",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--json",
+      "mergeable",
+      "--jq",
+      ".mergeable",
     ]);
   });
 
   it("buildPrViewUrlArgs", () => {
-    expect(buildPrViewUrlArgs(41, "acme/widgets")).toEqual(["pr", "view", "41", "--json", "url", "--jq", ".url", "-R", "acme/widgets"]);
+    expect(buildPrViewUrlArgs(41, "acme/widgets")).toEqual([
+      "pr",
+      "view",
+      "41",
+      "--json",
+      "url",
+      "--jq",
+      ".url",
+      "-R",
+      "acme/widgets",
+    ]);
   });
 
   it("buildPrTitle / buildPrBody", () => {
@@ -216,13 +268,24 @@ describe("argv builders", () => {
   });
 
   it("buildPrCreateArgs threads the exit code into the PR body", () => {
-    const args = buildPrCreateArgs("SYD-9", "A title", "http://host:3300", "MobilityLabs/switchyard", 1);
+    const args = buildPrCreateArgs(
+      "SYD-9",
+      "A title",
+      "http://host:3300",
+      "MobilityLabs/switchyard",
+      1,
+    );
     const bodyArg = args[args.indexOf("--body") + 1];
     expect(bodyArg).toContain("non-zero code (1)");
   });
 
   it("buildPrCreateArgs defaults to no exit-code warning when omitted", () => {
-    const args = buildPrCreateArgs("SYD-9", "A title", "http://host:3300", "MobilityLabs/switchyard");
+    const args = buildPrCreateArgs(
+      "SYD-9",
+      "A title",
+      "http://host:3300",
+      "MobilityLabs/switchyard",
+    );
     const bodyArg = args[args.indexOf("--body") + 1];
     expect(bodyArg).not.toContain("non-zero");
   });
@@ -234,7 +297,12 @@ describe("auto-rebase argv builders (SYD-85)", () => {
   });
 
   it("buildCheckoutRebaseBranchArgs", () => {
-    expect(buildCheckoutRebaseBranchArgs("SYD-9")).toEqual(["checkout", "-B", "agent/SYD-9", "FETCH_HEAD"]);
+    expect(buildCheckoutRebaseBranchArgs("SYD-9")).toEqual([
+      "checkout",
+      "-B",
+      "agent/SYD-9",
+      "FETCH_HEAD",
+    ]);
   });
 
   it("buildRebaseOntoMainArgs", () => {
@@ -250,7 +318,12 @@ describe("auto-rebase argv builders (SYD-85)", () => {
   });
 
   it("buildForcePushWithLeaseArgs — only ever targets the agent/<ref> branch", () => {
-    expect(buildForcePushWithLeaseArgs("SYD-9")).toEqual(["push", "--force-with-lease", "origin", "agent/SYD-9"]);
+    expect(buildForcePushWithLeaseArgs("SYD-9")).toEqual([
+      "push",
+      "--force-with-lease",
+      "origin",
+      "agent/SYD-9",
+    ]);
   });
 });
 
@@ -313,11 +386,18 @@ describe("auto-rebase comment bodies (SYD-85)", () => {
 describe("buildMergedPrForBranchArgs (SYD-94)", () => {
   it("looks up merged PRs for the branch, not open ones", () => {
     expect(buildMergedPrForBranchArgs("SYD-9", "MobilityLabs/switchyard")).toEqual([
-      "pr", "list", "-R", "MobilityLabs/switchyard",
-      "--head", "agent/SYD-9",
-      "--state", "merged",
-      "--json", "number,mergeCommit",
-      "--limit", "1",
+      "pr",
+      "list",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--head",
+      "agent/SYD-9",
+      "--state",
+      "merged",
+      "--json",
+      "number,mergeCommit",
+      "--limit",
+      "1",
     ]);
   });
 });
@@ -372,7 +452,9 @@ describe("conflict-resolution dispatch (SYD-100)", () => {
   describe("shouldDispatchConflictResolution", () => {
     it("is false when not containerized, regardless of the conflictResolution flag", () => {
       expect(shouldDispatchConflictResolution(baseConfig)).toBe(false);
-      expect(shouldDispatchConflictResolution({ ...baseConfig, delivery: { conflictResolution: true } })).toBe(false);
+      expect(
+        shouldDispatchConflictResolution({ ...baseConfig, delivery: { conflictResolution: true } }),
+      ).toBe(false);
     });
 
     it("defaults to true when containerized", () => {
@@ -381,7 +463,11 @@ describe("conflict-resolution dispatch (SYD-100)", () => {
 
     it("respects an explicit opt-out", () => {
       expect(
-        shouldDispatchConflictResolution({ ...baseConfig, containerized: true, delivery: { conflictResolution: false } })
+        shouldDispatchConflictResolution({
+          ...baseConfig,
+          containerized: true,
+          delivery: { conflictResolution: false },
+        }),
       ).toBe(false);
     });
   });
@@ -418,19 +504,40 @@ describe("conflict-resolution dispatch (SYD-100)", () => {
 
   describe("buildConflictResolutionDockerArgs", () => {
     it("mounts the scratch clone (not the human's live checkout)", () => {
-      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
+      const args = buildConflictResolutionDockerArgs(
+        "SYD-9",
+        ["src/a.ts"],
+        "/tmp/clones/SYD",
+        project,
+        baseConfig,
+        oauthEnv,
+      );
       const vIndex = args.indexOf("-v");
       expect(args[vIndex + 1]).toBe("/tmp/clones/SYD:/origin");
     });
 
     it("sets MODE=resolve-conflict and AGENT_BRANCH", () => {
-      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
+      const args = buildConflictResolutionDockerArgs(
+        "SYD-9",
+        ["src/a.ts"],
+        "/tmp/clones/SYD",
+        project,
+        baseConfig,
+        oauthEnv,
+      );
       expect(args).toContain("MODE=resolve-conflict");
       expect(args).toContain("AGENT_BRANCH=agent/SYD-9");
     });
 
     it("scopes ALLOWED_TOOLS to the conflict-resolution allowlist, not the full work allowlist", () => {
-      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
+      const args = buildConflictResolutionDockerArgs(
+        "SYD-9",
+        ["src/a.ts"],
+        "/tmp/clones/SYD",
+        project,
+        baseConfig,
+        oauthEnv,
+      );
       const allowedToolsArg = args.find((a) => a.startsWith("ALLOWED_TOOLS="));
       expect(allowedToolsArg).toBe(`ALLOWED_TOOLS=${CONFLICT_RESOLUTION_ALLOWED_TOOLS.join(",")}`);
       expect(CONFLICT_RESOLUTION_ALLOWED_TOOLS).not.toContain("mcp__switchyard__claim_issue");
@@ -438,8 +545,19 @@ describe("conflict-resolution dispatch (SYD-100)", () => {
     });
 
     it("passes secret vars using the bare -e form, never embedding their values", () => {
-      const args = buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, oauthEnv);
-      for (const secretVar of ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]) {
+      const args = buildConflictResolutionDockerArgs(
+        "SYD-9",
+        ["src/a.ts"],
+        "/tmp/clones/SYD",
+        project,
+        baseConfig,
+        oauthEnv,
+      );
+      for (const secretVar of [
+        "SWITCHYARD_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+      ]) {
         expect(args).toContain(secretVar);
         expect(args.some((a) => a.startsWith(`${secretVar}=`))).toBe(false);
       }
@@ -448,13 +566,25 @@ describe("conflict-resolution dispatch (SYD-100)", () => {
 
     it("throws without an auth env var, the same as buildDockerArgs", () => {
       expect(() =>
-        buildConflictResolutionDockerArgs("SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, baseConfig, {})
+        buildConflictResolutionDockerArgs(
+          "SYD-9",
+          ["src/a.ts"],
+          "/tmp/clones/SYD",
+          project,
+          baseConfig,
+          {},
+        ),
       ).toThrow(/CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/);
     });
 
     it("respects a custom image", () => {
       const args = buildConflictResolutionDockerArgs(
-        "SYD-9", ["src/a.ts"], "/tmp/clones/SYD", project, { ...baseConfig, image: "custom/worker-image" }, oauthEnv
+        "SYD-9",
+        ["src/a.ts"],
+        "/tmp/clones/SYD",
+        project,
+        { ...baseConfig, image: "custom/worker-image" },
+        oauthEnv,
       );
       expect(args[args.length - 1]).toBe("custom/worker-image");
     });
@@ -469,7 +599,12 @@ describe("conflict-resolution dispatch (SYD-100)", () => {
   });
 
   it("conflictResolutionFailedComment lists conflicted files, the original failure, and the session's output tail", () => {
-    const body = conflictResolutionFailedComment("SYD-9", "gh: not mergeable", ["src/a.ts"], "TypeError: boom");
+    const body = conflictResolutionFailedComment(
+      "SYD-9",
+      "gh: not mergeable",
+      ["src/a.ts"],
+      "TypeError: boom",
+    );
     expect(body).toContain("SYD-9");
     expect(body).toContain("not mergeable");
     expect(body).toContain("agent/SYD-9");
@@ -503,28 +638,46 @@ describe("parsePrNumberFromUrl", () => {
 
 describe("formatPublishOutcome", () => {
   it("formats each outcome status (SYD-54)", () => {
-    expect(formatPublishOutcome("agent/SYD-9", { status: "no-branch" }))
-      .toBe("no agent/SYD-9 branch — nothing to publish");
-    expect(formatPublishOutcome("agent/SYD-9", { status: "no-commits" }))
-      .toBe("agent/SYD-9 has no commits ahead of main — nothing to publish");
-    expect(formatPublishOutcome("agent/SYD-9", { status: "already-open", prNumber: 5, url: "https://x/pull/5" }))
-      .toBe("pushed agent/SYD-9; PR #5 already open");
-    expect(formatPublishOutcome("agent/SYD-9", { status: "opened", prNumber: 6, url: "https://x/pull/6" }))
-      .toBe("opened PR for agent/SYD-9: https://x/pull/6");
+    expect(formatPublishOutcome("agent/SYD-9", { status: "no-branch" })).toBe(
+      "no agent/SYD-9 branch — nothing to publish",
+    );
+    expect(formatPublishOutcome("agent/SYD-9", { status: "no-commits" })).toBe(
+      "agent/SYD-9 has no commits ahead of main — nothing to publish",
+    );
+    expect(
+      formatPublishOutcome("agent/SYD-9", {
+        status: "already-open",
+        prNumber: 5,
+        url: "https://x/pull/5",
+      }),
+    ).toBe("pushed agent/SYD-9; PR #5 already open");
+    expect(
+      formatPublishOutcome("agent/SYD-9", {
+        status: "opened",
+        prNumber: 6,
+        url: "https://x/pull/6",
+      }),
+    ).toBe("opened PR for agent/SYD-9: https://x/pull/6");
   });
 });
 
 describe("parseOwnerRepo", () => {
   it("parses an ssh-style remote url", () => {
-    expect(parseOwnerRepo("git@github.com:MobilityLabs/switchyard.git")).toBe("MobilityLabs/switchyard");
+    expect(parseOwnerRepo("git@github.com:MobilityLabs/switchyard.git")).toBe(
+      "MobilityLabs/switchyard",
+    );
   });
 
   it("parses an https remote url with a .git suffix", () => {
-    expect(parseOwnerRepo("https://github.com/MobilityLabs/switchyard.git")).toBe("MobilityLabs/switchyard");
+    expect(parseOwnerRepo("https://github.com/MobilityLabs/switchyard.git")).toBe(
+      "MobilityLabs/switchyard",
+    );
   });
 
   it("parses an https remote url without a .git suffix", () => {
-    expect(parseOwnerRepo("https://github.com/MobilityLabs/switchyard")).toBe("MobilityLabs/switchyard");
+    expect(parseOwnerRepo("https://github.com/MobilityLabs/switchyard")).toBe(
+      "MobilityLabs/switchyard",
+    );
   });
 
   it("throws on an unparseable url", () => {
@@ -534,21 +687,30 @@ describe("parseOwnerRepo", () => {
 
 describe("comment bodies", () => {
   it("success with deploy", () => {
-    const body = deliveryComment({ prNumber: 41, mergeSha: "abc123", deploy: { ran: true, ok: true, tail: "done" } });
+    const body = deliveryComment({
+      prNumber: 41,
+      mergeSha: "abc123",
+      deploy: { ran: true, ok: true, tail: "done" },
+    });
     expect(body).toContain("PR #41");
     expect(body).toContain("abc123");
     expect(body).toContain("Deploy: succeeded");
   });
 
   it("deploy failure includes the output tail", () => {
-    const body = deliveryComment({ prNumber: 41, mergeSha: "abc123", deploy: { ran: true, ok: false, tail: "boom" } });
+    const body = deliveryComment({
+      prNumber: 41,
+      mergeSha: "abc123",
+      deploy: { ran: true, ok: false, tail: "boom" },
+    });
     expect(body).toContain("Deploy: FAILED");
     expect(body).toContain("boom");
   });
 
   it("deploy skipped", () => {
-    expect(deliveryComment({ prNumber: 41, mergeSha: "abc123", deploy: { ran: false } }))
-      .toContain("Deploy: skipped");
+    expect(deliveryComment({ prNumber: 41, mergeSha: "abc123", deploy: { ran: false } })).toContain(
+      "Deploy: skipped",
+    );
   });
 
   it("failure comment names the ref and reason", () => {
@@ -673,14 +835,16 @@ describe("tailOf", () => {
     expect(tailOf("x".repeat(5000), 20, 2000).length).toBe(2000);
   });
   it("strips ANSI escape sequences so issue comments stay readable", () => {
-    const colored = "\x1b[31mFAIL\x1b[39m \x1b[2mtests/foo.test.ts\x1b[22m > \x1b[1mbar\x1b[0m\n\x1b[32m- Expected\x1b[39m false";
+    const colored =
+      "\x1b[31mFAIL\x1b[39m \x1b[2mtests/foo.test.ts\x1b[22m > \x1b[1mbar\x1b[0m\n\x1b[32m- Expected\x1b[39m false";
     expect(tailOf(colored)).toBe("FAIL tests/foo.test.ts > bar\n- Expected false");
   });
 
   it("strips tar xattr noise so a real error surviving 20 lines of it still surfaces (SYD-173)", () => {
     const noise = Array.from(
       { length: 30 },
-      (_, i) => `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance' for entry file${i}.txt`
+      (_, i) =>
+        `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance' for entry file${i}.txt`,
     );
     const text = [...noise, "Error: health check failed after deploy"].join("\n");
     const tail = tailOf(text, 20);
@@ -700,13 +864,16 @@ describe("tailOf", () => {
   it("strips a mix of noise so it doesn't drown a real error under the line budget", () => {
     const tarNoise = Array.from(
       { length: 15 },
-      (_, i) => `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance' for entry file${i}.txt`
+      (_, i) =>
+        `tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance' for entry file${i}.txt`,
     );
     const sshNoise = [
       "** WARNING: connection is not using a post-quantum key exchange algorithm.",
       "** This session may be vulnerable to a store-now-decrypt-later attack.",
     ];
-    const text = [...tarNoise, ...sshNoise, "FATAL: migration crashed on issues.parentId"].join("\n");
+    const text = [...tarNoise, ...sshNoise, "FATAL: migration crashed on issues.parentId"].join(
+      "\n",
+    );
     const tail = tailOf(text, 20);
     expect(tail).toBe("FATAL: migration crashed on issues.parentId");
   });

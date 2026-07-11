@@ -1,0 +1,10 @@
+dist
+drizzle
+package-lock.json
+worker-sdk/package-lock.json
+
+# Prose, not code — hand-formatted, not Prettier's job. Codemaps are also
+# generated (regenerate with /update-codemaps) so reformatting them here
+# would just be overwritten anyway.
+*.md
+codemaps

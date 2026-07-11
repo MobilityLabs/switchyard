@@ -22,8 +22,18 @@ const PR_FIELDS = "number,headRefName,title,body,url,state,mergeCommit";
  * burn the whole poll tick's API budget on ancient history. */
 export async function listPullRequests(repo: string, limit = 50): Promise<GhPr[]> {
   const out = await run([
-    "pr", "list", "--repo", repo, "--state", "all", "--limit", String(limit),
-    "--search", "sort:updated-desc", "--json", PR_FIELDS,
+    "pr",
+    "list",
+    "--repo",
+    repo,
+    "--state",
+    "all",
+    "--limit",
+    String(limit),
+    "--search",
+    "sort:updated-desc",
+    "--json",
+    PR_FIELDS,
   ]);
   return JSON.parse(out || "[]") as GhPr[];
 }
@@ -31,8 +41,16 @@ export async function listPullRequests(repo: string, limit = 50): Promise<GhPr[]
 /** The latest workflow run for a branch, or null if it has none yet. */
 export async function latestRun(repo: string, branch: string): Promise<GhRun | null> {
   const out = await run([
-    "run", "list", "--repo", repo, "--branch", branch, "--limit", "1",
-    "--json", "headSha,status,conclusion,url",
+    "run",
+    "list",
+    "--repo",
+    repo,
+    "--branch",
+    branch,
+    "--limit",
+    "1",
+    "--json",
+    "headSha,status,conclusion,url",
   ]);
   const runs = JSON.parse(out || "[]") as GhRun[];
   return runs[0] ?? null;

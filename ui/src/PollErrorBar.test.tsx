@@ -10,14 +10,22 @@ import { PollErrorBar } from "./PollErrorBar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-async function render(error: string | null): Promise<{ container: HTMLElement; rerender: (e: string | null) => Promise<void> }> {
+async function render(
+  error: string | null,
+): Promise<{ container: HTMLElement; rerender: (e: string | null) => Promise<void> }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<PollErrorBar error={error} />); });
+  await act(async () => {
+    root.render(<PollErrorBar error={error} />);
+  });
   return {
     container,
-    rerender: async (e) => { await act(async () => { root.render(<PollErrorBar error={e} />); }); },
+    rerender: async (e) => {
+      await act(async () => {
+        root.render(<PollErrorBar error={e} />);
+      });
+    },
   };
 }
 
@@ -38,14 +46,18 @@ describe("PollErrorBar", () => {
   it("hides the bar once the dismiss button is clicked", async () => {
     const { container } = await render("boom");
     const button = container.querySelector("button")!;
-    await act(async () => { button.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
     expect(container.querySelector(".error-bar")).toBeNull();
   });
 
   it("stays dismissed across a re-render with the same error message", async () => {
     const { container, rerender } = await render("boom");
     const button = container.querySelector("button")!;
-    await act(async () => { button.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
     expect(container.querySelector(".error-bar")).toBeNull();
 
     await rerender("boom");
@@ -55,7 +67,9 @@ describe("PollErrorBar", () => {
   it("reappears once dismissed but a new, different error arrives", async () => {
     const { container, rerender } = await render("boom");
     const button = container.querySelector("button")!;
-    await act(async () => { button.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
     expect(container.querySelector(".error-bar")).toBeNull();
 
     await rerender("a different failure");
@@ -67,7 +81,9 @@ describe("PollErrorBar", () => {
   it("resets dismissed state when the poll recovers (error clears to null) and fails again later", async () => {
     const { container, rerender } = await render("boom");
     const button = container.querySelector("button")!;
-    await act(async () => { button.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
 
     await rerender(null);
     expect(container.querySelector(".error-bar")).toBeNull();

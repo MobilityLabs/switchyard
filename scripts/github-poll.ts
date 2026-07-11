@@ -28,7 +28,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import type { WorkerConfig } from "./worker-select.js";
-import { diffRepoState, parsePollStateText, type PollStateFile, type PollEvent } from "./github-poll-lib.js";
+import {
+  diffRepoState,
+  parsePollStateText,
+  type PollStateFile,
+  type PollEvent,
+} from "./github-poll-lib.js";
 import { listPullRequests, latestRun } from "./github-poll-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
@@ -53,7 +58,8 @@ function loadConfig(): WorkerConfig {
   }
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
   const problems = validateWorkerConfig(raw);
-  if (problems.length > 0) throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
+  if (problems.length > 0)
+    throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
   return raw as WorkerConfig;
 }
 
@@ -92,15 +98,19 @@ async function postGithubEvent(url: string, token: string, ev: PollEvent): Promi
 }
 
 async function pollRepo(
-  fullName: string, config: WorkerConfig, token: string, state: PollStateFile, dryRun: boolean
+  fullName: string,
+  config: WorkerConfig,
+  token: string,
+  state: PollStateFile,
+  dryRun: boolean,
 ): Promise<void> {
   const prs = await listPullRequests(fullName);
   const runs = new Map(
     await Promise.all(
       prs
         .filter((pr) => pr.state === "OPEN")
-        .map(async (pr) => [pr.number, await latestRun(fullName, pr.headRefName)] as const)
-    )
+        .map(async (pr) => [pr.number, await latestRun(fullName, pr.headRefName)] as const),
+    ),
   );
   const { events, next } = diffRepoState(prs, runs, state[fullName] ?? {});
   state[fullName] = next;
@@ -155,7 +165,9 @@ async function main(): Promise<void> {
   const pollSeconds = config.githubPoll?.pollSeconds ?? DEFAULT_POLL_SECONDS;
   console.log(`github-poll worker polling every ${pollSeconds}s`);
   const timer = setInterval(() => {
-    tick(config, token, dryRun).catch((err) => console.error(`github-poll tick failed: ${(err as Error).message}`));
+    tick(config, token, dryRun).catch((err) =>
+      console.error(`github-poll tick failed: ${(err as Error).message}`),
+    );
   }, pollSeconds * 1000);
 
   const stop = () => {
