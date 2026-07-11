@@ -50,6 +50,28 @@ function runDreamer(dreamsDir: string, claudeBin: string, extraEnv: Record<strin
   }
 }
 
+// Same as runDreamer but without the default SWITCHYARD_TOKEN, so tests can
+// exercise the SWITCHYARD_TOKEN_FILE fallback (SYD-119) directly.
+function runDreamerNoTokenEnv(dreamsDir: string, claudeBin: string, extraEnv: Record<string, string> = {}) {
+  try {
+    execFileSync("bash", [SCRIPT], {
+      cwd: REPO_DIR,
+      env: {
+        ...process.env,
+        SWITCHYARD_URL: "http://localhost:3300",
+        SWITCHYARD_TOKEN: "",
+        CLAUDE_BIN: claudeBin,
+        DREAMS_DIR: dreamsDir,
+        ...extraEnv,
+      },
+      timeout: 15_000,
+    });
+    return 0;
+  } catch (err) {
+    return (err as { status?: number }).status ?? 1;
+  }
+}
+
 function digestPath(dreamsDir: string, date: string) {
   return path.join(dreamsDir, `switchyard-${date}.md`);
 }
@@ -122,5 +144,84 @@ describe("scripts/dreamer.sh", () => {
     expect(rc).toBe(0);
     expect(existsSync(sentinel)).toBe(false);
     rmSync(dreamsDir, { recursive: true, force: true });
+  });
+});
+
+// SYD-119: the launchd plist no longer embeds SWITCHYARD_TOKEN (installed
+// plists are world-readable at 0644). These tests cover the SWITCHYARD_TOKEN_FILE
+// fallback dreamer.sh reads instead: a 0600 file is trusted, a group/world
+// readable one is refused, and an already-set env var still wins.
+describe("scripts/dreamer.sh SWITCHYARD_TOKEN_FILE fallback", () => {
+  function logPath(dreamsDir: string) {
+    return path.join(dreamsDir, "switchyard-dreamer.log");
+  }
+
+  it("loads the token from a 0600 SWITCHYARD_TOKEN_FILE when SWITCHYARD_TOKEN is unset", () => {
+    const { dir, dreamsDir, binDir } = setup();
+    const date = today();
+    const tokenFile = path.join(dir, "dreamer-token");
+    writeFileSync(tokenFile, "file-token\n");
+    chmodSync(tokenFile, 0o600);
+    const claude = writeStubClaude(
+      binDir,
+      `printf 'token seen: %s\\n' "$SWITCHYARD_TOKEN" > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`
+    );
+
+    const rc = runDreamerNoTokenEnv(dreamsDir, claude, { SWITCHYARD_TOKEN_FILE: tokenFile });
+
+    expect(rc).toBe(0);
+    expect(existsSync(okMarkerPath(dreamsDir, date))).toBe(true);
+    expect(readFileSync(digestPath(dreamsDir, date), "utf8")).toContain("token seen: file-token");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a SWITCHYARD_TOKEN_FILE that is group/world readable and never runs claude", () => {
+    const { dir, dreamsDir, binDir } = setup();
+    const tokenFile = path.join(dir, "dreamer-token");
+    writeFileSync(tokenFile, "file-token\n");
+    chmodSync(tokenFile, 0o644);
+    const sentinel = path.join(dreamsDir, "should-not-exist");
+    const claude = writeStubClaude(binDir, `touch "${sentinel}"\nexit 0`);
+
+    const rc = runDreamerNoTokenEnv(dreamsDir, claude, { SWITCHYARD_TOKEN_FILE: tokenFile });
+
+    expect(rc).toBe(1);
+    expect(existsSync(sentinel)).toBe(false);
+    const log = readFileSync(logPath(dreamsDir), "utf8");
+    expect(log).toContain("FATAL");
+    expect(log).toContain("chmod 600");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("prefers an already-set SWITCHYARD_TOKEN over the file", () => {
+    const { dir, dreamsDir, binDir } = setup();
+    const date = today();
+    const tokenFile = path.join(dir, "dreamer-token");
+    writeFileSync(tokenFile, "file-token\n");
+    chmodSync(tokenFile, 0o600);
+    const claude = writeStubClaude(
+      binDir,
+      `printf 'token seen: %s\\n' "$SWITCHYARD_TOKEN" > "$DREAMS_DIR/switchyard-$DREAMER_DATE.md"\nexit 0`
+    );
+
+    const rc = runDreamer(dreamsDir, claude, { SWITCHYARD_TOKEN_FILE: tokenFile });
+
+    expect(rc).toBe(0);
+    expect(readFileSync(digestPath(dreamsDir, date), "utf8")).toContain("token seen: test-token");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails with the original FATAL when neither SWITCHYARD_TOKEN nor the file is present", () => {
+    const { dir, dreamsDir, binDir } = setup();
+    const claude = writeStubClaude(binDir, `exit 0`);
+
+    const rc = runDreamerNoTokenEnv(dreamsDir, claude, {
+      SWITCHYARD_TOKEN_FILE: path.join(dir, "does-not-exist"),
+    });
+
+    expect(rc).toBe(1);
+    const log = readFileSync(logPath(dreamsDir), "utf8");
+    expect(log).toContain("FATAL: SWITCHYARD_URL and SWITCHYARD_TOKEN must both be set");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
