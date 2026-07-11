@@ -117,6 +117,9 @@ export function endAgentSession(db: Db, actor: Actor, id: number, exitCode: numb
   requireAgent(actor, "report agent sessions");
   const existing = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get();
   if (!existing) throw new SwitchyardError(`Agent session ${id} does not exist.`);
+  if (existing.actorId !== actor.id) {
+    throw new SwitchyardError(`Agent session ${id} belongs to another actor.`);
+  }
   db.update(agentSessions)
     .set({ status: "exited", exitCode, endedAt: sql`(unixepoch())` })
     .where(eq(agentSessions.id, id))
