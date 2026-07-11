@@ -80,7 +80,16 @@ function okMarkerPath(dreamsDir: string, date: string) {
   return path.join(dreamsDir, `.switchyard-${date}.ok`);
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
+// Must be the LOCAL date: dreamer.sh names files by `date +%Y-%m-%d`, so the
+// UTC date (toISOString) diverges from it every evening and 404s every path.
+const today = () => {
+  const d = new Date();
+  return [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, "0"),
+    String(d.getDate()).padStart(2, "0"),
+  ].join("-");
+};
 
 describe("scripts/dreamer.sh", () => {
   it("on success, writes an .ok marker and leaves the digest the session wrote", () => {

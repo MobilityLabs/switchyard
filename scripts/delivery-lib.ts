@@ -573,6 +573,9 @@ export function parseCursorText(text: string): number | null {
 
 /** Last `maxLines` lines of subprocess output, capped at `maxChars`. */
 export function tailOf(text: string, maxLines = 20, maxChars = 2000): string {
-  const tail = text.trimEnd().split("\n").slice(-maxLines).join("\n");
+  // Vitest/tsc emit ANSI color codes even piped; left in, they render as
+  // `[31m` garbage in issue comments (the UI drops the ESC byte).
+  const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+  const tail = plain.trimEnd().split("\n").slice(-maxLines).join("\n");
   return tail.length > maxChars ? tail.slice(-maxChars) : tail;
 }
