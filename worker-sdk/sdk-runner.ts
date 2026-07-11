@@ -23,6 +23,8 @@ export type SdkSessionOpts = {
   switchyardToken: string;
   allowedTools: string[];
   logPath: string;
+  /** Watchdog (SYD-115): abort the query if it runs longer than this. No timeout when omitted. */
+  timeoutMs?: number;
 };
 
 /** Run one issue's session to completion. Resolves to an exit-code-like
@@ -40,6 +42,19 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
     }
   };
   let exit = 1;
+  // Watchdog (SYD-115): an SDK query that never yields a `result` message
+  // (a stuck tool call, a wedged CLI subprocess under the hood) would
+  // otherwise hold its concurrency slot forever. abortController is the
+  // SDK's own cancellation mechanism — aborting stops the query and cleans
+  // up its resources so the `finally` below always runs.
+  const abortController = new AbortController();
+  const watchdog =
+    o.timeoutMs !== undefined
+      ? setTimeout(() => {
+          log(`[sdk] session exceeded ${o.timeoutMs! / 1000}s watchdog timeout — aborting`);
+          abortController.abort();
+        }, o.timeoutMs)
+      : null;
   try {
     const stream = query({
       prompt: o.prompt,
@@ -47,6 +62,7 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
         cwd: o.cwd,
         permissionMode: "acceptEdits",
         allowedTools: o.allowedTools,
+        abortController,
         mcpServers: {
           switchyard: {
             type: "http",
@@ -66,6 +82,8 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
   } catch (err) {
     log(`[sdk] session error: ${(err as Error).message}`);
     exit = 1;
+  } finally {
+    if (watchdog) clearTimeout(watchdog);
   }
   return exit;
 }

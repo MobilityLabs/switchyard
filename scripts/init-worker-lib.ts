@@ -114,6 +114,12 @@ export function validateWorkerConfig(raw: unknown): string[] {
       }
     }
   }
+  if (
+    c.sessionTimeoutSeconds !== undefined &&
+    (typeof c.sessionTimeoutSeconds !== "number" || !(c.sessionTimeoutSeconds > 0))
+  ) {
+    problems.push("`sessionTimeoutSeconds` must be a positive number");
+  }
   if (c.githubPoll !== undefined) {
     if (typeof c.githubPoll !== "object" || c.githubPoll === null || Array.isArray(c.githubPoll)) {
       problems.push("`githubPoll` must be an object");

@@ -23,6 +23,8 @@ findResumeRefs,
   workerPidFileName,
   checkRoleLockConflict,
   DEFAULT_MAX_ANSWER_CONCURRENT,
+  DEFAULT_SESSION_TIMEOUT_SECONDS,
+  sessionTimeoutMs,
   HttpStatusError,
   RETRY_BACKOFFS_MS,
   isRetryableError,
@@ -331,6 +333,16 @@ describe("selectAnswerable", () => {
   it("respects a configured maxAnswerConcurrent", () => {
     const tight = { ...config, maxAnswerConcurrent: 1 };
     expect(selectAnswerable(["SYD-1"], tight, [answerKey("SYD-9")], new Map())).toEqual([]);
+  });
+});
+
+describe("sessionTimeoutMs (SYD-115)", () => {
+  it("defaults to DEFAULT_SESSION_TIMEOUT_SECONDS when unconfigured", () => {
+    expect(sessionTimeoutMs(config)).toBe(DEFAULT_SESSION_TIMEOUT_SECONDS * 1000);
+  });
+
+  it("respects a configured sessionTimeoutSeconds", () => {
+    expect(sessionTimeoutMs({ ...config, sessionTimeoutSeconds: 60 })).toBe(60_000);
   });
 });
 

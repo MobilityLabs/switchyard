@@ -41,9 +41,15 @@ describe("buildPrompt", () => {
 });
 
 /** Minimal stand-in for a Node ChildProcess: an EventEmitter with a `pid`, which
- * is exactly what dispatchAnswer's CLI branch touches. */
+ * is exactly what dispatchAnswer's CLI branch touches. `kill` just records
+ * calls — exitCode/signalCode stay whatever the test sets, so a test can
+ * simulate either an unresponsive process (killSession's grace-period check,
+ * SYD-115, should then escalate to SIGKILL) or one that dies on SIGTERM. */
 class FakeChildProcess extends EventEmitter {
   pid: number | undefined;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  kill = vi.fn((_signal?: NodeJS.Signals) => true);
 }
 
 describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
@@ -97,6 +103,150 @@ describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("failed to spawn answer session"));
 
     logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+});
+
+describe("session watchdog (SYD-115)", () => {
+  const ref = "SYD-115";
+  const issue = { ref, title: "Bundle", labels: ["auto"], assigneeId: null, needsInput: false, updatedAt: 0 };
+  const config: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 2,
+    projects: { SYD: { repo: "/repo/syd" } },
+    sessionTimeoutSeconds: 30,
+  };
+
+  beforeEach(() => {
+    active.clear();
+    answerState.clear();
+    spawnMock.mockReset();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("SIGTERMs a bare-host work session once it exceeds sessionTimeoutSeconds", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    dispatch(issue, config, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("exceeded 30s watchdog timeout"));
+    // No docker kill for a bare-host (non-containerized) dispatch.
+    expect(spawnMock).not.toHaveBeenCalledWith("docker", expect.anything(), expect.anything());
+
+    errorSpy.mockRestore();
+  });
+
+  it("escalates to SIGKILL after the grace period if the process is still alive", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    dispatch(issue, config, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+
+    vi.advanceTimersByTime(30_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    // Process ignores SIGTERM — exitCode/signalCode stay null.
+    vi.advanceTimersByTime(10_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+
+    errorSpy.mockRestore();
+  });
+
+  it("does not escalate to SIGKILL once the process has already exited", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    dispatch(issue, config, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+
+    vi.advanceTimersByTime(30_000);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    child.exitCode = 143; // process actually exited in response to SIGTERM
+    child.emit("exit", 143);
+
+    vi.advanceTimersByTime(10_000);
+    expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+
+    errorSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("also docker-kills the named container for a containerized dispatch", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const containerizedConfig: WorkerConfig = {
+      ...config,
+      containerized: true,
+      projects: { SYD: { repo: "/repo/syd" } },
+    };
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+
+    dispatch(issue, containerizedConfig, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(spawnMock).toHaveBeenCalledWith("docker", ["kill", `syd-${ref}`], expect.anything());
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+    errorSpy.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  it("clears the watchdog on a normal exit so a slow-but-finished session is never killed", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}), text: async () => "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    dispatch(issue, config, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+    child.emit("exit", 0);
+
+    vi.advanceTimersByTime(60_000);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("also watchdogs an answer session", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    dispatchAnswer(ref, config, "tok", { dryRun: false });
+    child.pid = 111;
+    child.emit("spawn");
+
+    vi.advanceTimersByTime(30_000);
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`answer session for ${ref} exceeded 30s watchdog timeout`)
+    );
+
     errorSpy.mockRestore();
   });
 });
