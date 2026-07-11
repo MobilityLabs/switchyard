@@ -552,6 +552,73 @@ export function conflictResolutionFailedComment(
   );
 }
 
+// Queue mode (SYD-164): rebase agent/<ref> onto current main and verify the
+// REBASED tree before ever attempting the merge, instead of merging first and
+// only rebasing as a post-failure fallback (the legacy flow above). A rebase
+// conflict or a failing post-rebase verify bounces the ref — comment +
+// delivery_failed, main untouched — rather than landing and being caught by
+// the post-merge verify gate after the fact. No conflict-resolution session
+// is dispatched here: a real conflict always bounces for re-dispatch.
+
+/** Whether `config.delivery.mode` selects the queue flow. Defaults to the
+ * legacy (merge-first) flow when unset. */
+export function isQueueMode(config: WorkerConfig): boolean {
+  return config.delivery?.mode === "queue";
+}
+
+/** Bounded retries for the rare race where origin/main moves again between a
+ * queue-mode rebase's force-push and the merge attempt that follows it (e.g.
+ * a human merges something else by hand in that window) — each retry redoes
+ * the full rebase→verify→force-push cycle against the newer main rather than
+ * retrying the merge against a tree that was only verified against the old
+ * one. Bounded so a persistently contested ref bounces instead of looping
+ * forever. */
+export const MAX_QUEUE_MERGE_ATTEMPTS = 3;
+
+/** Pure stop condition for the queue-mode rebase/merge retry loop — mirrors
+ * shouldRetryMergePoll's shape so it's testable without shelling out. */
+export function shouldRetryQueueRebase(attempt: number, maxAttempts: number = MAX_QUEUE_MERGE_ATTEMPTS): boolean {
+  return attempt < maxAttempts;
+}
+
+/** Queue-mode rebase hit real conflict hunks — bounced rather than merged, and
+ * never handed to a conflict-resolution session (unlike the legacy flow's
+ * autoRebaseConflictComment/SYD-100 path). */
+export function queueRebaseConflictComment(ref: string, conflictFiles: string[]): string {
+  const fileList = conflictFiles.length > 0 ? conflictFiles.map((f) => `- ${f}`).join("\n") : "(no conflicted files reported)";
+  return (
+    `Delivery FAILED for ${ref}: rebasing ${agentBranch(ref)} onto ${MAIN_BRANCH} (queue mode) hit real conflicts in:\n` +
+    `${fileList}\n` +
+    `Queue mode bounces on conflict rather than repairing in place — ${MAIN_BRANCH} was never touched. Resolve the ` +
+    `conflicts on ${agentBranch(ref)}, push, and click Retry delivery on the attention banner (or re-dispatch the ` +
+    `issue against fresh ${MAIN_BRANCH}).`
+  );
+}
+
+/** Queue-mode rebase applied with no conflicts, but typecheck/tests failed on
+ * the REBASED tree — a semantic conflict with other work already on main,
+ * caught before the merge instead of after it (contrast
+ * verificationFailureComment, which fires post-merge). */
+export function queueVerifyFailedComment(ref: string, tail: string): string {
+  return (
+    `Delivery FAILED for ${ref}: rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} (queue mode) with no conflicts, but ` +
+    `the post-rebase verify gate (typecheck + tests) failed on the rebased tree — a semantic conflict with other ` +
+    `work already on ${MAIN_BRANCH}. NOT merged; ${MAIN_BRANCH} stays green.\n` +
+    `Output tail:\n\`\`\`\n${tail}\n\`\`\`\n` +
+    `Fix the failure on ${agentBranch(ref)}, push, and click Retry delivery on the attention banner.`
+  );
+}
+
+/** Prepended to deliveryComment's output for a queue-mode delivery, so it
+ * reads distinctly from a legacy merge-first "Delivered" (contrast
+ * autoRebasedNote/conflictResolvedNote, which mark a legacy-flow fallback). */
+export function queueDeliveredNote(ref: string): string {
+  return (
+    `Queue mode: rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} and verified the rebased tree (typecheck + tests) ` +
+    `before merging — a pre-merge gate, not a post-merge check.`
+  );
+}
+
 /** Prepended to deliveryComment's output when the merge only succeeded after
  * a dispatched conflict-resolution session (SYD-100) — distinct from
  * autoRebasedNote, which covers a clean (no-conflict) auto-rebase, so a

@@ -43,6 +43,12 @@ import {
   parsePrNumberFromUrl,
   parseCursorText,
   tailOf,
+  isQueueMode,
+  shouldRetryQueueRebase,
+  MAX_QUEUE_MERGE_ATTEMPTS,
+  queueRebaseConflictComment,
+  queueVerifyFailedComment,
+  queueDeliveredNote,
   type DeliveryFeedEvent,
 } from "../../scripts/delivery-lib.js";
 import type { WorkerConfig, WorkerProject } from "../../scripts/worker-select.js";
@@ -570,6 +576,89 @@ describe("parseCursorText", () => {
     expect(parseCursorText("abc")).toBeNull();
     expect(parseCursorText("-3")).toBeNull();
     expect(parseCursorText("1.5")).toBeNull();
+  });
+});
+
+describe("queue mode (SYD-164)", () => {
+  const baseConfig: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 1,
+    projects: { SYD: { repo: "/repo/syd" } },
+  };
+
+  describe("isQueueMode", () => {
+    it("defaults to false (legacy flow) when delivery.mode is unset", () => {
+      expect(isQueueMode(baseConfig)).toBe(false);
+      expect(isQueueMode({ ...baseConfig, delivery: {} })).toBe(false);
+    });
+
+    it("is false under explicit legacy mode", () => {
+      expect(isQueueMode({ ...baseConfig, delivery: { mode: "legacy" } })).toBe(false);
+    });
+
+    it("is true under queue mode", () => {
+      expect(isQueueMode({ ...baseConfig, delivery: { mode: "queue" } })).toBe(true);
+    });
+  });
+
+  describe("shouldRetryQueueRebase", () => {
+    it("retries while under the max attempts", () => {
+      expect(shouldRetryQueueRebase(1, 3)).toBe(true);
+      expect(shouldRetryQueueRebase(2, 3)).toBe(true);
+    });
+
+    it("stops once the max attempts is reached", () => {
+      expect(shouldRetryQueueRebase(3, 3)).toBe(false);
+      expect(shouldRetryQueueRebase(4, 3)).toBe(false);
+    });
+
+    it("defaults the max to MAX_QUEUE_MERGE_ATTEMPTS", () => {
+      expect(shouldRetryQueueRebase(MAX_QUEUE_MERGE_ATTEMPTS - 1)).toBe(true);
+      expect(shouldRetryQueueRebase(MAX_QUEUE_MERGE_ATTEMPTS)).toBe(false);
+    });
+  });
+
+  describe("queueRebaseConflictComment", () => {
+    it("names the ref, branch, conflicted files, and says main was never touched", () => {
+      const body = queueRebaseConflictComment("SYD-9", ["src/a.ts", "src/b.ts"]);
+      expect(body).toContain("SYD-9");
+      expect(body).toContain("agent/SYD-9");
+      expect(body).toContain("- src/a.ts");
+      expect(body).toContain("- src/b.ts");
+      expect(body).toContain("never touched");
+      expect(body).toContain("Retry delivery");
+    });
+
+    it("never mentions dispatching a conflict-resolution session", () => {
+      const body = queueRebaseConflictComment("SYD-9", ["src/a.ts"]);
+      expect(body).not.toContain("conflict-resolution worker session");
+    });
+
+    it("handles an empty file list", () => {
+      expect(queueRebaseConflictComment("SYD-9", [])).toContain("no conflicted files reported");
+    });
+  });
+
+  describe("queueVerifyFailedComment", () => {
+    it("includes the output tail and says NOT merged / main stays green", () => {
+      const body = queueVerifyFailedComment("SYD-9", "TypeError: boom");
+      expect(body).toContain("SYD-9");
+      expect(body).toContain("agent/SYD-9");
+      expect(body).toContain("TypeError: boom");
+      expect(body).toContain("NOT merged");
+      expect(body).toContain("stays green");
+    });
+  });
+
+  describe("queueDeliveredNote", () => {
+    it("names the branch and main, and says verification happened before merging", () => {
+      const note = queueDeliveredNote("SYD-9");
+      expect(note).toContain("agent/SYD-9");
+      expect(note).toContain("main");
+      expect(note).toContain("before merging");
+    });
   });
 });
 
