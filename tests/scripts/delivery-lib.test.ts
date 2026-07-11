@@ -45,6 +45,11 @@ import {
   tailOf,
   decideQueueAction,
   QUEUE_MAX_REBASE_ATTEMPTS,
+  queueBounceComment,
+  queueBounceEventMessage,
+  queueDeliveredNote,
+  buildFetchMainArgs,
+  buildOriginMainShaArgs,
   type DeliveryFeedEvent,
   type QueueDecision,
 } from "../../scripts/delivery-lib.js";
@@ -589,6 +594,49 @@ describe("tailOf", () => {
   it("strips ANSI escape sequences so issue comments stay readable", () => {
     const colored = "\x1b[31mFAIL\x1b[39m \x1b[2mtests/foo.test.ts\x1b[22m > \x1b[1mbar\x1b[0m\n\x1b[32m- Expected\x1b[39m false";
     expect(tailOf(colored)).toBe("FAIL tests/foo.test.ts > bar\n- Expected false");
+  });
+});
+
+describe("queue-mode comments and argv builders (SYD-164)", () => {
+  it("buildFetchMainArgs / buildOriginMainShaArgs", () => {
+    expect(buildFetchMainArgs()).toEqual(["fetch", "origin", "main"]);
+    expect(buildOriginMainShaArgs()).toEqual(["rev-parse", "origin/main"]);
+  });
+
+  it("conflict bounce names the files and prescribes regeneration, not repair", () => {
+    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "conflict", files: ["src/a.ts", "ui/b.tsx"] });
+    expect(body).toContain("agent/SYD-9");
+    expect(body).toContain("src/a.ts");
+    expect(body).toContain("ui/b.tsx");
+    expect(body.toLowerCase()).toContain("re-dispatch");
+    expect(body).not.toContain("undefined");
+  });
+
+  it("verify-failed bounce carries the tail and says main was not touched", () => {
+    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "verify-failed", tail: "FAIL src/x.test.ts" });
+    expect(body).toContain("FAIL src/x.test.ts");
+    expect(body.toLowerCase()).toContain("main was not");
+  });
+
+  it("main-hot bounce reports the attempt count", () => {
+    const body = queueBounceComment("SYD-9", { kind: "bounce", reason: "main-hot", attempts: 3 });
+    expect(body).toContain("3");
+  });
+
+  it("no-branch bounce mentions the missing branch", () => {
+    expect(queueBounceComment("SYD-9", { kind: "bounce", reason: "no-branch" })).toContain("agent/SYD-9");
+  });
+
+  it("event messages are one-line and reason-tagged", () => {
+    expect(queueBounceEventMessage({ kind: "bounce", reason: "conflict", files: ["a"] })).toContain("conflict");
+    expect(queueBounceEventMessage({ kind: "bounce", reason: "verify-failed", tail: "t" })).toContain("verify");
+    expect(queueBounceEventMessage({ kind: "bounce", reason: "main-hot", attempts: 3 })).toContain("main");
+    expect(queueBounceEventMessage({ kind: "bounce", reason: "no-branch" })).toContain("branch");
+  });
+
+  it("queueDeliveredNote reads naturally for 1 and N attempts", () => {
+    expect(queueDeliveredNote("SYD-9", 1)).toContain("rebased onto main and verified");
+    expect(queueDeliveredNote("SYD-9", 3)).toContain("3");
   });
 });
 

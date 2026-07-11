@@ -612,3 +612,66 @@ export function tailOf(text: string, maxLines = 20, maxChars = 2000): string {
   const tail = plain.trimEnd().split("\n").slice(-maxLines).join("\n");
   return tail.length > maxChars ? tail.slice(-maxChars) : tail;
 }
+
+export function buildFetchMainArgs(): string[] {
+  return ["fetch", "origin", MAIN_BRANCH];
+}
+
+export function buildOriginMainShaArgs(): string[] {
+  return ["rev-parse", `origin/${MAIN_BRANCH}`];
+}
+
+/** Queue mode (SYD-164): the human-facing bounce comment. One formatter per
+ * reason keeps the copy testable; the shared framing states what the queue
+ * did, that main was never touched, and what to do next. */
+export function queueBounceComment(ref: string, d: Extract<QueueDecision, { kind: "bounce" }>): string {
+  const branch = agentBranch(ref);
+  const header = `⛔ Delivery bounced — main was not touched.`;
+  const retry = `To retry: fix ${branch} (or re-dispatch this issue so a fresh session regenerates the change against current ${MAIN_BRANCH}), then stamp done again or hit Retry delivery.`;
+  switch (d.reason) {
+    case "conflict":
+      return [
+        header,
+        `Rebasing ${branch} onto ${MAIN_BRANCH} hit real conflicts in:`,
+        ...d.files.map((f) => `- \`${f}\``),
+        `Queue mode does not auto-resolve conflicts — re-dispatch beats repairing a stale branch (see docs/2026-07-10-merge-queue-research.md).`,
+        retry,
+      ].join("\n");
+    case "verify-failed":
+      return [
+        header,
+        `${branch} rebased onto ${MAIN_BRANCH} cleanly, but typecheck/tests FAILED on the combined result — this change conflicts semantically with something that landed after its branch was cut.`,
+        "```",
+        tailOf(d.tail),
+        "```",
+        retry,
+      ].join("\n");
+    case "main-hot":
+      return [
+        header,
+        `${MAIN_BRANCH} moved during ${d.attempts} consecutive rebase→verify cycles, so the verified result kept going stale before it could merge. Retry when the branch settles.`,
+      ].join("\n");
+    case "no-branch":
+      return `${header}\nNo ${branch} branch exists on the remote — nothing to deliver.`;
+  }
+}
+
+/** One-line machine-facing message for the delivery_failed event strip. */
+export function queueBounceEventMessage(d: Extract<QueueDecision, { kind: "bounce" }>): string {
+  switch (d.reason) {
+    case "conflict":
+      return `queue bounce: rebase conflicts in ${d.files.join(", ") || "(unknown files)"}`;
+    case "verify-failed":
+      return "queue bounce: verify failed on the rebased result (semantic conflict)";
+    case "main-hot":
+      return `queue bounce: main moved during ${d.attempts} rebase attempts`;
+    case "no-branch":
+      return "queue bounce: agent branch missing on remote";
+  }
+}
+
+/** Prefix for the delivery comment when queue mode landed the PR. */
+export function queueDeliveredNote(ref: string, attempts: number): string {
+  const cycles = attempts > 1 ? ` (took ${attempts} rebase cycles — ${MAIN_BRANCH} was moving)` : "";
+  return `🔁 ${agentBranch(ref)} was rebased onto main and verified pre-merge by queue mode${cycles}.`;
+}
