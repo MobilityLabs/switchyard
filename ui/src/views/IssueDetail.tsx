@@ -11,6 +11,7 @@ import { useActorNames } from "../useActorNames";
 import { formatElapsed } from "./Agents";
 import { projectKeyFromRef } from "../refs";
 import { Composer } from "../Composer";
+import { safeHref } from "../safeHref";
 
 const SUMMARY_FALLBACK_LENGTH = 200;
 
@@ -213,7 +214,7 @@ function DeliveryStrip({ status }: { status: DeliveryStatus }) {
       {status.prNumber !== null && (
         <span className="delivery-pr">
           {status.url
-            ? <a href={status.url} target="_blank" rel="noreferrer">PR #{status.prNumber}</a>
+            ? <a href={safeHref(status.url)} target="_blank" rel="noreferrer">PR #{status.prNumber}</a>
             : `PR #${status.prNumber}`}
           {" "}
           <span className={`badge delivery-state delivery-${status.state}`}>{status.state}</span>
@@ -330,7 +331,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
       {data.sourceType && (
         <div className="provenance panel">
           Filed from: {data.sourceType} · {data.sourceDetail ?? ""}
-          {data.sourceUrl && <> · <a href={data.sourceUrl} target="_blank" rel="noreferrer">link</a></>}
+          {data.sourceUrl && <> · <a href={safeHref(data.sourceUrl)} target="_blank" rel="noreferrer">link</a></>}
         </div>
       )}
       {data.needsInput && (
@@ -524,7 +525,7 @@ export function Event({
     return (
       <p className="event">
         <strong>{ev.actorName}</strong> opened{" "}
-        {url ? <a href={url} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
+        {url ? <a href={safeHref(url)} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
         {" "}<time>{when}</time>
       </p>
     );
@@ -553,7 +554,7 @@ export function Event({
     return (
       <p className="event">
         GitHub: {verb}{" "}
-        {url ? <a href={url} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
+        {url ? <a href={safeHref(url)} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
         {ev.type === "gh_pr_merged" && ev.payload.mergeSha ? <> at <code>{String(ev.payload.mergeSha).slice(0, 7)}</code></> : null}
         {" "}<time>{when}</time>
       </p>
@@ -573,7 +574,7 @@ export function Event({
     const label = `${count} commit${count === 1 ? "" : "s"}`;
     return (
       <p className="event">
-        GitHub: pushed {url ? <a href={url} target="_blank" rel="noreferrer">{label}</a> : label}
+        GitHub: pushed {url ? <a href={safeHref(url)} target="_blank" rel="noreferrer">{label}</a> : label}
         {sha && <> (<code>{sha.slice(0, 7)}</code>)</>}
         {" "}<time>{when}</time>
       </p>

@@ -11,6 +11,7 @@ import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { ActivityFeed, DescriptionSection, summaryText } from "./IssueDetail";
 import { projectKeyFromRef } from "../refs";
+import { safeHref } from "../safeHref";
 
 // Issues routinely leave triage with priority "none" (SYD-65) — default
 // accept-to-todo to "medium" unless a human already set something more
@@ -168,7 +169,7 @@ export function TriageRow({
       <div className="provenance">
         filed by {creatorName ?? "?"} · {age(issue.createdAt)}
         {issue.sourceType && <> · {issue.sourceType} · {issue.sourceDetail ?? ""}</>}
-        {issue.sourceUrl && <> · <a href={issue.sourceUrl} target="_blank" rel="noreferrer">link</a></>}
+        {issue.sourceUrl && <> · <a href={safeHref(issue.sourceUrl)} target="_blank" rel="noreferrer">link</a></>}
       </div>
 
       {expanded && (
