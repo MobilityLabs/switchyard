@@ -30,7 +30,9 @@ for (const c of checks) {
 if (failures.length > 0) {
   console.error("FATAL: this session's stack is missing required tools:");
   for (const f of failures) {
-    console.error(`  - ${f.name}: \`${f.check}\` failed${f.install ? ` (repair: ${f.install})` : ""}`);
+    console.error(
+      `  - ${f.name}: \`${f.check}\` failed${f.install ? ` (repair: ${f.install})` : ""}`,
+    );
   }
   process.exit(1);
 }

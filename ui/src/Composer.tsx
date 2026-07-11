@@ -6,7 +6,11 @@ import type { usePasteUpload } from "./usePasteUpload";
  * after the textarea for view-specific submit button(s) — Review renders none
  * here since its Approve/Send back/Comment buttons live in a separate row. */
 export function Composer({
-  value, onChange, placeholder, paste, children,
+  value,
+  onChange,
+  placeholder,
+  paste,
+  children,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -18,7 +22,9 @@ export function Composer({
   return (
     <>
       {uploadError && (
-        <p className="error-bar">{uploadError} <button onClick={() => setUploadError(null)}>×</button></p>
+        <p className="error-bar">
+          {uploadError} <button onClick={() => setUploadError(null)}>×</button>
+        </p>
       )}
       <div className="composer">
         <textarea

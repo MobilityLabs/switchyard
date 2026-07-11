@@ -37,7 +37,10 @@ beforeAll(async () => {
   });
 });
 
-afterAll(() => { server.close(); receiver.close(); });
+afterAll(() => {
+  server.close();
+  receiver.close();
+});
 
 describe("plan 2 loop", () => {
   it("login link -> cookie -> full REST loop with triage gate and webhooks", async () => {
@@ -50,23 +53,32 @@ describe("plan 2 loop", () => {
     const agentH = { authorization: `Bearer ${agentToken}`, "content-type": "application/json" };
     const humanH = { cookie, "content-type": "application/json" };
 
-    const filed = await (await fetch(`${base}/api/issues`, {
-      method: "POST", headers: agentH,
-      body: JSON.stringify({
-        projectKey: "SYD", title: "Found a bug",
-        description: "Encountered while exercising the REST loop; the response shape didn't match the documented schema. Suggest verifying the serializer.",
-        provenance: { sourceType: "session", detail: "rest-loop test" },
-      }),
-    })).json() as { ref: string; status: string };
+    const filed = (await (
+      await fetch(`${base}/api/issues`, {
+        method: "POST",
+        headers: agentH,
+        body: JSON.stringify({
+          projectKey: "SYD",
+          title: "Found a bug",
+          description:
+            "Encountered while exercising the REST loop; the response shape didn't match the documented schema. Suggest verifying the serializer.",
+          provenance: { sourceType: "session", detail: "rest-loop test" },
+        }),
+      })
+    ).json()) as { ref: string; status: string };
     expect(filed.status).toBe("triage");
 
     const denied = await fetch(`${base}/api/issues/${filed.ref}`, {
-      method: "PATCH", headers: agentH, body: JSON.stringify({ status: "todo" }),
+      method: "PATCH",
+      headers: agentH,
+      body: JSON.stringify({ status: "todo" }),
     });
     expect(denied.status).toBe(400);
 
     const ok = await fetch(`${base}/api/issues/${filed.ref}`, {
-      method: "PATCH", headers: humanH, body: JSON.stringify({ status: "todo" }),
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "todo" }),
     });
     expect(ok.status).toBe(200);
 

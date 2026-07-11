@@ -19,7 +19,11 @@ function run(workspace: string): string {
   return execFileSync("node", [SCRIPT, workspace], { encoding: "utf8", stdio: "pipe" }).toString();
 }
 
-function runCapturingStderr(workspace: string): { stdout: string; stderr: string; status: number | null } {
+function runCapturingStderr(workspace: string): {
+  stdout: string;
+  stderr: string;
+  status: number | null;
+} {
   const result = spawnSync("node", [SCRIPT, workspace], { encoding: "utf8" });
   return { stdout: result.stdout, stderr: result.stderr, status: result.status };
 }
@@ -31,7 +35,10 @@ function tmpWorkspace(): string {
 describe("npm-ci-guard.mjs", () => {
   it("skips npm ci and warns when no lockfile is present", () => {
     const workspace = tmpWorkspace();
-    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-x", version: "1.0.0" }));
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
+    );
 
     const { stderr } = runCapturingStderr(workspace);
 
@@ -41,14 +48,20 @@ describe("npm-ci-guard.mjs", () => {
 
   it("exits 0 even when the lockfile is missing (non-fatal, matches prior behavior)", () => {
     const workspace = tmpWorkspace();
-    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-x", version: "1.0.0" }));
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
+    );
 
     expect(() => run(workspace)).not.toThrow();
   });
 
   it("runs npm ci successfully when package.json and package-lock.json are in sync", () => {
     const workspace = tmpWorkspace();
-    writeFileSync(path.join(workspace, "package.json"), JSON.stringify({ name: "tmp-x", version: "1.0.0" }));
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
+    );
     writeFileSync(
       path.join(workspace, "package-lock.json"),
       JSON.stringify({
@@ -57,7 +70,7 @@ describe("npm-ci-guard.mjs", () => {
         lockfileVersion: 3,
         requires: true,
         packages: { "": { name: "tmp-x", version: "1.0.0" } },
-      })
+      }),
     );
 
     const { stderr } = runCapturingStderr(workspace);
@@ -71,7 +84,7 @@ describe("npm-ci-guard.mjs", () => {
     // "in sync" EUSAGE case, resolved entirely offline (no registry hit).
     writeFileSync(
       path.join(workspace, "package.json"),
-      JSON.stringify({ name: "tmp-x", version: "1.0.0", dependencies: { "left-pad": "^1.0.0" } })
+      JSON.stringify({ name: "tmp-x", version: "1.0.0", dependencies: { "left-pad": "^1.0.0" } }),
     );
     writeFileSync(
       path.join(workspace, "package-lock.json"),
@@ -81,7 +94,7 @@ describe("npm-ci-guard.mjs", () => {
         lockfileVersion: 3,
         requires: true,
         packages: { "": { name: "tmp-x", version: "1.0.0" } },
-      })
+      }),
     );
 
     const { stderr } = runCapturingStderr(workspace);

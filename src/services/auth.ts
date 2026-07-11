@@ -14,7 +14,7 @@ export function createLoginLink(db: Db, actorName: string): { token: string; pat
   if (!actor) throw new SwitchyardError(`There is no actor named "${actorName}".`);
   if (actor.type !== "human") {
     throw new SwitchyardError(
-      `"${actorName}" is an agent — agents authenticate with their bearer token, not login links.`
+      `"${actorName}" is an agent — agents authenticate with their bearer token, not login links.`,
     );
   }
   const token = mintToken("syl");
@@ -26,16 +26,24 @@ export function createLoginLink(db: Db, actorName: string): { token: string; pat
 }
 
 export function redeemLoginLink(db: Db, token: string): { sessionToken: string; actor: Actor } {
-  const row = db.select().from(loginLinks).where(eq(loginLinks.tokenHash, hashToken(token))).get();
+  const row = db
+    .select()
+    .from(loginLinks)
+    .where(eq(loginLinks.tokenHash, hashToken(token)))
+    .get();
   if (!row || row.usedAt !== null || row.expiresAt < nowSec()) {
     throw new SwitchyardError(
-      "This login link is invalid, expired, or already used — mint a new one with the switchyard CLI."
+      "This login link is invalid, expired, or already used — mint a new one with the switchyard CLI.",
     );
   }
   db.update(loginLinks).set({ usedAt: nowSec() }).where(eq(loginLinks.id, row.id)).run();
   const sessionToken = mintToken("sys", 32);
   db.insert(sessions)
-    .values({ tokenHash: hashToken(sessionToken), actorId: row.actorId, expiresAt: nowSec() + SESSION_TTL })
+    .values({
+      tokenHash: hashToken(sessionToken),
+      actorId: row.actorId,
+      expiresAt: nowSec() + SESSION_TTL,
+    })
     .run();
   const a = db.select().from(actors).where(eq(actors.id, row.actorId)).get();
   if (!a) {
@@ -56,5 +64,7 @@ export function getSessionActor(db: Db, sessionToken: string): Actor | null {
 }
 
 export function deleteSession(db: Db, sessionToken: string): void {
-  db.delete(sessions).where(eq(sessions.tokenHash, hashToken(sessionToken))).run();
+  db.delete(sessions)
+    .where(eq(sessions.tokenHash, hashToken(sessionToken)))
+    .run();
 }

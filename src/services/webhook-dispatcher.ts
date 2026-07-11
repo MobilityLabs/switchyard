@@ -56,7 +56,12 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
           "sha256=" + createHmac("sha256", h.secret).update(body).digest("hex");
       }
       try {
-        const res = await fetchFn(h.url, { method: "POST", headers, body, signal: AbortSignal.timeout(5000) });
+        const res = await fetchFn(h.url, {
+          method: "POST",
+          headers,
+          body,
+          signal: AbortSignal.timeout(5000),
+        });
         if (res.ok) {
           delivered++;
         } else {

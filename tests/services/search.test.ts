@@ -38,16 +38,31 @@ describe("searchIssues", () => {
   it("orders the triage status filter oldest first (SYD-159)", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     const provenance = { sourceType: "session" as const, detail: "test" };
-    createIssue(db, agent, { projectKey: "AIPI", title: "Filed first", description: "d", provenance });
-    createIssue(db, agent, { projectKey: "AIPI", title: "Filed second", description: "d", provenance });
+    createIssue(db, agent, {
+      projectKey: "AIPI",
+      title: "Filed first",
+      description: "d",
+      provenance,
+    });
+    createIssue(db, agent, {
+      projectKey: "AIPI",
+      title: "Filed second",
+      description: "d",
+      provenance,
+    });
     const triaged = searchIssues(db, { status: "triage" }).map((i) => i.ref);
     expect(triaged).toEqual(["AIPI-3", "AIPI-4"]);
   });
 
   it("attention filter (SYD-94) restricts to issues with an unresolved delivery_failed", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
-    expect(searchIssues(db, { attention: "delivery_failed" }).map((i) => i.ref)).toEqual(["AIPI-2"]);
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    expect(searchIssues(db, { attention: "delivery_failed" }).map((i) => i.ref)).toEqual([
+      "AIPI-2",
+    ]);
   });
 
   it("attention filter returns nothing when no issue is flagged", () => {
@@ -56,16 +71,29 @@ describe("searchIssues", () => {
 
   it("attention filter clears once a later delivered event fires", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivered", prNumber: 7, mergeSha: "abc123", deploy: { ran: false } });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "delivered",
+      prNumber: 7,
+      mergeSha: "abc123",
+      deploy: { ran: false },
+    });
     expect(searchIssues(db, { attention: "delivery_failed" })).toEqual([]);
   });
 
   it("attention filter combines (ANDed) with other filters", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivery_failed", message: "merge conflict" });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
     expect(searchIssues(db, { attention: "delivery_failed", projectKey: "HAND" })).toEqual([]);
-    expect(searchIssues(db, { attention: "delivery_failed", projectKey: "AIPI" }).map((i) => i.ref)).toEqual(["AIPI-2"]);
+    expect(
+      searchIssues(db, { attention: "delivery_failed", projectKey: "AIPI" }).map((i) => i.ref),
+    ).toEqual(["AIPI-2"]);
   });
 
   it("issues a single query regardless of result-set size (SYD-143 — no per-row project SELECT)", () => {
@@ -90,9 +118,17 @@ describe("searchIssues", () => {
 
   it("openPr filter (SYD-171) restricts to issues with a still-open agent PR", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+    });
     expect(searchIssues(db, { openPr: true }).map((i) => i.ref)).toEqual(["AIPI-2"]);
-    expect(searchIssues(db, { openPr: false }).map((i) => i.ref).sort()).toEqual(["AIPI-1", "HAND-1"]);
+    expect(
+      searchIssues(db, { openPr: false })
+        .map((i) => i.ref)
+        .sort(),
+    ).toEqual(["AIPI-1", "HAND-1"]);
   });
 
   it("openPr filter returns nothing when no issue has an open PR", () => {
@@ -101,17 +137,32 @@ describe("searchIssues", () => {
 
   it("openPr filter clears once the PR is delivered", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "delivered", prNumber: 41, mergeSha: "abc123", deploy: { ran: false } });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+    });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "delivered",
+      prNumber: 41,
+      mergeSha: "abc123",
+      deploy: { ran: false },
+    });
     expect(searchIssues(db, { openPr: true })).toEqual([]);
   });
 
   it("openPr filter combines (ANDed) with status, e.g. done-but-not-yet-merged", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     updateIssue(db, human, "AIPI-2", { status: "todo" });
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+    });
     updateIssue(db, human, "AIPI-2", { status: "done" });
-    expect(searchIssues(db, { status: "done", openPr: true }).map((i) => i.ref)).toEqual(["AIPI-2"]);
+    expect(searchIssues(db, { status: "done", openPr: true }).map((i) => i.ref)).toEqual([
+      "AIPI-2",
+    ]);
     expect(searchIssues(db, { status: "todo", openPr: true })).toEqual([]);
   });
 
@@ -119,8 +170,8 @@ describe("searchIssues", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Progress at 50% done" });
     createIssue(db, human, { projectKey: "AIPI", title: "snake_case naming" });
     createIssue(db, human, { projectKey: "AIPI", title: "v1.2~beta release" });
-    createIssue(db, human, { projectKey: "AIPI", title: "Progress at 50x done" });   // would match "50%" if % were a wildcard
-    createIssue(db, human, { projectKey: "AIPI", title: "each case handling" });      // would match "e_c" if _ were a wildcard
+    createIssue(db, human, { projectKey: "AIPI", title: "Progress at 50x done" }); // would match "50%" if % were a wildcard
+    createIssue(db, human, { projectKey: "AIPI", title: "each case handling" }); // would match "e_c" if _ were a wildcard
     expect(searchIssues(db, { text: "50%" }).map((i) => i.title)).toEqual(["Progress at 50% done"]);
     expect(searchIssues(db, { text: "e_c" }).map((i) => i.title)).toEqual(["snake_case naming"]);
     expect(searchIssues(db, { text: "2~beta" }).map((i) => i.title)).toEqual(["v1.2~beta release"]);

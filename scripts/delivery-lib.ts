@@ -3,7 +3,12 @@
 // agent/<ref> PRs, and formatting the comments deliver.ts posts back. I/O-free
 // so it's trivially unit-testable; the exec side lives in delivery-exec.ts.
 
-import { projectKeyOf, stackChecksEnv, type WorkerConfig, type WorkerProject } from "./worker-select.js";
+import {
+  projectKeyOf,
+  stackChecksEnv,
+  type WorkerConfig,
+  type WorkerProject,
+} from "./worker-select.js";
 
 /** The subset of a GET /api/events row the delivery worker needs. */
 export type DeliveryFeedEvent = {
@@ -30,7 +35,7 @@ function findRefsMatching(
   feed: DeliveryFeedEvent[],
   projectKeys: Iterable<string>,
   lastEventId: number | null,
-  matches: (e: DeliveryFeedEvent) => boolean
+  matches: (e: DeliveryFeedEvent) => boolean,
 ): { refs: string[]; lastEventId: number | null } {
   if (feed.length === 0) return { refs: [], lastEventId };
   const keys = new Set(projectKeys);
@@ -55,11 +60,13 @@ function findRefsMatching(
 export function findDeliverableRefs(
   feed: DeliveryFeedEvent[],
   projectKeys: Iterable<string>,
-  lastEventId: number | null
+  lastEventId: number | null,
 ): { refs: string[]; lastEventId: number | null } {
   return findRefsMatching(
-    feed, projectKeys, lastEventId,
-    (e) => e.type === "status_changed" && e.payload?.to === "done"
+    feed,
+    projectKeys,
+    lastEventId,
+    (e) => e.type === "status_changed" && e.payload?.to === "done",
   );
 }
 
@@ -73,7 +80,7 @@ export function findDeliverableRefs(
 export function findRedeliverRefs(
   feed: DeliveryFeedEvent[],
   projectKeys: Iterable<string>,
-  lastEventId: number | null
+  lastEventId: number | null,
 ): { refs: string[]; lastEventId: number | null } {
   return findRefsMatching(feed, projectKeys, lastEventId, (e) => e.type === "redeliver_requested");
 }
@@ -87,7 +94,7 @@ export function findRedeliverRefs(
  */
 export function feedGap(
   feed: DeliveryFeedEvent[],
-  lastEventId: number | null
+  lastEventId: number | null,
 ): { from: number; to: number } | null {
   if (lastEventId === null || feed.length === 0) return null;
   const oldest = Math.min(...feed.map((e) => e.id));
@@ -106,7 +113,10 @@ export type AttentionIssueRow = { ref: string; attention: { reason: string } | n
  * query, or a caller that fetches unfiltered, can't sweep in refs the worker
  * doesn't own.
  */
-export function selectReconcilableRefs(rows: AttentionIssueRow[], projectKeys: Iterable<string>): string[] {
+export function selectReconcilableRefs(
+  rows: AttentionIssueRow[],
+  projectKeys: Iterable<string>,
+): string[] {
   const keys = new Set(projectKeys);
   return rows
     .filter((r) => r.attention?.reason === "delivery_failed" && keys.has(projectKeyOf(r.ref)))
@@ -126,7 +136,11 @@ export function buildPrTitle(ref: string, issueTitle: string): string {
  * is what makes a reviewer aware without them having to go look; the merge
  * decision stays a human's regardless, this is not a merge gate.
  */
-export function buildPrBody(ref: string, serverUrl: string, exitCode: number | null = null): string {
+export function buildPrBody(
+  ref: string,
+  serverUrl: string,
+  exitCode: number | null = null,
+): string {
   const lines = [
     `Agent work for Switchyard issue **${ref}**.`,
     "",
@@ -138,7 +152,7 @@ export function buildPrBody(ref: string, serverUrl: string, exitCode: number | n
     lines.push(
       "",
       `⚠️ **Session exited with a non-zero code (${exitCode}).** This branch may carry ` +
-        "partial or incomplete work from an errored or killed session — review carefully."
+        "partial or incomplete work from an errored or killed session — review carefully.",
     );
   }
   return lines.join("\n");
@@ -158,7 +172,18 @@ export function buildPushArgs(ref: string): string[] {
 }
 
 export function buildPrListArgs(ref: string, ownerRepo: string): string[] {
-  return ["pr", "list", "-R", ownerRepo, "--head", agentBranch(ref), "--state", "open", "--json", "number"];
+  return [
+    "pr",
+    "list",
+    "-R",
+    ownerRepo,
+    "--head",
+    agentBranch(ref),
+    "--state",
+    "open",
+    "--json",
+    "number",
+  ];
 }
 
 export function buildPrCreateArgs(
@@ -166,15 +191,21 @@ export function buildPrCreateArgs(
   issueTitle: string,
   serverUrl: string,
   ownerRepo: string,
-  exitCode: number | null = null
+  exitCode: number | null = null,
 ): string[] {
   return [
-    "pr", "create",
-    "-R", ownerRepo,
-    "--base", MAIN_BRANCH,
-    "--head", agentBranch(ref),
-    "--title", buildPrTitle(ref, issueTitle),
-    "--body", buildPrBody(ref, serverUrl, exitCode),
+    "pr",
+    "create",
+    "-R",
+    ownerRepo,
+    "--base",
+    MAIN_BRANCH,
+    "--head",
+    agentBranch(ref),
+    "--title",
+    buildPrTitle(ref, issueTitle),
+    "--body",
+    buildPrBody(ref, serverUrl, exitCode),
   ];
 }
 
@@ -183,7 +214,17 @@ export function buildPrMergeArgs(prNumber: number, ownerRepo: string): string[] 
 }
 
 export function buildPrViewMergeShaArgs(prNumber: number, ownerRepo: string): string[] {
-  return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"];
+  return [
+    "pr",
+    "view",
+    String(prNumber),
+    "-R",
+    ownerRepo,
+    "--json",
+    "mergeCommit",
+    "--jq",
+    ".mergeCommit.oid",
+  ];
 }
 
 // Pre-merge mergeability poll (SYD-103, widened by SYD-152): after
@@ -201,7 +242,17 @@ export const MERGE_POLL_INTERVAL_MS = 4000;
 export const MERGE_POLL_TIMEOUT_MS = 60000;
 
 export function buildPrViewMergeableArgs(prNumber: number, ownerRepo: string): string[] {
-  return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "mergeable", "--jq", ".mergeable"];
+  return [
+    "pr",
+    "view",
+    String(prNumber),
+    "-R",
+    ownerRepo,
+    "--json",
+    "mergeable",
+    "--jq",
+    ".mergeable",
+  ];
 }
 
 /**
@@ -212,7 +263,11 @@ export function buildPrViewMergeableArgs(prNumber: number, ownerRepo: string): s
  * us by waiting longer. Pure so the stop condition is testable without
  * shelling out to `gh` or a real clock.
  */
-export function shouldRetryMergePoll(state: MergeableState, elapsedMs: number, timeoutMs: number = MERGE_POLL_TIMEOUT_MS): boolean {
+export function shouldRetryMergePoll(
+  state: MergeableState,
+  elapsedMs: number,
+  timeoutMs: number = MERGE_POLL_TIMEOUT_MS,
+): boolean {
   return state === "UNKNOWN" && elapsedMs < timeoutMs;
 }
 
@@ -222,11 +277,18 @@ export function shouldRetryMergePoll(state: MergeableState, elapsedMs: number, t
  * though `mergeAgentPr` never touched it. */
 export function buildMergedPrForBranchArgs(ref: string, ownerRepo: string): string[] {
   return [
-    "pr", "list", "-R", ownerRepo,
-    "--head", agentBranch(ref),
-    "--state", "merged",
-    "--json", "number,mergeCommit",
-    "--limit", "1",
+    "pr",
+    "list",
+    "-R",
+    ownerRepo,
+    "--head",
+    agentBranch(ref),
+    "--state",
+    "merged",
+    "--json",
+    "number,mergeCommit",
+    "--limit",
+    "1",
   ];
 }
 
@@ -338,7 +400,11 @@ export function deliveryComment(r: DeliveryResult): string {
  * cleanly but merged main no longer typechecks/passes tests, so deploy was
  * skipped. Distinct from deliveryFailureComment, which covers merge-time
  * failures (the PR never landed) — here the merge already happened. */
-export function verificationFailureComment(prNumber: number, mergeSha: string, tail: string): string {
+export function verificationFailureComment(
+  prNumber: number,
+  mergeSha: string,
+  tail: string,
+): string {
   return [
     `Merged PR #${prNumber} at \`${mergeSha}\`, but post-merge verification FAILED — deploy skipped.`,
     "main is red; do not build on it until this is fixed. Output tail:",
@@ -380,8 +446,15 @@ export function autoRebasedNote(ref: string): string {
 /** gh pr merge failed and the automatic rebase hit real conflict hunks
  * (SYD-85) — never resolved automatically, always escalated with the
  * conflicted file list so the human/coordinator starts with the diagnosis. */
-export function autoRebaseConflictComment(ref: string, mergeFailureMessage: string, conflictFiles: string[]): string {
-  const fileList = conflictFiles.length > 0 ? conflictFiles.map((f) => `- ${f}`).join("\n") : "(no conflicted files reported)";
+export function autoRebaseConflictComment(
+  ref: string,
+  mergeFailureMessage: string,
+  conflictFiles: string[],
+): string {
+  const fileList =
+    conflictFiles.length > 0
+      ? conflictFiles.map((f) => `- ${f}`).join("\n")
+      : "(no conflicted files reported)";
   return (
     `Delivery FAILED for ${ref}: merge failed (${mergeFailureMessage})\n` +
     `Attempted an automatic rebase of ${agentBranch(ref)} onto ${MAIN_BRANCH}, but it hit real conflicts:\n` +
@@ -416,7 +489,13 @@ const DEFAULT_RESOLVE_IMAGE = "switchyard-worker";
  * claim/status-change powers — the resolver session is scoped to conflict
  * resolution only, never to driving the issue itself. */
 export const CONFLICT_RESOLUTION_ALLOWED_TOOLS = [
-  "Bash", "Read", "Edit", "Grep", "Glob", "mcp__switchyard__comment", "mcp__switchyard__get_issue",
+  "Bash",
+  "Read",
+  "Edit",
+  "Grep",
+  "Glob",
+  "mcp__switchyard__comment",
+  "mcp__switchyard__get_issue",
 ];
 
 /** Whether deliver.ts should dispatch a conflict-resolution session on a real
@@ -436,7 +515,10 @@ export function shouldDispatchConflictResolution(config: WorkerConfig): boolean 
  * implied. */
 export function buildConflictResolutionPrompt(ref: string, conflictFiles: string[]): string {
   const branch = agentBranch(ref);
-  const fileList = conflictFiles.length > 0 ? conflictFiles.map((f) => `- ${f}`).join("\n") : "(no conflicted files reported)";
+  const fileList =
+    conflictFiles.length > 0
+      ? conflictFiles.map((f) => `- ${f}`).join("\n")
+      : "(no conflicted files reported)";
   return (
     `Switchyard issue ${ref}'s agent branch (${branch}) failed to merge: rebasing it onto ${MAIN_BRANCH} hits real ` +
     `conflicts in:\n${fileList}\n\n` +
@@ -457,8 +539,7 @@ export function buildConflictResolutionPrompt(ref: string, conflictFiles: string
  * deliver.ts's branch on it (retry the merge vs. escalate) is testable
  * without shelling out to docker. */
 export type ConflictResolutionOutcome =
-  | { status: "resolved"; sha: string }
-  | { status: "failed"; tail: string };
+  { status: "resolved"; sha: string } | { status: "failed"; tail: string };
 
 /**
  * Builds the `docker run` argv for a conflict-resolution dispatch — same
@@ -476,11 +557,11 @@ export function buildConflictResolutionDockerArgs(
   cloneDir: string,
   project: WorkerProject,
   config: WorkerConfig,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
 ): string[] {
   if (!env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY) {
     throw new Error(
-      "conflict-resolution dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment"
+      "conflict-resolution dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment",
     );
   }
   const prompt = buildConflictResolutionPrompt(ref, conflictFiles);
@@ -490,19 +571,31 @@ export function buildConflictResolutionDockerArgs(
   return [
     "run",
     "--rm",
-    "--name", `syd-resolve-${ref}`,
-    "-v", `${cloneDir}:/origin`,
-    "-e", `ISSUE_REF=${ref}`,
-    "-e", "MODE=resolve-conflict",
-    "-e", `AGENT_BRANCH=${agentBranch(ref)}`,
-    "-e", `SWITCHYARD_URL=${config.url}`,
-    "-e", "SWITCHYARD_TOKEN",
-    "-e", "CLAUDE_CODE_OAUTH_TOKEN",
-    "-e", "ANTHROPIC_API_KEY",
-    "-e", `WORKER_PROMPT=${prompt}`,
-    "-e", `ALLOWED_TOOLS=${CONFLICT_RESOLUTION_ALLOWED_TOOLS.join(",")}`,
+    "--name",
+    `syd-resolve-${ref}`,
+    "-v",
+    `${cloneDir}:/origin`,
+    "-e",
+    `ISSUE_REF=${ref}`,
+    "-e",
+    "MODE=resolve-conflict",
+    "-e",
+    `AGENT_BRANCH=${agentBranch(ref)}`,
+    "-e",
+    `SWITCHYARD_URL=${config.url}`,
+    "-e",
+    "SWITCHYARD_TOKEN",
+    "-e",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "-e",
+    "ANTHROPIC_API_KEY",
+    "-e",
+    `WORKER_PROMPT=${prompt}`,
+    "-e",
+    `ALLOWED_TOOLS=${CONFLICT_RESOLUTION_ALLOWED_TOOLS.join(",")}`,
     ...(stackChecks ? ["-e", `STACK_CHECKS=${stackChecks}`] : []),
-    "-e", `BASE_BRANCH=${MAIN_BRANCH}`,
+    "-e",
+    `BASE_BRANCH=${MAIN_BRANCH}`,
     image,
   ];
 }
@@ -539,9 +632,15 @@ export function buildSyncLocalMainArgs(): string[] {
  * Distinct from autoRebaseConflictComment, which fires when no resolution
  * session was even attempted (not containerized, or opted out). */
 export function conflictResolutionFailedComment(
-  ref: string, mergeFailureMessage: string, conflictFiles: string[], tail: string
+  ref: string,
+  mergeFailureMessage: string,
+  conflictFiles: string[],
+  tail: string,
 ): string {
-  const fileList = conflictFiles.length > 0 ? conflictFiles.map((f) => `- ${f}`).join("\n") : "(no conflicted files reported)";
+  const fileList =
+    conflictFiles.length > 0
+      ? conflictFiles.map((f) => `- ${f}`).join("\n")
+      : "(no conflicted files reported)";
   return (
     `Delivery FAILED for ${ref}: merge failed (${mergeFailureMessage})\n` +
     `Attempted an automatic rebase of ${agentBranch(ref)} onto ${MAIN_BRANCH}, which hit real conflicts in:\n${fileList}\n` +
@@ -577,7 +676,10 @@ export const MAX_QUEUE_MERGE_ATTEMPTS = 3;
 
 /** Pure stop condition for the queue-mode rebase/merge retry loop — mirrors
  * shouldRetryMergePoll's shape so it's testable without shelling out. */
-export function shouldRetryQueueRebase(attempt: number, maxAttempts: number = MAX_QUEUE_MERGE_ATTEMPTS): boolean {
+export function shouldRetryQueueRebase(
+  attempt: number,
+  maxAttempts: number = MAX_QUEUE_MERGE_ATTEMPTS,
+): boolean {
   return attempt < maxAttempts;
 }
 
@@ -585,7 +687,10 @@ export function shouldRetryQueueRebase(attempt: number, maxAttempts: number = MA
  * never handed to a conflict-resolution session (unlike the legacy flow's
  * autoRebaseConflictComment/SYD-100 path). */
 export function queueRebaseConflictComment(ref: string, conflictFiles: string[]): string {
-  const fileList = conflictFiles.length > 0 ? conflictFiles.map((f) => `- ${f}`).join("\n") : "(no conflicted files reported)";
+  const fileList =
+    conflictFiles.length > 0
+      ? conflictFiles.map((f) => `- ${f}`).join("\n")
+      : "(no conflicted files reported)";
   return (
     `Delivery FAILED for ${ref}: rebasing ${agentBranch(ref)} onto ${MAIN_BRANCH} (queue mode) hit real conflicts in:\n` +
     `${fileList}\n` +
@@ -671,6 +776,7 @@ function stripNoiseLines(text: string): string {
 export function tailOf(text: string, maxLines = 20, maxChars = 2000): string {
   // Vitest/tsc emit ANSI color codes even piped; left in, they render as
   // `[31m` garbage in issue comments (the UI drops the ESC byte).
+  // eslint-disable-next-line no-control-regex -- matching the ESC byte is the point
   const plain = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
   const stripped = stripNoiseLines(plain);
   const tail = stripped.trimEnd().split("\n").slice(-maxLines).join("\n");

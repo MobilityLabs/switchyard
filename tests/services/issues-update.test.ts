@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, updateIssue, claimIssue, getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
+import {
+  createIssue,
+  updateIssue,
+  claimIssue,
+  getIssue,
+  SUMMARY_MAX_LENGTH,
+} from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
@@ -31,10 +37,12 @@ describe("updateIssue", () => {
   });
 
   it("rejects unknown statuses and assignees legibly", () => {
-    expect(() => updateIssue(db, human, "AIPI-1", { status: "doing" as never }))
-      .toThrowError(/valid statuses/i);
-    expect(() => updateIssue(db, human, "AIPI-1", { assigneeName: "ghost" }))
-      .toThrowError(/no actor named "ghost"/i);
+    expect(() => updateIssue(db, human, "AIPI-1", { status: "doing" as never })).toThrowError(
+      /valid statuses/i,
+    );
+    expect(() => updateIssue(db, human, "AIPI-1", { assigneeName: "ghost" })).toThrowError(
+      /no actor named "ghost"/i,
+    );
   });
 
   it("no-op labels update records no event", () => {
@@ -54,22 +62,27 @@ describe("updateIssue", () => {
   });
 
   it("rejects unknown priorities legibly", () => {
-    expect(() => updateIssue(db, human, "AIPI-1", { priority: "mega" as never }))
-      .toThrowError(/valid priorities/i);
+    expect(() => updateIssue(db, human, "AIPI-1", { priority: "mega" as never })).toThrowError(
+      /valid priorities/i,
+    );
   });
 
   it("agents cannot move issues out of triage; humans can", () => {
     const filed = createIssue(db, agent, {
-      projectKey: "AIPI", title: "Agent-filed",
-      description: "Filed while working another task; needs a human to confirm priority before scheduling.",
+      projectKey: "AIPI",
+      title: "Agent-filed",
+      description:
+        "Filed while working another task; needs a human to confirm priority before scheduling.",
       provenance: { sourceType: "manual", detail: "x" },
     });
     // non-status edits by agents are still allowed in triage
     expect(updateIssue(db, agent, filed.ref, { priority: "high" }).priority).toBe("high");
-    expect(() => updateIssue(db, agent, filed.ref, { status: "todo" }))
-      .toThrowError(/only humans move issues out of triage/i);
-    expect(() => claimIssue(db, agent, filed.ref))
-      .toThrowError(/only humans move issues out of triage/i);
+    expect(() => updateIssue(db, agent, filed.ref, { status: "todo" })).toThrowError(
+      /only humans move issues out of triage/i,
+    );
+    expect(() => claimIssue(db, agent, filed.ref)).toThrowError(
+      /only humans move issues out of triage/i,
+    );
     expect(updateIssue(db, human, filed.ref, { status: "todo" }).status).toBe("todo");
   });
 
@@ -77,8 +90,9 @@ describe("updateIssue", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     claimIssue(db, agent, "AIPI-1");
     updateIssue(db, agent, "AIPI-1", { status: "in_review" });
-    expect(() => updateIssue(db, agent, "AIPI-1", { status: "done" }))
-      .toThrowError(/only humans move issues to done/i);
+    expect(() => updateIssue(db, agent, "AIPI-1", { status: "done" })).toThrowError(
+      /only humans move issues to done/i,
+    );
     expect(getIssue(db, "AIPI-1").status).toBe("in_review");
     expect(updateIssue(db, human, "AIPI-1", { status: "done" }).status).toBe("done");
   });
@@ -86,26 +100,32 @@ describe("updateIssue", () => {
   it("agents cannot add the auto label, but may remove it or keep it", () => {
     // starting without "auto": agent adding it is rejected
     updateIssue(db, human, "AIPI-1", { labels: ["urgent"] });
-    expect(() => updateIssue(db, agent, "AIPI-1", { labels: ["auto", "urgent"] }))
-      .toThrowError(/only humans apply the "auto" label/i);
+    expect(() => updateIssue(db, agent, "AIPI-1", { labels: ["auto", "urgent"] })).toThrowError(
+      /only humans apply the "auto" label/i,
+    );
     expect(getIssue(db, "AIPI-1").labels).toEqual(["urgent"]);
 
     // a human adding it is fine
-    expect(updateIssue(db, human, "AIPI-1", { labels: ["auto", "urgent"] }).labels.sort())
-      .toEqual(["auto", "urgent"]);
+    expect(updateIssue(db, human, "AIPI-1", { labels: ["auto", "urgent"] }).labels.sort()).toEqual([
+      "auto",
+      "urgent",
+    ]);
 
     // agent removing it is fine
     expect(updateIssue(db, agent, "AIPI-1", { labels: ["urgent"] }).labels).toEqual(["urgent"]);
 
     // agent keeping an already-present "auto" while changing other labels is fine
     updateIssue(db, human, "AIPI-1", { labels: ["auto", "urgent"] });
-    expect(updateIssue(db, agent, "AIPI-1", { labels: ["auto", "other"] }).labels.sort())
-      .toEqual(["auto", "other"]);
+    expect(updateIssue(db, agent, "AIPI-1", { labels: ["auto", "other"] }).labels.sort()).toEqual([
+      "auto",
+      "other",
+    ]);
   });
 
   it("sets, updates, and clears the summary; rejects one over the length cap", () => {
-    expect(updateIssue(db, human, "AIPI-1", { summary: "Ship v1 to prod." }).summary)
-      .toBe("Ship v1 to prod.");
+    expect(updateIssue(db, human, "AIPI-1", { summary: "Ship v1 to prod." }).summary).toBe(
+      "Ship v1 to prod.",
+    );
     expect(updateIssue(db, human, "AIPI-1", { summary: null }).summary).toBeNull();
 
     const tooLong = "x".repeat(SUMMARY_MAX_LENGTH + 1);
@@ -116,14 +136,16 @@ describe("updateIssue", () => {
   it("agents cannot push someone else's todo straight to in_review, skipping claim/PR machinery", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     // not a legal direct transition at all — an agent must claim (in_progress) first
-    expect(() => updateIssue(db, agent, "AIPI-1", { status: "in_review" }))
-      .toThrowError(/can't move.*from "todo" to "in_review".*human-only/i);
+    expect(() => updateIssue(db, agent, "AIPI-1", { status: "in_review" })).toThrowError(
+      /can't move.*from "todo" to "in_review".*human-only/i,
+    );
     expect(getIssue(db, "AIPI-1").status).toBe("todo");
 
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
     claimIssue(db, agent, "AIPI-1");
-    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_review" }))
-      .toThrowError(/assigned to claude\/worker.*only the assignee/i);
+    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_review" })).toThrowError(
+      /assigned to claude\/worker.*only the assignee/i,
+    );
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
 
     // the actual assignee can move it
@@ -136,8 +158,9 @@ describe("updateIssue", () => {
     updateIssue(db, agent, "AIPI-1", { status: "in_review" });
     updateIssue(db, human, "AIPI-1", { status: "done" });
 
-    expect(() => updateIssue(db, agent, "AIPI-1", { status: "backlog" }))
-      .toThrowError(/is done — only humans reopen/i);
+    expect(() => updateIssue(db, agent, "AIPI-1", { status: "backlog" })).toThrowError(
+      /is done — only humans reopen/i,
+    );
     expect(getIssue(db, "AIPI-1").status).toBe("done");
     expect(updateIssue(db, human, "AIPI-1", { status: "backlog" }).status).toBe("backlog");
   });
@@ -148,16 +171,18 @@ describe("updateIssue", () => {
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
 
     // a different agent can't release someone else's claim
-    expect(() => updateIssue(db, other, "AIPI-1", { status: "todo" }))
-      .toThrowError(/assigned to claude\/worker.*only the assignee/i);
+    expect(() => updateIssue(db, other, "AIPI-1", { status: "todo" })).toThrowError(
+      /assigned to claude\/worker.*only the assignee/i,
+    );
     // the assignee can release their own claim
     expect(updateIssue(db, agent, "AIPI-1", { status: "todo" }).status).toBe("todo");
 
     // reclaim and move to in_review, then only the assignee may reopen it
     claimIssue(db, agent, "AIPI-1");
     updateIssue(db, agent, "AIPI-1", { status: "in_review" });
-    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" }))
-      .toThrowError(/assigned to claude\/worker.*only the assignee/i);
+    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" })).toThrowError(
+      /assigned to claude\/worker.*only the assignee/i,
+    );
     expect(updateIssue(db, agent, "AIPI-1", { status: "in_progress" }).status).toBe("in_progress");
   });
 
@@ -165,18 +190,21 @@ describe("updateIssue", () => {
     // backlog is a human-triage state; agents can't self-promote out of it
     const filed = createIssue(db, human, { projectKey: "AIPI", title: "Sits in backlog" });
     expect(getIssue(db, filed.ref).status).toBe("backlog");
-    expect(() => updateIssue(db, agent, filed.ref, { status: "todo" }))
-      .toThrowError(/can't move.*from "backlog" to "todo".*human-only/i);
+    expect(() => updateIssue(db, agent, filed.ref, { status: "todo" })).toThrowError(
+      /can't move.*from "backlog" to "todo".*human-only/i,
+    );
 
     // and agents can't cancel issues
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    expect(() => updateIssue(db, agent, "AIPI-1", { status: "canceled" }))
-      .toThrowError(/can't move.*human-only/i);
+    expect(() => updateIssue(db, agent, "AIPI-1", { status: "canceled" })).toThrowError(
+      /can't move.*human-only/i,
+    );
   });
 
   it("needs_input clears only on a status change, not on unrelated field edits", () => {
     const filed = createIssue(db, agent, {
-      projectKey: "AIPI", title: "Needs a call",
+      projectKey: "AIPI",
+      title: "Needs a call",
       description: "Blocked on a decision only a human can make about scope.",
       provenance: { sourceType: "manual", detail: "x" },
     });
@@ -223,7 +251,11 @@ describe("audit log stays consistent with column state", () => {
   // "to" payload (description_changed/summary_changed intentionally don't —
   // see issues.ts — so they're out of scope for this reconstruction check).
   it("replaying the last status/priority/title event matches the current column value", () => {
-    updateIssue(db, human, "AIPI-1", { status: "todo", priority: "high", title: "Ship v1 (renamed)" });
+    updateIssue(db, human, "AIPI-1", {
+      status: "todo",
+      priority: "high",
+      title: "Ship v1 (renamed)",
+    });
     claimIssue(db, agent, "AIPI-1");
     updateIssue(db, agent, "AIPI-1", { status: "in_review", priority: "urgent" });
 
@@ -261,7 +293,9 @@ describe("claimIssue", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
     claimIssue(db, agent, "AIPI-1");
-    expect(() => claimIssue(db, other, "AIPI-1")).toThrowError(/already claimed by claude\/worker/i);
+    expect(() => claimIssue(db, other, "AIPI-1")).toThrowError(
+      /already claimed by claude\/worker/i,
+    );
     expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
   });
 
@@ -269,7 +303,9 @@ describe("claimIssue", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     claimIssue(db, agent, "AIPI-1");
     recordDeliveryEvent(db, agent, "AIPI-1", {
-      type: "pr_opened", prNumber: 41, url: "https://github.com/acme/widgets/pull/41",
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
     });
     // Simulate a stale-claim release: back to todo, assignee cleared, PR still open.
     updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: null });
@@ -284,8 +320,9 @@ describe("claimIssue", () => {
     // the in_progress transition below is what actually exercises the gate.
     updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: "claude/worker" });
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
-    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" }))
-      .toThrowError(/already claimed by claude\/worker/i);
+    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" })).toThrowError(
+      /already claimed by claude\/worker/i,
+    );
     expect(getIssue(db, "AIPI-1").status).toBe("todo");
   });
 
@@ -313,8 +350,9 @@ describe("claimIssue", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     updateIssue(db, agent, "AIPI-1", { status: "in_progress" });
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
-    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" }))
-      .toThrowError(/already claimed by claude\/worker/i);
+    expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" })).toThrowError(
+      /already claimed by claude\/worker/i,
+    );
     expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
   });
 
@@ -331,7 +369,10 @@ describe("claimIssue", () => {
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
     // A human pre-assigning to someone else while moving it to in_progress
     // must not get overwritten by auto-assigning the calling actor.
-    const moved = updateIssue(db, human, "AIPI-1", { status: "in_progress", assigneeName: "claude/other" });
+    const moved = updateIssue(db, human, "AIPI-1", {
+      status: "in_progress",
+      assigneeName: "claude/other",
+    });
     expect(moved.assigneeId).toBe(other.id);
   });
 });

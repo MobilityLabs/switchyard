@@ -18,9 +18,16 @@ import Agents, { formatElapsed } from "./Agents";
 
 function session(overrides: Partial<AgentSession>): AgentSession {
   return {
-    id: 1, ref: "SYD-1", issueTitle: "Ship v1", mode: "cli",
-    pid: 4242, status: "running", exitCode: null,
-    startedAt: Math.floor(Date.now() / 1000) - 90, endedAt: null, lastNote: null,
+    id: 1,
+    ref: "SYD-1",
+    issueTitle: "Ship v1",
+    mode: "cli",
+    pid: 4242,
+    status: "running",
+    exitCode: null,
+    startedAt: Math.floor(Date.now() / 1000) - 90,
+    endedAt: null,
+    lastNote: null,
     ...overrides,
   };
 }
@@ -29,7 +36,9 @@ async function renderAgents(): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(async () => { root.render(<Agents />); });
+  await act(async () => {
+    root.render(<Agents />);
+  });
   return container;
 }
 
@@ -61,7 +70,13 @@ describe("Agents view", () => {
   it("splits running sessions from exited ones and links the ref", async () => {
     vi.mocked(listAgentSessions).mockResolvedValue([
       session({ id: 2, status: "running", lastNote: { note: "writing tests", createdAt: 0 } }),
-      session({ id: 1, ref: "SYD-9", status: "exited", exitCode: 0, endedAt: Math.floor(Date.now() / 1000) }),
+      session({
+        id: 1,
+        ref: "SYD-9",
+        status: "exited",
+        exitCode: 0,
+        endedAt: Math.floor(Date.now() / 1000),
+      }),
     ]);
     const container = await renderAgents();
     const text = container.textContent ?? "";

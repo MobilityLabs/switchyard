@@ -20,9 +20,9 @@ beforeEach(() => {
   human = createActor(db, { name: "sean", type: "human" }).actor;
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, { key: "AIPI", name: "aipi" });
-  createIssue(db, human, { projectKey: "AIPI", title: "Schema", priority: "high" });   // AIPI-1
-  createIssue(db, human, { projectKey: "AIPI", title: "API", priority: "urgent" });    // AIPI-2
-  createIssue(db, human, { projectKey: "AIPI", title: "Docs", priority: "low" });      // AIPI-3
+  createIssue(db, human, { projectKey: "AIPI", title: "Schema", priority: "high" }); // AIPI-1
+  createIssue(db, human, { projectKey: "AIPI", title: "API", priority: "urgent" }); // AIPI-2
+  createIssue(db, human, { projectKey: "AIPI", title: "Docs", priority: "low" }); // AIPI-3
   for (const ref of ["AIPI-1", "AIPI-2", "AIPI-3"]) updateIssue(db, human, ref, { status: "todo" });
 });
 
@@ -30,8 +30,7 @@ describe("dependencies", () => {
   it("blocked issues cannot be claimed until the blocker is done", () => {
     addDependency(db, human, "AIPI-1", "AIPI-2"); // schema blocks api
     expect(getOpenBlockers(db, 2).map((b) => b.ref)).toEqual(["AIPI-1"]);
-    expect(() => claimIssue(db, agent, "AIPI-2"))
-      .toThrowError(/blocked by AIPI-1.*next_task/s);
+    expect(() => claimIssue(db, agent, "AIPI-2")).toThrowError(/blocked by AIPI-1.*next_task/s);
     updateIssue(db, human, "AIPI-1", { status: "done" });
     expect(claimIssue(db, agent, "AIPI-2").status).toBe("in_progress");
   });
@@ -63,7 +62,11 @@ describe("dependencies", () => {
 
   it("nextTask skips a todo issue with an open PR from a released prior claim (SYD-99)", () => {
     claimIssue(db, agent, "AIPI-2"); // urgent, would otherwise win
-    recordDeliveryEvent(db, agent, "AIPI-2", { type: "pr_opened", prNumber: 41, url: "https://x/41" });
+    recordDeliveryEvent(db, agent, "AIPI-2", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://x/41",
+    });
     updateIssue(db, human, "AIPI-2", { status: "todo", assigneeName: null }); // stale-claim release
     expect(nextTask(db, agent)?.ref).toBe("AIPI-1");
   });
@@ -128,8 +131,9 @@ describe("dependencies", () => {
 
   it("agents cannot PATCH a blocked issue straight to in_progress (same gate as claim)", () => {
     addDependency(db, human, "AIPI-1", "AIPI-2");
-    expect(() => updateIssue(db, agent, "AIPI-2", { status: "in_progress" }))
-      .toThrowError(/blocked by AIPI-1/);
+    expect(() => updateIssue(db, agent, "AIPI-2", { status: "in_progress" })).toThrowError(
+      /blocked by AIPI-1/,
+    );
     // Humans stay exempt, matching claim semantics for deliberate overrides.
     expect(updateIssue(db, human, "AIPI-2", { status: "in_progress" }).status).toBe("in_progress");
   });

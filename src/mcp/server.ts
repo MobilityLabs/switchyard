@@ -6,13 +6,21 @@ import type { Actor } from "../services/actors.js";
 import { SwitchyardError } from "../services/errors.js";
 import { listProjects } from "../services/projects.js";
 import {
-  createIssue, getIssue, updateIssue, claimIssue, SUMMARY_MAX_LENGTH,
+  createIssue,
+  getIssue,
+  updateIssue,
+  claimIssue,
+  SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
 import { nextTask, addDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
-import { listRecentEventsPage, DEFAULT_RECENT_EVENTS_LIMIT, MAX_RECENT_EVENTS_LIMIT } from "../services/events.js";
+import {
+  listRecentEventsPage,
+  DEFAULT_RECENT_EVENTS_LIMIT,
+  MAX_RECENT_EVENTS_LIMIT,
+} from "../services/events.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import { recordProgressNote, listAgentSessions } from "../services/agent-sessions.js";
 import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
@@ -39,13 +47,17 @@ function guard<A>(fn: (args: A) => unknown): (args: A) => Promise<ToolResult> {
   };
 }
 
-export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = defaultAttachmentsDir()): McpServer {
+export function buildMcpServer(
+  db: Db,
+  actor: Actor,
+  attachmentsDir: string = defaultAttachmentsDir(),
+): McpServer {
   const server = new McpServer({ name: "switchyard", version: "0.1.0" });
 
   server.registerTool(
     "list_projects",
     { description: "List all projects with their keys. Issue refs are <KEY>-<number>." },
-    guard(() => listProjects(db))
+    guard(() => listProjects(db)),
   );
 
   server.registerTool(
@@ -55,7 +67,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "Get the actor name/type/id your MCP token is bound to — the MCP equivalent of REST's " +
         "GET /me. Useful for assignee-scoped search_issues, or to confirm which actor a token authenticates as.",
     },
-    guard(() => actor)
+    guard(() => actor),
   );
 
   server.registerTool(
@@ -71,7 +83,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         attention: getAttention(db, issue.id),
         activity: getActivity(db, ref),
       };
-    })
+    }),
   );
 
   server.registerTool(
@@ -87,20 +99,27 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         needs_input: z.boolean().optional(),
       },
     },
-    guard((a: {
-      project_key?: string; status?: (typeof STATUSES)[number]; assignee?: string;
-      label?: string; text?: string; needs_input?: boolean;
-    }) =>
-      {
+    guard(
+      (a: {
+        project_key?: string;
+        status?: (typeof STATUSES)[number];
+        assignee?: string;
+        label?: string;
+        text?: string;
+        needs_input?: boolean;
+      }) => {
         const results = searchIssues(db, {
-          projectKey: a.project_key, status: a.status,
-          assigneeName: a.assignee, label: a.label, text: a.text,
+          projectKey: a.project_key,
+          status: a.status,
+          assigneeName: a.assignee,
+          label: a.label,
+          text: a.text,
           needsInput: a.needs_input,
         });
         const attention = listAttentionByIssueId(db);
         return results.map((r) => ({ ...r, attention: attention.get(r.id) ?? null }));
-      }
-    )
+      },
+    ),
   );
 
   server.registerTool(
@@ -111,7 +130,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "Call this when you want work. Returns null when nothing is workable.",
       inputSchema: { project_key: z.string().optional() },
     },
-    guard(({ project_key }: { project_key?: string }) => nextTask(db, actor, project_key))
+    guard(({ project_key }: { project_key?: string }) => nextTask(db, actor, project_key)),
   );
 
   server.registerTool(
@@ -144,20 +163,32 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         source_url: z.string().optional(),
       },
     },
-    guard((a: {
-      project_key: string; title: string; summary?: string; description?: string;
-      priority?: (typeof PRIORITIES)[number]; labels?: string[]; parent_ref?: string;
-      source_type?: "session" | "todo" | "ci" | "manual";
-      source_detail?: string; source_url?: string;
-    }) =>
-      createIssue(db, actor, {
-        projectKey: a.project_key, title: a.title, summary: a.summary, description: a.description,
-        priority: a.priority, labels: a.labels, parentRef: a.parent_ref,
-        provenance: a.source_type
-          ? { sourceType: a.source_type, detail: a.source_detail, url: a.source_url }
-          : undefined,
-      })
-    )
+    guard(
+      (a: {
+        project_key: string;
+        title: string;
+        summary?: string;
+        description?: string;
+        priority?: (typeof PRIORITIES)[number];
+        labels?: string[];
+        parent_ref?: string;
+        source_type?: "session" | "todo" | "ci" | "manual";
+        source_detail?: string;
+        source_url?: string;
+      }) =>
+        createIssue(db, actor, {
+          projectKey: a.project_key,
+          title: a.title,
+          summary: a.summary,
+          description: a.description,
+          priority: a.priority,
+          labels: a.labels,
+          parentRef: a.parent_ref,
+          provenance: a.source_type
+            ? { sourceType: a.source_type, detail: a.source_detail, url: a.source_url }
+            : undefined,
+        }),
+    ),
   );
 
   server.registerTool(
@@ -169,7 +200,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "Prefer next_task to pick what to claim.",
       inputSchema: { ref: z.string() },
     },
-    guard(({ ref }: { ref: string }) => claimIssue(db, actor, ref))
+    guard(({ ref }: { ref: string }) => claimIssue(db, actor, ref)),
   );
 
   server.registerTool(
@@ -191,15 +222,27 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         labels: z.array(z.string()).optional(),
       },
     },
-    guard((a: {
-      ref: string; status?: (typeof STATUSES)[number]; priority?: (typeof PRIORITIES)[number];
-      title?: string; summary?: string | null; description?: string; assignee?: string | null; labels?: string[];
-    }) =>
-      updateIssue(db, actor, a.ref, {
-        status: a.status, priority: a.priority, title: a.title,
-        summary: a.summary, description: a.description, assigneeName: a.assignee, labels: a.labels,
-      })
-    )
+    guard(
+      (a: {
+        ref: string;
+        status?: (typeof STATUSES)[number];
+        priority?: (typeof PRIORITIES)[number];
+        title?: string;
+        summary?: string | null;
+        description?: string;
+        assignee?: string | null;
+        labels?: string[];
+      }) =>
+        updateIssue(db, actor, a.ref, {
+          status: a.status,
+          priority: a.priority,
+          title: a.title,
+          summary: a.summary,
+          description: a.description,
+          assigneeName: a.assignee,
+          labels: a.labels,
+        }),
+    ),
   );
 
   server.registerTool(
@@ -213,7 +256,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     guard(({ ref, body }: { ref: string; body: string }) => {
       addComment(db, actor, ref, body);
       return { ok: true };
-    })
+    }),
   );
 
   server.registerTool(
@@ -229,7 +272,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     guard(({ ref, note }: { ref: string; note: string }) => {
       recordProgressNote(db, actor, ref, note);
       return { ok: true };
-    })
+    }),
   );
 
   server.registerTool(
@@ -241,7 +284,9 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "blocked on a decision only a human can make. The flag clears when a human replies or changes status.",
       inputSchema: { ref: z.string(), question: z.string() },
     },
-    guard(({ ref, question }: { ref: string; question: string }) => requestHumanInput(db, actor, ref, question))
+    guard(({ ref, question }: { ref: string; question: string }) =>
+      requestHumanInput(db, actor, ref, question),
+    ),
   );
 
   server.registerTool(
@@ -260,17 +305,38 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         content_base64: z.string().max(28 * 1024 * 1024),
       },
     },
-    guard(async ({ ref, filename, content_base64 }: { ref: string; filename: string; content_base64: string }) => {
-      const cleaned = content_base64.replace(/\s+/g, "");
-      if (cleaned.length === 0 || cleaned.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned)) {
-        throw new SwitchyardError(
-          "content_base64 is not valid base64 — check the encoding and try again."
+    guard(
+      async ({
+        ref,
+        filename,
+        content_base64,
+      }: {
+        ref: string;
+        filename: string;
+        content_base64: string;
+      }) => {
+        const cleaned = content_base64.replace(/\s+/g, "");
+        if (
+          cleaned.length === 0 ||
+          cleaned.length % 4 !== 0 ||
+          !/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned)
+        ) {
+          throw new SwitchyardError(
+            "content_base64 is not valid base64 — check the encoding and try again.",
+          );
+        }
+        const data = Buffer.from(cleaned, "base64");
+        const { attachment, markdown } = await saveAttachment(
+          db,
+          actor,
+          ref,
+          filename,
+          data,
+          attachmentsDir,
         );
-      }
-      const data = Buffer.from(cleaned, "base64");
-      const { attachment, markdown } = await saveAttachment(db, actor, ref, filename, data, attachmentsDir);
-      return { markdown, url: `/api/attachments/${attachment.id}/${attachment.filename}` };
-    })
+        return { markdown, url: `/api/attachments/${attachment.id}/${attachment.filename}` };
+      },
+    ),
   );
 
   server.registerTool(
@@ -284,14 +350,14 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
       addDependency(db, actor, blocker_ref, blocked_ref);
       return { ok: true };
-    })
+    }),
   );
 
   server.registerTool(
     "recent_events",
     {
       description:
-        "Cross-issue, newest-first activity feed for diagnosing \"what just happened on the board\" " +
+        'Cross-issue, newest-first activity feed for diagnosing "what just happened on the board" ' +
         "(the same feed the dispatch worker polls). Optional `since` (unix seconds) filters to events " +
         `after that time. Defaults to the ${DEFAULT_RECENT_EVENTS_LIMIT} most recent events, capped at ` +
         `${MAX_RECENT_EVENTS_LIMIT} — the response includes \`truncated\` and \`next_cursor\`; pass ` +
@@ -305,7 +371,7 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
     guard(({ since, limit, before_id }: { since?: number; limit?: number; before_id?: number }) => {
       const page = listRecentEventsPage(db, { since, limit, beforeId: before_id });
       return { events: page.events, next_cursor: page.nextCursor, truncated: page.truncated };
-    })
+    }),
   );
 
   server.registerTool(
@@ -318,8 +384,12 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
       inputSchema: { project_key: z.string().optional(), include_snoozed: z.boolean().optional() },
     },
     guard(({ project_key, include_snoozed }: { project_key?: string; include_snoozed?: boolean }) =>
-      searchIssues(db, { projectKey: project_key, status: "triage", excludeSnoozed: !include_snoozed })
-    )
+      searchIssues(db, {
+        projectKey: project_key,
+        status: "triage",
+        excludeSnoozed: !include_snoozed,
+      }),
+    ),
   );
 
   server.registerTool(
@@ -330,7 +400,9 @@ export function buildMcpServer(db: Db, actor: Actor, attachmentsDir: string = de
         "panel. Use to check whether an issue already has an agent working it, or what's currently live.",
       inputSchema: { active: z.boolean().optional(), ref: z.string().optional() },
     },
-    guard(({ active, ref }: { active?: boolean; ref?: string }) => listAgentSessions(db, { active, ref }))
+    guard(({ active, ref }: { active?: boolean; ref?: string }) =>
+      listAgentSessions(db, { active, ref }),
+    ),
   );
 
   return server;

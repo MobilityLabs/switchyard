@@ -16,7 +16,16 @@ vi.mock("../api", () => ({
   listAgentSessions: vi.fn(() => Promise.resolve([])),
 }));
 
-import { ActivityFeed, AgentSessionStrip, AttentionBanner, computeDeliveryStatus, DescriptionSection, Event, groupProgressNotes, withAttachmentIds } from "./IssueDetail";
+import {
+  ActivityFeed,
+  AgentSessionStrip,
+  AttentionBanner,
+  computeDeliveryStatus,
+  DescriptionSection,
+  Event,
+  groupProgressNotes,
+  withAttachmentIds,
+} from "./IssueDetail";
 import { listAgentSessions } from "../api";
 import type { Activity, Attachment, Issue } from "../types";
 import { act } from "react";
@@ -25,13 +34,20 @@ import { createRoot } from "react-dom/client";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const ev = (o: Partial<Activity>): Activity => ({
-  type: "comment", actorName: "claude/worker", payload: {}, createdAt: 1000, ...o,
+  type: "comment",
+  actorName: "claude/worker",
+  payload: {},
+  createdAt: 1000,
+  ...o,
 });
 
 // SYD-92: the full description is always visible on the detail view and the
 // expanded triage row — no more "Show full description" click-to-reveal.
 describe("DescriptionSection", () => {
-  async function render(issue: { summary: string | null; description: string }): Promise<HTMLElement> {
+  async function render(issue: {
+    summary: string | null;
+    description: string;
+  }): Promise<HTMLElement> {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -96,7 +112,9 @@ describe("AttentionBanner", () => {
   // its own retry trigger rather than telling humans to re-stamp done.
   it("renders a Retry delivery button that calls onRetry when clicked", async () => {
     let clicked = 0;
-    const container = await render({ reason: "delivery_failed", message: "merge conflict" }, () => { clicked += 1; });
+    const container = await render({ reason: "delivery_failed", message: "merge conflict" }, () => {
+      clicked += 1;
+    });
     const button = container.querySelector(".retry-delivery") as HTMLButtonElement | null;
     expect(button).not.toBeNull();
     await act(async () => {
@@ -113,11 +131,19 @@ describe("computeDeliveryStatus", () => {
 
   it("reports an open PR from pr_opened alone", () => {
     const status = computeDeliveryStatus([
-      ev({ type: "pr_opened", payload: { prNumber: 7, url: "https://github.com/acme/widgets/pull/7" } }),
+      ev({
+        type: "pr_opened",
+        payload: { prNumber: 7, url: "https://github.com/acme/widgets/pull/7" },
+      }),
     ]);
     expect(status).toEqual({
-      prNumber: 7, url: "https://github.com/acme/widgets/pull/7", state: "open",
-      mergeSha: null, deploy: null, failedMessage: null, checks: null,
+      prNumber: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      state: "open",
+      mergeSha: null,
+      deploy: null,
+      failedMessage: null,
+      checks: null,
     });
   });
 
@@ -125,34 +151,60 @@ describe("computeDeliveryStatus", () => {
     const status = computeDeliveryStatus([
       ev({ type: "pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
       ev({
-        type: "delivered", createdAt: 2,
-        payload: { prNumber: 7, mergeSha: "abc123def", deploy: { ran: true, ok: true, tail: "done" } },
+        type: "delivered",
+        createdAt: 2,
+        payload: {
+          prNumber: 7,
+          mergeSha: "abc123def",
+          deploy: { ran: true, ok: true, tail: "done" },
+        },
       }),
     ]);
     expect(status).toMatchObject({
-      prNumber: 7, state: "merged", mergeSha: "abc123def",
-      deploy: { ran: true, ok: true, tail: "done" }, failedMessage: null,
+      prNumber: 7,
+      state: "merged",
+      mergeSha: "abc123def",
+      deploy: { ran: true, ok: true, tail: "done" },
+      failedMessage: null,
     });
   });
 
   it("reports an open PR from gh_pr_opened, matching the manual pr_opened shape", () => {
     const status = computeDeliveryStatus([
-      ev({ type: "gh_pr_opened", payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9", branch: "agent/SYD-1" } }),
+      ev({
+        type: "gh_pr_opened",
+        payload: {
+          prNumber: 9,
+          url: "https://github.com/acme/widgets/pull/9",
+          branch: "agent/SYD-1",
+        },
+      }),
     ]);
-    expect(status).toMatchObject({ prNumber: 9, url: "https://github.com/acme/widgets/pull/9", state: "open" });
+    expect(status).toMatchObject({
+      prNumber: 9,
+      url: "https://github.com/acme/widgets/pull/9",
+      state: "open",
+    });
   });
 
   it("reports merged from gh_pr_merged, preserving a deploy result from an earlier delivered event", () => {
     const status = computeDeliveryStatus([
       ev({ type: "pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
       ev({
-        type: "delivered", createdAt: 2,
+        type: "delivered",
+        createdAt: 2,
         payload: { prNumber: 7, mergeSha: "old", deploy: { ran: true, ok: true, tail: "done" } },
       }),
-      ev({ type: "gh_pr_merged", createdAt: 3, payload: { prNumber: 7, url: "https://x/pull/7", mergeSha: "new123" } }),
+      ev({
+        type: "gh_pr_merged",
+        createdAt: 3,
+        payload: { prNumber: 7, url: "https://x/pull/7", mergeSha: "new123" },
+      }),
     ]);
     expect(status).toMatchObject({
-      state: "merged", mergeSha: "new123", deploy: { ran: true, ok: true, tail: "done" },
+      state: "merged",
+      mergeSha: "new123",
+      deploy: { ran: true, ok: true, tail: "done" },
     });
   });
 
@@ -194,7 +246,8 @@ describe("computeDeliveryStatus", () => {
       ev({ type: "pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
       ev({ type: "delivery_failed", createdAt: 2, payload: { message: "deploy broke" } }),
       ev({
-        type: "delivered", createdAt: 3,
+        type: "delivered",
+        createdAt: 3,
         payload: { prNumber: 7, mergeSha: "fedcba", deploy: { ran: true, ok: true, tail: "" } },
       }),
     ]);
@@ -205,18 +258,33 @@ describe("computeDeliveryStatus", () => {
 
 describe("withAttachmentIds", () => {
   const attachment = (o: Partial<Attachment>): Attachment => ({
-    id: 1, filename: "shot.png", contentType: "image/png", size: 10, actorName: "claude/dev", createdAt: 1, ...o,
+    id: 1,
+    filename: "shot.png",
+    contentType: "image/png",
+    size: 10,
+    actorName: "claude/dev",
+    createdAt: 1,
+    ...o,
   });
 
   it("leaves events that already carry an id untouched", () => {
-    const events = [ev({ type: "attachment_added", payload: { id: 5, filename: "a.png", contentType: "image/png" } })];
+    const events = [
+      ev({
+        type: "attachment_added",
+        payload: { id: 5, filename: "a.png", contentType: "image/png" },
+      }),
+    ];
     expect(withAttachmentIds(events, [])).toEqual(events);
   });
 
   it("backfills id + contentType for a historical event by matching filename", () => {
     const events = [ev({ type: "attachment_added", payload: { filename: "shot.png", size: 10 } })];
     const result = withAttachmentIds(events, [attachment({ id: 42 })]);
-    expect(result[0].payload).toMatchObject({ id: 42, contentType: "image/png", filename: "shot.png" });
+    expect(result[0].payload).toMatchObject({
+      id: 42,
+      contentType: "image/png",
+      filename: "shot.png",
+    });
   });
 
   it("consumes each attachment at most once so duplicate filenames map to distinct rows", () => {
@@ -249,7 +317,10 @@ describe("Event rendering for delivery events", () => {
 
   it("links the PR in a pr_opened event", async () => {
     const container = await render(
-      ev({ type: "pr_opened", payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9" } })
+      ev({
+        type: "pr_opened",
+        payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9" },
+      }),
     );
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/9");
@@ -260,8 +331,12 @@ describe("Event rendering for delivery events", () => {
     const container = await render(
       ev({
         type: "delivered",
-        payload: { prNumber: 9, mergeSha: "abcdef1234567", deploy: { ran: true, ok: false, tail: "boom" } },
-      })
+        payload: {
+          prNumber: 9,
+          mergeSha: "abcdef1234567",
+          deploy: { ran: true, ok: false, tail: "boom" },
+        },
+      }),
     );
     expect(container.textContent).toContain("PR #9");
     expect(container.textContent).toContain("abcdef1");
@@ -270,7 +345,14 @@ describe("Event rendering for delivery events", () => {
 
   it("links the PR in a gh_pr_merged event with its merge sha", async () => {
     const container = await render(
-      ev({ type: "gh_pr_merged", payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9", mergeSha: "abcdef1234567" } })
+      ev({
+        type: "gh_pr_merged",
+        payload: {
+          prNumber: 9,
+          url: "https://github.com/acme/widgets/pull/9",
+          mergeSha: "abcdef1234567",
+        },
+      }),
     );
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/pull/9");
@@ -280,14 +362,19 @@ describe("Event rendering for delivery events", () => {
 
   it("renders a gh_pr_closed event without a merge sha", async () => {
     const container = await render(
-      ev({ type: "gh_pr_closed", payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9" } })
+      ev({
+        type: "gh_pr_closed",
+        payload: { prNumber: 9, url: "https://github.com/acme/widgets/pull/9" },
+      }),
     );
     expect(container.textContent).toContain("closed");
     expect(container.textContent).not.toContain("at ");
   });
 
   it("flags a gh_checks_failed event as a failure", async () => {
-    const container = await render(ev({ type: "gh_checks_failed", payload: { conclusion: "failure" } }));
+    const container = await render(
+      ev({ type: "gh_checks_failed", payload: { conclusion: "failure" } }),
+    );
     expect(container.textContent).toContain("checks failed");
     expect(container.querySelector(".delivery-failed")).not.toBeNull();
   });
@@ -296,8 +383,12 @@ describe("Event rendering for delivery events", () => {
     const container = await render(
       ev({
         type: "gh_pushed",
-        payload: { commitCount: 3, headSha: "deadbeefcafe", url: "https://github.com/acme/widgets/compare/a...b" },
-      })
+        payload: {
+          commitCount: 3,
+          headSha: "deadbeefcafe",
+          url: "https://github.com/acme/widgets/compare/a...b",
+        },
+      }),
     );
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://github.com/acme/widgets/compare/a...b");
@@ -306,7 +397,9 @@ describe("Event rendering for delivery events", () => {
   });
 
   it("singularizes a gh_pushed event with one commit and renders without a link when there's no url", async () => {
-    const container = await render(ev({ type: "gh_pushed", payload: { commitCount: 1, headSha: null, url: null } }));
+    const container = await render(
+      ev({ type: "gh_pushed", payload: { commitCount: 1, headSha: null, url: null } }),
+    );
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).toContain("1 commit");
     expect(container.textContent).not.toContain("1 commits");
@@ -314,7 +407,10 @@ describe("Event rendering for delivery events", () => {
 
   it("renders an image attachment as a linked thumbnail", async () => {
     const container = await render(
-      ev({ type: "attachment_added", payload: { id: 7, filename: "shot.png", size: 10, contentType: "image/png" } })
+      ev({
+        type: "attachment_added",
+        payload: { id: 7, filename: "shot.png", size: 10, contentType: "image/png" },
+      }),
     );
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("/api/attachments/7/shot.png");
@@ -325,7 +421,10 @@ describe("Event rendering for delivery events", () => {
 
   it("renders a non-image attachment as a filename link", async () => {
     const container = await render(
-      ev({ type: "attachment_added", payload: { id: 8, filename: "clip.mp4", size: 10, contentType: "video/mp4" } })
+      ev({
+        type: "attachment_added",
+        payload: { id: 8, filename: "clip.mp4", size: 10, contentType: "video/mp4" },
+      }),
     );
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("/api/attachments/8/clip.mp4");
@@ -335,7 +434,7 @@ describe("Event rendering for delivery events", () => {
 
   it("falls back to plain text for a historical event with no id and no match", async () => {
     const container = await render(
-      ev({ type: "attachment_added", payload: { filename: "old.png", size: 10 } })
+      ev({ type: "attachment_added", payload: { filename: "old.png", size: 10 } }),
     );
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).toContain("attached old.png");
@@ -356,7 +455,7 @@ describe("Event rendering for progress_note (SYD-43)", () => {
         <Event
           ev={ev({ type: "progress_note", payload: { note: "compiling" } })}
           projectKey="SYD"
-        />
+        />,
       );
     });
     expect(container.textContent).toContain("compiling");
@@ -381,7 +480,9 @@ describe("groupProgressNotes (SYD-104)", () => {
     const n3 = ev({ type: "progress_note", payload: { note: "three" } });
     const after = ev({ type: "comment" });
     expect(groupProgressNotes([before, n1, n2, n3, after])).toEqual([
-      [before], [n1, n2, n3], [after],
+      [before],
+      [n1, n2, n3],
+      [after],
     ]);
   });
 
@@ -456,16 +557,26 @@ describe("ActivityFeed (SYD-104)", () => {
 // doesn't have to guess whether an agent is still working.
 describe("AgentSessionStrip (SYD-43)", () => {
   it("shows a live line per active session with the last note", async () => {
-    vi.mocked(listAgentSessions).mockResolvedValue([{
-      id: 1, ref: "SYD-1", issueTitle: "Ship v1", mode: "container",
-      pid: null, status: "running", exitCode: null,
-      startedAt: Math.floor(Date.now() / 1000) - 300, endedAt: null,
-      lastNote: { note: "running the tests", createdAt: 0 },
-    }]);
+    vi.mocked(listAgentSessions).mockResolvedValue([
+      {
+        id: 1,
+        ref: "SYD-1",
+        issueTitle: "Ship v1",
+        mode: "container",
+        pid: null,
+        status: "running",
+        exitCode: null,
+        startedAt: Math.floor(Date.now() / 1000) - 300,
+        endedAt: null,
+        lastNote: { note: "running the tests", createdAt: 0 },
+      },
+    ]);
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<AgentSessionStrip refId="SYD-1" />); });
+    await act(async () => {
+      root.render(<AgentSessionStrip refId="SYD-1" />);
+    });
     expect(container.textContent).toContain("running the tests");
     expect(container.textContent).toMatch(/5m/);
   });
@@ -475,7 +586,9 @@ describe("AgentSessionStrip (SYD-43)", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
-    await act(async () => { root.render(<AgentSessionStrip refId="SYD-1" />); });
+    await act(async () => {
+      root.render(<AgentSessionStrip refId="SYD-1" />);
+    });
     expect(container.textContent).toBe("");
   });
 });

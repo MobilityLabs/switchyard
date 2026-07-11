@@ -3,7 +3,11 @@ import { parseLabels } from "./labels";
 
 describe("parseLabels", () => {
   it("trims, dedupes, and preserves order", () => {
-    expect(parseLabels(" backend, urgent , backend ,frontend")).toEqual(["backend", "urgent", "frontend"]);
+    expect(parseLabels(" backend, urgent , backend ,frontend")).toEqual([
+      "backend",
+      "urgent",
+      "frontend",
+    ]);
   });
 
   it("drops empty entries", () => {

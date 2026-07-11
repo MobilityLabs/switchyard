@@ -6,7 +6,16 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { getLastProject, href, isIssueRef, isKnownPath, navigate, parsePath, redirect, useRoute } from "./router";
+import {
+  getLastProject,
+  href,
+  isIssueRef,
+  isKnownPath,
+  navigate,
+  parsePath,
+  redirect,
+  useRoute,
+} from "./router";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

@@ -39,6 +39,10 @@ export function acquirePidLock(lockPath: string, hint = "stop it first"): () => 
   }
   writeFileSync(lockPath, String(process.pid));
   return () => {
-    try { rmSync(lockPath); } catch { /* already gone */ }
+    try {
+      rmSync(lockPath);
+    } catch {
+      /* already gone */
+    }
   };
 }

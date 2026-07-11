@@ -18,7 +18,9 @@ if (!dbPath || !cmd) {
   console.log("       tsx src/cli.ts <db-path> add-webhook <url> [PROJECT_KEY] [secret]");
   console.log("       tsx src/cli.ts <db-path> list-webhooks");
   console.log("       tsx src/cli.ts <db-path> rm-webhook <id>");
-  console.log("       tsx src/cli.ts <db-path> add-github-repo <owner/repo> [PROJECT_KEY] [secret]");
+  console.log(
+    "       tsx src/cli.ts <db-path> add-github-repo <owner/repo> [PROJECT_KEY] [secret]",
+  );
   console.log("       tsx src/cli.ts <db-path> list-github-repos");
   console.log("       tsx src/cli.ts <db-path> rm-github-repo <id>");
   process.exit(1);
@@ -60,7 +62,9 @@ try {
       process.exit(1);
     }
     const hook = addWebhook(db, cliActor, { url, projectKey, secret });
-    console.log(`webhook ${hook.id} -> ${hook.url}${projectKey ? ` (project ${projectKey})` : " (all projects)"}${secret ? " (signed)" : ""}`);
+    console.log(
+      `webhook ${hook.id} -> ${hook.url}${projectKey ? ` (project ${projectKey})` : " (all projects)"}${secret ? " (signed)" : ""}`,
+    );
   } else if (cmd === "list-webhooks") {
     for (const h of listWebhooks(db)) {
       console.log(`${h.id}: ${h.url} projectId=${h.projectId ?? "all"}`);
@@ -80,10 +84,14 @@ try {
       process.exit(1);
     }
     const repo = addGithubRepo(db, cliActor, { fullName, projectKey, secret });
-    console.log(`github repo ${repo.id} -> ${repo.fullName}${projectKey ? ` (project ${projectKey})` : " (no project scope)"}${secret ? " (own secret)" : " (shares GITHUB_WEBHOOK_SECRET)"}`);
+    console.log(
+      `github repo ${repo.id} -> ${repo.fullName}${projectKey ? ` (project ${projectKey})` : " (no project scope)"}${secret ? " (own secret)" : " (shares GITHUB_WEBHOOK_SECRET)"}`,
+    );
   } else if (cmd === "list-github-repos") {
     for (const r of listGithubRepos(db)) {
-      console.log(`${r.id}: ${r.fullName} projectId=${r.projectId ?? "none"} secret=${r.secret ? "own" : "shared"}`);
+      console.log(
+        `${r.id}: ${r.fullName} projectId=${r.projectId ?? "none"} secret=${r.secret ? "own" : "shared"}`,
+      );
     }
   } else if (cmd === "rm-github-repo") {
     const id = args[0];

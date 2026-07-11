@@ -38,41 +38,63 @@ describe("usePoll visibility handling", () => {
   it("polls on the interval while the tab is visible", async () => {
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
     expect(fn).toHaveBeenCalledTimes(2);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
   it("stops polling once the tab is hidden", async () => {
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { setVisibility("hidden"); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("refetches immediately and resumes polling once the tab becomes visible again", async () => {
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { setVisibility("hidden"); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      setVisibility("hidden");
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { setVisibility("visible"); });
+    await act(async () => {
+      setVisibility("visible");
+    });
     expect(fn).toHaveBeenCalledTimes(2);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15000);
+    });
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
@@ -80,10 +102,14 @@ describe("usePoll visibility handling", () => {
     setVisibility("hidden");
     const fn = vi.fn(() => Promise.resolve(1));
     const root = createRoot(container);
-    await act(async () => { root.render(<Poller fn={fn} />); });
+    await act(async () => {
+      root.render(<Poller fn={fn} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
   });
 });
@@ -105,7 +131,13 @@ describe("usePoll stale-response guard", () => {
     container.remove();
   });
 
-  function DataPoller({ fn, expose }: { fn: () => Promise<number>; expose: (s: { data: number | null; error: string | null; reload: () => void }) => void }) {
+  function DataPoller({
+    fn,
+    expose,
+  }: {
+    fn: () => Promise<number>;
+    expose: (s: { data: number | null; error: string | null; reload: () => void }) => void;
+  }) {
     const { data, error, reload } = usePoll(fn, [], 15000);
     expose({ data, error, reload });
     return <div>{data === null ? "null" : data}</div>;
@@ -113,16 +145,27 @@ describe("usePoll stale-response guard", () => {
 
   it("ignores a resolution that arrives after unmount", async () => {
     let resolve: ((v: number) => void) | null = null;
-    const fn = vi.fn(() => new Promise<number>((res) => { resolve = res; }));
+    const fn = vi.fn(
+      () =>
+        new Promise<number>((res) => {
+          resolve = res;
+        }),
+    );
     const root = createRoot(container);
-    await act(async () => { root.render(<DataPoller fn={fn} expose={() => {}} />); });
+    await act(async () => {
+      root.render(<DataPoller fn={fn} expose={() => {}} />);
+    });
     expect(fn).toHaveBeenCalledTimes(1);
 
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    await act(async () => { root.unmount(); });
+    await act(async () => {
+      root.unmount();
+    });
     // Resolving after unmount must not trigger a React "state update on an
     // unmounted component" warning — the live guard should short-circuit it.
-    await act(async () => { resolve?.(42); });
+    await act(async () => {
+      resolve?.(42);
+    });
     expect(consoleError).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
@@ -133,20 +176,33 @@ describe("usePoll stale-response guard", () => {
     let state: { data: number | null; error: string | null; reload: () => void } | null = null;
     const root = createRoot(container);
     await act(async () => {
-      root.render(<DataPoller fn={fn} expose={(s) => { state = s; }} />);
+      root.render(
+        <DataPoller
+          fn={fn}
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
     });
     expect(fn).toHaveBeenCalledTimes(1);
 
-    await act(async () => { state!.reload(); });
+    await act(async () => {
+      state!.reload();
+    });
     expect(fn).toHaveBeenCalledTimes(2);
 
     // The first (stale) call resolves after reload kicked off a fresh one —
     // its result must not land.
-    await act(async () => { resolvers[0](1); });
+    await act(async () => {
+      resolvers[0](1);
+    });
     expect(container.textContent).toBe("null");
 
     // The fresh call's result does land.
-    await act(async () => { resolvers[1](2); });
+    await act(async () => {
+      resolvers[1](2);
+    });
     expect(container.textContent).toBe("2");
   });
 
@@ -156,13 +212,22 @@ describe("usePoll stale-response guard", () => {
     let state: { data: number | null; error: string | null; reload: () => void } | null = null;
     const root = createRoot(container);
     await act(async () => {
-      root.render(<DataPoller fn={fn} expose={(s) => { state = s; }} />);
+      root.render(
+        <DataPoller
+          fn={fn}
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
     });
     expect(state!.error).toBe("boom");
     expect(state!.data).toBeNull();
 
     fail = false;
-    await act(async () => { state!.reload(); });
+    await act(async () => {
+      state!.reload();
+    });
     expect(state!.error).toBeNull();
     expect(state!.data).toBe(7);
   });

@@ -16,7 +16,12 @@ export type DeliveryEventInput =
   | { type: "delivered"; prNumber: number; mergeSha: string; deploy: DeployResult }
   | { type: "delivery_failed"; message: string };
 
-export function recordDeliveryEvent(db: Db, actor: Actor, ref: string, input: DeliveryEventInput): void {
+export function recordDeliveryEvent(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  input: DeliveryEventInput,
+): void {
   const issue = getIssue(db, ref);
   const { type, ...payload } = input;
   recordEvent(db, { issueId: issue.id, actorId: actor.id, type, payload });

@@ -38,5 +38,10 @@ export function getAttention(db: Db, issueId: number): AttentionFlag | null {
 
 export function listAttentionByIssueId(db: Db): Map<number, AttentionFlag> {
   const rows = unresolvedDeliveryFailures(db);
-  return new Map(rows.map((r) => [r.issueId, { reason: "delivery_failed", message: r.message ?? "delivery failed" }]));
+  return new Map(
+    rows.map((r) => [
+      r.issueId,
+      { reason: "delivery_failed", message: r.message ?? "delivery failed" },
+    ]),
+  );
 }

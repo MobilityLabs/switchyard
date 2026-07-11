@@ -38,12 +38,25 @@ import { navigate, useRoute } from "../router";
 
 function issue(ref: string, title = `Title for ${ref}`): Issue {
   return {
-    id: Number(ref.split("-")[1]), ref, title, description: "", summary: null,
-    status: "in_review", priority: "none",
-    assigneeId: null, creatorId: 1, labels: [],
-    sourceType: null, sourceDetail: null, sourceUrl: null,
-    needsInput: false, snoozedUntil: null,
-    createdAt: 0, updatedAt: 0, attention: null, openPr: null,
+    id: Number(ref.split("-")[1]),
+    ref,
+    title,
+    description: "",
+    summary: null,
+    status: "in_review",
+    priority: "none",
+    assigneeId: null,
+    creatorId: 1,
+    labels: [],
+    sourceType: null,
+    sourceDetail: null,
+    sourceUrl: null,
+    needsInput: false,
+    snoozedUntil: null,
+    createdAt: 0,
+    updatedAt: 0,
+    attention: null,
+    openPr: null,
   };
 }
 
@@ -105,9 +118,13 @@ describe("Review selection stability", () => {
 
     // Next poll tick: a new issue arrives and the list reorders.
     vi.mocked(listIssues).mockResolvedValue([
-      issue("SYD-3", "Third"), issue("SYD-2", "Second"), issue("SYD-1", "First"),
+      issue("SYD-3", "Third"),
+      issue("SYD-2", "Second"),
+      issue("SYD-1", "First"),
     ]);
-    await act(async () => { vi.advanceTimersByTime(15000); });
+    await act(async () => {
+      vi.advanceTimersByTime(15000);
+    });
     await flush();
 
     expect(refText(container)).toBe("SYD-2");
@@ -118,12 +135,18 @@ describe("Review selection stability", () => {
     vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First"), issue("SYD-2", "Second")]);
     const container = await mountReviewRoute("/review/SYD-9");
 
-    expect(container.querySelector(".review-left")?.textContent).toContain("SYD-9 is no longer in review");
+    expect(container.querySelector(".review-left")?.textContent).toContain(
+      "SYD-9 is no longer in review",
+    );
     expect(refText(container)).toBeNull();
     expect(location.pathname).toBe("/review/SYD-9");
 
-    const jumpButton = [...container.querySelectorAll("button")].find((b) => b.textContent === "Jump to next")!;
-    await act(async () => { jumpButton.click(); });
+    const jumpButton = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent === "Jump to next",
+    )!;
+    await act(async () => {
+      jumpButton.click();
+    });
     await flush();
 
     expect(location.pathname).toBe("/review/SYD-1");
@@ -131,13 +154,17 @@ describe("Review selection stability", () => {
 });
 
 function findButton(container: HTMLElement, label: string): HTMLButtonElement {
-  const button = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes(label));
+  const button = [...container.querySelectorAll("button")].find((b) =>
+    b.textContent?.includes(label),
+  );
   if (!button) throw new Error(`no button labeled "${label}"`);
   return button as HTMLButtonElement;
 }
 
 async function click(el: HTMLElement): Promise<void> {
-  await act(async () => { el.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+  await act(async () => {
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
   await flush();
 }
 
@@ -168,7 +195,9 @@ describe("Review scroll-to-top (SYD-70)", () => {
   async function mount(path: string): Promise<void> {
     history.replaceState(null, "", path);
     const root = createRoot(container);
-    await act(async () => { root.render(<ReviewRoute />); });
+    await act(async () => {
+      root.render(<ReviewRoute />);
+    });
     await flush();
   }
 
@@ -206,7 +235,10 @@ describe("Review scroll-to-top (SYD-70)", () => {
   it("scrolls .content to the top after a successful Send back", async () => {
     await mount("/review/SYD-1");
     const textarea = container.querySelector("textarea")!;
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
     await act(async () => {
       nativeSetter.call(textarea, "please fix the thing");
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
@@ -234,7 +266,10 @@ describe("Review row attention badge (SYD-98)", () => {
 
   it("renders an icon-only badge for an unresolved delivery_failed, with the message as a hover title", async () => {
     vi.mocked(listIssues).mockResolvedValue([
-      { ...issue("SYD-1", "First"), attention: { reason: "delivery_failed", message: "merge conflict" } },
+      {
+        ...issue("SYD-1", "First"),
+        attention: { reason: "delivery_failed", message: "merge conflict" },
+      },
     ]);
     const container = await mountReviewRoute("/review/SYD-1");
     const badge = container.querySelector(".issue-head .badge.danger");

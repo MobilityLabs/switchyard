@@ -45,9 +45,7 @@
 
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  existsSync, readFileSync, mkdirSync, openSync, closeSync, appendFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, mkdirSync, openSync, closeSync, appendFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
@@ -146,7 +144,7 @@ function loadDotEnv(): void {
 function loadConfig(configPath: string): WorkerConfig {
   if (!existsSync(configPath)) {
     throw new Error(
-      `Missing ${configPath} — copy switchyard-worker.example.json to switchyard-worker.json and edit it.`
+      `Missing ${configPath} — copy switchyard-worker.example.json to switchyard-worker.json and edit it.`,
     );
   }
   const raw = JSON.parse(readFileSync(configPath, "utf8")) as unknown;
@@ -168,7 +166,10 @@ function loadConfig(configPath: string): WorkerConfig {
  * caller's own catch/log (e.g. the pr_opened handler in dispatch()) still
  * has the error to report but nothing is lost silently before that. */
 async function postDeliveryEvent(
-  config: WorkerConfig, token: string, ref: string, input: DeliveryEventInput
+  config: WorkerConfig,
+  token: string,
+  ref: string,
+  input: DeliveryEventInput,
 ): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/delivery-events`;
   const label = `POST delivery-events on ${ref}`;
@@ -180,15 +181,23 @@ async function postDeliveryEvent(
           headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
           body: JSON.stringify(input),
         });
-        if (!res.ok) throw new HttpStatusError(res.status, `${label} failed: ${res.status} ${await res.text()}`);
+        if (!res.ok)
+          throw new HttpStatusError(
+            res.status,
+            `${label} failed: ${res.status} ${await res.text()}`,
+          );
       },
       {
         onRetry: (attempt, err, delayMs) =>
-          console.error(`retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`),
-      }
+          console.error(
+            `retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`,
+          ),
+      },
     );
   } catch (err) {
-    console.error(`giving up on ${label} after retries: ${(err as Error).message}\n  payload: ${JSON.stringify(input)}`);
+    console.error(
+      `giving up on ${label} after retries: ${(err as Error).message}\n  payload: ${JSON.stringify(input)}`,
+    );
     throw err;
   }
 }
@@ -200,7 +209,9 @@ async function postDeliveryEvent(
  * per-issue worker log (SYD-105) — console.error alone is easy to miss since
  * dispatched sessions' stdout/stderr already goes to that same log file. */
 export async function reportSessionStart(
-  config: WorkerConfig, token: string, input: { ref: string; mode: "cli" | "container" | "sdk"; pid: number | null },
+  config: WorkerConfig,
+  token: string,
+  input: { ref: string; mode: "cli" | "container" | "sdk"; pid: number | null },
   onError?: (message: string) => void,
 ): Promise<number | null> {
   const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions`;
@@ -212,7 +223,10 @@ export async function reportSessionStart(
         body: JSON.stringify(input),
       });
       if (!res.ok) {
-        throw new HttpStatusError(res.status, `POST agent-sessions for ${input.ref} failed: ${res.status} ${await res.text()}`);
+        throw new HttpStatusError(
+          res.status,
+          `POST agent-sessions for ${input.ref} failed: ${res.status} ${await res.text()}`,
+        );
       }
       return ((await res.json()) as { id: number }).id;
     });
@@ -229,7 +243,10 @@ export async function reportSessionStart(
  * a null id (start never landed) is a silent no-op. Never rejects. See
  * reportSessionStart for the `onError` mirroring contract. */
 export async function reportSessionEnd(
-  config: WorkerConfig, token: string, sessionId: Promise<number | null>, exitCode: number | null,
+  config: WorkerConfig,
+  token: string,
+  sessionId: Promise<number | null>,
+  exitCode: number | null,
   onError?: (message: string) => void,
 ): Promise<void> {
   const id = await sessionId;
@@ -243,7 +260,10 @@ export async function reportSessionEnd(
         body: JSON.stringify({ exitCode }),
       });
       if (!res.ok) {
-        throw new HttpStatusError(res.status, `PATCH agent-sessions/${id} failed: ${res.status} ${await res.text()}`);
+        throw new HttpStatusError(
+          res.status,
+          `PATCH agent-sessions/${id} failed: ${res.status} ${await res.text()}`,
+        );
       }
     });
   } catch (err) {
@@ -287,7 +307,9 @@ export async function refreshDispatchPolicy(config: WorkerConfig, token: string)
     if (!res.ok) throw new HttpStatusError(res.status, await res.text());
     applyDispatchPolicy(config, (await res.json()) as DispatchPolicy);
   } catch (err) {
-    console.error(`could not fetch dispatch policy, keeping last-known values: ${(err as Error).message}`);
+    console.error(
+      `could not fetch dispatch policy, keeping last-known values: ${(err as Error).message}`,
+    );
   }
 }
 
@@ -312,7 +334,10 @@ async function claimIssueHost(config: WorkerConfig, token: string, ref: string):
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/claim`;
   try {
     await withRetry(async () => {
-      const res = await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}` } });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
       if (!res.ok) throw new HttpStatusError(res.status, await res.text());
     });
     return true;
@@ -352,7 +377,7 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
  * and logged here rather than becoming an unhandled rejection. */
 function triggerUnansweredDrain(config: WorkerConfig, token: string): void {
   drainUnansweredQuestions(config, token, { dryRun: false }).catch((err: Error) =>
-    console.error(`unanswered-questions drain failed: ${err.message}`)
+    console.error(`unanswered-questions drain failed: ${err.message}`),
   );
 }
 
@@ -395,7 +420,9 @@ function finishSessionExit(
   exitCode: number | null,
   logLine: (text: string) => void,
 ): void {
-  void reportSessionEnd(config, token, sessionId, exitCode, (message) => logLine(`[worker] ${message}\n`));
+  void reportSessionEnd(config, token, sessionId, exitCode, (message) =>
+    logLine(`[worker] ${message}\n`),
+  );
   console.log(`${ref} exited with code ${exitCode}`);
   logLine(`\n[worker] exited with code ${exitCode}\n`);
   // Delivery gate (SYD-49): a containerized session that pushed agent/<ref>
@@ -411,9 +438,14 @@ function finishSessionExit(
         const line = formatPublishOutcome(agentBranch(ref), outcome);
         console.log(`${ref}: ${line}`);
         logLine(`[worker] ${line}\n`);
-        if ((outcome.status === "opened" || outcome.status === "already-open") && outcome.prNumber !== null) {
+        if (
+          (outcome.status === "opened" || outcome.status === "already-open") &&
+          outcome.prNumber !== null
+        ) {
           postDeliveryEvent(config, token, ref, {
-            type: "pr_opened", prNumber: outcome.prNumber, url: outcome.url,
+            type: "pr_opened",
+            prNumber: outcome.prNumber,
+            url: outcome.url,
           }).catch((err: Error) => {
             console.error(`could not record pr_opened event for ${ref}: ${err.message}`);
             logLine(`[worker] could not record pr_opened event: ${err.message}\n`);
@@ -431,7 +463,11 @@ function finishSessionExit(
 // below drive dispatch() end to end (spawn -> reportSessionStart, exit ->
 // reportSessionEnd) rather than only exercising the two helpers in isolation.
 export function dispatch(
-  issue: ApiIssue, config: WorkerConfig, token: string, role: WorkerRole, opts: { resumed?: boolean } = {}
+  issue: ApiIssue,
+  config: WorkerConfig,
+  token: string,
+  role: WorkerRole,
+  opts: { resumed?: boolean } = {},
 ): void {
   const project = config.projects[projectKeyOf(issue.ref)];
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
@@ -467,13 +503,25 @@ export function dispatch(
     } else {
       // Headless sessions can't answer permission prompts — grant the tools the
       // work needs up front. The "auto" label is the human's consent for this.
-      const allowedTools =
-        config.allowedTools ??
-        ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+      const allowedTools = config.allowedTools ?? [
+        "mcp__switchyard__*",
+        "Bash",
+        "Read",
+        "Edit",
+        "Write",
+        "Grep",
+        "Glob",
+      ];
       child = spawn(
         "claude",
-        ["-p", buildPrompt(issue.ref, opts), "--permission-mode", "acceptEdits",
-         "--allowedTools", allowedTools.join(",")],
+        [
+          "-p",
+          buildPrompt(issue.ref, opts),
+          "--permission-mode",
+          "acceptEdits",
+          "--allowedTools",
+          allowedTools.join(","),
+        ],
         {
           cwd: project.repo,
           detached: true,
@@ -506,11 +554,16 @@ export function dispatch(
   // SYD-74 note in dispatchAnswer) — a failed spawn never creates a session.
   let sessionId: Promise<number | null> = Promise.resolve(null);
   child.on("spawn", () => {
-    sessionId = reportSessionStart(config, token, {
-      ref: issue.ref,
-      mode: config.containerized ? "container" : "cli",
-      pid: child.pid ?? null,
-    }, (message) => logLine(`[worker] ${message}\n`));
+    sessionId = reportSessionStart(
+      config,
+      token,
+      {
+        ref: issue.ref,
+        mode: config.containerized ? "container" : "cli",
+        pid: child.pid ?? null,
+      },
+      (message) => logLine(`[worker] ${message}\n`),
+    );
   });
 
   child.on("exit", (code) => {
@@ -527,7 +580,9 @@ export function dispatch(
     activeMode.delete(issue.ref);
     // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
     // close the session (no-op when spawn never happened: sessionId is null).
-    void reportSessionEnd(config, token, sessionId, null, (message) => logLine(`[worker] ${message}\n`));
+    void reportSessionEnd(config, token, sessionId, null, (message) =>
+      logLine(`[worker] ${message}\n`),
+    );
     console.error(`failed to spawn claude for ${issue.ref}: ${err.message}`);
   });
 }
@@ -547,8 +602,15 @@ function dispatchSdk(
   logPath: string,
   opts: { resumed?: boolean },
 ): void {
-  const allowedTools =
-    config.allowedTools ?? ["mcp__switchyard__*", "Bash", "Read", "Edit", "Write", "Grep", "Glob"];
+  const allowedTools = config.allowedTools ?? [
+    "mcp__switchyard__*",
+    "Bash",
+    "Read",
+    "Edit",
+    "Write",
+    "Grep",
+    "Glob",
+  ];
   // A log-write failure (dir deleted, disk full) must never leak the active
   // slot or reject the chain — one bad append would otherwise crash the whole
   // worker via an unhandled rejection.
@@ -563,7 +625,9 @@ function dispatchSdk(
   console.log(`dispatched ${issue.ref} (sdk session) -> ${logPath}`);
   safeAppend(`[worker] sdk session starting for ${issue.ref}\n`);
   const sessionId = reportSessionStart(
-    config, token, { ref: issue.ref, mode: "sdk", pid: null },
+    config,
+    token,
+    { ref: issue.ref, mode: "sdk", pid: null },
     (message) => safeAppend(`[worker] ${message}\n`),
   );
 
@@ -584,18 +648,24 @@ function dispatchSdk(
       (code) => {
         console.log(`${issue.ref} sdk session finished with code ${code}`);
         safeAppend(`[worker] exited with code ${code}\n`);
-        void reportSessionEnd(config, token, sessionId, code, (message) => safeAppend(`[worker] ${message}\n`));
+        void reportSessionEnd(config, token, sessionId, code, (message) =>
+          safeAppend(`[worker] ${message}\n`),
+        );
       },
       (err: Error) => {
         console.error(`sdk dispatch failed for ${issue.ref}: ${err.message}`);
         safeAppend(
           `[worker] sdk dispatch failed: ${err.message}\n` +
-          `[worker] is worker-sdk installed? run: npm install --prefix worker-sdk\n`,
+            `[worker] is worker-sdk installed? run: npm install --prefix worker-sdk\n`,
         );
-        void reportSessionEnd(config, token, sessionId, null, (message) => safeAppend(`[worker] ${message}\n`));
+        void reportSessionEnd(config, token, sessionId, null, (message) =>
+          safeAppend(`[worker] ${message}\n`),
+        );
       },
     )
-    .catch((err: Error) => console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`))
+    .catch((err: Error) =>
+      console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`),
+    )
     .finally(() => {
       active.delete(issue.ref);
       if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
@@ -610,7 +680,12 @@ function dispatchSdk(
  * post a comment. Runs bare-host (never containerized): read-only work
  * doesn't need the branch/push sandbox containerized mode exists for.
  */
-export function dispatchAnswer(ref: string, config: WorkerConfig, token: string, opts: { dryRun: boolean }): void {
+export function dispatchAnswer(
+  ref: string,
+  config: WorkerConfig,
+  token: string,
+  opts: { dryRun: boolean },
+): void {
   const key = answerKey(ref);
   if (active.has(key)) return;
   if (remainingAnswerCapacity(config, active.keys()) <= 0) {
@@ -664,7 +739,9 @@ export function dispatchAnswer(ref: string, config: WorkerConfig, token: string,
   // no container name to kill.
   const timeoutMs = sessionTimeoutMs(config);
   const watchdog = setTimeout(() => {
-    console.error(`answer session for ${ref} exceeded ${timeoutMs / 1000}s watchdog timeout — killing`);
+    console.error(
+      `answer session for ${ref} exceeded ${timeoutMs / 1000}s watchdog timeout — killing`,
+    );
     killSession(child, null);
   }, timeoutMs);
 
@@ -737,7 +814,9 @@ function dispatchAnswerSdk(
         safeAppend(`[worker] sdk answer dispatch failed: ${err.message}\n`);
       },
     )
-    .catch((err: Error) => console.error(`sdk answer dispatch cleanup error for ${ref}: ${err.message}`))
+    .catch((err: Error) =>
+      console.error(`sdk answer dispatch cleanup error for ${ref}: ${err.message}`),
+    )
     .finally(() => {
       active.delete(key);
       triggerUnansweredDrain(config, token);
@@ -754,7 +833,11 @@ function dispatchAnswerSdk(
  * capacity exists, without depending on the event-poll fast path (pollEvents
  * / findAnswerRefs) having caught the original agent_question event.
  */
-async function drainUnansweredQuestions(config: WorkerConfig, token: string, opts: { dryRun: boolean }): Promise<void> {
+async function drainUnansweredQuestions(
+  config: WorkerConfig,
+  token: string,
+  opts: { dryRun: boolean },
+): Promise<void> {
   let refs: string[];
   try {
     refs = await fetchUnansweredQuestions(config, token);
@@ -779,7 +862,12 @@ async function drainUnansweredQuestions(config: WorkerConfig, token: string, opt
  * before dispatch — a claim refusal means another actor won the race, so
  * that ref is skipped rather than dispatched.
  */
-export async function runTick(config: WorkerConfig, token: string, role: WorkerRole, opts: { dryRun: boolean }): Promise<void> {
+export async function runTick(
+  config: WorkerConfig,
+  token: string,
+  role: WorkerRole,
+  opts: { dryRun: boolean },
+): Promise<void> {
   await runGated(tickGate, async () => {
     if (roleRunsCode(role)) {
       try {
@@ -791,7 +879,9 @@ export async function runTick(config: WorkerConfig, token: string, role: WorkerR
           if (opts.dryRun) {
             recordAttempt(retryState, issue.ref, issue.updatedAt);
             const resumed = resumeRefs.delete(issue.ref);
-            console.log(`[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`);
+            console.log(
+              `[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`,
+            );
             continue;
           }
           if (!(await claimIssueHost(config, token, issue.ref))) continue;
@@ -826,7 +916,12 @@ export async function runTick(config: WorkerConfig, token: string, role: WorkerR
  * worker never resumes work dispatch. Both scans always run regardless of
  * role so the shared eventCursor still advances correctly either way.
  */
-async function pollEvents(config: WorkerConfig, token: string, role: WorkerRole, opts: { dryRun: boolean }): Promise<void> {
+async function pollEvents(
+  config: WorkerConfig,
+  token: string,
+  role: WorkerRole,
+  opts: { dryRun: boolean },
+): Promise<void> {
   const url = `${config.url.replace(/\/$/, "")}/api/events?limit=100`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
@@ -870,7 +965,7 @@ const SHUTDOWN_GRACE_MS = 5000;
 export async function killActiveSessions(
   active: ReadonlyMap<string, ChildProcess | "sdk">,
   activeMode: ReadonlyMap<string, "cli" | "container">,
-  opts: { killFn?: (pid: number, signal: NodeJS.Signals) => void; graceMs?: number } = {}
+  opts: { killFn?: (pid: number, signal: NodeJS.Signals) => void; graceMs?: number } = {},
 ): Promise<void> {
   const killFn = opts.killFn ?? ((pid, signal) => process.kill(pid, signal));
   const graceMs = opts.graceMs ?? SHUTDOWN_GRACE_MS;
@@ -900,7 +995,7 @@ export async function killActiveSessions(
           clearTimeout(timer);
           resolve();
         });
-      })
+      }),
     );
   }
   await Promise.all(waits);
@@ -915,17 +1010,31 @@ const execFileP = promisify(execFile);
  * unrelated containers on the same host.
  */
 async function listLiveContainerNames(): Promise<Set<string>> {
-  const { stdout } = await execFileP("docker", ["ps", "--filter", "name=syd-", "--format", "{{.Names}}"]);
-  return new Set(stdout.split("\n").map((s) => s.trim()).filter(Boolean));
+  const { stdout } = await execFileP("docker", [
+    "ps",
+    "--filter",
+    "name=syd-",
+    "--format",
+    "{{.Names}}",
+  ]);
+  return new Set(
+    stdout
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
 }
 
 async function fetchRunningContainerSessions(
-  config: WorkerConfig, token: string
+  config: WorkerConfig,
+  token: string,
 ): Promise<RunningContainerSessionRow[]> {
   const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
-    throw new Error(`GET /api/agent-sessions?active=true failed: ${res.status} ${await res.text()}`);
+    throw new Error(
+      `GET /api/agent-sessions?active=true failed: ${res.status} ${await res.text()}`,
+    );
   }
   return (await res.json()) as RunningContainerSessionRow[];
 }
@@ -939,7 +1048,11 @@ async function fetchRunningContainerSessions(
  * `active` so the next tick won't try to dispatch it again (which would
  * collide on the still-in-use container name).
  */
-export function adoptContainerSession(session: RunningContainerSessionRow, config: WorkerConfig, token: string): void {
+export function adoptContainerSession(
+  session: RunningContainerSessionRow,
+  config: WorkerConfig,
+  token: string,
+): void {
   const project = config.projects[projectKeyOf(session.ref)];
   if (!project) return;
 
@@ -954,7 +1067,9 @@ export function adoptContainerSession(session: RunningContainerSessionRow, confi
     }
   };
 
-  const child = spawn("docker", ["wait", containerNameFor(session.ref)], { stdio: ["ignore", "pipe", "ignore"] });
+  const child = spawn("docker", ["wait", containerNameFor(session.ref)], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
   active.set(session.ref, child);
   activeMode.set(session.ref, "container");
   console.log(`adopted ${session.ref}: still-running container from before the restart`);
@@ -970,7 +1085,16 @@ export function adoptContainerSession(session: RunningContainerSessionRow, confi
     activeMode.delete(session.ref);
     const parsed = Number.parseInt(output.trim(), 10);
     const exitCode = Number.isFinite(parsed) ? parsed : null;
-    finishSessionExit(session.ref, session.issueTitle, project, config, token, Promise.resolve(session.id), exitCode, logLine);
+    finishSessionExit(
+      session.ref,
+      session.issueTitle,
+      project,
+      config,
+      token,
+      Promise.resolve(session.id),
+      exitCode,
+      logLine,
+    );
   });
   child.on("error", (err) => {
     active.delete(session.ref);
@@ -1003,7 +1127,7 @@ export async function reconcileContainerSessions(
   deps: {
     listLiveContainerNames?: () => Promise<Set<string>>;
     adopt?: (session: RunningContainerSessionRow, config: WorkerConfig, token: string) => void;
-  } = {}
+  } = {},
 ): Promise<void> {
   if (!config.containerized) return;
   const listNames = deps.listLiveContainerNames ?? listLiveContainerNames;
@@ -1021,13 +1145,17 @@ export async function reconcileContainerSessions(
   try {
     sessions = await fetchRunningContainerSessions(config, token);
   } catch (err) {
-    console.error(`startup reconciliation: fetching agent sessions failed, skipping: ${(err as Error).message}`);
+    console.error(
+      `startup reconciliation: fetching agent sessions failed, skipping: ${(err as Error).message}`,
+    );
     return;
   }
 
   const { orphaned, live } = partitionContainerSessions(sessions, liveNames);
   for (const session of orphaned) {
-    console.log(`reconcile: ${session.ref} has no running container — closing stuck session ${session.id}`);
+    console.log(
+      `reconcile: ${session.ref} has no running container — closing stuck session ${session.id}`,
+    );
     await reportSessionEnd(config, token, Promise.resolve(session.id), null);
   }
   for (const session of live) {
@@ -1058,7 +1186,7 @@ function acquireRoleLock(role: WorkerRole): () => void {
   const target = role === "all" ? paths.all : role === "code" ? paths.code : paths.answer;
   return acquirePidLock(
     target,
-    "stop it first (launchctl unload the matching com.switchyard.worker* LaunchAgent, or kill the pid)"
+    "stop it first (launchctl unload the matching com.switchyard.worker* LaunchAgent, or kill the pid)",
   );
 }
 
@@ -1088,14 +1216,14 @@ async function main(): Promise<void> {
   const releaseLock = acquireRoleLock(role);
   if (!dryRun) {
     await reconcileContainerSessions(config, token).catch((err: Error) =>
-      console.error(`startup reconciliation failed: ${err.message}`)
+      console.error(`startup reconciliation failed: ${err.message}`),
     );
   }
   await runTick(config, token, role, { dryRun });
 
   console.log(
     `role=${role} polling every ${config.intervalSeconds}s, event feed every ${config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS}s ` +
-    `(maxConcurrent=${config.maxConcurrent}, maxAnswerConcurrent=${config.maxAnswerConcurrent ?? DEFAULT_MAX_ANSWER_CONCURRENT}, label="${config.label}")`
+      `(maxConcurrent=${config.maxConcurrent}, maxAnswerConcurrent=${config.maxAnswerConcurrent ?? DEFAULT_MAX_ANSWER_CONCURRENT}, label="${config.label}")`,
   );
 
   // Self-rescheduling setTimeout loops (rather than setInterval) so that a
@@ -1120,14 +1248,17 @@ async function main(): Promise<void> {
   };
   const scheduleEventPoll = () => {
     if (stopped) return;
-    eventTimer = setTimeout(async () => {
-      try {
-        await pollEvents(config, token, role, { dryRun });
-      } catch (err) {
-        console.error(`event poll failed: ${(err as Error).message}`);
-      }
-      scheduleEventPoll();
-    }, (config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS) * 1000);
+    eventTimer = setTimeout(
+      async () => {
+        try {
+          await pollEvents(config, token, role, { dryRun });
+        } catch (err) {
+          console.error(`event poll failed: ${(err as Error).message}`);
+        }
+        scheduleEventPoll();
+      },
+      (config.eventPollSeconds ?? DEFAULT_EVENT_POLL_SECONDS) * 1000,
+    );
   };
   scheduleTick();
   scheduleEventPoll();

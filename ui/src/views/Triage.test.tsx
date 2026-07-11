@@ -26,12 +26,25 @@ vi.mock("../api", () => ({
 import { listIssues, markDuplicate, updateIssue } from "../api";
 
 const ISSUE: Issue = {
-  id: 1, ref: "SYD-1", title: "Do the thing", description: "", summary: null,
-  status: "triage", priority: "none",
-  assigneeId: null, creatorId: 1, labels: [],
-  sourceType: null, sourceDetail: null, sourceUrl: null,
-  needsInput: false, snoozedUntil: null,
-  createdAt: 0, updatedAt: 0, attention: null, openPr: null,
+  id: 1,
+  ref: "SYD-1",
+  title: "Do the thing",
+  description: "",
+  summary: null,
+  status: "triage",
+  priority: "none",
+  assigneeId: null,
+  creatorId: 1,
+  labels: [],
+  sourceType: null,
+  sourceDetail: null,
+  sourceUrl: null,
+  needsInput: false,
+  snoozedUntil: null,
+  createdAt: 0,
+  updatedAt: 0,
+  attention: null,
+  openPr: null,
 };
 
 describe("defaultAcceptPriority", () => {
@@ -55,11 +68,13 @@ describe("TriageRow accept → todo", () => {
       root.render(
         <TriageRow
           issue={issue}
-          act={(fn: () => Promise<unknown>) => { fn(); }}
+          act={(fn: () => Promise<unknown>) => {
+            fn();
+          }}
           knownActorNames={[]}
           expanded={false}
           onToggleExpand={() => {}}
-        />
+        />,
       );
     });
     return container;
@@ -67,7 +82,9 @@ describe("TriageRow accept → todo", () => {
 
   it("accepts immediately with the default priority, leaving labels untouched", async () => {
     const container = await renderRow(ISSUE);
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
+    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Accept → todo",
+    )!;
 
     await reactAct(async () => acceptButton.click());
 
@@ -76,7 +93,9 @@ describe("TriageRow accept → todo", () => {
 
   it("keeps an already-set priority instead of overriding it", async () => {
     const container = await renderRow({ ...ISSUE, priority: "high", labels: ["backend"] });
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
+    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Accept → todo",
+    )!;
 
     await reactAct(async () => acceptButton.click());
 
@@ -99,7 +118,7 @@ describe("TriageRow keyboard accessibility", () => {
           knownActorNames={[]}
           expanded={expanded}
           onToggleExpand={onToggleExpand}
-        />
+        />,
       );
     });
     return container;
@@ -115,30 +134,44 @@ describe("TriageRow keyboard accessibility", () => {
 
   it("toggles expansion on Enter", async () => {
     let toggled = 0;
-    const container = await renderRow(false, () => { toggled += 1; });
+    const container = await renderRow(false, () => {
+      toggled += 1;
+    });
     const row = container.querySelector(".triage-row")!;
     await reactAct(async () => {
-      row.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(toggled).toBe(1);
   });
 
   it("toggles expansion on Space", async () => {
     let toggled = 0;
-    const container = await renderRow(false, () => { toggled += 1; });
+    const container = await renderRow(false, () => {
+      toggled += 1;
+    });
     const row = container.querySelector(".triage-row")!;
     await reactAct(async () => {
-      row.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }));
+      row.dispatchEvent(
+        new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+      );
     });
     expect(toggled).toBe(1);
   });
 
   it("leaves toggling to the control when Enter originates from a nested button", async () => {
     let toggled = 0;
-    const container = await renderRow(false, () => { toggled += 1; });
-    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Accept → todo")!;
+    const container = await renderRow(false, () => {
+      toggled += 1;
+    });
+    const acceptButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Accept → todo",
+    )!;
     await reactAct(async () => {
-      acceptButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      acceptButton.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
     });
     expect(toggled).toBe(0);
   });
@@ -161,13 +194,21 @@ describe("Triage project scoping", () => {
 
   it("passes the project filter through to both the inbox and needs-input polls", async () => {
     await renderTriage("SYD");
-    expect(listIssues).toHaveBeenCalledWith({ project: "SYD", status: "triage", excludeSnoozed: true });
+    expect(listIssues).toHaveBeenCalledWith({
+      project: "SYD",
+      status: "triage",
+      excludeSnoozed: true,
+    });
     expect(listIssues).toHaveBeenCalledWith({ project: "SYD", needsInput: true });
   });
 
   it("omits the project filter for All projects", async () => {
     await renderTriage(null);
-    expect(listIssues).toHaveBeenCalledWith({ project: undefined, status: "triage", excludeSnoozed: true });
+    expect(listIssues).toHaveBeenCalledWith({
+      project: undefined,
+      status: "triage",
+      excludeSnoozed: true,
+    });
     expect(listIssues).toHaveBeenCalledWith({ project: undefined, needsInput: true });
   });
 });
@@ -189,11 +230,13 @@ describe("TriageRow Duplicate/Dismiss modals", () => {
       root.render(
         <TriageRow
           issue={ISSUE}
-          act={(fn: () => Promise<unknown>) => { fn(); }}
+          act={(fn: () => Promise<unknown>) => {
+            fn();
+          }}
           knownActorNames={[]}
           expanded={false}
           onToggleExpand={() => {}}
-        />
+        />,
       );
     });
     return container;
@@ -203,7 +246,9 @@ describe("TriageRow Duplicate/Dismiss modals", () => {
     const container = await renderRow();
     expect(container.querySelector(".modal-overlay")).toBeNull();
 
-    const duplicateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Duplicate…")!;
+    const duplicateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Duplicate…",
+    )!;
     await reactAct(async () => duplicateButton.click());
     expect(container.querySelector(".modal-overlay")).not.toBeNull();
 
@@ -213,7 +258,9 @@ describe("TriageRow Duplicate/Dismiss modals", () => {
       nativeSetter.call(input, "SYD-99");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    const okButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "OK")!;
+    const okButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "OK",
+    )!;
     await reactAct(async () => okButton.click());
 
     expect(markDuplicate).toHaveBeenCalledWith("SYD-1", "SYD-99");
@@ -222,10 +269,14 @@ describe("TriageRow Duplicate/Dismiss modals", () => {
 
   it("closes the Duplicate modal without acting when Cancel is clicked", async () => {
     const container = await renderRow();
-    const duplicateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Duplicate…")!;
+    const duplicateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Duplicate…",
+    )!;
     await reactAct(async () => duplicateButton.click());
 
-    const cancelButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Cancel")!;
+    const cancelButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Cancel",
+    )!;
     await reactAct(async () => cancelButton.click());
 
     expect(markDuplicate).not.toHaveBeenCalled();
@@ -234,11 +285,15 @@ describe("TriageRow Duplicate/Dismiss modals", () => {
 
   it("opens a confirm modal for Dismiss and cancels the issue on confirm", async () => {
     const container = await renderRow();
-    const dismissButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Dismiss")!;
+    const dismissButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Dismiss",
+    )!;
     await reactAct(async () => dismissButton.click());
     expect(container.querySelector(".modal-overlay")).not.toBeNull();
 
-    const confirmButton = [...container.querySelectorAll<HTMLButtonElement>("button")].filter((b) => b.textContent === "Dismiss")[1];
+    const confirmButton = [...container.querySelectorAll<HTMLButtonElement>("button")].filter(
+      (b) => b.textContent === "Dismiss",
+    )[1];
     await reactAct(async () => confirmButton.click());
 
     expect(updateIssue).toHaveBeenCalledWith("SYD-1", { status: "canceled" });
@@ -247,10 +302,14 @@ describe("TriageRow Duplicate/Dismiss modals", () => {
 
   it("closes the Dismiss modal without acting when Cancel is clicked", async () => {
     const container = await renderRow();
-    const dismissButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Dismiss")!;
+    const dismissButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Dismiss",
+    )!;
     await reactAct(async () => dismissButton.click());
 
-    const cancelButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Cancel")!;
+    const cancelButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === "Cancel",
+    )!;
     await reactAct(async () => cancelButton.click());
 
     expect(updateIssue).not.toHaveBeenCalled();

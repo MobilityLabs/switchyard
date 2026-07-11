@@ -19,12 +19,25 @@ vi.mock("../api", () => ({
 import { listIssues, listProjects } from "../api";
 
 const ISSUE: Issue = {
-  id: 1, ref: "SYD-42", title: "Fix the widget", description: "", summary: null,
-  status: "in_progress", priority: "medium",
-  assigneeId: null, creatorId: 1, labels: [],
-  sourceType: null, sourceDetail: null, sourceUrl: null,
-  needsInput: false, snoozedUntil: null,
-  createdAt: 0, updatedAt: 1700000000, attention: null, openPr: null,
+  id: 1,
+  ref: "SYD-42",
+  title: "Fix the widget",
+  description: "",
+  summary: null,
+  status: "in_progress",
+  priority: "medium",
+  assigneeId: null,
+  creatorId: 1,
+  labels: [],
+  sourceType: null,
+  sourceDetail: null,
+  sourceUrl: null,
+  needsInput: false,
+  snoozedUntil: null,
+  createdAt: 0,
+  updatedAt: 1700000000,
+  attention: null,
+  openPr: null,
 };
 
 const PROJECTS: Project[] = [{ key: "SYD", name: "Switchyard" } as Project];
@@ -82,11 +95,16 @@ describe("Search view", () => {
     vi.mocked(listIssues).mockResolvedValue([]);
     const container = await renderSearch("widget");
     const projectSelect = container.querySelector(".search-filters select") as HTMLSelectElement;
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLSelectElement.prototype,
+      "value",
+    )!.set!;
     await act(async () => {
       nativeSetter.call(projectSelect, "SYD");
       projectSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(listIssues).toHaveBeenLastCalledWith(expect.objectContaining({ text: "widget", project: "SYD" }));
+    expect(listIssues).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "widget", project: "SYD" }),
+    );
   });
 });

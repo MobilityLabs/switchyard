@@ -1,10 +1,28 @@
 import { useState } from "react";
-import { addComment, addDependency, getIssue, listAgentSessions, redeliverIssue, removeDependency, updateIssue } from "../api";
+import {
+  addComment,
+  addDependency,
+  getIssue,
+  listAgentSessions,
+  redeliverIssue,
+  removeDependency,
+  updateIssue,
+} from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { href } from "../router";
-import { PRIORITIES, STATUSES, type Activity, type Attachment, type DependencyRef, type DeployResult, type Issue, type Priority, type Status } from "../types";
+import {
+  PRIORITIES,
+  STATUSES,
+  type Activity,
+  type Attachment,
+  type DependencyRef,
+  type DeployResult,
+  type Issue,
+  type Priority,
+  type Status,
+} from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
@@ -25,7 +43,9 @@ export function summaryText(issue: { summary: string | null; description: string
 }
 
 export function DescriptionSection({
-  issue, projectKey, knownActorNames,
+  issue,
+  projectKey,
+  knownActorNames,
 }: {
   issue: { summary: string | null; description: string };
   projectKey: string;
@@ -34,7 +54,11 @@ export function DescriptionSection({
   if (!issue.description.trim()) return <p className="empty">No description.</p>;
   return (
     <div className="description panel">
-      <Markdown text={issue.description} projectKey={projectKey} knownActorNames={knownActorNames} />
+      <Markdown
+        text={issue.description}
+        projectKey={projectKey}
+        knownActorNames={knownActorNames}
+      />
       <DesignEmbeds text={issue.description} />
     </div>
   );
@@ -98,7 +122,12 @@ export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | nu
   }
   if (prNumber === null && failedMessage === null) return null;
   return {
-    prNumber, url, state, mergeSha, deploy, checks,
+    prNumber,
+    url,
+    state,
+    mergeSha,
+    deploy,
+    checks,
     failedMessage: lastFailedAt > lastDeliveredAt ? failedMessage : null,
   };
 }
@@ -146,7 +175,9 @@ export function groupProgressNotes(activity: Activity[]): Activity[][] {
 }
 
 function ProgressNoteGroup({
-  notes, projectKey, knownActorNames,
+  notes,
+  projectKey,
+  knownActorNames,
 }: {
   notes: Activity[];
   projectKey: string;
@@ -156,15 +187,23 @@ function ProgressNoteGroup({
   if (expanded) {
     return (
       <div className="progress-note-group expanded">
-        {notes.map((ev, i) => <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={knownActorNames} />)}
-        <button className="link-button" onClick={() => setExpanded(false)}>Show less</button>
+        {notes.map((ev, i) => (
+          <Event key={i} ev={ev} projectKey={projectKey} knownActorNames={knownActorNames} />
+        ))}
+        <button className="link-button" onClick={() => setExpanded(false)}>
+          Show less
+        </button>
       </div>
     );
   }
   const hiddenCount = notes.length - 1;
   return (
     <div className="progress-note-group">
-      <Event ev={notes[notes.length - 1]} projectKey={projectKey} knownActorNames={knownActorNames} />
+      <Event
+        ev={notes[notes.length - 1]}
+        projectKey={projectKey}
+        knownActorNames={knownActorNames}
+      />
       <button className="link-button" onClick={() => setExpanded(true)}>
         + {hiddenCount} earlier progress note{hiddenCount === 1 ? "" : "s"}
       </button>
@@ -174,7 +213,9 @@ function ProgressNoteGroup({
 
 /** Activity feed shared by IssueDetail/Triage/Review — collapses runs of progress_note events. */
 export function ActivityFeed({
-  activity, projectKey, knownActorNames = [],
+  activity,
+  projectKey,
+  knownActorNames = [],
 }: {
   activity: Activity[];
   projectKey: string;
@@ -183,16 +224,24 @@ export function ActivityFeed({
   return (
     <>
       {groupProgressNotes(activity).map((group, i) =>
-        group.length > 1
-          ? <ProgressNoteGroup key={i} notes={group} projectKey={projectKey} knownActorNames={knownActorNames} />
-          : <Event key={i} ev={group[0]} projectKey={projectKey} knownActorNames={knownActorNames} />
+        group.length > 1 ? (
+          <ProgressNoteGroup
+            key={i}
+            notes={group}
+            projectKey={projectKey}
+            knownActorNames={knownActorNames}
+          />
+        ) : (
+          <Event key={i} ev={group[0]} projectKey={projectKey} knownActorNames={knownActorNames} />
+        ),
       )}
     </>
   );
 }
 
 export function AttentionBanner({
-  attention, onRetry,
+  attention,
+  onRetry,
 }: {
   attention: Issue["attention"];
   onRetry?: () => void;
@@ -202,7 +251,9 @@ export function AttentionBanner({
     <p className="banner danger issue-attention">
       ⛔ {attention.message}
       {onRetry && (
-        <button className="retry-delivery" onClick={onRetry}>Retry delivery</button>
+        <button className="retry-delivery" onClick={onRetry}>
+          Retry delivery
+        </button>
       )}
     </p>
   );
@@ -213,19 +264,30 @@ function DeliveryStrip({ status }: { status: DeliveryStatus }) {
     <div className="delivery-strip panel">
       {status.prNumber !== null && (
         <span className="delivery-pr">
-          {status.url
-            ? <a href={safeHref(status.url)} target="_blank" rel="noreferrer">PR #{status.prNumber}</a>
-            : `PR #${status.prNumber}`}
-          {" "}
+          {status.url ? (
+            <a href={safeHref(status.url)} target="_blank" rel="noreferrer">
+              PR #{status.prNumber}
+            </a>
+          ) : (
+            `PR #${status.prNumber}`
+          )}{" "}
           <span className={`badge delivery-state delivery-${status.state}`}>{status.state}</span>
         </span>
       )}
       {status.mergeSha && (
-        <span className="delivery-sha">merged <code>{status.mergeSha.slice(0, 7)}</code></span>
+        <span className="delivery-sha">
+          merged <code>{status.mergeSha.slice(0, 7)}</code>
+        </span>
       )}
       {status.deploy && (
-        <span className={`badge delivery-deploy delivery-deploy-${status.deploy.ran ? (status.deploy.ok ? "ok" : "failed") : "skipped"}`}>
-          {status.deploy.ran ? (status.deploy.ok ? "deploy ok" : "deploy FAILED") : "deploy skipped"}
+        <span
+          className={`badge delivery-deploy delivery-deploy-${status.deploy.ran ? (status.deploy.ok ? "ok" : "failed") : "skipped"}`}
+        >
+          {status.deploy.ran
+            ? status.deploy.ok
+              ? "deploy ok"
+              : "deploy FAILED"
+            : "deploy skipped"}
         </span>
       )}
       {status.checks && (
@@ -252,7 +314,12 @@ export function AgentSessionStrip({ refId }: { refId: string }) {
       {data.map((s) => (
         <span key={s.id}>
           🤖 agent session running ({s.mode}) · {formatElapsed(s.startedAt, null)} elapsed
-          {s.lastNote && <> · <em>{s.lastNote.note}</em></>}
+          {s.lastNote && (
+            <>
+              {" "}
+              · <em>{s.lastNote.note}</em>
+            </>
+          )}
         </span>
       ))}
     </div>
@@ -263,7 +330,11 @@ export default function IssueDetail({ refId }: { refId: string }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(refId, draft, setDraft);
+  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
+    refId,
+    draft,
+    setDraft,
+  );
   const actorNames = useActorNames();
 
   if (error && !data) return <p className="error-bar">{error}</p>;
@@ -274,11 +345,18 @@ export default function IssueDetail({ refId }: { refId: string }) {
   const activity = withAttachmentIds(data.activity, data.attachments);
 
   const act = (fn: () => Promise<unknown>) =>
-    fn().then(() => { setActionError(null); reload(); }, (e) => setActionError(e.message));
+    fn().then(
+      () => {
+        setActionError(null);
+        reload();
+      },
+      (e) => setActionError(e.message),
+    );
 
   const setLabels = (labels: string[]) => act(() => updateIssue(refId, { labels }));
   const isAuto = data.labels.includes("auto");
-  const toggleAuto = () => setLabels(isAuto ? data.labels.filter((l) => l !== "auto") : [...data.labels, "auto"]);
+  const toggleAuto = () =>
+    setLabels(isAuto ? data.labels.filter((l) => l !== "auto") : [...data.labels, "auto"]);
   const removeLabel = (label: string) => setLabels(data.labels.filter((l) => l !== label));
   const addLabel = (raw: string) => {
     const label = raw.trim();
@@ -292,11 +370,25 @@ export default function IssueDetail({ refId }: { refId: string }) {
       <header className="issue-head">
         <span className="ref">{data.ref}</span>
         <h2>{data.title}</h2>
-        <select value={data.status} onChange={(e) => act(() => updateIssue(refId, { status: e.target.value as Status }))}>
-          {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+        <select
+          value={data.status}
+          onChange={(e) => act(() => updateIssue(refId, { status: e.target.value as Status }))}
+        >
+          {STATUSES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
         </select>
-        <select value={data.priority} onChange={(e) => act(() => updateIssue(refId, { priority: e.target.value as Priority }))}>
-          {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+        <select
+          value={data.priority}
+          onChange={(e) => act(() => updateIssue(refId, { priority: e.target.value as Priority }))}
+        >
+          {PRIORITIES.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
         </select>
         <button
           className={`pill auto-pill${isAuto ? " active" : ""}`}
@@ -306,7 +398,10 @@ export default function IssueDetail({ refId }: { refId: string }) {
           🤖 auto
         </button>
       </header>
-      <AttentionBanner attention={data.attention} onRetry={() => act(() => redeliverIssue(refId))} />
+      <AttentionBanner
+        attention={data.attention}
+        onRetry={() => act(() => redeliverIssue(refId))}
+      />
       <div className="labels-row">
         {otherLabels.map((label) => (
           <span key={label} className="chip label-chip">
@@ -323,7 +418,9 @@ export default function IssueDetail({ refId }: { refId: string }) {
         <LabelInput onAdd={addLabel} />
       </div>
       {actionError && (
-        <p className="error-bar">{actionError} <button onClick={() => setActionError(null)}>×</button></p>
+        <p className="error-bar">
+          {actionError} <button onClick={() => setActionError(null)}>×</button>
+        </p>
       )}
       <PollErrorBar error={error} />
       {delivery && <DeliveryStrip status={delivery} />}
@@ -331,17 +428,23 @@ export default function IssueDetail({ refId }: { refId: string }) {
       {data.sourceType && (
         <div className="provenance panel">
           Filed from: {data.sourceType} · {data.sourceDetail ?? ""}
-          {data.sourceUrl && <> · <a href={safeHref(data.sourceUrl)} target="_blank" rel="noreferrer">link</a></>}
+          {data.sourceUrl && (
+            <>
+              {" "}
+              ·{" "}
+              <a href={safeHref(data.sourceUrl)} target="_blank" rel="noreferrer">
+                link
+              </a>
+            </>
+          )}
         </div>
       )}
       {data.needsInput && (
-        <p className="banner warn">⚠ An agent is waiting on a human answer — reply in a comment below.</p>
+        <p className="banner warn">
+          ⚠ An agent is waiting on a human answer — reply in a comment below.
+        </p>
       )}
-      <DescriptionSection
-        issue={data}
-        projectKey={projectKey}
-        knownActorNames={actorNames}
-      />
+      <DescriptionSection issue={data} projectKey={projectKey} knownActorNames={actorNames} />
 
       <Dependencies refId={refId} deps={data.dependencies} act={act} />
 
@@ -381,13 +484,15 @@ function AttachmentsStrip({ attachments }: { attachments: Attachment[] }) {
           const url = attachmentUrl(a.id, a.filename);
           return (
             <li key={a.id}>
-              {a.contentType.startsWith("image/")
-                ? (
-                  <a href={url} target="_blank" rel="noreferrer">
-                    <img src={url} alt={a.filename} className="attachment-thumb" />
-                  </a>
-                )
-                : <a href={url} target="_blank" rel="noreferrer">{a.filename}</a>}
+              {a.contentType.startsWith("image/") ? (
+                <a href={url} target="_blank" rel="noreferrer">
+                  <img src={url} alt={a.filename} className="attachment-thumb" />
+                </a>
+              ) : (
+                <a href={url} target="_blank" rel="noreferrer">
+                  {a.filename}
+                </a>
+              )}
             </li>
           );
         })}
@@ -415,15 +520,19 @@ function Dependencies({
     const ref = other.trim().toUpperCase();
     if (!ref) return;
     act(() =>
-      (direction === "blocked-by" ? addDependency(ref, refId) : addDependency(refId, ref))
-        .then(() => setOther("")),
+      (direction === "blocked-by" ? addDependency(ref, refId) : addDependency(refId, ref)).then(
+        () => setOther(""),
+      ),
     );
   };
 
   const row = (d: DependencyRef, dir: "blocked-by" | "blocks") => (
     <li key={`${dir}-${d.ref}`}>
-      <a className="ref" href={href({ view: "issue", ref: d.ref })}>{d.ref}</a>{" "}
-      {d.title} <span className={`badge dep-status dep-${d.status}`}>{d.status.replace(/_/g, " ")}</span>
+      <a className="ref" href={href({ view: "issue", ref: d.ref })}>
+        {d.ref}
+      </a>{" "}
+      {d.title}{" "}
+      <span className={`badge dep-status dep-${d.status}`}>{d.status.replace(/_/g, " ")}</span>
       <button
         className="chip-remove"
         title="Remove this dependency"
@@ -443,7 +552,8 @@ function Dependencies({
       <h3>Dependencies</h3>
       {openBlockers.length > 0 && (
         <p className="banner warn">
-          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents can't claim this issue.
+          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents can&apos;t
+          claim this issue.
         </p>
       )}
       {deps.blockedBy.length > 0 && (
@@ -463,7 +573,10 @@ function Dependencies({
       )}
       <div className="dep-add">
         <span>This issue is</span>
-        <select value={direction} onChange={(e) => setDirection(e.target.value as "blocked-by" | "blocks")}>
+        <select
+          value={direction}
+          onChange={(e) => setDirection(e.target.value as "blocked-by" | "blocks")}
+        >
           <option value="blocked-by">blocked by</option>
           <option value="blocks">blocking</option>
         </select>
@@ -478,7 +591,9 @@ function Dependencies({
             add();
           }}
         />
-        <button disabled={!other.trim()} onClick={add}>Add</button>
+        <button disabled={!other.trim()} onClick={add}>
+          Add
+        </button>
       </div>
     </div>
   );
@@ -515,8 +630,14 @@ export function Event({
   if (ev.type === "comment") {
     return (
       <article className="comment panel">
-        <header><strong>{ev.actorName}</strong> <time>{when}</time></header>
-        <Markdown text={String(ev.payload.body ?? "")} projectKey={projectKey} knownActorNames={knownActorNames} />
+        <header>
+          <strong>{ev.actorName}</strong> <time>{when}</time>
+        </header>
+        <Markdown
+          text={String(ev.payload.body ?? "")}
+          projectKey={projectKey}
+          knownActorNames={knownActorNames}
+        />
       </article>
     );
   }
@@ -525,38 +646,61 @@ export function Event({
     return (
       <p className="event">
         <strong>{ev.actorName}</strong> opened{" "}
-        {url ? <a href={safeHref(url)} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
-        {" "}<time>{when}</time>
+        {url ? (
+          <a href={safeHref(url)} target="_blank" rel="noreferrer">
+            PR #{String(ev.payload.prNumber)}
+          </a>
+        ) : (
+          `PR #${String(ev.payload.prNumber)}`
+        )}{" "}
+        <time>{when}</time>
       </p>
     );
   }
   if (ev.type === "delivered") {
     const sha = String(ev.payload.mergeSha ?? "");
     const deploy = ev.payload.deploy as DeployResult | undefined;
-    const deployText = !deploy?.ran ? "deploy skipped" : deploy.ok ? "deploy succeeded" : "deploy FAILED";
+    const deployText = !deploy?.ran
+      ? "deploy skipped"
+      : deploy.ok
+        ? "deploy succeeded"
+        : "deploy FAILED";
     return (
       <p className="event">
-        <strong>{ev.actorName}</strong> delivered PR #{String(ev.payload.prNumber)} at <code>{sha.slice(0, 7)}</code> · {deployText}{" "}
-        <time>{when}</time>
+        <strong>{ev.actorName}</strong> delivered PR #{String(ev.payload.prNumber)} at{" "}
+        <code>{sha.slice(0, 7)}</code> · {deployText} <time>{when}</time>
       </p>
     );
   }
   if (ev.type === "delivery_failed") {
     return (
       <p className="event delivery-failed">
-        <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")} <time>{when}</time>
+        <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")}{" "}
+        <time>{when}</time>
       </p>
     );
   }
   if (ev.type === "gh_pr_opened" || ev.type === "gh_pr_merged" || ev.type === "gh_pr_closed") {
     const url = String(ev.payload.url ?? "");
-    const verb = ev.type === "gh_pr_opened" ? "opened" : ev.type === "gh_pr_merged" ? "merged" : "closed";
+    const verb =
+      ev.type === "gh_pr_opened" ? "opened" : ev.type === "gh_pr_merged" ? "merged" : "closed";
     return (
       <p className="event">
         GitHub: {verb}{" "}
-        {url ? <a href={safeHref(url)} target="_blank" rel="noreferrer">PR #{String(ev.payload.prNumber)}</a> : `PR #${String(ev.payload.prNumber)}`}
-        {ev.type === "gh_pr_merged" && ev.payload.mergeSha ? <> at <code>{String(ev.payload.mergeSha).slice(0, 7)}</code></> : null}
-        {" "}<time>{when}</time>
+        {url ? (
+          <a href={safeHref(url)} target="_blank" rel="noreferrer">
+            PR #{String(ev.payload.prNumber)}
+          </a>
+        ) : (
+          `PR #${String(ev.payload.prNumber)}`
+        )}
+        {ev.type === "gh_pr_merged" && ev.payload.mergeSha ? (
+          <>
+            {" "}
+            at <code>{String(ev.payload.mergeSha).slice(0, 7)}</code>
+          </>
+        ) : null}{" "}
+        <time>{when}</time>
       </p>
     );
   }
@@ -574,9 +718,21 @@ export function Event({
     const label = `${count} commit${count === 1 ? "" : "s"}`;
     return (
       <p className="event">
-        GitHub: pushed {url ? <a href={safeHref(url)} target="_blank" rel="noreferrer">{label}</a> : label}
-        {sha && <> (<code>{sha.slice(0, 7)}</code>)</>}
-        {" "}<time>{when}</time>
+        GitHub: pushed{" "}
+        {url ? (
+          <a href={safeHref(url)} target="_blank" rel="noreferrer">
+            {label}
+          </a>
+        ) : (
+          label
+        )}
+        {sha && (
+          <>
+            {" "}
+            (<code>{sha.slice(0, 7)}</code>)
+          </>
+        )}{" "}
+        <time>{when}</time>
       </p>
     );
   }
@@ -604,14 +760,16 @@ export function Event({
     return (
       <p className="event attachment-event">
         <strong>{ev.actorName}</strong> attached{" "}
-        {contentType.startsWith("image/")
-          ? (
-            <a href={url} target="_blank" rel="noreferrer">
-              <img src={url} alt={filename} className="attachment-thumb" />
-            </a>
-          )
-          : <a href={url} target="_blank" rel="noreferrer">{filename}</a>}
-        {" "}<time>{when}</time>
+        {contentType.startsWith("image/") ? (
+          <a href={url} target="_blank" rel="noreferrer">
+            <img src={url} alt={filename} className="attachment-thumb" />
+          </a>
+        ) : (
+          <a href={url} target="_blank" rel="noreferrer">
+            {filename}
+          </a>
+        )}{" "}
+        <time>{when}</time>
       </p>
     );
   }
@@ -623,7 +781,8 @@ export function Event({
         : "";
   return (
     <p className="event">
-      <strong>{ev.actorName}</strong> {ev.type.replace(/_/g, " ")}{fromTo} <time>{when}</time>
+      <strong>{ev.actorName}</strong> {ev.type.replace(/_/g, " ")}
+      {fromTo} <time>{when}</time>
     </p>
   );
 }

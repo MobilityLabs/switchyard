@@ -16,9 +16,7 @@ export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
  * what used to be papered over with 38 tx-as-Db casts (SYD-144). */
 export type DbOrTx = Db | Tx;
 
-const migrationsFolder = path.join(
-  path.dirname(fileURLToPath(import.meta.url)), "../../drizzle"
-);
+const migrationsFolder = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
 
 // The db holds webhook/repo HMAC secrets in plaintext (SYD-139) — tighten to
 // 0600 so filesystem access, not just API redaction, gates read access.

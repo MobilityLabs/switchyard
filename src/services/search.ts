@@ -27,7 +27,8 @@ export type SearchFilters = {
 
 export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
   const conditions: SQL[] = [];
-  if (filters.projectKey) conditions.push(eq(issues.projectId, getProjectByKey(db, filters.projectKey).id));
+  if (filters.projectKey)
+    conditions.push(eq(issues.projectId, getProjectByKey(db, filters.projectKey).id));
   if (filters.status) conditions.push(eq(issues.status, filters.status));
   if (filters.assigneeName) {
     const a = db.select().from(actors).where(eq(actors.name, filters.assigneeName)).get();
@@ -35,7 +36,9 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
     conditions.push(eq(issues.assigneeId, a.id));
   }
   if (filters.label) {
-    conditions.push(sql`EXISTS (SELECT 1 FROM json_each(${issues.labels}) WHERE json_each.value = ${filters.label})`);
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM json_each(${issues.labels}) WHERE json_each.value = ${filters.label})`,
+    );
   }
   if (filters.needsInput !== undefined) {
     conditions.push(eq(issues.needsInput, filters.needsInput));
@@ -57,7 +60,12 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
       if (withOpenPr.length === 0) return [];
       conditions.push(inArray(issues.id, withOpenPr));
     } else if (withOpenPr.length > 0) {
-      conditions.push(sql`${issues.id} NOT IN (${sql.join(withOpenPr.map((id) => sql`${id}`), sql`, `)})`);
+      conditions.push(
+        sql`${issues.id} NOT IN (${sql.join(
+          withOpenPr.map((id) => sql`${id}`),
+          sql`, `,
+        )})`,
+      );
     }
   }
   if (filters.text) {
@@ -67,8 +75,8 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
     conditions.push(
       or(
         sql`lower(${issues.title}) LIKE ${pattern} ESCAPE '~'`,
-        sql`lower(${issues.description}) LIKE ${pattern} ESCAPE '~'`
-      )!
+        sql`lower(${issues.description}) LIKE ${pattern} ESCAPE '~'`,
+      )!,
     );
   }
   // Triage is worked oldest-first (SYD-159) — humans clear the inbox in

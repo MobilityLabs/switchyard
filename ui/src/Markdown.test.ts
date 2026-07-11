@@ -9,7 +9,11 @@ import { renderMarkdown } from "./Markdown";
 
 const REPO = "https://github.com/MobilityLabs/switchyard";
 
-function toDom(markdown: string, projectKey = "SYD", knownActorNames: readonly string[] = []): HTMLDivElement {
+function toDom(
+  markdown: string,
+  projectKey = "SYD",
+  knownActorNames: readonly string[] = [],
+): HTMLDivElement {
   const el = document.createElement("div");
   el.innerHTML = renderMarkdown(markdown, projectKey, knownActorNames);
   return el;
@@ -100,8 +104,9 @@ describe("sanitizer", () => {
   });
 
   it("pins raw <input type=text> to a disabled checkbox (UI-spoofing)", () => {
-    const input = toDom('<input type="text" value="paste your token here">')
-      .querySelector("input")!;
+    const input = toDom('<input type="text" value="paste your token here">').querySelector(
+      "input",
+    )!;
     expect(input).not.toBeNull();
     expect(input.getAttribute("type")).toBe("checkbox");
     expect(input.hasAttribute("value")).toBe(false);
@@ -121,7 +126,7 @@ describe("sanitizer", () => {
   });
 
   it("strips external img src, replacing it with a plain link (tracking-pixel defense)", () => {
-    const el = toDom('![tracker](https://evil.example/pixel.png)');
+    const el = toDom("![tracker](https://evil.example/pixel.png)");
     expect(el.querySelector("img")).toBeNull();
     const a = el.querySelector("a")!;
     expect(a).not.toBeNull();

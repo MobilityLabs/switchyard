@@ -95,7 +95,7 @@ function checkSuitePayload(pr: GhPr, run: GhRun): Record<string, unknown> {
 export function diffRepoState(
   prs: GhPr[],
   runs: Map<number, GhRun | null>,
-  prior: RepoPollState
+  prior: RepoPollState,
 ): { events: PollEvent[]; next: RepoPollState } {
   const events: PollEvent[] = [];
   const next: RepoPollState = { ...prior };

@@ -24,12 +24,14 @@ describe("createIssue", () => {
   });
 
   it("agent-created issues require provenance and land in triage", () => {
-    expect(() => createIssue(db, agent, { projectKey: "AIPI", title: "Flaky test" }))
-      .toThrowError(/provenance/i);
+    expect(() => createIssue(db, agent, { projectKey: "AIPI", title: "Flaky test" })).toThrowError(
+      /provenance/i,
+    );
     const issue = createIssue(db, agent, {
       projectKey: "AIPI",
       title: "Flaky test in api suite",
-      description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
+      description:
+        "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
       provenance: { sourceType: "todo", detail: "src/api.ts:88" },
     });
     expect(issue.status).toBe("triage");
@@ -42,12 +44,13 @@ describe("createIssue", () => {
         projectKey: "AIPI",
         title: "Flaky test in api suite",
         provenance: { sourceType: "todo", detail: "src/api.ts:88" },
-      })
+      }),
     ).toThrowError(/description a human can triage from/i);
     const issue = createIssue(db, agent, {
       projectKey: "AIPI",
       title: "Flaky test in api suite",
-      description: "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
+      description:
+        "api_test.ts fails intermittently under load; likely a shared-state race. Suggest isolating fixtures.",
       provenance: { sourceType: "todo", detail: "src/api.ts:88" },
     });
     expect(issue.status).toBe("triage");
@@ -58,14 +61,16 @@ describe("createIssue", () => {
       createIssue(db, agent, {
         projectKey: "AIPI",
         title: "Malicious link",
-        description: "Filed via a suspicious webhook payload containing a javascript: URL; flagging for review before trusting the source.",
+        description:
+          "Filed via a suspicious webhook payload containing a javascript: URL; flagging for review before trusting the source.",
         provenance: { sourceType: "manual", url: "javascript:alert(1)" },
-      })
+      }),
     ).toThrowError(/must be http/i);
     const issue = createIssue(db, agent, {
       projectKey: "AIPI",
       title: "Safe link",
-      description: "CI run linked below shows the failing build; needs a human to confirm before we retry the deploy.",
+      description:
+        "CI run linked below shows the failing build; needs a human to confirm before we retry the deploy.",
       provenance: { sourceType: "manual", url: "https://example.com/run/123" },
     });
     expect(issue.sourceUrl).toBe("https://example.com/run/123");
@@ -80,7 +85,9 @@ describe("createIssue", () => {
 
   it("stores a summary when given one, and leaves it null when omitted", () => {
     const withSummary = createIssue(db, human, {
-      projectKey: "AIPI", title: "Ship v1", summary: "Ship the first cut of v1.",
+      projectKey: "AIPI",
+      title: "Ship v1",
+      summary: "Ship the first cut of v1.",
     });
     expect(withSummary.summary).toBe("Ship the first cut of v1.");
 
@@ -91,12 +98,13 @@ describe("createIssue", () => {
   it("rejects a summary over the length cap", () => {
     const tooLong = "x".repeat(SUMMARY_MAX_LENGTH + 1);
     expect(() =>
-      createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", summary: tooLong })
+      createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", summary: tooLong }),
     ).toThrowError(/summary/i);
 
     const atCap = "x".repeat(SUMMARY_MAX_LENGTH);
-    expect(createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", summary: atCap }).summary)
-      .toBe(atCap);
+    expect(
+      createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", summary: atCap }).summary,
+    ).toBe(atCap);
   });
 
   it("toView throws SwitchyardError instead of crashing when the issue's project row is missing (SYD-146)", () => {

@@ -11,8 +11,10 @@ const enginesNode: string | undefined = pkg.engines?.node;
 if (enginesNode && !nodeVersionSatisfiesEngines(enginesNode, process.version)) {
   console.warn(
     `\n⚠ running tests under node ${process.version}, outside the supported engines.node range "${enginesNode}". ` +
-      `See .nvmrc and SYD-97 — a failure here may be a node-version artifact, not a real regression.\n`
+      `See .nvmrc and SYD-97 — a failure here may be a node-version artifact, not a real regression.\n`,
   );
 }
 
-export default defineConfig({ test: { include: ["tests/**/*.test.ts", "ui/src/**/*.test.{ts,tsx}"] } });
+export default defineConfig({
+  test: { include: ["tests/**/*.test.ts", "ui/src/**/*.test.{ts,tsx}"] },
+});

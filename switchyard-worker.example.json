@@ -10,9 +10,7 @@
       "repo": "/Users/sean/sites/switchyard",
       "stack": {
         "node": "20",
-        "cli": [
-          { "name": "gh", "check": "gh --version", "install": "brew install gh" }
-        ],
+        "cli": [{ "name": "gh", "check": "gh --version", "install": "brew install gh" }],
         "ports": [3300]
       }
     }

@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync, copyFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  chmodSync,
+  rmSync,
+  copyFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -63,7 +72,7 @@ echo "$N" > "$N_FILE"
 } > "$SSH_CALLS_DIR/call-$N.args"
 cat > "$SSH_CALLS_DIR/call-$N.stdin"
 exit 0
-`
+`,
   );
   chmodSync(p, 0o755);
 }
@@ -73,7 +82,7 @@ function runDeploy(
   binDir: string,
   callsDir: string,
   scriptArgs: string[] = [],
-  extraEnv: Record<string, string> = {}
+  extraEnv: Record<string, string> = {},
 ) {
   try {
     const stdout = execFileSync("sh", [path.join(dir, "scripts/deploy-nas.sh"), ...scriptArgs], {

@@ -57,7 +57,11 @@ function requireAgent(actor: Actor, action: string): void {
 // second the session exits is dropped rather than risk attributing a later
 // session's note to this one (unixepoch granularity).
 function lastNoteFor(
-  db: Db, issueId: number, actorId: number, startedAt: number, endedAt: number | null
+  db: Db,
+  issueId: number,
+  actorId: number,
+  startedAt: number,
+  endedAt: number | null,
 ): AgentSessionView["lastNote"] {
   const conditions = [
     eq(events.issueId, issueId),
@@ -74,12 +78,20 @@ function lastNoteFor(
     .limit(1)
     .all();
   if (!row) return null;
-  return { note: String((row.payload as Record<string, unknown>).note ?? ""), createdAt: row.createdAt };
+  return {
+    note: String((row.payload as Record<string, unknown>).note ?? ""),
+    createdAt: row.createdAt,
+  };
 }
 
 function queryViews(db: Db, conditions: SQL[]): AgentSessionView[] {
   const rows = db
-    .select({ s: agentSessions, key: projects.key, number: issues.number, issueTitle: issues.title })
+    .select({
+      s: agentSessions,
+      key: projects.key,
+      number: issues.number,
+      issueTitle: issues.title,
+    })
     .from(agentSessions)
     .innerJoin(issues, eq(agentSessions.issueId, issues.id))
     .innerJoin(projects, eq(issues.projectId, projects.id))
@@ -104,7 +116,7 @@ function queryViews(db: Db, conditions: SQL[]): AgentSessionView[] {
 export function startAgentSession(
   db: Db,
   actor: Actor,
-  input: { ref: string; mode: AgentSessionMode; pid?: number | null }
+  input: { ref: string; mode: AgentSessionMode; pid?: number | null },
 ): AgentSessionView {
   requireAgent(actor, "report agent sessions");
   const issue = getIssue(db, input.ref);
@@ -116,7 +128,12 @@ export function startAgentSession(
   return queryViews(db, [eq(agentSessions.id, row.id)])[0];
 }
 
-export function endAgentSession(db: Db, actor: Actor, id: number, exitCode: number | null): AgentSessionView {
+export function endAgentSession(
+  db: Db,
+  actor: Actor,
+  id: number,
+  exitCode: number | null,
+): AgentSessionView {
   requireAgent(actor, "report agent sessions");
   const existing = db.select().from(agentSessions).where(eq(agentSessions.id, id)).get();
   if (!existing) throw new SwitchyardError(`Agent session ${id} does not exist.`);
@@ -133,13 +150,15 @@ export function endAgentSession(db: Db, actor: Actor, id: number, exitCode: numb
 export function listAgentSessions(
   db: Db,
   filters: { active?: boolean; ref?: string } = {},
-  nowSeconds: number = Math.floor(Date.now() / 1000)
+  nowSeconds: number = Math.floor(Date.now() / 1000),
 ): AgentSessionView[] {
   const conditions: SQL[] = [];
   if (filters.ref) conditions.push(eq(agentSessions.issueId, getIssue(db, filters.ref).id));
   if (filters.active) {
     conditions.push(eq(agentSessions.status, "running"));
-    conditions.push(gt(agentSessions.startedAt, nowSeconds - getSetting(db, "sessions.stale_seconds")));
+    conditions.push(
+      gt(agentSessions.startedAt, nowSeconds - getSetting(db, "sessions.stale_seconds")),
+    );
   }
   return queryViews(db, conditions);
 }
@@ -156,7 +175,8 @@ export function listAgentSessions(
  * is unknown. Returns the number of sessions swept.
  */
 export function sweepOrphanedAgentSessions(
-  db: Db, staleSeconds: number = getSetting(db, "sessions.stale_seconds")
+  db: Db,
+  staleSeconds: number = getSetting(db, "sessions.stale_seconds"),
 ): number {
   const cutoff = Math.floor(Date.now() / 1000) - staleSeconds;
   const swept = db
@@ -173,5 +193,10 @@ export function recordProgressNote(db: Db, actor: Actor, ref: string, note: stri
   const trimmed = note.trim();
   if (!trimmed) throw new SwitchyardError("A progress note must not be empty.");
   const issue = getIssue(db, ref);
-  recordEvent(db, { issueId: issue.id, actorId: actor.id, type: "progress_note", payload: { note: trimmed } });
+  recordEvent(db, {
+    issueId: issue.id,
+    actorId: actor.id,
+    type: "progress_note",
+    payload: { note: trimmed },
+  });
 }

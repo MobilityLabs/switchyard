@@ -21,8 +21,9 @@ describe("actors", () => {
   it("rejects duplicate names with an agent-legible error", () => {
     const db = openDb(":memory:");
     createActor(db, { name: "sean", type: "human" });
-    expect(() => createActor(db, { name: "sean", type: "human" }))
-      .toThrowError(/actor named "sean" already exists/);
+    expect(() => createActor(db, { name: "sean", type: "human" })).toThrowError(
+      /actor named "sean" already exists/,
+    );
   });
 
   it("lists actors with token status and no token material", () => {

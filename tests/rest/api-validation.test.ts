@@ -30,7 +30,9 @@ describe("request validation", () => {
     expect(((await badPriority.json()) as { error: string }).error).toMatch(/priority/);
 
     const badStatus = await app.request("/issues/SYD-1", {
-      method: "PATCH", headers: h, body: JSON.stringify({ status: "doing" }),
+      method: "PATCH",
+      headers: h,
+      body: JSON.stringify({ status: "doing" }),
     });
     expect(badStatus.status).toBe(400);
 
@@ -39,21 +41,29 @@ describe("request validation", () => {
     expect(((await badUrl.json()) as { error: string }).error).toMatch(/url/);
 
     const longSummary = await post("/issues", {
-      projectKey: "SYD", title: "x", summary: "x".repeat(SUMMARY_MAX_LENGTH + 1),
+      projectKey: "SYD",
+      title: "x",
+      summary: "x".repeat(SUMMARY_MAX_LENGTH + 1),
     });
     expect(longSummary.status).toBe(400);
     expect(((await longSummary.json()) as { error: string }).error).toMatch(/summary/i);
   });
 
   it("valid bodies still work end to end", async () => {
-    const created = await post("/issues", { projectKey: "SYD", title: "Real one", priority: "high" });
+    const created = await post("/issues", {
+      projectKey: "SYD",
+      title: "Real one",
+      priority: "high",
+    });
     expect(created.status).toBe(200);
     expect(((await created.json()) as { ref: string }).ref).toBe("SYD-1");
   });
 
   it("accepts and round-trips a summary within the cap", async () => {
     const created = await post("/issues", {
-      projectKey: "SYD", title: "Real one", summary: "A concise summary.",
+      projectKey: "SYD",
+      title: "Real one",
+      summary: "A concise summary.",
     });
     expect(created.status).toBe(200);
     expect(((await created.json()) as { summary: string }).summary).toBe("A concise summary.");

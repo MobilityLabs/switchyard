@@ -127,7 +127,11 @@ function pinnedNodeVersion(pathDirs: string[]): string | null {
 }
 
 /** Doctor check: does an installed LaunchAgent's pinned PATH resolve a node inside `engines.node` (SYD-97)? */
-function checkPlistPinnedNode(opts: { noun: string; plistPath: string; enginesNode: string | null }): CheckResult {
+function checkPlistPinnedNode(opts: {
+  noun: string;
+  plistPath: string;
+  enginesNode: string | null;
+}): CheckResult {
   const dirs = parsePlistPath(readFileSync(opts.plistPath, "utf8"));
   const pinned = pinnedNodeVersion(dirs);
   if (pinned === null) {
@@ -159,13 +163,19 @@ function checkPlistPinnedNode(opts: { noun: string; plistPath: string; enginesNo
 function runsOk(cmd: string, config: WorkerConfig): boolean {
   if (config.containerized) {
     const image = config.image ?? "switchyard-worker";
-    return spawnSync("docker", ["run", "--rm", image, "sh", "-c", cmd], { stdio: "ignore" }).status === 0;
+    return (
+      spawnSync("docker", ["run", "--rm", image, "sh", "-c", cmd], { stdio: "ignore" }).status === 0
+    );
   }
   return spawnSync("sh", ["-c", cmd], { stdio: "ignore" }).status === 0;
 }
 
 /** Doctor checks for a project's declared `stack` (SYD-76): Node version, extra CLIs, declared ports. */
-function checkProjectStack(key: string, project: WorkerProject, config: WorkerConfig): CheckResult[] {
+function checkProjectStack(
+  key: string,
+  project: WorkerProject,
+  config: WorkerConfig,
+): CheckResult[] {
   const results: CheckResult[] = [];
   const stack = project.stack;
   if (!stack) return results;
@@ -174,7 +184,9 @@ function checkProjectStack(key: string, project: WorkerProject, config: WorkerCo
     let actual: string | null;
     if (config.containerized) {
       const image = config.image ?? "switchyard-worker";
-      const out = spawnSync("docker", ["run", "--rm", image, "node", "--version"], { encoding: "utf8" });
+      const out = spawnSync("docker", ["run", "--rm", image, "node", "--version"], {
+        encoding: "utf8",
+      });
       actual = out.status === 0 ? out.stdout.trim() : null;
     } else {
       actual = process.version;
@@ -191,7 +203,11 @@ function checkProjectStack(key: string, project: WorkerProject, config: WorkerCo
     results.push({
       name: `projects.${key} stack: ${cli.name}`,
       ok,
-      note: ok ? undefined : cli.install ? `missing — run: ${cli.install}` : `missing — \`${cli.check}\` failed`,
+      note: ok
+        ? undefined
+        : cli.install
+          ? `missing — run: ${cli.install}`
+          : `missing — \`${cli.check}\` failed`,
     });
   }
 
@@ -241,7 +257,8 @@ function captureUserStack(home: string): UserStackCapture {
       const raw = JSON.parse(readFileSync(settingsPath, "utf8"));
       const foundPlugins = parseEnabledPlugins(raw);
       const foundServers = parseMcpServerNames(raw);
-      if (foundPlugins.length > 0 || foundServers.length > 0) sources.add("~/.claude/settings.json");
+      if (foundPlugins.length > 0 || foundServers.length > 0)
+        sources.add("~/.claude/settings.json");
       plugins.push(...foundPlugins);
       mcpServers.push(...foundServers);
     } catch {
@@ -278,9 +295,10 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   results.push({
     name: "node satisfies engines.node",
     ok: enginesNode === null || nodeVersionSatisfiesEngines(enginesNode, process.version),
-    note: enginesNode === null
-      ? `running ${process.version} (package.json has no engines.node to check against)`
-      : `running ${process.version}, want ${enginesNode}`,
+    note:
+      enginesNode === null
+        ? `running ${process.version} (package.json has no engines.node to check against)`
+        : `running ${process.version}, want ${enginesNode}`,
   });
 
   // Config file
@@ -302,7 +320,11 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         results.push({ name: "switchyard-worker.json", ok: true });
       }
     } catch (err) {
-      results.push({ name: "switchyard-worker.json", ok: false, note: `invalid JSON: ${(err as Error).message}` });
+      results.push({
+        name: "switchyard-worker.json",
+        ok: false,
+        note: `invalid JSON: ${(err as Error).message}`,
+      });
     }
   }
 
@@ -325,8 +347,16 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     // empty capture (no known per-user config found) means this whole
     // block is skipped and stack.cli alone governs, as before.
     const userStack = captureUserStack(os.homedir());
-    if (userStack.cli.length > 0 || userStack.plugins.length > 0 || userStack.mcpServers.length > 0) {
-      results.push({ name: "user-stack capture", ok: true, note: formatUserStackCapture(userStack) });
+    if (
+      userStack.cli.length > 0 ||
+      userStack.plugins.length > 0 ||
+      userStack.mcpServers.length > 0
+    ) {
+      results.push({
+        name: "user-stack capture",
+        ok: true,
+        note: formatUserStackCapture(userStack),
+      });
       for (const [key, project] of Object.entries(config.projects)) {
         const gaps = stackParityGaps(userStack.cli, project.stack?.cli);
         if (gaps.length === 0) continue;
@@ -346,7 +376,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   // Runner prerequisites
   if (config && (config.runner ?? "cli") === "sdk") {
     const sdkInstalled = existsSync(
-      path.join(repoRoot, "worker-sdk", "node_modules", "@anthropic-ai", "claude-agent-sdk")
+      path.join(repoRoot, "worker-sdk", "node_modules", "@anthropic-ai", "claude-agent-sdk"),
     );
     results.push({
       name: "worker-sdk installed",
@@ -378,7 +408,9 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     results.push({
       name: "CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY)",
       ok: hasClaudeAuth,
-      note: hasClaudeAuth ? "in .env / environment" : "required for containerized sessions — `claude setup-token`",
+      note: hasClaudeAuth
+        ? "in .env / environment"
+        : "required for containerized sessions — `claude setup-token`",
     });
   } else {
     results.push({
@@ -390,14 +422,20 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
 
   // Tokens + server
   if (!existsSync(envPath)) {
-    results.push({ name: ".env", ok: false, note: `missing ${envPath} — the worker reads it at start` });
+    results.push({
+      name: ".env",
+      ok: false,
+      note: `missing ${envPath} — the worker reads it at start`,
+    });
   } else {
     const mode = statSync(envPath).mode & 0o777;
     const tight = (mode & 0o077) === 0;
     results.push({
       name: ".env permissions",
       ok: tight,
-      note: tight ? "0600" : `mode ${mode.toString(8)} is group/world-readable — run: chmod 600 .env`,
+      note: tight
+        ? "0600"
+        : `mode ${mode.toString(8)} is group/world-readable — run: chmod 600 .env`,
     });
   }
   const token = env.SWITCHYARD_TOKEN;
@@ -407,9 +445,17 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     const base = config.url.replace(/\/$/, "");
     try {
       const health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(5000) });
-      results.push({ name: `server ${base}`, ok: health.ok, note: health.ok ? undefined : `health returned ${health.status}` });
+      results.push({
+        name: `server ${base}`,
+        ok: health.ok,
+        note: health.ok ? undefined : `health returned ${health.status}`,
+      });
     } catch (err) {
-      results.push({ name: `server ${base}`, ok: false, note: `unreachable: ${(err as Error).message}` });
+      results.push({
+        name: `server ${base}`,
+        ok: false,
+        note: `unreachable: ${(err as Error).message}`,
+      });
     }
 
     if (token) {
@@ -440,7 +486,9 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     name: "Slack notifier",
     ok: true,
     warn: !env.SLACK_WEBHOOK_URL,
-    note: env.SLACK_WEBHOOK_URL ? "SLACK_WEBHOOK_URL set" : "SLACK_WEBHOOK_URL not set — notifier skipped",
+    note: env.SLACK_WEBHOOK_URL
+      ? "SLACK_WEBHOOK_URL set"
+      : "SLACK_WEBHOOK_URL not set — notifier skipped",
   });
 
   // Delivery gate (SYD-49) prerequisites — deliver.ts shells out to `gh` for
@@ -466,16 +514,24 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
       });
     }
     for (const [key, project] of Object.entries(config.projects)) {
-      const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], { encoding: "utf8" });
+      const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], {
+        encoding: "utf8",
+      });
       if (remote.status !== 0) {
-        results.push({ name: `projects.${key} GitHub origin`, ok: false, note: "no `origin` remote configured" });
+        results.push({
+          name: `projects.${key} GitHub origin`,
+          ok: false,
+          note: "no `origin` remote configured",
+        });
         continue;
       }
       const parsed = parseGithubRemote(remote.stdout.trim());
       results.push({
         name: `projects.${key} GitHub origin`,
         ok: parsed !== null,
-        note: parsed ? `${parsed.owner}/${parsed.repo}` : `origin is not a GitHub remote: ${remote.stdout.trim()}`,
+        note: parsed
+          ? `${parsed.owner}/${parsed.repo}`
+          : `origin is not a GitHub remote: ${remote.stdout.trim()}`,
       });
     }
   }
@@ -490,7 +546,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     role,
     running: isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role))),
     installed: existsSync(
-      path.join(os.homedir(), "Library", "LaunchAgents", `${workerLaunchdLabel(role)}.plist`)
+      path.join(os.homedir(), "Library", "LaunchAgents", `${workerLaunchdLabel(role)}.plist`),
     ),
   }));
   results.push(summarizeRoleStatus(roleStatuses));
@@ -503,7 +559,10 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   for (const status of roleStatuses) {
     if (!status.installed) continue;
     const plistPath = path.join(
-      os.homedir(), "Library", "LaunchAgents", `${workerLaunchdLabel(status.role)}.plist`
+      os.homedir(),
+      "Library",
+      "LaunchAgents",
+      `${workerLaunchdLabel(status.role)}.plist`,
     );
     const dirs = parsePlistPath(readFileSync(plistPath, "utf8"));
     const found = dirs.some((dir) => existsSync(path.join(dir, "claude")));
@@ -519,7 +578,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         noun: status.role === "all" ? "worker" : `worker (${status.role})`,
         plistPath,
         enginesNode,
-      })
+      }),
     );
   }
 
@@ -528,9 +587,16 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   // (e.g. Node 25's jsdom-shadowing WebStorage globals) turns every good
   // delivery into a false-negative `delivery_failed`, which is exactly what
   // bit SYD-93. Checked the same way as the worker roles above.
-  const deliverPlistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${DELIVER_LAUNCHD_LABEL}.plist`);
+  const deliverPlistPath = path.join(
+    os.homedir(),
+    "Library",
+    "LaunchAgents",
+    `${DELIVER_LAUNCHD_LABEL}.plist`,
+  );
   if (existsSync(deliverPlistPath)) {
-    results.push(checkPlistPinnedNode({ noun: "deliver", plistPath: deliverPlistPath, enginesNode }));
+    results.push(
+      checkPlistPinnedNode({ noun: "deliver", plistPath: deliverPlistPath, enginesNode }),
+    );
   }
 
   return { results, config };
@@ -545,7 +611,12 @@ function deliverAlreadyRunning(): boolean {
 }
 
 /** Shared write-plist / launchctl-load flow for the worker and deliver LaunchAgents. */
-function installPlist(opts: { label: string; plist: string; alreadyRunning: () => boolean; noun: string }): void {
+function installPlist(opts: {
+  label: string;
+  plist: string;
+  alreadyRunning: () => boolean;
+  noun: string;
+}): void {
   const dest = path.join(os.homedir(), "Library", "LaunchAgents", `${opts.label}.plist`);
   mkdirSync(path.dirname(dest), { recursive: true });
   mkdirSync(path.join(repoRoot, ".superpowers", "worker-logs"), { recursive: true });
@@ -555,10 +626,10 @@ function installPlist(opts: { label: string; plist: string; alreadyRunning: () =
   if (opts.alreadyRunning()) {
     console.log(
       `\nA ${opts.noun} process is already running — NOT loading the LaunchAgent now\n` +
-      `(two would double-run). If it's a previous LaunchAgent install:\n` +
-      `  launchctl unload ${dest} && launchctl load ${dest}\n` +
-      "If it's a hand-started loop, kill it, then:\n" +
-      `  launchctl load ${dest}`
+        `(two would double-run). If it's a previous LaunchAgent install:\n` +
+        `  launchctl unload ${dest} && launchctl load ${dest}\n` +
+        "If it's a hand-started loop, kill it, then:\n" +
+        `  launchctl load ${dest}`,
     );
     return;
   }
@@ -570,8 +641,8 @@ function installPlist(opts: { label: string; plist: string; alreadyRunning: () =
   if (load.status !== 0) {
     console.error(
       `launchctl load failed: ${(load.stderr || load.stdout || "").trim()}\n` +
-      "If you're over SSH, run this from a GUI session — or try:\n" +
-      `  launchctl bootstrap gui/$(id -u) ${dest}`
+        "If you're over SSH, run this from a GUI session — or try:\n" +
+        `  launchctl bootstrap gui/$(id -u) ${dest}`,
     );
     process.exit(1);
   }
@@ -619,7 +690,7 @@ function installLaunchdDeliver(config: WorkerConfig | null): void {
   if (!config?.delivery) {
     console.error(
       "switchyard-worker.json has no `delivery` block — nothing to install. " +
-      "Add one (see docs/onboarding-a-project.md) before running --install-launchd-deliver."
+        "Add one (see docs/onboarding-a-project.md) before running --install-launchd-deliver.",
     );
     process.exit(1);
   }
@@ -646,7 +717,9 @@ function installLaunchdDeliver(config: WorkerConfig | null): void {
  */
 function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): void {
   if (!config) {
-    console.error("switchyard-worker.json is missing or invalid — fix it before running --protect-main.");
+    console.error(
+      "switchyard-worker.json is missing or invalid — fix it before running --protect-main.",
+    );
     process.exit(1);
   }
   const keys = onlyKey ? [onlyKey] : Object.keys(config.projects);
@@ -658,7 +731,9 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
       failures++;
       continue;
     }
-    const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], { encoding: "utf8" });
+    const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], {
+      encoding: "utf8",
+    });
     if (remote.status !== 0) {
       console.error(`✗ ${key}: no \`origin\` remote in ${project.repo}`);
       failures++;
@@ -677,7 +752,9 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
       failures++;
       continue;
     }
-    console.log(`✓ ${key}: main branch protected on ${parsed.owner}/${parsed.repo} (force-push + deletion blocked)`);
+    console.log(
+      `✓ ${key}: main branch protected on ${parsed.owner}/${parsed.repo} (force-push + deletion blocked)`,
+    );
   }
   if (failures > 0) process.exit(1);
 }
@@ -699,7 +776,9 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
  */
 function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): void {
   if (!config) {
-    console.error("switchyard-worker.json is missing or invalid — fix it before running --repair-stack.");
+    console.error(
+      "switchyard-worker.json is missing or invalid — fix it before running --repair-stack.",
+    );
     process.exit(1);
   }
   const keys = onlyKey ? [onlyKey] : Object.keys(config.projects);
@@ -721,7 +800,7 @@ function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): 
     if (config.containerized) {
       console.log(
         `${key}: containerized — add these to Dockerfile.worker and run \`npm run build:worker-image\`:\n` +
-        formatDockerfileStackGuidance(cli, capturedGaps).join("\n")
+          formatDockerfileStackGuidance(cli, capturedGaps).join("\n"),
       );
       continue;
     }
@@ -746,20 +825,24 @@ function repairStack(config: WorkerConfig | null, onlyKey: string | undefined): 
     }
     for (const c of suggestStackCli(capturedGaps)) {
       if (runsOk(c.check, config)) {
-        console.log(`✓ ${key}: ${c.name} already present (captured, undeclared — add it to stack.cli to stop seeing this)`);
+        console.log(
+          `✓ ${key}: ${c.name} already present (captured, undeclared — add it to stack.cli to stop seeing this)`,
+        );
         continue;
       }
       if (!c.install) {
         console.log(
           `${key}: ${c.name} captured but undeclared, and no well-known install command — ` +
-          `run \`npm run init-worker -- --capture-stack ${key}\` for a paste-ready stack.cli snippet`
+            `run \`npm run init-worker -- --capture-stack ${key}\` for a paste-ready stack.cli snippet`,
         );
         continue;
       }
       console.log(`${key}: installing ${c.name} (captured, undeclared) — ${c.install}`);
       spawnSync("sh", ["-c", c.install], { stdio: "inherit" });
       if (runsOk(c.check, config)) {
-        console.log(`✓ ${key}: ${c.name} installed — add it to projects.${key}.stack.cli to declare it permanently`);
+        console.log(
+          `✓ ${key}: ${c.name} installed — add it to projects.${key}.stack.cli to declare it permanently`,
+        );
       } else {
         console.error(`✗ ${key}: ${c.name} install failed or check still fails`);
         failures++;
@@ -811,7 +894,9 @@ async function addProject(argv: string[]): Promise<void> {
   }
   const problems = validateWorkerConfig(parsed);
   if (problems.length > 0) {
-    console.error(`${configPath} is currently invalid — fix it first:\n${problems.map((p) => `  - ${p}`).join("\n")}`);
+    console.error(
+      `${configPath} is currently invalid — fix it first:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+    );
     process.exit(1);
   }
   const config = parsed as WorkerConfig;
@@ -821,7 +906,7 @@ async function addProject(argv: string[]): Promise<void> {
     const existingRepo = path.resolve(config.projects[key].repo);
     if (existingRepo !== repoPath) {
       console.error(
-        `projects.${key} already points at ${existingRepo} (you asked for ${repoPath}) — edit ${configPath} by hand to change it`
+        `projects.${key} already points at ${existingRepo} (you asked for ${repoPath}) — edit ${configPath} by hand to change it`,
       );
       process.exit(1);
     }
@@ -831,7 +916,9 @@ async function addProject(argv: string[]): Promise<void> {
   const env = loadEnv();
   const token = env.SWITCHYARD_TOKEN;
   if (!token) {
-    console.error(`SWITCHYARD_TOKEN not set in ${envPath} / environment — needed to create the project on the server`);
+    console.error(
+      `SWITCHYARD_TOKEN not set in ${envPath} / environment — needed to create the project on the server`,
+    );
     process.exit(1);
   }
   const base = config.url.replace(/\/$/, "");
@@ -865,7 +952,9 @@ async function addProject(argv: string[]): Promise<void> {
     const updatedText = insertProjectIntoConfigText(configText, key, repoPath);
     const reparsed = JSON.parse(updatedText) as WorkerConfig;
     if (reparsed.projects[key]?.repo !== repoPath) {
-      console.error("internal error: config edit did not produce the expected entry — not writing switchyard-worker.json");
+      console.error(
+        "internal error: config edit did not produce the expected entry — not writing switchyard-worker.json",
+      );
       process.exit(1);
     }
     writeFileSync(configPath, updatedText);
@@ -899,29 +988,33 @@ function captureStack(config: WorkerConfig | null, onlyKey: string | undefined):
   if (userStack.cli.length === 0) {
     console.log(
       `no user-scope stack expectations captured from ${home} ` +
-      "(looked for .claude/debate-acpx.json, .claude/settings.json, .claude.json) — " +
-      "each project's hand-authored stack.cli remains the sole source of truth."
+        "(looked for .claude/debate-acpx.json, .claude/settings.json, .claude.json) — " +
+        "each project's hand-authored stack.cli remains the sole source of truth.",
     );
     return;
   }
 
   const keys = onlyKey ? [onlyKey] : Object.keys(config?.projects ?? {});
   if (keys.length === 0) {
-    console.log(`captured cli: ${userStack.cli.join(", ")} (from ${userStack.sources.join(", ")}) — no projects configured to compare against`);
+    console.log(
+      `captured cli: ${userStack.cli.join(", ")} (from ${userStack.sources.join(", ")}) — no projects configured to compare against`,
+    );
     return;
   }
   for (const key of keys) {
     const declared = config?.projects[key]?.stack?.cli;
     const gaps = stackParityGaps(userStack.cli, declared);
     if (gaps.length === 0) {
-      console.log(`${key}: stack.cli already covers everything captured from ${userStack.sources.join(", ")}`);
+      console.log(
+        `${key}: stack.cli already covers everything captured from ${userStack.sources.join(", ")}`,
+      );
       continue;
     }
     console.log(
       `${key}: captured from ${userStack.sources.join(", ")} — paste into projects.${key}.stack.cli ` +
-      "(well-known CLIs get `install` pre-filled; fill in the rest by hand, or --repair-stack will " +
-      "report them as unrepairable):\n" +
-      JSON.stringify(suggestStackCli(gaps), null, 2)
+        "(well-known CLIs get `install` pre-filled; fill in the rest by hand, or --repair-stack will " +
+        "report them as unrepairable):\n" +
+        JSON.stringify(suggestStackCli(gaps), null, 2),
     );
   }
 }
@@ -972,7 +1065,9 @@ async function main(): Promise<void> {
 
   const failed = results.filter((r) => !r.ok);
   if (failed.length > 0) {
-    console.error(`\n${failed.length} check(s) failed — fix them and re-run \`npm run init-worker\`.`);
+    console.error(
+      `\n${failed.length} check(s) failed — fix them and re-run \`npm run init-worker\`.`,
+    );
     process.exit(1);
   }
   console.log("\nall checks passed");

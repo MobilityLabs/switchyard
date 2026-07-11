@@ -52,25 +52,25 @@ export async function saveAttachment(
   ref: string,
   filename: string,
   data: Buffer,
-  attachmentsDir: string
+  attachmentsDir: string,
 ): Promise<{ attachment: AttachmentRow; markdown: string }> {
   const sanitized = sanitizeFilename(filename);
   const ext = extensionOf(sanitized);
 
   if (ext === "svg") {
     throw new SwitchyardError(
-      "SVG attachments are rejected — SVG can embed scripts and is an XSS vector. Convert to a raster format (PNG/JPEG) and try again."
+      "SVG attachments are rejected — SVG can embed scripts and is an XSS vector. Convert to a raster format (PNG/JPEG) and try again.",
     );
   }
   const contentType = ALLOWED_ATTACHMENT_TYPES[ext];
   if (!contentType) {
     throw new SwitchyardError(
-      `".${ext || "?"}" is not an allowed attachment type — allowed types: ${Object.keys(ALLOWED_ATTACHMENT_TYPES).join(", ")}.`
+      `".${ext || "?"}" is not an allowed attachment type — allowed types: ${Object.keys(ALLOWED_ATTACHMENT_TYPES).join(", ")}.`,
     );
   }
   if (data.length > MAX_ATTACHMENT_SIZE) {
     throw new SwitchyardError(
-      `Attachment is ${(data.length / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`
+      `Attachment is ${(data.length / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`,
     );
   }
 
@@ -105,7 +105,9 @@ export async function saveAttachment(
   }
 
   const url = `/api/attachments/${row.id}/${row.filename}`;
-  const markdown = VIDEO_EXTENSIONS.has(ext) ? `[${row.filename}](${url})` : `![${row.filename}](${url})`;
+  const markdown = VIDEO_EXTENSIONS.has(ext)
+    ? `[${row.filename}](${url})`
+    : `![${row.filename}](${url})`;
   return { attachment: row, markdown };
 }
 

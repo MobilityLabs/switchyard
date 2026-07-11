@@ -40,7 +40,11 @@ describe("comments and activity", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
     addComment(db, human, "AIPI-1", "  @AGENT any update?");
-    expect(getActivity(db, "AIPI-1").map((a) => a.type)).toEqual(["created", "comment", "agent_question"]);
+    expect(getActivity(db, "AIPI-1").map((a) => a.type)).toEqual([
+      "created",
+      "comment",
+      "agent_question",
+    ]);
   });
 
   it("does not emit agent_question for an ordinary comment or a mid-sentence mention", () => {

@@ -33,7 +33,12 @@ async function render(node: React.ReactElement): Promise<HTMLElement> {
 describe("Composer", () => {
   it("renders the textarea with the given value and placeholder", async () => {
     const container = await render(
-      <Composer value="draft text" onChange={() => {}} placeholder="Say something" paste={paste()} />
+      <Composer
+        value="draft text"
+        onChange={() => {}}
+        placeholder="Say something"
+        paste={paste()}
+      />,
     );
     const textarea = container.querySelector("textarea")!;
     expect(textarea.value).toBe("draft text");
@@ -43,10 +48,13 @@ describe("Composer", () => {
   it("calls onChange as the textarea is edited", async () => {
     const onChange = vi.fn();
     const container = await render(
-      <Composer value="" onChange={onChange} placeholder="" paste={paste()} />
+      <Composer value="" onChange={onChange} placeholder="" paste={paste()} />,
     );
     const textarea = container.querySelector("textarea")!;
-    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
     await act(async () => {
       nativeSetter.call(textarea, "hello");
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
@@ -58,7 +66,7 @@ describe("Composer", () => {
     const container = await render(
       <Composer value="" onChange={() => {}} placeholder="" paste={paste()}>
         <button>Send</button>
-      </Composer>
+      </Composer>,
     );
     const button = container.querySelector("button")!;
     expect(button.textContent).toBe("Send");
@@ -72,7 +80,7 @@ describe("Composer", () => {
         onChange={() => {}}
         placeholder=""
         paste={paste({ uploadError: "upload failed", setUploadError })}
-      />
+      />,
     );
     expect(container.textContent).toContain("upload failed");
     const dismiss = container.querySelector(".error-bar button") as HTMLButtonElement;
@@ -82,7 +90,7 @@ describe("Composer", () => {
 
   it("shows the uploading indicator while an upload is in flight", async () => {
     const container = await render(
-      <Composer value="" onChange={() => {}} placeholder="" paste={paste({ uploading: true })} />
+      <Composer value="" onChange={() => {}} placeholder="" paste={paste({ uploading: true })} />,
     );
     expect(container.querySelector(".uploading-note")).not.toBeNull();
   });
@@ -90,7 +98,7 @@ describe("Composer", () => {
   it("wires the paste handler onto the textarea", async () => {
     const onPaste = vi.fn();
     const container = await render(
-      <Composer value="" onChange={() => {}} placeholder="" paste={paste({ onPaste })} />
+      <Composer value="" onChange={() => {}} placeholder="" paste={paste({ onPaste })} />,
     );
     const textarea = container.querySelector("textarea")!;
     await act(async () => {

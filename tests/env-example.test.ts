@@ -33,12 +33,12 @@ describe(".env.example", () => {
   it("documents every process.env var read under src/", () => {
     const used = envVarsReadIn(tsFilesUnder(SRC_DIR));
     const example = readFileSync(path.join(REPO_DIR, ".env.example"), "utf8");
-    const documented = new Set(
-      [...example.matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)].map((m) => m[1])
-    );
+    const documented = new Set([...example.matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)].map((m) => m[1]));
 
     for (const name of used) {
-      expect(documented.has(name), `${name} is read in src/ but missing from .env.example`).toBe(true);
+      expect(documented.has(name), `${name} is read in src/ but missing from .env.example`).toBe(
+        true,
+      );
     }
   });
 });
