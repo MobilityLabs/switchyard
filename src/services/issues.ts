@@ -68,7 +68,10 @@ export function parseRef(ref: string): { key: string; number: number } {
 }
 
 export function toView(db: Db, row: typeof issues.$inferSelect): IssueView {
-  const project = db.select().from(projects).where(eq(projects.id, row.projectId)).get()!;
+  const project = db.select().from(projects).where(eq(projects.id, row.projectId)).get();
+  if (!project) {
+    throw new SwitchyardError(`Issue ${row.id} references a missing project (id ${row.projectId}).`);
+  }
   return { ...row, ref: `${project.key}-${row.number}` };
 }
 

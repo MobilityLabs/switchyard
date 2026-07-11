@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
+import { createIssue, getIssue, toView, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
 let db: Db, human: Actor, agent: Actor;
@@ -97,5 +97,11 @@ describe("createIssue", () => {
     const atCap = "x".repeat(SUMMARY_MAX_LENGTH);
     expect(createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", summary: atCap }).summary)
       .toBe(atCap);
+  });
+
+  it("toView throws SwitchyardError instead of crashing when the issue's project row is missing (SYD-146)", () => {
+    const issue = createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+    const orphanRow = { ...issue, projectId: 999999 };
+    expect(() => toView(db, orphanRow)).toThrowError(/references a missing project/i);
   });
 });
