@@ -38,7 +38,12 @@ export type Issue = {
   snoozedUntil: number | null;
   createdAt: number;
   updatedAt: number;
-  attention: { reason: "delivery_failed"; message: string } | null;
+  attention:
+    | { reason: "delivery_failed"; message: string }
+    | { reason: "merged_pr_not_done"; message: string }
+    | { reason: "open_pr_not_in_review"; message: string }
+    | { reason: "stale_claim"; message: string }
+    | null;
   openPr: { prNumber: number; url: string } | null;
 };
 export type Activity = {

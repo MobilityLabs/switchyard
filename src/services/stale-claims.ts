@@ -1,4 +1,4 @@
-import { and, eq, max, sql } from "drizzle-orm";
+import { and, eq, max, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues, events } from "../db/schema.js";
 import { recordEvent } from "./events.js";
@@ -12,6 +12,10 @@ import { getSetting } from "./settings.js";
  * For each released issue: status -> todo, assignee cleared, and a
  * `claim_released` event is recorded (attributed to the assignee if set, else
  * the creator). Returns the number of issues released.
+ *
+ * `process_deviation` events are excluded from the idle computation (SYD-188):
+ * that signal is itself derived from this same idle clock, so recording one at
+ * ~now must not reset the clock and delay auto-release.
  */
 export function releaseStaleClaims(
   db: Db,
@@ -28,7 +32,7 @@ export function releaseStaleClaims(
     const newest = db
       .select({ createdAt: max(events.createdAt) })
       .from(events)
-      .where(eq(events.issueId, issue.id))
+      .where(and(eq(events.issueId, issue.id), ne(events.type, "process_deviation")))
       .get();
     const newestCreatedAt = newest?.createdAt ?? issue.createdAt;
     if (newestCreatedAt > cutoff) continue;

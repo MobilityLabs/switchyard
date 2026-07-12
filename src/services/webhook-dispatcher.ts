@@ -5,6 +5,7 @@ import { actors, events, issues, projects, webhooks, webhookCursor } from "../db
 import { releaseStaleClaims } from "./stale-claims.js";
 import { sweepOrphanedAgentSessions } from "./agent-sessions.js";
 import { getSetting } from "./settings.js";
+import { emitProcessDeviations } from "./deviation.js";
 
 export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Promise<number> {
   let cursor = db.select().from(webhookCursor).where(eq(webhookCursor.id, 1)).get();
@@ -78,6 +79,11 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
 
 export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
   const timer = setInterval(() => {
+    try {
+      emitProcessDeviations(db);
+    } catch (err) {
+      console.error("process deviation emit:", err);
+    }
     dispatchPending(db).catch((err) => console.error("webhook dispatch:", err));
     try {
       // No explicit staleSeconds: releaseStaleClaims reads claims.stale_seconds

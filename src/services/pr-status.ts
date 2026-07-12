@@ -54,3 +54,20 @@ export function getOpenPr(db: Db, issueId: number): OpenPr | null {
 export function listOpenPrByIssueId(db: Db): Map<number, OpenPr> {
   return new Map(openPrRows(db).map((r) => [r.issueId, { prNumber: r.prNumber, url: r.url }]));
 }
+
+export type MergedPrEvent = { prNumber: number; eventId: number };
+
+// The latest merge event for an issue (a `delivered` self-publish or a
+// `gh_pr_merged` webhook), with its event id — used by the process-deviation
+// signal both to name the PR and as the "episode start" marker for webhook
+// dedup. Note `delivered` payloads carry no url, so only prNumber is returned.
+export function getMergedPrEvent(db: Db, issueId: number): MergedPrEvent | null {
+  const row = db.all<{ prNumber: number; eventId: number }>(sql`
+    SELECT json_extract(payload, '$.prNumber') AS prNumber, id AS eventId
+    FROM events
+    WHERE issue_id = ${issueId} AND type IN ('gh_pr_merged', 'delivered')
+    ORDER BY id DESC
+    LIMIT 1
+  `)[0];
+  return row ? { prNumber: row.prNumber, eventId: row.eventId } : null;
+}

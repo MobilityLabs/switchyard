@@ -13,6 +13,7 @@ import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
 import { navigate, redirect } from "../router";
 import { countNewArrivals, firstRef, pickAdjacentRef } from "./reviewQueue";
+import { attentionChip } from "../attention";
 
 export default function Review({
   project,
@@ -225,11 +226,15 @@ export default function Review({
             <span className="ref">{current.ref}</span>
             <h3>{current.title}</h3>
             <span className={`badge prio prio-${current.priority}`}>{current.priority}</span>
-            {current.attention && (
-              <span className="badge danger" title={current.attention.message}>
-                ⛔ delivery failed
-              </span>
-            )}
+            {current.attention &&
+              (() => {
+                const chip = attentionChip(current.attention);
+                return chip ? (
+                  <span className={chip.className} title={current.attention.message}>
+                    {chip.label}
+                  </span>
+                ) : null;
+              })()}
           </div>
 
           {current.sourceType && (

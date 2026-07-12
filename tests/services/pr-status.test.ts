@@ -5,7 +5,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { recordEvent } from "../../src/services/events.js";
-import { getOpenPr, listOpenPrByIssueId } from "../../src/services/pr-status.js";
+import { getOpenPr, listOpenPrByIssueId, getMergedPrEvent } from "../../src/services/pr-status.js";
 
 function setup() {
   const db = openDb(":memory:");
@@ -153,5 +153,59 @@ describe("listOpenPrByIssueId", () => {
     const flags = listOpenPrByIssueId(db);
     expect(flags.get(open.id)).toEqual({ prNumber: 41, url: "https://x/41" });
     expect(flags.has(clean.id)).toBe(false);
+  });
+});
+
+describe("getMergedPrEvent", () => {
+  it("returns null when the issue has no merge event", () => {
+    const { db } = setup();
+    expect(getMergedPrEvent(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+
+  it("returns the prNumber + event id of a delivered event", () => {
+    const { db, human } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "delivered",
+      prNumber: 41,
+      mergeSha: "abc123",
+      deploy: { ran: false },
+    });
+    const merged = getMergedPrEvent(db, issue.id);
+    expect(merged?.prNumber).toBe(41);
+    expect(merged?.eventId).toBeGreaterThan(0);
+  });
+
+  it("returns the prNumber of a gh_pr_merged event (webhook path)", () => {
+    const { db, agent } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 41, url: "https://github.com/acme/widgets/pull/41", mergeSha: "abc" },
+    });
+    expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(41);
+  });
+
+  it("returns the most recent merge event when several exist", () => {
+    const { db, human } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 41, mergeSha: "a", deploy: { ran: false } });
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 42, mergeSha: "b", deploy: { ran: false } });
+    expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(42);
+  });
+
+  it("returns the most recent merge event across delivered and gh_pr_merged types", () => {
+    const { db, human, agent } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 41, mergeSha: "a", deploy: { ran: false } });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 42, url: "https://github.com/acme/widgets/pull/42", mergeSha: "b" },
+    });
+    expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(42);
   });
 });
