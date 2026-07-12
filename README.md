@@ -296,6 +296,32 @@ commits. The container gets no host filesystem beyond that one mount, and can
 only ever push that one branch name — merging stays a human decision, same
 as bare mode.
 
+### Egress allowlist (SYD-110)
+
+Containerized sessions carry secrets in env (`SWITCHYARD_TOKEN`, and
+`CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`); with open networking, a
+prompt-injected session — or a malicious npm lifecycle script during the
+pre-session `npm ci` — could simply POST them somewhere. Two layers close
+this:
+
+1. **Network egress allowlist (default on).** Session containers join an
+   `--internal` Docker network (`syd-workers`) with no route out; their only
+   exit is a tinyproxy sidecar (`syd-egress`, built by
+   `npm run build:worker-image` from `Dockerfile.egress-proxy`) that forwards
+   only to `api.anthropic.com`, `registry.npmjs.org`, and the tracker host
+   from `url`. Add hosts with `egressAllow: ["host.name"]`; opt out entirely
+   with `egress: "open"` in `switchyard-worker.json`. The worker stands the
+   network and sidecar up automatically at startup (and refuses to start if
+   it can't — deliver.ts warns instead, since merges shouldn't stop). Known
+   residual channels, accepted for now: Docker's embedded DNS still resolves
+   external names (a covert exfil channel), and allowlisted hosts themselves
+   could in principle relay.
+
+2. **Secret-free `npm ci`.** `scripts/npm-ci-guard.mjs` strips the three
+   secret vars from the install's environment, so third-party lifecycle
+   scripts never see them (native-module builds still work — the reason we
+   don't use `--ignore-scripts`).
+
 ## Delivery gate
 
 Unattended agent work never lands on `main` (or the NAS) until a human stamps
