@@ -67,6 +67,18 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig(good)).toEqual([]);
   });
 
+  it("accepts valid egress values and rejects unknown ones (SYD-110)", () => {
+    expect(validateWorkerConfig({ ...good, egress: "proxy" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, egress: "open" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, egress: "none" })).toEqual([
+      '`egress` must be "proxy" or "open"',
+    ]);
+    expect(validateWorkerConfig({ ...good, egressAllow: "github.com" })).toEqual([
+      "`egressAllow` must be an array of hostnames",
+    ]);
+    expect(validateWorkerConfig({ ...good, egressAllow: ["github.com"] })).toEqual([]);
+  });
+
   it("rejects non-objects", () => {
     expect(validateWorkerConfig(null)).toHaveLength(1);
     expect(validateWorkerConfig([])).toHaveLength(1);

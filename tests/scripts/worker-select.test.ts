@@ -10,6 +10,9 @@ import {
   buildAnswerPrompt,
   ANSWER_ALLOWED_TOOLS,
   buildDockerArgs,
+  egressMode,
+  egressAllowlist,
+  ensureEgressGuard,
   buildContainerizedPrompt,
   stackChecksEnv,
   containerNameFor,
@@ -557,9 +560,120 @@ describe("recordAttempt", () => {
   });
 });
 
+describe("egress config (SYD-110)", () => {
+  it("egressMode defaults to proxy and honors an explicit open", () => {
+    expect(egressMode(config)).toBe("proxy");
+    expect(egressMode({ ...config, egress: "open" })).toBe("open");
+    expect(egressMode({ ...config, egress: "proxy" })).toBe("proxy");
+  });
+
+  it("egressAllowlist covers the Anthropic API, npm registry, and the tracker host", () => {
+    expect(egressAllowlist(config)).toEqual(["api.anthropic.com", "localhost", "registry.npmjs.org"]);
+  });
+
+  it("egressAllowlist merges config extras, deduped and sorted", () => {
+    expect(
+      egressAllowlist({
+        ...config,
+        url: "http://nas.local:3300",
+        egressAllow: ["github.com", "api.anthropic.com"],
+      }),
+    ).toEqual(["api.anthropic.com", "github.com", "nas.local", "registry.npmjs.org"]);
+  });
+});
+
+describe("ensureEgressGuard (SYD-110)", () => {
+  type Call = { cmd: string; args: string[] };
+
+  /** Mock docker exec: `respond` maps "subcommand-ish" keys to stdout or a rejection. */
+  function mockExec(respond: (call: Call) => string | Error) {
+    const calls: Call[] = [];
+    const exec = async (cmd: string, args: string[]) => {
+      const call = { cmd, args };
+      calls.push(call);
+      const out = respond(call);
+      if (out instanceof Error) throw out;
+      return { stdout: out };
+    };
+    return { calls, exec };
+  }
+
+  const domainsCsv = "api.anthropic.com,localhost,registry.npmjs.org";
+
+  it("creates the internal network and starts+connects the proxy when both are missing", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network" && args[1] === "inspect") return new Error("no such network");
+      if (args[0] === "inspect") return new Error("no such container");
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+
+    const flat = calls.map((c) => c.args.join(" "));
+    expect(flat).toContainEqual(expect.stringContaining("network create --internal syd-workers"));
+    const runCall = calls.find((c) => c.args[0] === "run");
+    expect(runCall).toBeDefined();
+    expect(runCall!.args.join(" ")).toContain(`ALLOWED_DOMAINS=${domainsCsv}`);
+    expect(runCall!.args).toContain("switchyard-egress-proxy");
+    expect(runCall!.args).toContain("--restart");
+    expect(flat).toContainEqual(expect.stringContaining("network connect syd-workers syd-egress"));
+  });
+
+  it("is a no-op when the network exists and the proxy runs with the same allowlist", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") return `true ALLOWED_DOMAINS=${domainsCsv}`;
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(false);
+    expect(calls.some((c) => c.args.includes("create"))).toBe(false);
+  });
+
+  it("recreates the proxy when the allowlist changed", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") return "true ALLOWED_DOMAINS=api.anthropic.com,old.host";
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+
+    const flat = calls.map((c) => c.args.join(" "));
+    expect(flat).toContainEqual(expect.stringContaining("rm -f syd-egress"));
+    const runCall = calls.find((c) => c.args[0] === "run");
+    expect(runCall!.args.join(" ")).toContain(`ALLOWED_DOMAINS=${domainsCsv}`);
+  });
+
+  it("recreates the proxy when it exists but is not running", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") return `false ALLOWED_DOMAINS=${domainsCsv}`;
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(true);
+  });
+});
+
 describe("buildDockerArgs", () => {
   const project: WorkerProject = { repo: "/repo/syd" };
   const oauthEnv = { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret" };
+
+  it("joins the internal egress network and routes sessions through the proxy (SYD-110)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    const netIndex = args.indexOf("--network");
+    expect(args[netIndex + 1]).toBe("syd-workers");
+    for (const v of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+      expect(args).toContain(`${v}=http://syd-egress:8888`);
+    }
+    expect(args).toContain("NO_PROXY=localhost,127.0.0.1");
+    expect(args).toContain("no_proxy=localhost,127.0.0.1");
+  });
+
+  it("omits the egress network and proxy env when egress is open (SYD-110)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, { ...config, egress: "open" }, oauthEnv);
+    expect(args).not.toContain("--network");
+    expect(args.some((a) => a.includes("_PROXY") || a.includes("_proxy"))).toBe(false);
+  });
 
   it("mounts the right repo", () => {
     const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);

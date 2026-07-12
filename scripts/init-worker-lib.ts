@@ -46,6 +46,15 @@ export function validateWorkerConfig(raw: unknown): string[] {
   if (c.containerized !== undefined && typeof c.containerized !== "boolean") {
     problems.push("`containerized` must be true or false, not a string");
   }
+  if (c.egress !== undefined && c.egress !== "proxy" && c.egress !== "open") {
+    problems.push('`egress` must be "proxy" or "open"');
+  }
+  if (
+    c.egressAllow !== undefined &&
+    (!Array.isArray(c.egressAllow) || c.egressAllow.some((d) => typeof d !== "string"))
+  ) {
+    problems.push("`egressAllow` must be an array of hostnames");
+  }
   const runner = c.runner ?? "cli";
   if (runner !== "cli" && runner !== "sdk") {
     problems.push('`runner` must be "cli" or "sdk"');

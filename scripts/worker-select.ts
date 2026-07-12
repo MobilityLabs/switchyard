@@ -171,6 +171,17 @@ export type WorkerConfig = {
    * maxConcurrent/maxAnswerConcurrent slot forever. Default 3600 (1h).
    */
   sessionTimeoutSeconds?: number;
+  /**
+   * Container egress policy (SYD-110). "proxy" (default) puts dispatch
+   * containers on an internal Docker network whose only way out is a
+   * domain-allowlisted proxy sidecar — a prompt-injected session (or a
+   * malicious npm lifecycle script) can't exfiltrate the tokens in its env.
+   * "open" is the escape hatch: plain default-bridge networking, full egress.
+   */
+  egress?: "proxy" | "open";
+  /** Extra hostnames the egress proxy should allow, beyond the tracker host,
+   * api.anthropic.com, and registry.npmjs.org. */
+  egressAllow?: string[];
 };
 
 const DEFAULT_ALLOWED_TOOLS = [
@@ -755,6 +766,105 @@ const CONTAINER_MEMORY_LIMIT = "4g";
 const CONTAINER_CPU_LIMIT = "2";
 const CONTAINER_PIDS_LIMIT = "512";
 
+// SYD-110 egress guard: an --internal Docker network (no route out) whose only
+// exit is a tinyproxy sidecar with a domain allowlist. Session tokens can't be
+// exfiltrated to arbitrary hosts even by a fully compromised session.
+export const EGRESS_NETWORK = "syd-workers";
+export const EGRESS_PROXY_NAME = "syd-egress";
+export const EGRESS_PROXY_IMAGE = "switchyard-egress-proxy";
+export const EGRESS_PROXY_PORT = 8888;
+
+/** Baseline hosts every session needs: the Anthropic API and npm's registry
+ * (sessions run `npm ci`). The tracker host comes from config.url. */
+const EGRESS_BASELINE = ["api.anthropic.com", "registry.npmjs.org"];
+
+export function egressMode(config: WorkerConfig): "proxy" | "open" {
+  return config.egress ?? "proxy";
+}
+
+/** The full, sorted, deduped set of hostnames the proxy sidecar allows. */
+export function egressAllowlist(config: WorkerConfig): string[] {
+  const hosts = new Set(EGRESS_BASELINE);
+  hosts.add(new URL(config.url).hostname);
+  for (const extra of config.egressAllow ?? []) hosts.add(extra);
+  return [...hosts].sort();
+}
+
+/** Minimal exec shape ensureEgressGuard needs — injected so tests never touch docker. */
+export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }>;
+
+/**
+ * Idempotently stands up the SYD-110 egress guard: the internal network and
+ * the allowlisting proxy sidecar. Called at worker/deliver startup (and
+ * harmless to call repeatedly): missing pieces are created, a proxy whose
+ * allowlist no longer matches the config (or that stopped) is recreated.
+ * ALLOWED_DOMAINS is plain hostnames, safe to embed in argv.
+ */
+export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Promise<void> {
+  try {
+    await exec("docker", ["network", "inspect", EGRESS_NETWORK]);
+  } catch {
+    await exec("docker", ["network", "create", "--internal", EGRESS_NETWORK]);
+  }
+
+  const domainsCsv = egressAllowlist(config).join(",");
+  let needsStart = false;
+  let existed = false;
+  try {
+    const { stdout } = await exec("docker", [
+      "inspect",
+      "-f",
+      "{{.State.Running}} {{range .Config.Env}}{{.}} {{end}}",
+      EGRESS_PROXY_NAME,
+    ]);
+    existed = true;
+    const running = stdout.trim().startsWith("true");
+    const sameDomains = stdout.includes(`ALLOWED_DOMAINS=${domainsCsv}`);
+    needsStart = !running || !sameDomains;
+  } catch {
+    needsStart = true;
+  }
+  if (!needsStart) return;
+
+  if (existed) {
+    await exec("docker", ["rm", "-f", EGRESS_PROXY_NAME]);
+  }
+  await exec("docker", [
+    "run",
+    "-d",
+    "--restart",
+    "unless-stopped",
+    "--name",
+    EGRESS_PROXY_NAME,
+    "-e",
+    `ALLOWED_DOMAINS=${domainsCsv}`,
+    EGRESS_PROXY_IMAGE,
+  ]);
+  // Dual-home the sidecar: created on the default bridge (egress), connected
+  // to the internal network (where the session containers can reach it).
+  await exec("docker", ["network", "connect", EGRESS_NETWORK, EGRESS_PROXY_NAME]);
+}
+
+/**
+ * The docker-run argv fragment that scopes a session container's network
+ * (SYD-110): join the internal network and point every HTTP(S) client at the
+ * proxy sidecar — Claude Code, npm, and git all honor these env vars (both
+ * cases needed: npm/git read the lowercase forms). Empty in "open" mode.
+ * Shared by buildDockerArgs and delivery-lib's conflict-resolution builder.
+ */
+export function egressDockerArgs(config: WorkerConfig): string[] {
+  if (egressMode(config) === "open") return [];
+  const proxyUrl = `http://${EGRESS_PROXY_NAME}:${EGRESS_PROXY_PORT}`;
+  const args = ["--network", EGRESS_NETWORK];
+  for (const v of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+    args.push("-e", `${v}=${proxyUrl}`);
+  }
+  for (const v of ["NO_PROXY", "no_proxy"]) {
+    args.push("-e", `${v}=localhost,127.0.0.1`);
+  }
+  return args;
+}
+
 export function buildDockerArgs(
   issue: WorkerIssue,
   project: WorkerProject,
@@ -790,6 +900,7 @@ export function buildDockerArgs(
     // binary even so.
     "--security-opt",
     "no-new-privileges",
+    ...egressDockerArgs(config),
     "-v",
     `${project.repo}:/origin`,
     "-e",

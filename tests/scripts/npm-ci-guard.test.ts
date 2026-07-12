@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -106,5 +106,55 @@ describe("npm-ci-guard.mjs", () => {
 
   it("requires a workspace argument", () => {
     expect(() => execFileSync("node", [SCRIPT], { stdio: "pipe" })).toThrow();
+  });
+
+  it("runs npm ci with the secret env vars stripped, so lifecycle scripts can't read tokens (SYD-110)", () => {
+    const workspace = tmpWorkspace();
+    // A real root-project postinstall script: records which secrets it can see.
+    writeFileSync(
+      path.join(workspace, "record-env.mjs"),
+      `import { writeFileSync } from "node:fs";
+writeFileSync(
+  "env-seen.txt",
+  ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "PATH"]
+    .map((k) => (process.env[k] ? k + "=set" : k + "=unset"))
+    .join(","),
+);
+`,
+    );
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({
+        name: "tmp-x",
+        version: "1.0.0",
+        scripts: { postinstall: "node record-env.mjs" },
+      }),
+    );
+    writeFileSync(
+      path.join(workspace, "package-lock.json"),
+      JSON.stringify({
+        name: "tmp-x",
+        version: "1.0.0",
+        lockfileVersion: 3,
+        requires: true,
+        packages: { "": { name: "tmp-x", version: "1.0.0" } },
+      }),
+    );
+
+    const result = spawnSync("node", [SCRIPT, workspace], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SWITCHYARD_TOKEN: "syd_secret",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth_secret",
+        ANTHROPIC_API_KEY: "key_secret",
+      },
+    });
+    expect(result.status).toBe(0);
+
+    const seen = readFileSync(path.join(workspace, "env-seen.txt"), "utf8");
+    expect(seen).toBe(
+      "SWITCHYARD_TOKEN=unset,CLAUDE_CODE_OAUTH_TOKEN=unset,ANTHROPIC_API_KEY=unset,PATH=set",
+    );
   });
 });
