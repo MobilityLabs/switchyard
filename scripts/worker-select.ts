@@ -790,6 +790,61 @@ export function egressAllowlist(config: WorkerConfig): string[] {
   return [...hosts].sort();
 }
 
+/** Minimal exec shape ensureEgressGuard needs — injected so tests never touch docker. */
+export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }>;
+
+/**
+ * Idempotently stands up the SYD-110 egress guard: the internal network and
+ * the allowlisting proxy sidecar. Called at worker/deliver startup (and
+ * harmless to call repeatedly): missing pieces are created, a proxy whose
+ * allowlist no longer matches the config (or that stopped) is recreated.
+ * ALLOWED_DOMAINS is plain hostnames, safe to embed in argv.
+ */
+export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Promise<void> {
+  try {
+    await exec("docker", ["network", "inspect", EGRESS_NETWORK]);
+  } catch {
+    await exec("docker", ["network", "create", "--internal", EGRESS_NETWORK]);
+  }
+
+  const domainsCsv = egressAllowlist(config).join(",");
+  let needsStart = false;
+  let existed = false;
+  try {
+    const { stdout } = await exec("docker", [
+      "inspect",
+      "-f",
+      "{{.State.Running}} {{range .Config.Env}}{{.}} {{end}}",
+      EGRESS_PROXY_NAME,
+    ]);
+    existed = true;
+    const running = stdout.trim().startsWith("true");
+    const sameDomains = stdout.includes(`ALLOWED_DOMAINS=${domainsCsv}`);
+    needsStart = !running || !sameDomains;
+  } catch {
+    needsStart = true;
+  }
+  if (!needsStart) return;
+
+  if (existed) {
+    await exec("docker", ["rm", "-f", EGRESS_PROXY_NAME]);
+  }
+  await exec("docker", [
+    "run",
+    "-d",
+    "--restart",
+    "unless-stopped",
+    "--name",
+    EGRESS_PROXY_NAME,
+    "-e",
+    `ALLOWED_DOMAINS=${domainsCsv}`,
+    EGRESS_PROXY_IMAGE,
+  ]);
+  // Dual-home the sidecar: created on the default bridge (egress), connected
+  // to the internal network (where the session containers can reach it).
+  await exec("docker", ["network", "connect", EGRESS_NETWORK, EGRESS_PROXY_NAME]);
+}
+
 /**
  * The docker-run argv fragment that scopes a session container's network
  * (SYD-110): join the internal network and point every HTTP(S) client at the

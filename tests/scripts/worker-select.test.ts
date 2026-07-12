@@ -12,6 +12,7 @@ import {
   buildDockerArgs,
   egressMode,
   egressAllowlist,
+  ensureEgressGuard,
   buildContainerizedPrompt,
   stackChecksEnv,
   containerNameFor,
@@ -578,6 +579,78 @@ describe("egress config (SYD-110)", () => {
         egressAllow: ["github.com", "api.anthropic.com"],
       }),
     ).toEqual(["api.anthropic.com", "github.com", "nas.local", "registry.npmjs.org"]);
+  });
+});
+
+describe("ensureEgressGuard (SYD-110)", () => {
+  type Call = { cmd: string; args: string[] };
+
+  /** Mock docker exec: `respond` maps "subcommand-ish" keys to stdout or a rejection. */
+  function mockExec(respond: (call: Call) => string | Error) {
+    const calls: Call[] = [];
+    const exec = async (cmd: string, args: string[]) => {
+      const call = { cmd, args };
+      calls.push(call);
+      const out = respond(call);
+      if (out instanceof Error) throw out;
+      return { stdout: out };
+    };
+    return { calls, exec };
+  }
+
+  const domainsCsv = "api.anthropic.com,localhost,registry.npmjs.org";
+
+  it("creates the internal network and starts+connects the proxy when both are missing", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network" && args[1] === "inspect") return new Error("no such network");
+      if (args[0] === "inspect") return new Error("no such container");
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+
+    const flat = calls.map((c) => c.args.join(" "));
+    expect(flat).toContainEqual(expect.stringContaining("network create --internal syd-workers"));
+    const runCall = calls.find((c) => c.args[0] === "run");
+    expect(runCall).toBeDefined();
+    expect(runCall!.args.join(" ")).toContain(`ALLOWED_DOMAINS=${domainsCsv}`);
+    expect(runCall!.args).toContain("switchyard-egress-proxy");
+    expect(runCall!.args).toContain("--restart");
+    expect(flat).toContainEqual(expect.stringContaining("network connect syd-workers syd-egress"));
+  });
+
+  it("is a no-op when the network exists and the proxy runs with the same allowlist", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") return `true ALLOWED_DOMAINS=${domainsCsv}`;
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(false);
+    expect(calls.some((c) => c.args.includes("create"))).toBe(false);
+  });
+
+  it("recreates the proxy when the allowlist changed", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") return "true ALLOWED_DOMAINS=api.anthropic.com,old.host";
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+
+    const flat = calls.map((c) => c.args.join(" "));
+    expect(flat).toContainEqual(expect.stringContaining("rm -f syd-egress"));
+    const runCall = calls.find((c) => c.args[0] === "run");
+    expect(runCall!.args.join(" ")).toContain(`ALLOWED_DOMAINS=${domainsCsv}`);
+  });
+
+  it("recreates the proxy when it exists but is not running", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") return `false ALLOWED_DOMAINS=${domainsCsv}`;
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(true);
   });
 });
 
