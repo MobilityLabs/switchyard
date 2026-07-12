@@ -90,3 +90,11 @@ export type GithubRepoView = {
   createdAt: number;
   hasSecret: boolean;
 };
+
+export type SettingView = {
+  key: string;
+  value: unknown;
+  default: unknown;
+  isDefault: boolean;
+  description: string | null;
+};

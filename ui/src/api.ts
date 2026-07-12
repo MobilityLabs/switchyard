@@ -10,6 +10,7 @@ import type {
   Status,
   WebhookView,
   GithubRepoView,
+  SettingView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -171,3 +172,8 @@ export const addGithubRepo = (input: { fullName: string; projectKey?: string; se
   api<GithubRepoView>("/api/github-repos", { method: "POST", body: JSON.stringify(input) });
 export const removeGithubRepo = (id: number) =>
   api<{ ok: true }>(`/api/github-repos/${id}`, { method: "DELETE" });
+export const listSettings = () => api<SettingView[]>("/api/settings");
+export const putSetting = (key: string, value: unknown) =>
+  api<SettingView>(`/api/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) });
+export const resetSetting = (key: string) =>
+  api<SettingView>(`/api/settings/${key}`, { method: "DELETE" });
