@@ -155,9 +155,10 @@ export function emitProcessDeviations(db: Db): number {
     .from(issues)
     .where(inArray(issues.status, [...CANDIDATE_STATUSES]))
     .all();
+  const openPrs = listOpenPrByIssueId(db);
   let emitted = 0;
   for (const issue of rows) {
-    const c = computeDeviation(db, issue, getOpenPr(db, issue.id), now, threshold);
+    const c = computeDeviation(db, issue, openPrs.get(issue.id) ?? null, now, threshold);
     if (!c) continue;
     if (alreadyEmitted(db, issue.id, c.reason, c.episodeStartId)) continue;
     recordEvent(db, {
