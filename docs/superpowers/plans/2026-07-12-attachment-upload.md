@@ -23,35 +23,34 @@
 
 **Files:**
 - Create: `scripts/attach.mjs`
-- Test: `tests/scripts/attach.test.ts`
+- Test: `tests/scripts/attach.test.mjs`
 
 **Interfaces:**
 - Consumes: nothing (leaf).
-- Produces: a CLI `node scripts/attach.mjs <ISSUE_REF> <FILE>` that reads `SWITCHYARD_URL` + `SWITCHYARD_TOKEN` from env, POSTs the file as multipart field `file` (filename = basename) to `${SWITCHYARD_URL}/api/issues/<ref>/attachments` with `Authorization: Bearer <token>`, prints the endpoint's JSON response (`{id,url,markdown}`) to stdout on success, and on any failure writes the error to stderr and exits non-zero.
+- Produces:
+  - An importable `export async function uploadAttachment({ url, token, ref, file }): Promise<string>` — reads `file`, POSTs it as multipart field `file` (filename = basename) to `${url}/api/issues/<ref>/attachments` with `Authorization: Bearer <token>`, returns the endpoint's raw JSON response body (`{id,url,markdown}`) on 2xx, and throws on missing `url`/`token`, a missing file (ENOENT), or a non-2xx response.
+  - A CLI `node scripts/attach.mjs <ISSUE_REF> <FILE>` that reads `SWITCHYARD_URL` + `SWITCHYARD_TOKEN` from env only, calls `uploadAttachment`, prints the response to stdout, and exits 0 on success / non-zero (stderr) on failure. Env-only for the token; never argv.
+
+> **Test mechanism note (why not a subprocess):** the repo's other `.mjs` script test (`prime-workspace-trust.test.ts`) runs the script via `execFileSync`, but that pattern cannot be verified in this project's sandboxed Bash: a spawned grandchild process (vitest worker → `execFileSync` child) is denied loopback network access, so a subprocess-hits-a-local-server test hangs. An **in-process** fetch to a local server from inside a vitest worker *does* work (probed). So the uploader exposes `uploadAttachment` and the test imports and calls it directly against an in-process capture server. The test is authored as `.mjs` (not `.ts`) because `tsconfig.json` has `allowJs` off with `include: ["scripts","tests"]`, so a `.ts` test importing `attach.mjs` would fail `tsc` with a missing-declaration error; tsc ignores `.mjs`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/scripts/attach.test.ts`. It runs the real script as a subprocess against a throwaway HTTP capture server (mirrors `prime-workspace-trust.test.ts`), so it exercises real multipart encoding without the app or Docker.
+Create `tests/scripts/attach.test.mjs`. It imports `uploadAttachment` and exercises it against a throwaway in-process `node:http` capture server — real multipart encoding, no subprocess, no app, no Docker.
 
-```ts
+```js
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
-import { createServer, type Server, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { AddressInfo } from "node:net";
+import { uploadAttachment } from "../../scripts/attach.mjs";
 
-const SCRIPT = path.resolve(__dirname, "../../scripts/attach.mjs");
+let server;
+let captured;
+let respond;
+let baseUrl;
 
-type Captured = { method: string; url: string; auth: string; body: string };
-
-let server: Server;
-let captured: Captured | null;
-let respond: (res: import("node:http").ServerResponse) => void;
-let baseUrl: string;
-
-function readBody(req: IncomingMessage): Promise<string> {
+function readBody(req) {
   return new Promise((resolve) => {
     let data = "";
     req.setEncoding("latin1");
@@ -68,75 +67,70 @@ beforeEach(async () => {
   };
   server = createServer(async (req, res) => {
     captured = {
-      method: req.method ?? "",
-      url: req.url ?? "",
+      method: req.method,
+      url: req.url,
       auth: req.headers["authorization"] ?? "",
       body: await readBody(req),
     };
     respond(res);
   });
-  await new Promise<void>((r) => server.listen(0, r));
-  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  baseUrl = `http://127.0.0.1:${server.address().port}`;
 });
 
 afterEach(() => {
   server.close();
 });
 
-function tmpFile(name: string, contents = "PNGBYTES"): string {
+function tmpFile(name, contents = "PNGBYTES") {
   const dir = mkdtempSync(path.join(tmpdir(), "attach-test-"));
   const p = path.join(dir, name);
   writeFileSync(p, contents);
   return p;
 }
 
-function run(args: string[], env: Record<string, string | undefined>): { stdout: string } {
-  const stdout = execFileSync("node", [SCRIPT, ...args], {
-    env: { ...process.env, ...env },
-    encoding: "utf8",
-  });
-  return { stdout };
-}
-
-describe("attach.mjs", () => {
-  it("POSTs the file to the issue's attachments endpoint and prints the response", () => {
+describe("uploadAttachment", () => {
+  it("POSTs the file to the issue's attachments endpoint and returns the response body", async () => {
     const file = tmpFile("shot.png");
-    const { stdout } = run(["SYD-1", file], { SWITCHYARD_URL: baseUrl, SWITCHYARD_TOKEN: "tok123" });
+    const out = await uploadAttachment({ url: baseUrl, token: "tok123", ref: "SYD-1", file });
 
-    expect(captured!.method).toBe("POST");
-    expect(captured!.url).toBe("/api/issues/SYD-1/attachments");
-    expect(captured!.auth).toBe("Bearer tok123");
-    expect(captured!.body).toContain('name="file"');
-    expect(captured!.body).toContain('filename="shot.png"');
-    expect(stdout).toContain("![shot.png](/api/attachments/7/shot.png)");
+    expect(captured.method).toBe("POST");
+    expect(captured.url).toBe("/api/issues/SYD-1/attachments");
+    expect(captured.auth).toBe("Bearer tok123");
+    expect(captured.body).toContain('name="file"');
+    expect(captured.body).toContain('filename="shot.png"');
+    expect(out).toContain("![shot.png](/api/attachments/7/shot.png)");
   });
 
-  it("strips a trailing slash on SWITCHYARD_URL", () => {
+  it("strips a trailing slash on the base URL", async () => {
     const file = tmpFile("shot.png");
-    run(["SYD-2", file], { SWITCHYARD_URL: `${baseUrl}/`, SWITCHYARD_TOKEN: "tok" });
-    expect(captured!.url).toBe("/api/issues/SYD-2/attachments");
+    await uploadAttachment({ url: `${baseUrl}/`, token: "tok", ref: "SYD-2", file });
+    expect(captured.url).toBe("/api/issues/SYD-2/attachments");
   });
 
-  it("exits non-zero with a clear error when SWITCHYARD_TOKEN is missing", () => {
+  it("throws when the token is missing", async () => {
     const file = tmpFile("shot.png");
-    expect(() => run(["SYD-1", file], { SWITCHYARD_URL: baseUrl, SWITCHYARD_TOKEN: undefined })).toThrow(
-      /SWITCHYARD_TOKEN/,
-    );
+    await expect(uploadAttachment({ url: baseUrl, token: "", ref: "SYD-1", file })).rejects.toThrow(/SWITCHYARD_TOKEN/);
   });
 
-  it("exits non-zero when the file does not exist", () => {
-    expect(() => run(["SYD-1", "/no/such/file.png"], { SWITCHYARD_URL: baseUrl, SWITCHYARD_TOKEN: "tok" })).toThrow(
-      /ENOENT|no such file/,
-    );
+  it("throws when the URL is missing", async () => {
+    const file = tmpFile("shot.png");
+    await expect(uploadAttachment({ url: "", token: "tok", ref: "SYD-1", file })).rejects.toThrow(/SWITCHYARD_URL/);
   });
 
-  it("exits non-zero and surfaces the server error on a non-2xx response", () => {
+  it("throws when the file does not exist", async () => {
+    await expect(
+      uploadAttachment({ url: baseUrl, token: "tok", ref: "SYD-1", file: "/no/such/file.png" }),
+    ).rejects.toThrow(/ENOENT|no such file/);
+  });
+
+  it("throws and surfaces the server error on a non-2xx response", async () => {
     respond = (res) => {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "not an allowed attachment type" }));
     };
     const file = tmpFile("notes.txt");
-    expect(() => run(["SYD-1", file], { SWITCHYARD_URL: baseUrl, SWITCHYARD_TOKEN: "tok" })).toThrow(
+    await expect(uploadAttachment({ url: baseUrl, token: "tok", ref: "SYD-1", file })).rejects.toThrow(
       /upload failed \(400\)/,
     );
   });
@@ -145,8 +139,8 @@ describe("attach.mjs", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npx vitest run tests/scripts/attach.test.ts`
-Expected: FAIL — the script does not exist yet (`Cannot find module …/scripts/attach.mjs` / non-zero exit on every case).
+Run: `npx vitest run tests/scripts/attach.test.mjs`
+Expected: FAIL — `attach.mjs` doesn't exist yet, so the import fails (`Cannot find module …/scripts/attach.mjs`) and all 6 tests error.
 
 - [ ] **Step 3: Write `scripts/attach.mjs`**
 
@@ -157,27 +151,23 @@ Expected: FAIL — the script does not exist yet (`Cannot find module …/script
 // base64-encoded through an MCP tool argument, which burns model output tokens
 // (SYD-182). Kept standalone (and baked into the worker image as
 // `switchyard-attach`) so any dispatched worker can use it regardless of the
-// target repo, and so it's unit-testable without a container.
+// target repo. `uploadAttachment` is exported so it's unit-testable in-process
+// without spawning a subprocess.
 //
 // Usage: node attach.mjs <ISSUE_REF> <FILE>
 // Env:   SWITCHYARD_URL, SWITCHYARD_TOKEN  (both required; token via env, never argv)
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-async function main() {
-  const ref = process.argv[2];
-  const file = process.argv[3];
-  if (!ref || !file) {
-    throw new Error("usage: attach.mjs <ISSUE_REF> <FILE>");
-  }
-
-  const url = process.env.SWITCHYARD_URL;
-  const token = process.env.SWITCHYARD_TOKEN;
+// Returns the endpoint's raw response body ({id,url,markdown} as JSON text).
+// Throws on missing url/token, a missing file (ENOENT from readFile), or a
+// non-2xx response.
+export async function uploadAttachment({ url, token, ref, file }) {
   if (!url) throw new Error("SWITCHYARD_URL must be set");
   if (!token) throw new Error("SWITCHYARD_TOKEN must be set");
 
-  // readFile throws ENOENT with a clear message if the path is missing.
   const bytes = await readFile(file);
 
   const form = new FormData();
@@ -194,26 +184,50 @@ async function main() {
   if (!res.ok) {
     throw new Error(`upload failed (${res.status}): ${text}`);
   }
+  return text;
+}
+
+async function main() {
+  const ref = process.argv[2];
+  const file = process.argv[3];
+  if (!ref || !file) {
+    throw new Error("usage: attach.mjs <ISSUE_REF> <FILE>");
+  }
+  const text = await uploadAttachment({
+    url: process.env.SWITCHYARD_URL,
+    token: process.env.SWITCHYARD_TOKEN,
+    ref,
+    file,
+  });
   // The endpoint returns {id,url,markdown} — print it so the caller can quote
   // the markdown snippet in a comment.
   process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
 }
 
-main().catch((err) => {
-  console.error(err.message);
-  process.exit(1);
-});
+// Run as CLI only when invoked directly, so importing uploadAttachment in a
+// test does not trigger a real upload. fetch()'s undici keep-alive agent holds
+// a socket open after the response is read, keeping the event loop alive — so
+// exit explicitly once the CLI is done rather than hang.
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main().then(
+    () => process.exit(0),
+    (err) => {
+      console.error(err.message);
+      process.exit(1);
+    },
+  );
+}
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npx vitest run tests/scripts/attach.test.ts`
-Expected: PASS (5 tests).
+Run: `npx vitest run tests/scripts/attach.test.mjs`
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add scripts/attach.mjs tests/scripts/attach.test.ts
+git add scripts/attach.mjs tests/scripts/attach.test.mjs
 git commit -m "feat: attach.mjs — out-of-band attachment uploader (SYD-182)"
 ```
 
@@ -382,7 +396,7 @@ git commit -m "test: assert uploaded bytes land on disk (SYD-182)"
 - [ ] **Step 1: Run the full suite**
 
 Run: `npx vitest run`
-Expected: all files pass (existing count + the new `attach.test.ts` and the 2 new Dockerfile assertions).
+Expected: all files pass (existing count + the new `attach.test.mjs` and the 2 new Dockerfile assertions).
 
 - [ ] **Step 2: Typecheck + UI build (subagent-commit gate)**
 
