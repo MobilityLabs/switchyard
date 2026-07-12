@@ -64,6 +64,20 @@ describe("getDeviation — open_pr_not_in_review", () => {
     updateIssue(db, human, "SYD-1", { status: "in_review" });
     expect(getDeviation(db, getIssue(db, "SYD-1").id)).toBeNull();
   });
+
+  it("prefers open_pr_not_in_review over stale_claim when both apply", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1"); // -> in_progress
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+    });
+    ageAllEvents(db, getIssue(db, "SYD-1").id, 2 * 3600); // idle past the 1h threshold too
+    expect(getDeviation(db, getIssue(db, "SYD-1").id)?.reason).toBe("open_pr_not_in_review");
+  });
 });
 
 describe("getDeviation — merged_pr_not_done", () => {
