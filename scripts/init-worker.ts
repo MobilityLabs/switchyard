@@ -53,7 +53,15 @@
 // instead of tribal knowledge.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants as fsConstants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,6 +70,7 @@ import { workerPidFileName } from "./worker-select.js";
 import { isLocked } from "./pidfile.js";
 import {
   buildProtectMainArgs,
+  findStableClaudeBinDir,
   formatChecks,
   formatDockerfileStackGuidance,
   formatUserStackCapture,
@@ -663,10 +672,40 @@ function installLaunchd(role: WorkerRole = "all"): void {
   // host regardless of `containerized` — and bare-host code dispatch needs
   // it too — so resolve `which claude` unconditionally (SYD-74; this used to
   // be skipped whenever `containerized` was set, leaving the answer role
-  // with no `claude` on launchd's minimal PATH).
+  // with no `claude` on launchd's minimal PATH). The which result is
+  // laundered through findStableClaudeBinDir (SYD-153): run inside a
+  // terminal-manager session, `which` finds a temp-dir shim that a
+  // persistent plist must never pin.
   const extraPathDirs: string[] = [];
   const which = spawnSync("which", ["claude"], { encoding: "utf8" });
-  if (which.status === 0) extraPathDirs.push(path.dirname(which.stdout.trim()));
+  const resolved = findStableClaudeBinDir({
+    whichPath: which.status === 0 ? which.stdout.trim() : null,
+    home: os.homedir(),
+    tmpdir: os.tmpdir(),
+    isExecutable: (p) => {
+      try {
+        accessSync(p, fsConstants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
+  if (resolved) {
+    extraPathDirs.push(resolved.dir);
+    if (resolved.volatile) {
+      console.warn(
+        `WARNING: claude only found in a volatile location (${resolved.dir}) — the LaunchAgent ` +
+          "will break when that directory is cleaned up. Install claude somewhere stable " +
+          "(e.g. ~/.local/bin) and re-run --install-launchd.",
+      );
+    }
+  } else {
+    console.warn(
+      "WARNING: no `claude` binary found — bare-host and answer sessions will exit 127 " +
+        "until claude is installed and --install-launchd is re-run.",
+    );
+  }
 
   const plist = renderWorkerPlist({
     repoRoot,

@@ -240,6 +240,53 @@ export function nodeVersionSatisfies(required: string, actual: string): boolean 
   return actualMajor >= requiredMajor;
 }
 
+export type ClaudeBinDirResolution = { dir: string; volatile: boolean } | null;
+
+/**
+ * Resolves the directory to pin into a LaunchAgent PATH so spawned sessions
+ * find a *real* `claude` (SYD-153 incident): `--install-launchd` run from
+ * inside a terminal-manager session (cmux) sees `which claude` pointing at a
+ * per-session shim under the temp dir. Baked into a persistent plist, that
+ * shim can't resolve the actual binary under launchd and every bare-host
+ * `claude -p` exits 127. Same principle as the SYD-97 node pin: persist real
+ * install locations, never the installing shell's view.
+ *
+ * Prefers the `which` result when its directory is stable; otherwise probes
+ * known install locations. Only if claude exists nowhere stable does it
+ * return the volatile dir (flagged, so the caller can warn).
+ */
+export function findStableClaudeBinDir(opts: {
+  whichPath: string | null;
+  home: string;
+  tmpdir: string;
+  isExecutable: (path: string) => boolean;
+}): ClaudeBinDirResolution {
+  const isVolatile = (dir: string): boolean =>
+    dir.includes("cmux-cli-shims") ||
+    dir.startsWith(opts.tmpdir) ||
+    dir.startsWith("/var/folders/") ||
+    dir.startsWith("/tmp/") ||
+    dir.startsWith("/private/tmp/");
+
+  const whichDir = opts.whichPath ? opts.whichPath.replace(/\/[^/]+$/, "") : null;
+  if (whichDir && !isVolatile(whichDir) && opts.isExecutable(`${whichDir}/claude`)) {
+    return { dir: whichDir, volatile: false };
+  }
+  const knownDirs = [
+    `${opts.home}/.local/bin`,
+    `${opts.home}/.claude/local`,
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+  ];
+  for (const dir of knownDirs) {
+    if (opts.isExecutable(`${dir}/claude`)) return { dir, volatile: false };
+  }
+  if (whichDir && opts.isExecutable(`${whichDir}/claude`)) {
+    return { dir: whichDir, volatile: true };
+  }
+  return null;
+}
+
 /**
  * Checks an actual `process.version`-shaped string (e.g. "v24.1.0") against a
  * package.json `engines.node`-style range: space-separated comparators on the
