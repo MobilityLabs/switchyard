@@ -599,6 +599,9 @@ describe("ensureEgressGuard (SYD-110)", () => {
   }
 
   const domainsCsv = "api.anthropic.com,localhost,registry.npmjs.org";
+  // SYD-186: the sidecar now also injects provider creds; env supplies them and
+  // seeds the INJECT_KEYS freshness sentinel (CLAUDE_CODE_OAUTH_TOKEN here).
+  const egressEnv = { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv;
 
   it("creates the internal network and starts+connects the proxy when both are missing", async () => {
     const { calls, exec } = mockExec(({ args }) => {
@@ -606,7 +609,7 @@ describe("ensureEgressGuard (SYD-110)", () => {
       if (args[0] === "inspect") return new Error("no such container");
       return "";
     });
-    await ensureEgressGuard(config, exec);
+    await ensureEgressGuard(config, exec, egressEnv);
 
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContainEqual(expect.stringContaining("network create --internal syd-workers"));
@@ -621,10 +624,11 @@ describe("ensureEgressGuard (SYD-110)", () => {
   it("is a no-op when the network exists and the proxy runs with the same allowlist", async () => {
     const { calls, exec } = mockExec(({ args }) => {
       if (args[0] === "network") return "[]";
-      if (args[0] === "inspect") return `true ALLOWED_DOMAINS=${domainsCsv}`;
+      if (args[0] === "inspect")
+        return `true ALLOWED_DOMAINS=${domainsCsv} INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN`;
       return "";
     });
-    await ensureEgressGuard(config, exec);
+    await ensureEgressGuard(config, exec, egressEnv);
     expect(calls.some((c) => c.args[0] === "run")).toBe(false);
     expect(calls.some((c) => c.args.includes("create"))).toBe(false);
   });
@@ -635,7 +639,7 @@ describe("ensureEgressGuard (SYD-110)", () => {
       if (args[0] === "inspect") return "true ALLOWED_DOMAINS=api.anthropic.com,old.host";
       return "";
     });
-    await ensureEgressGuard(config, exec);
+    await ensureEgressGuard(config, exec, egressEnv);
 
     const flat = calls.map((c) => c.args.join(" "));
     expect(flat).toContainEqual(expect.stringContaining("rm -f syd-egress"));
@@ -659,7 +663,7 @@ describe("ensureEgressGuard (SYD-110)", () => {
       if (args[0] === "inspect") return new Error("no such container");
       return "";
     });
-    await ensureEgressGuard(config, exec);
+    await ensureEgressGuard(config, exec, egressEnv);
     expect(calls.some((c) => c.args[0] === "run")).toBe(true);
   });
 
@@ -670,7 +674,7 @@ describe("ensureEgressGuard (SYD-110)", () => {
       }
       return "";
     });
-    await expect(ensureEgressGuard(config, exec)).rejects.toThrow(/permission denied/);
+    await expect(ensureEgressGuard(config, exec, egressEnv)).rejects.toThrow(/permission denied/);
   });
 
   it("survives losing the proxy-run race: winner's healthy proxy is accepted, no duplicate connect", async () => {
@@ -681,12 +685,12 @@ describe("ensureEgressGuard (SYD-110)", () => {
         proxyInspects++;
         return proxyInspects === 1
           ? new Error("no such container")
-          : `true ALLOWED_DOMAINS=${domainsCsv}`;
+          : `true ALLOWED_DOMAINS=${domainsCsv} INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN`;
       }
       if (args[0] === "run") return new Error("Conflict. The container name is already in use");
       return "";
     });
-    await ensureEgressGuard(config, exec);
+    await ensureEgressGuard(config, exec, egressEnv);
     expect(calls.some((c) => c.args[0] === "network" && c.args[1] === "connect")).toBe(false);
   });
 
@@ -699,7 +703,7 @@ describe("ensureEgressGuard (SYD-110)", () => {
       if (args[0] === "inspect") return new Error("no such container");
       return "";
     });
-    await expect(ensureEgressGuard(config, exec)).resolves.toBeUndefined();
+    await expect(ensureEgressGuard(config, exec, egressEnv)).resolves.toBeUndefined();
   });
 
   it("recreates the proxy when it exists but is not running", async () => {
@@ -708,7 +712,7 @@ describe("ensureEgressGuard (SYD-110)", () => {
       if (args[0] === "inspect") return `false ALLOWED_DOMAINS=${domainsCsv}`;
       return "";
     });
-    await ensureEgressGuard(config, exec);
+    await ensureEgressGuard(config, exec, egressEnv);
     expect(calls.some((c) => c.args[0] === "run")).toBe(true);
   });
 });

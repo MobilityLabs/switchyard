@@ -766,13 +766,47 @@ const CONTAINER_MEMORY_LIMIT = "4g";
 const CONTAINER_CPU_LIMIT = "2";
 const CONTAINER_PIDS_LIMIT = "512";
 
-// SYD-110 egress guard: an --internal Docker network (no route out) whose only
-// exit is a tinyproxy sidecar with a domain allowlist. Session tokens can't be
-// exfiltrated to arbitrary hosts even by a fully compromised session.
+// SYD-110 + SYD-186 egress guard: an --internal Docker network (no route out)
+// whose only exit is the syd-egress sidecar. The sidecar runs mitmproxy with a
+// domain allowlist (default-deny) AND injects the real provider credentials
+// into MITM'd provider traffic, so a compromised session can neither exfiltrate
+// to arbitrary hosts nor read the real key — it holds only a placeholder.
 export const EGRESS_NETWORK = "syd-workers";
 export const EGRESS_PROXY_NAME = "syd-egress";
 export const EGRESS_PROXY_IMAGE = "switchyard-egress-proxy";
 export const EGRESS_PROXY_PORT = 8888;
+
+// The persisted CA lives in a named volume mounted at mitmproxy's confdir. It
+// is generated once (on the sidecar's first run) and NEVER regenerated on a
+// recreate — agent containers must keep trusting the same CA across dispatches.
+export const EGRESS_CA_VOLUME = "syd-egress-ca";
+export const EGRESS_CA_DIR = "/home/mitmproxy/.mitmproxy";
+
+// Provider credential vars the sidecar injects (SYD-186). Anthropic is live
+// now; OpenAI/Gemini are provisioned for Project 2. Passed into the sidecar as
+// bare `-e VAR` (value read from the worker env at run time, never argv).
+export const PROVIDER_KEY_VARS = [
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
+] as const;
+
+/** Bare `-e VAR` docker args for each provider key present (non-empty) in env —
+ * the value is read from the worker's environment at run time, never argv. */
+export function injectKeyEnvArgs(env: NodeJS.ProcessEnv): string[] {
+  const args: string[] = [];
+  for (const v of PROVIDER_KEY_VARS) {
+    if (env[v]) args.push("-e", v);
+  }
+  return args;
+}
+
+/** Sorted names of the provider keys present in env — the recreate-freshness
+ * sentinel (INJECT_KEYS). Names only, never values. */
+export function injectKeyNames(env: NodeJS.ProcessEnv): string[] {
+  return PROVIDER_KEY_VARS.filter((v) => env[v]).sort();
+}
 
 /** Baseline hosts every session needs: the Anthropic API and npm's registry
  * (sessions run `npm ci`). The tracker host comes from config.url. */
@@ -794,18 +828,27 @@ export function egressAllowlist(config: WorkerConfig): string[] {
 export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }>;
 
 /**
- * Idempotently stands up the SYD-110 egress guard: the internal network and
- * the allowlisting proxy sidecar. Called at worker/deliver startup (and
- * harmless to call repeatedly): missing pieces are created, a proxy whose
- * allowlist no longer matches the config (or that stopped) is recreated.
- * ALLOWED_DOMAINS is plain hostnames, safe to embed in argv.
+ * Idempotently stands up the SYD-110/SYD-186 egress guard: the internal network
+ * and the injecting proxy sidecar. Called at worker/deliver startup (and
+ * harmless to call repeatedly): missing pieces are created; a proxy whose
+ * allowlist OR injected key-set no longer matches (or that stopped) is
+ * recreated. The persisted CA volume is mounted but never removed, so the CA
+ * survives a recreate. `env` supplies the real provider credentials injected
+ * into the sidecar (bare `-e VAR`, never argv). ALLOWED_DOMAINS and INJECT_KEYS
+ * are plain hostnames / var-names, safe to embed in argv.
  */
-export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Promise<void> {
+export async function ensureEgressGuard(
+  config: WorkerConfig,
+  exec: ExecFn,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
   // Several processes ensure concurrently at boot (deliver + both workers
   // kickstart together — observed live 2026-07-11): every mutating step below
   // races an identical twin, so a failure only counts if the desired state
   // genuinely isn't there when we look again.
-  const inspectProxy = async (): Promise<{ running: boolean; sameDomains: boolean } | null> => {
+  const inspectProxy = async (): Promise<
+    { running: boolean; sameDomains: boolean; sameKeys: boolean } | null
+  > => {
     try {
       const { stdout } = await exec("docker", [
         "inspect",
@@ -816,6 +859,7 @@ export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Pro
       return {
         running: stdout.trim().startsWith("true"),
         sameDomains: stdout.includes(`ALLOWED_DOMAINS=${domainsCsv}`),
+        sameKeys: stdout.includes(`INJECT_KEYS=${keysCsv}`),
       };
     } catch {
       return null;
@@ -831,6 +875,7 @@ export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Pro
   };
 
   const domainsCsv = egressAllowlist(config).join(",");
+  const keysCsv = injectKeyNames(env).join(",");
 
   if (!(await networkExists())) {
     try {
@@ -841,9 +886,11 @@ export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Pro
   }
 
   let proxy = await inspectProxy();
-  if (proxy && proxy.running && proxy.sameDomains) return;
+  if (proxy && proxy.running && proxy.sameDomains && proxy.sameKeys) return;
 
   if (proxy) {
+    // Remove the container only — the CA volume is left in place so the
+    // regenerated sidecar reuses the same CA every agent already trusts.
     await exec("docker", ["rm", "-f", EGRESS_PROXY_NAME]);
   }
   try {
@@ -854,15 +901,20 @@ export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Pro
       "unless-stopped",
       "--name",
       EGRESS_PROXY_NAME,
+      "-v",
+      `${EGRESS_CA_VOLUME}:${EGRESS_CA_DIR}`,
       "-e",
       `ALLOWED_DOMAINS=${domainsCsv}`,
+      "-e",
+      `INJECT_KEYS=${keysCsv}`,
+      ...injectKeyEnvArgs(env),
       EGRESS_PROXY_IMAGE,
     ]);
   } catch (err) {
     // Name-conflict race: accept the winner's proxy if it's healthy — and
     // leave the network connect to the winner too.
     proxy = await inspectProxy();
-    if (proxy && proxy.running && proxy.sameDomains) return;
+    if (proxy && proxy.running && proxy.sameDomains && proxy.sameKeys) return;
     throw err;
   }
   // Dual-home the sidecar: created on the default bridge (egress), connected
