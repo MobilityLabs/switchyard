@@ -8,6 +8,7 @@ import type { Db } from "../db/index.js";
 import { events, issues } from "../db/schema.js";
 import { getOpenPr, listOpenPrByIssueId, getMergedPrEvent, type OpenPr } from "./pr-status.js";
 import { getSetting } from "./settings.js";
+import { recordEvent } from "./events.js";
 
 export type DeviationReason = "open_pr_not_in_review" | "merged_pr_not_done" | "stale_claim";
 export type DeviationFlag = { reason: DeviationReason; message: string };
@@ -119,4 +120,50 @@ export function listDeviationByIssueId(db: Db): Map<number, DeviationFlag> {
     if (c) out.set(issue.id, { reason: c.reason, message: c.message });
   }
   return out;
+}
+
+function alreadyEmitted(
+  db: Db,
+  issueId: number,
+  reason: DeviationReason,
+  episodeStartId: number,
+): boolean {
+  const row = db.all<{ id: number }>(sql`
+    SELECT id FROM events
+    WHERE issue_id = ${issueId}
+      AND type = 'process_deviation'
+      AND json_extract(payload, '$.reason') = ${reason}
+      AND id > ${episodeStartId}
+    LIMIT 1
+  `)[0];
+  return row !== undefined;
+}
+
+// Records a `process_deviation` event for every currently-drifting issue that
+// has not already been flagged for this episode (dedup derived from events, so
+// it self-re-arms on the next episode — no stored "notified" column). The event
+// fans out through the existing webhook dispatcher. Attributed to the assignee
+// (else creator), mirroring releaseStaleClaims. Returns the count recorded.
+export function emitProcessDeviations(db: Db): number {
+  const now = Math.floor(Date.now() / 1000);
+  const threshold = getSetting(db, "claims.deviation_seconds");
+  const rows = db
+    .select()
+    .from(issues)
+    .where(inArray(issues.status, [...CANDIDATE_STATUSES]))
+    .all();
+  let emitted = 0;
+  for (const issue of rows) {
+    const c = computeDeviation(db, issue, getOpenPr(db, issue.id), now, threshold);
+    if (!c) continue;
+    if (alreadyEmitted(db, issue.id, c.reason, c.episodeStartId)) continue;
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: issue.assigneeId ?? issue.creatorId,
+      type: "process_deviation",
+      payload: c.prNumber != null ? { reason: c.reason, prNumber: c.prNumber } : { reason: c.reason },
+    });
+    emitted++;
+  }
+  return emitted;
 }

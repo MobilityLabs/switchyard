@@ -9,6 +9,8 @@ import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { recordEvent } from "../../src/services/events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 import { getDeviation, listDeviationByIssueId } from "../../src/services/deviation.js";
+import { listIssueEvents } from "../../src/services/events.js";
+import { emitProcessDeviations } from "../../src/services/deviation.js";
 
 function setup() {
   const db = openDb(":memory:");
@@ -172,5 +174,78 @@ describe("listDeviationByIssueId", () => {
     const map = listDeviationByIssueId(db);
     expect(map.get(getIssue(db, "SYD-1").id)?.reason).toBe("open_pr_not_in_review");
     expect(map.has(getIssue(db, "SYD-2").id)).toBe(false);
+  });
+});
+
+function deviationEvents(db: Db, ref: string) {
+  return listIssueEvents(db, getIssue(db, ref).id).filter((e) => e.type === "process_deviation");
+}
+
+describe("emitProcessDeviations", () => {
+  it("records one event per drifting issue", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+    });
+    expect(emitProcessDeviations(db)).toBe(1);
+    const evs = deviationEvents(db, "SYD-1");
+    expect(evs).toHaveLength(1);
+    expect(evs[0].payload).toMatchObject({ reason: "open_pr_not_in_review", prNumber: 41 });
+  });
+
+  it("does not re-emit within the same episode", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+    });
+    expect(emitProcessDeviations(db)).toBe(1);
+    expect(emitProcessDeviations(db)).toBe(0);
+    expect(deviationEvents(db, "SYD-1")).toHaveLength(1);
+  });
+
+  it("re-arms for a new episode (a new PR after the old one closed)", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+    });
+    expect(emitProcessDeviations(db)).toBe(1);
+    // PR #41 lands (clears the open-PR episode), then a new PR #42 opens.
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "delivered",
+      prNumber: 41,
+      mergeSha: "abc",
+      deploy: { ran: false },
+    });
+    expect(emitProcessDeviations(db)).toBe(0); // in_progress, no open PR, fresh -> nothing
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 42,
+      url: "https://github.com/acme/widgets/pull/42",
+    });
+    expect(emitProcessDeviations(db)).toBe(1); // new episode -> re-armed
+    expect(deviationEvents(db, "SYD-1")).toHaveLength(2);
+  });
+
+  it("emits nothing when no issue is drifting", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1"); // fresh, no PR
+    expect(emitProcessDeviations(db)).toBe(0);
   });
 });
