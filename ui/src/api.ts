@@ -1,5 +1,6 @@
 import type {
   Actor,
+  ActorWithStatus,
   AgentSession,
   Attachment,
   Issue,
@@ -44,7 +45,18 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const getMe = () => api<Actor>("/api/me");
-export const listActors = () => api<Actor[]>("/api/actors");
+export const listActors = () => api<ActorWithStatus[]>("/api/actors");
+export const createActor = (input: { name: string; type: "human" | "agent" }) =>
+  api<{ actor: Actor; token: string }>("/api/actors", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const rotateActorToken = (id: number) =>
+  api<{ token: string }>(`/api/actors/${id}/rotate-token`, { method: "POST" });
+export const revokeActorToken = (id: number) =>
+  api<{ ok: true }>(`/api/actors/${id}/token`, { method: "DELETE" });
+export const mintLoginLink = (id: number) =>
+  api<{ url: string }>(`/api/actors/${id}/login-link`, { method: "POST" });
 export const listProjects = () => api<Project[]>("/api/projects");
 export const createProject = (input: { key: string; name: string }) =>
   api<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });

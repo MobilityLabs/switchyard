@@ -1,4 +1,5 @@
 export type Actor = { id: number; name: string; type: "human" | "agent" };
+export type ActorWithStatus = Actor & { createdAt: number; hasToken: boolean };
 export type Project = {
   id: number;
   key: string;

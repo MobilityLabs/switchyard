@@ -20,7 +20,7 @@ vi.mock("./api", () => ({
 
 import { listActors } from "./api";
 import { useActorNames } from "./useActorNames";
-import type { Actor } from "./types";
+import type { Actor, ActorWithStatus } from "./types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -57,8 +57,8 @@ describe("useActorNames reference stability (SYD-130)", () => {
   it("returns a stable reference across polls when the names haven't changed", async () => {
     vi.mocked(listActors).mockImplementation(() =>
       Promise.resolve([
-        { id: 1, name: "sean", type: "human" },
-        { id: 2, name: "claude/dev", type: "agent" },
+        { id: 1, name: "sean", type: "human", createdAt: 1, hasToken: false },
+        { id: 2, name: "claude/dev", type: "agent", createdAt: 1, hasToken: true },
       ]),
     );
     const seen: string[][] = [];
@@ -81,7 +81,7 @@ describe("useActorNames reference stability (SYD-130)", () => {
 
   it("returns a new reference once the names actually change", async () => {
     vi.mocked(listActors).mockImplementation(() =>
-      Promise.resolve([{ id: 1, name: "sean", type: "human" }]),
+      Promise.resolve([{ id: 1, name: "sean", type: "human", createdAt: 1, hasToken: false }]),
     );
     const seen: string[][] = [];
     const root = createRoot(container);
@@ -94,8 +94,8 @@ describe("useActorNames reference stability (SYD-130)", () => {
 
     vi.mocked(listActors).mockImplementation(() =>
       Promise.resolve([
-        { id: 1, name: "sean", type: "human" },
-        { id: 2, name: "claude/dev", type: "agent" },
+        { id: 1, name: "sean", type: "human", createdAt: 1, hasToken: false },
+        { id: 2, name: "claude/dev", type: "agent", createdAt: 1, hasToken: true },
       ]),
     );
     await act(async () => {
@@ -136,9 +136,9 @@ describe("useActorNames (SYD-134)", () => {
   });
 
   it("returns the actor names once listActors resolves", async () => {
-    const actors: Actor[] = [
-      { id: 1, name: "sean", type: "human" },
-      { id: 2, name: "claude/worker", type: "agent" },
+    const actors: ActorWithStatus[] = [
+      { id: 1, name: "sean", type: "human", createdAt: 1, hasToken: false },
+      { id: 2, name: "claude/worker", type: "agent", createdAt: 1, hasToken: true },
     ];
     vi.mocked(listActors).mockResolvedValueOnce(actors);
     let names: string[] = [];
