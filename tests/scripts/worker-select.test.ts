@@ -10,6 +10,8 @@ import {
   buildAnswerPrompt,
   ANSWER_ALLOWED_TOOLS,
   buildDockerArgs,
+  egressMode,
+  egressAllowlist,
   buildContainerizedPrompt,
   stackChecksEnv,
   containerNameFor,
@@ -557,9 +559,48 @@ describe("recordAttempt", () => {
   });
 });
 
+describe("egress config (SYD-110)", () => {
+  it("egressMode defaults to proxy and honors an explicit open", () => {
+    expect(egressMode(config)).toBe("proxy");
+    expect(egressMode({ ...config, egress: "open" })).toBe("open");
+    expect(egressMode({ ...config, egress: "proxy" })).toBe("proxy");
+  });
+
+  it("egressAllowlist covers the Anthropic API, npm registry, and the tracker host", () => {
+    expect(egressAllowlist(config)).toEqual(["api.anthropic.com", "localhost", "registry.npmjs.org"]);
+  });
+
+  it("egressAllowlist merges config extras, deduped and sorted", () => {
+    expect(
+      egressAllowlist({
+        ...config,
+        url: "http://nas.local:3300",
+        egressAllow: ["github.com", "api.anthropic.com"],
+      }),
+    ).toEqual(["api.anthropic.com", "github.com", "nas.local", "registry.npmjs.org"]);
+  });
+});
+
 describe("buildDockerArgs", () => {
   const project: WorkerProject = { repo: "/repo/syd" };
   const oauthEnv = { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret" };
+
+  it("joins the internal egress network and routes sessions through the proxy (SYD-110)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    const netIndex = args.indexOf("--network");
+    expect(args[netIndex + 1]).toBe("syd-workers");
+    for (const v of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+      expect(args).toContain(`${v}=http://syd-egress:8888`);
+    }
+    expect(args).toContain("NO_PROXY=localhost,127.0.0.1");
+    expect(args).toContain("no_proxy=localhost,127.0.0.1");
+  });
+
+  it("omits the egress network and proxy env when egress is open (SYD-110)", () => {
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, { ...config, egress: "open" }, oauthEnv);
+    expect(args).not.toContain("--network");
+    expect(args.some((a) => a.includes("_PROXY") || a.includes("_proxy"))).toBe(false);
+  });
 
   it("mounts the right repo", () => {
     const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);

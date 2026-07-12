@@ -171,6 +171,17 @@ export type WorkerConfig = {
    * maxConcurrent/maxAnswerConcurrent slot forever. Default 3600 (1h).
    */
   sessionTimeoutSeconds?: number;
+  /**
+   * Container egress policy (SYD-110). "proxy" (default) puts dispatch
+   * containers on an internal Docker network whose only way out is a
+   * domain-allowlisted proxy sidecar — a prompt-injected session (or a
+   * malicious npm lifecycle script) can't exfiltrate the tokens in its env.
+   * "open" is the escape hatch: plain default-bridge networking, full egress.
+   */
+  egress?: "proxy" | "open";
+  /** Extra hostnames the egress proxy should allow, beyond the tracker host,
+   * api.anthropic.com, and registry.npmjs.org. */
+  egressAllow?: string[];
 };
 
 const DEFAULT_ALLOWED_TOOLS = [
@@ -755,6 +766,50 @@ const CONTAINER_MEMORY_LIMIT = "4g";
 const CONTAINER_CPU_LIMIT = "2";
 const CONTAINER_PIDS_LIMIT = "512";
 
+// SYD-110 egress guard: an --internal Docker network (no route out) whose only
+// exit is a tinyproxy sidecar with a domain allowlist. Session tokens can't be
+// exfiltrated to arbitrary hosts even by a fully compromised session.
+export const EGRESS_NETWORK = "syd-workers";
+export const EGRESS_PROXY_NAME = "syd-egress";
+export const EGRESS_PROXY_IMAGE = "switchyard-egress-proxy";
+export const EGRESS_PROXY_PORT = 8888;
+
+/** Baseline hosts every session needs: the Anthropic API and npm's registry
+ * (sessions run `npm ci`). The tracker host comes from config.url. */
+const EGRESS_BASELINE = ["api.anthropic.com", "registry.npmjs.org"];
+
+export function egressMode(config: WorkerConfig): "proxy" | "open" {
+  return config.egress ?? "proxy";
+}
+
+/** The full, sorted, deduped set of hostnames the proxy sidecar allows. */
+export function egressAllowlist(config: WorkerConfig): string[] {
+  const hosts = new Set(EGRESS_BASELINE);
+  hosts.add(new URL(config.url).hostname);
+  for (const extra of config.egressAllow ?? []) hosts.add(extra);
+  return [...hosts].sort();
+}
+
+/**
+ * The docker-run argv fragment that scopes a session container's network
+ * (SYD-110): join the internal network and point every HTTP(S) client at the
+ * proxy sidecar — Claude Code, npm, and git all honor these env vars (both
+ * cases needed: npm/git read the lowercase forms). Empty in "open" mode.
+ * Shared by buildDockerArgs and delivery-lib's conflict-resolution builder.
+ */
+export function egressDockerArgs(config: WorkerConfig): string[] {
+  if (egressMode(config) === "open") return [];
+  const proxyUrl = `http://${EGRESS_PROXY_NAME}:${EGRESS_PROXY_PORT}`;
+  const args = ["--network", EGRESS_NETWORK];
+  for (const v of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+    args.push("-e", `${v}=${proxyUrl}`);
+  }
+  for (const v of ["NO_PROXY", "no_proxy"]) {
+    args.push("-e", `${v}=localhost,127.0.0.1`);
+  }
+  return args;
+}
+
 export function buildDockerArgs(
   issue: WorkerIssue,
   project: WorkerProject,
@@ -790,6 +845,7 @@ export function buildDockerArgs(
     // binary even so.
     "--security-opt",
     "no-new-privileges",
+    ...egressDockerArgs(config),
     "-v",
     `${project.repo}:/origin`,
     "-e",

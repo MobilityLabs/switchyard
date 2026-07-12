@@ -503,6 +503,35 @@ describe("conflict-resolution dispatch (SYD-100)", () => {
   });
 
   describe("buildConflictResolutionDockerArgs", () => {
+    it("joins the internal egress network and routes the session through the proxy (SYD-110)", () => {
+      const args = buildConflictResolutionDockerArgs(
+        "SYD-9",
+        ["src/a.ts"],
+        "/tmp/clones/SYD",
+        project,
+        baseConfig,
+        oauthEnv,
+      );
+      const netIndex = args.indexOf("--network");
+      expect(args[netIndex + 1]).toBe("syd-workers");
+      for (const v of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+        expect(args).toContain(`${v}=http://syd-egress:8888`);
+      }
+    });
+
+    it("omits the egress network and proxy env when egress is open (SYD-110)", () => {
+      const args = buildConflictResolutionDockerArgs(
+        "SYD-9",
+        ["src/a.ts"],
+        "/tmp/clones/SYD",
+        project,
+        { ...baseConfig, egress: "open" },
+        oauthEnv,
+      );
+      expect(args).not.toContain("--network");
+      expect(args.some((a) => a.includes("_PROXY") || a.includes("_proxy"))).toBe(false);
+    });
+
     it("mounts the scratch clone (not the human's live checkout)", () => {
       const args = buildConflictResolutionDockerArgs(
         "SYD-9",

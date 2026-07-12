@@ -4,6 +4,7 @@
 // so it's trivially unit-testable; the exec side lives in delivery-exec.ts.
 
 import {
+  egressDockerArgs,
   projectKeyOf,
   stackChecksEnv,
   type WorkerConfig,
@@ -573,6 +574,7 @@ export function buildConflictResolutionDockerArgs(
     "--rm",
     "--name",
     `syd-resolve-${ref}`,
+    ...egressDockerArgs(config),
     "-v",
     `${cloneDir}:/origin`,
     "-e",
