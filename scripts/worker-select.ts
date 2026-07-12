@@ -801,48 +801,77 @@ export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }
  * ALLOWED_DOMAINS is plain hostnames, safe to embed in argv.
  */
 export async function ensureEgressGuard(config: WorkerConfig, exec: ExecFn): Promise<void> {
-  try {
-    await exec("docker", ["network", "inspect", EGRESS_NETWORK]);
-  } catch {
-    await exec("docker", ["network", "create", "--internal", EGRESS_NETWORK]);
-  }
+  // Several processes ensure concurrently at boot (deliver + both workers
+  // kickstart together — observed live 2026-07-11): every mutating step below
+  // races an identical twin, so a failure only counts if the desired state
+  // genuinely isn't there when we look again.
+  const inspectProxy = async (): Promise<{ running: boolean; sameDomains: boolean } | null> => {
+    try {
+      const { stdout } = await exec("docker", [
+        "inspect",
+        "-f",
+        "{{.State.Running}} {{range .Config.Env}}{{.}} {{end}}",
+        EGRESS_PROXY_NAME,
+      ]);
+      return {
+        running: stdout.trim().startsWith("true"),
+        sameDomains: stdout.includes(`ALLOWED_DOMAINS=${domainsCsv}`),
+      };
+    } catch {
+      return null;
+    }
+  };
+  const networkExists = async (): Promise<boolean> => {
+    try {
+      await exec("docker", ["network", "inspect", EGRESS_NETWORK]);
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   const domainsCsv = egressAllowlist(config).join(",");
-  let needsStart = false;
-  let existed = false;
-  try {
-    const { stdout } = await exec("docker", [
-      "inspect",
-      "-f",
-      "{{.State.Running}} {{range .Config.Env}}{{.}} {{end}}",
-      EGRESS_PROXY_NAME,
-    ]);
-    existed = true;
-    const running = stdout.trim().startsWith("true");
-    const sameDomains = stdout.includes(`ALLOWED_DOMAINS=${domainsCsv}`);
-    needsStart = !running || !sameDomains;
-  } catch {
-    needsStart = true;
-  }
-  if (!needsStart) return;
 
-  if (existed) {
+  if (!(await networkExists())) {
+    try {
+      await exec("docker", ["network", "create", "--internal", EGRESS_NETWORK]);
+    } catch (err) {
+      if (!(await networkExists())) throw err; // a twin didn't win — real failure
+    }
+  }
+
+  let proxy = await inspectProxy();
+  if (proxy && proxy.running && proxy.sameDomains) return;
+
+  if (proxy) {
     await exec("docker", ["rm", "-f", EGRESS_PROXY_NAME]);
   }
-  await exec("docker", [
-    "run",
-    "-d",
-    "--restart",
-    "unless-stopped",
-    "--name",
-    EGRESS_PROXY_NAME,
-    "-e",
-    `ALLOWED_DOMAINS=${domainsCsv}`,
-    EGRESS_PROXY_IMAGE,
-  ]);
+  try {
+    await exec("docker", [
+      "run",
+      "-d",
+      "--restart",
+      "unless-stopped",
+      "--name",
+      EGRESS_PROXY_NAME,
+      "-e",
+      `ALLOWED_DOMAINS=${domainsCsv}`,
+      EGRESS_PROXY_IMAGE,
+    ]);
+  } catch (err) {
+    // Name-conflict race: accept the winner's proxy if it's healthy — and
+    // leave the network connect to the winner too.
+    proxy = await inspectProxy();
+    if (proxy && proxy.running && proxy.sameDomains) return;
+    throw err;
+  }
   // Dual-home the sidecar: created on the default bridge (egress), connected
   // to the internal network (where the session containers can reach it).
-  await exec("docker", ["network", "connect", EGRESS_NETWORK, EGRESS_PROXY_NAME]);
+  try {
+    await exec("docker", ["network", "connect", EGRESS_NETWORK, EGRESS_PROXY_NAME]);
+  } catch (err) {
+    if (!/already exists/i.test((err as Error).message)) throw err;
+  }
 }
 
 /**

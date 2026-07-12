@@ -643,6 +643,65 @@ describe("ensureEgressGuard (SYD-110)", () => {
     expect(runCall!.args.join(" ")).toContain(`ALLOWED_DOMAINS=${domainsCsv}`);
   });
 
+  it("survives losing the network-create race to a concurrently starting worker", async () => {
+    // Observed live (2026-07-11): deliver and worker-answer kickstarted
+    // together; both saw the network missing, the loser's `network create`
+    // got "already exists" and the whole worker died on it.
+    let networkInspects = 0;
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network" && args[1] === "inspect") {
+        networkInspects++;
+        return networkInspects === 1 ? new Error("no such network") : "[]";
+      }
+      if (args[0] === "network" && args[1] === "create") {
+        return new Error("network with name syd-workers already exists");
+      }
+      if (args[0] === "inspect") return new Error("no such container");
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(true);
+  });
+
+  it("still throws when network create fails and the network is genuinely absent", async () => {
+    const { exec } = mockExec(({ args }) => {
+      if (args[0] === "network") {
+        return args[1] === "create" ? new Error("permission denied") : new Error("no such network");
+      }
+      return "";
+    });
+    await expect(ensureEgressGuard(config, exec)).rejects.toThrow(/permission denied/);
+  });
+
+  it("survives losing the proxy-run race: winner's healthy proxy is accepted, no duplicate connect", async () => {
+    let proxyInspects = 0;
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") {
+        proxyInspects++;
+        return proxyInspects === 1
+          ? new Error("no such container")
+          : `true ALLOWED_DOMAINS=${domainsCsv}`;
+      }
+      if (args[0] === "run") return new Error("Conflict. The container name is already in use");
+      return "";
+    });
+    await ensureEgressGuard(config, exec);
+    expect(calls.some((c) => c.args[0] === "network" && c.args[1] === "connect")).toBe(false);
+  });
+
+  it("tolerates an already-connected proxy on network connect", async () => {
+    const { exec } = mockExec(({ args }) => {
+      if (args[0] === "network" && args[1] === "inspect") return new Error("no such network");
+      if (args[0] === "network" && args[1] === "connect") {
+        return new Error("endpoint with name syd-egress already exists in network syd-workers");
+      }
+      if (args[0] === "inspect") return new Error("no such container");
+      return "";
+    });
+    await expect(ensureEgressGuard(config, exec)).resolves.toBeUndefined();
+  });
+
   it("recreates the proxy when it exists but is not running", async () => {
     const { calls, exec } = mockExec(({ args }) => {
       if (args[0] === "network") return "[]";
