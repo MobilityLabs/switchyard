@@ -19,22 +19,20 @@ function RenameCell(props: { projectKey: string; name: string; onSaved: () => vo
 
   if (!editing) {
     return (
-      <>
-        {props.name}{" "}
-        <button
-          onClick={() => {
-            setName(props.name);
-            setError(null);
-            setEditing(true);
-          }}
-        >
-          Rename
-        </button>
-      </>
+      <button
+        className="ghost"
+        onClick={() => {
+          setName(props.name);
+          setError(null);
+          setEditing(true);
+        }}
+      >
+        Rename
+      </button>
     );
   }
   return (
-    <>
+    <div className="rename-edit">
       <input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       <button
         className="primary"
@@ -57,9 +55,11 @@ function RenameCell(props: { projectKey: string; name: string; onSaved: () => vo
       >
         Save
       </button>
-      <button onClick={() => setEditing(false)}>Cancel</button>
+      <button className="ghost" onClick={() => setEditing(false)}>
+        Cancel
+      </button>
       {error && <span className="error-bar">{error}</span>}
-    </>
+    </div>
   );
 }
 
@@ -96,21 +96,23 @@ function NewProjectForm(props: { existingKeys: string[]; onCreated: () => void }
       }}
     >
       <h3>New project</h3>
-      <label>
-        Key
-        <input
-          value={key}
-          onChange={(e) => setKey(e.target.value.toUpperCase())}
-          placeholder="ACME"
-          maxLength={10}
-        />
-      </label>
+      <div className="form-grid">
+        <label>
+          Key
+          <input
+            value={key}
+            onChange={(e) => setKey(e.target.value.toUpperCase())}
+            placeholder="ACME"
+            maxLength={10}
+          />
+        </label>
+        <label>
+          Name
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
+        </label>
+      </div>
       {key.length > 0 && !keyValid && <p className="hint">2–10 uppercase letters, e.g. “ACME”.</p>}
       {keyValid && keyTaken && <p className="hint">A project with key “{key}” already exists.</p>}
-      <label>
-        Name
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme Corp" />
-      </label>
       <p className="banner warn">
         The key is permanent — issue refs like {key || "KEY"}-1 can never be changed later.
       </p>
@@ -126,6 +128,10 @@ export default function ProjectsTab() {
   const projects = usePoll(listProjects, []);
   return (
     <section>
+      <div className="settings-head">
+        <h2>Projects</h2>
+        <p>Every issue lives in a project. Its key becomes the permanent prefix on issue refs.</p>
+      </div>
       <PollErrorBar error={projects.error} />
       <table>
         <thead>
@@ -134,17 +140,19 @@ export default function ProjectsTab() {
             <th>Name</th>
             <th>Next issue #</th>
             <th>Created</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {(projects.data ?? []).map((p) => (
             <tr key={p.key}>
-              <td>{p.key}</td>
-              <td>
+              <td className="proj-key">{p.key}</td>
+              <td>{p.name}</td>
+              <td className="num">{p.nextIssueNumber}</td>
+              <td className="num">{new Date(p.createdAt * 1000).toLocaleDateString()}</td>
+              <td className="actions">
                 <RenameCell projectKey={p.key} name={p.name} onSaved={projects.reload} />
               </td>
-              <td>{p.nextIssueNumber}</td>
-              <td>{new Date(p.createdAt * 1000).toLocaleDateString()}</td>
             </tr>
           ))}
         </tbody>
