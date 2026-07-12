@@ -1,19 +1,36 @@
-# Egress-allowlist proxy sidecar for Switchyard's containerized dispatch
-# (SYD-110). Dispatch containers live on an --internal Docker network with no
-# route out; this sidecar is dual-homed (internal network + default bridge)
-# and forwards only to the hostnames in ALLOWED_DOMAINS — see
-# scripts/egress-proxy-entry.sh and ensureEgressGuard in
-# scripts/worker-select.ts.
-FROM alpine:3.20
+# Credential-injecting egress-proxy sidecar for Switchyard's containerized
+# dispatch (SYD-186). Dispatch containers live on an --internal Docker network
+# with no route out; this sidecar is dual-homed (internal network + default
+# bridge) and is their only exit. It runs mitmproxy with a header-injection +
+# allowlist addon (scripts/egress-inject-addon.py): provider hosts are MITM'd
+# and the real credential injected, allowlisted non-provider hosts tunnel
+# un-intercepted, everything else is refused. See scripts/egress-proxy-entry.sh
+# and ensureEgressGuard in scripts/worker-select.ts.
+#
+# Replaces the previous tinyproxy base (which allowlisted but could not inject
+# credentials). The real provider keys and the CA private key live only in this
+# container; agent containers get only the CA public cert + a placeholder key.
+#
+# NOTE: confirm the mitmproxy tag exists on Docker Hub at build time and bump as
+# releases land — pinned for reproducibility (matches the alpine pin the old
+# image used).
+FROM mitmproxy/mitmproxy:11.1.3
 
-RUN apk add --no-cache tinyproxy
+# The base image runs as the non-root `mitmproxy` user (uid 1000, home
+# /home/mitmproxy). Become root only to place files + prep the CA dir, then
+# drop back — same no-root-at-runtime posture as Dockerfile.worker (SYD-117).
+USER root
 
+COPY scripts/egress-inject-addon.py /egress-inject-addon.py
 COPY scripts/egress-proxy-entry.sh /entry.sh
-RUN chmod +x /entry.sh \
-    && mkdir -p /etc/tinyproxy \
-    && chown -R tinyproxy:tinyproxy /etc/tinyproxy
+RUN chmod +x /entry.sh /egress-inject-addon.py \
+    && mkdir -p /home/mitmproxy/.mitmproxy \
+    && chown -R mitmproxy:mitmproxy /home/mitmproxy/.mitmproxy
 
-# Same posture as Dockerfile.worker (SYD-117): no root inside the sidecar.
-USER tinyproxy
+USER mitmproxy
 
-ENTRYPOINT ["/bin/sh", "/entry.sh"]
+# The persisted CA lives here; ensureEgressGuard mounts a named volume over it
+# so the CA survives sidecar recreation.
+VOLUME ["/home/mitmproxy/.mitmproxy"]
+
+ENTRYPOINT ["/entry.sh"]
