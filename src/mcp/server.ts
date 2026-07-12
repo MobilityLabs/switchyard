@@ -296,7 +296,12 @@ export function buildMcpServer(
         "Attach an image or short video to an issue as evidence (png/jpg/gif/webp/avif/mp4/webm/mov, " +
         "≤20MB decoded). The issue's activity feed shows a thumbnail/link for this automatically. " +
         "Also include the returned markdown snippet in your next comment when you want to call out " +
-        "or discuss the attachment, not just record it.",
+        "or discuss the attachment, not just record it. " +
+        "PREFER uploading from disk instead of base64: if the file is already on disk and you have a " +
+        "shell, run `switchyard-attach <ISSUE_REF> <FILE>` (dispatched workers) or " +
+        "`node scripts/attach.mjs <ISSUE_REF> <FILE>` (Switchyard repo) — it streams the bytes to the " +
+        "tracker without spending output tokens base64-encoding the image, and prints the same markdown. " +
+        "Use content_base64 below only when you lack a shell or the SWITCHYARD_URL/SWITCHYARD_TOKEN env vars.",
       inputSchema: {
         ref: z.string(),
         filename: z.string(),

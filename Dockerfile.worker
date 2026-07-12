@@ -14,6 +14,14 @@ COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
 COPY scripts/npm-ci-guard.mjs /npm-ci-guard.mjs
 RUN chmod +x /entry.sh
 
+# Out-of-band attachment uploader (SYD-182): baked in so any dispatched worker
+# can `switchyard-attach <ISSUE_REF> <FILE>` regardless of the target repo,
+# streaming the bytes to the tracker instead of base64-ing them through an MCP
+# tool arg. Shell wrapper (not a bare rename) so node runs the .mjs as ESM.
+COPY scripts/attach.mjs /opt/switchyard/attach.mjs
+RUN printf '#!/bin/sh\nexec node /opt/switchyard/attach.mjs "$@"\n' > /usr/local/bin/switchyard-attach \
+    && chmod +x /usr/local/bin/switchyard-attach
+
 # Run as the image's built-in non-root `node` user (SYD-117) instead of root
 # -- narrows the blast radius of a compromised session and, combined with
 # --security-opt no-new-privileges (worker-select.ts buildDockerArgs), stops

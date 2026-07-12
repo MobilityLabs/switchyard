@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { openDb, type Db } from "../../src/db/index.js";
@@ -142,6 +142,10 @@ describe("attachment routes", () => {
     const { ref } = await fileIssue();
     const data = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
     const uploaded = await body<{ id: number; url: string }>(await upload(ref, "shot.png", data));
+
+    // The bytes must land on disk at the id-named path saveAttachment writes to.
+    const onDisk = readFileSync(path.join(attachmentsDir, String(uploaded.id)));
+    expect(onDisk.equals(data)).toBe(true);
 
     // buildApiRoutes' own routes aren't prefixed with "/api" — that prefix is
     // added when it's mounted in server.ts — so strip it for direct requests

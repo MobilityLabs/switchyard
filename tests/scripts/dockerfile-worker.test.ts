@@ -24,3 +24,21 @@ describe("Dockerfile.worker non-root user (SYD-117)", () => {
     expect(lines.slice(userIndex + 1).some((l) => l === "USER root")).toBe(false);
   });
 });
+
+describe("Dockerfile.worker attachment uploader (SYD-182)", () => {
+  const raw = readFileSync(path.join(__dirname, "../../Dockerfile.worker"), "utf8");
+  const lines = raw.split("\n").map((l) => l.trim());
+  const userIndex = lines.findIndex((l) => l.startsWith("USER "));
+
+  it("copies attach.mjs into the image before dropping root", () => {
+    const copyIndex = lines.findIndex(
+      (l) => l.startsWith("COPY ") && l.includes("scripts/attach.mjs"),
+    );
+    expect(copyIndex).toBeGreaterThan(-1);
+    expect(copyIndex).toBeLessThan(userIndex);
+  });
+
+  it("installs a switchyard-attach launcher on PATH", () => {
+    expect(raw).toContain("/usr/local/bin/switchyard-attach");
+  });
+});
