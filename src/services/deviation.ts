@@ -3,7 +3,7 @@
 // have drifted out of the board process (claim -> in_progress -> PR -> in_review
 // -> human stamps done). NEVER mutates the issues table; it only reads (and, via
 // emitProcessDeviations in webhook-dispatcher, records notification events).
-import { eq, inArray, max, sql } from "drizzle-orm";
+import { and, eq, inArray, max, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { events, issues } from "../db/schema.js";
 import { getOpenPr, listOpenPrByIssueId, getMergedPrEvent, type OpenPr } from "./pr-status.js";
@@ -25,11 +25,14 @@ type IssueRow = typeof issues.$inferSelect;
 
 const CANDIDATE_STATUSES = ["todo", "in_progress", "in_review"] as const;
 
+// process_deviation events are excluded so the monitoring signal itself can't
+// reset the idle clock it's monitoring (SYD-188): recording one at ~now would
+// otherwise make the issue look freshly active and clear the stale_claim flag.
 function newestEventAt(db: Db, issue: IssueRow): number {
   const row = db
     .select({ createdAt: max(events.createdAt) })
     .from(events)
-    .where(eq(events.issueId, issue.id))
+    .where(and(eq(events.issueId, issue.id), ne(events.type, "process_deviation")))
     .get();
   return row?.createdAt ?? issue.createdAt;
 }

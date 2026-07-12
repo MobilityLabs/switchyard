@@ -6,11 +6,11 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
-import { recordEvent } from "../../src/services/events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 import { getDeviation, listDeviationByIssueId } from "../../src/services/deviation.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { emitProcessDeviations } from "../../src/services/deviation.js";
+import { releaseStaleClaims } from "../../src/services/stale-claims.js";
 
 function setup() {
   const db = openDb(":memory:");
@@ -247,5 +247,30 @@ describe("emitProcessDeviations", () => {
     updateIssue(db, human, "SYD-1", { status: "todo" });
     claimIssue(db, agent, "SYD-1"); // fresh, no PR
     expect(emitProcessDeviations(db)).toBe(0);
+  });
+});
+
+describe("process_deviation does not reset the idle clock (SYD-188 seam)", () => {
+  it("still flags stale_claim after emitProcessDeviations records its event", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    ageAllEvents(db, getIssue(db, "SYD-1").id, 2 * 3600); // idle 2h > 1h threshold
+    expect(emitProcessDeviations(db)).toBe(1); // records a process_deviation at ~now
+    // the freshly-recorded process_deviation must NOT reset the idle clock:
+    expect(getDeviation(db, getIssue(db, "SYD-1").id)?.reason).toBe("stale_claim");
+  });
+
+  it("does not delay releaseStaleClaims", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    ageAllEvents(db, getIssue(db, "SYD-1").id, 5 * 3600); // past both 1h deviation + 4h stale
+    expect(emitProcessDeviations(db)).toBe(1); // records a process_deviation at ~now
+    // without the fix, that event resets MAX(createdAt) and blocks release:
+    expect(releaseStaleClaims(db)).toBe(1);
+    expect(getIssue(db, "SYD-1").status).toBe("todo");
   });
 });
