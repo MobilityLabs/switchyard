@@ -21,7 +21,7 @@ beforeEach(() => {
     authorization: `Bearer ${otherWorker.token}`,
     "content-type": "application/json",
   };
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, human.actor, { key: "SYD", name: "Switchyard" });
   createIssue(db, worker.actor, {
     projectKey: "SYD",
     title: "Ship v1",

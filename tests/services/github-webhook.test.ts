@@ -14,7 +14,7 @@ import {
 function setup() {
   const db = openDb(":memory:");
   const human = createActor(db, { name: "sean", type: "human" }).actor;
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
   return db;
 }

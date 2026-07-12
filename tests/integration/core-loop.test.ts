@@ -26,9 +26,10 @@ const text = (r: Awaited<ReturnType<Client["callTool"]>>) =>
 
 beforeAll(async () => {
   db = openDb(":memory:");
-  humanToken = createActor(db, { name: "sean", type: "human" }).token;
+  const sean = createActor(db, { name: "sean", type: "human" });
+  humanToken = sean.token;
   agentToken = createActor(db, { name: "claude/worker", type: "agent" }).token;
-  createProject(db, { key: "AIPI", name: "aipi" });
+  createProject(db, sean.actor, { key: "AIPI", name: "aipi" });
   await new Promise<void>((resolve) => {
     server = serve({ fetch: createApp(db).fetch, port: 0 }, (info) => {
       port = info.port;

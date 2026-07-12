@@ -12,7 +12,7 @@ describe("recordDeliveryEvent", () => {
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     // The delivery infra authenticates with a human-typed token (SYD-107/108).
     const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, worker, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
     recordDeliveryEvent(db, worker, "SYD-1", {
@@ -45,7 +45,7 @@ describe("recordDeliveryEvent", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, worker, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
     recordDeliveryEvent(db, worker, "SYD-1", {
@@ -64,7 +64,7 @@ describe("recordDeliveryEvent", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
     expect(() =>
@@ -81,7 +81,7 @@ describe("recordDeliveryEvent", () => {
   it("throws for an unknown issue ref", () => {
     const db = openDb(":memory:");
     const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, worker, { key: "SYD", name: "Switchyard" });
     expect(() =>
       recordDeliveryEvent(db, worker, "SYD-9", { type: "delivery_failed", message: "boom" }),
     ).toThrowError(/does not exist/);

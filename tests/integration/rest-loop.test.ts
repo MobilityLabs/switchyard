@@ -17,7 +17,7 @@ beforeAll(async () => {
   db = openDb(":memory:");
   agentToken = createActor(db, { name: "claude/dev", type: "agent" }).token;
   const human = createActor(db, { name: "sean", type: "human" }).actor;
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, human, { key: "SYD", name: "Switchyard" });
 
   server = await new Promise((resolve) => {
     const s = serve({ fetch: createApp(db).fetch, port: 0 }, (i) => {

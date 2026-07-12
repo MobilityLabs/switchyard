@@ -14,7 +14,7 @@ import {
   type Actor,
 } from "../services/actors.js";
 import { createLoginLink, getSessionActor } from "../services/auth.js";
-import { createProject, listProjects } from "../services/projects.js";
+import { createProject, listProjects, updateProject } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
 import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
@@ -71,6 +71,7 @@ import path from "node:path";
 import {
   body,
   projectBody,
+  projectUpdateBody,
   issueCreateBody,
   issueUpdateBody,
   commentBody,
@@ -132,7 +133,12 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.get("/projects", (c) => c.json(listProjects(db)));
-  app.post("/projects", body(projectBody), (c) => c.json(createProject(db, c.req.valid("json"))));
+  app.post("/projects", body(projectBody), (c) =>
+    c.json(createProject(db, c.var.actor, c.req.valid("json"))),
+  );
+  app.patch("/projects/:key", body(projectUpdateBody), (c) =>
+    c.json(updateProject(db, c.var.actor, c.req.param("key"), c.req.valid("json"))),
+  );
   app.get("/actors", (c) => c.json(listActorsWithStatus(db)));
 
   app.post("/actors", body(actorCreateBody), (c) => {

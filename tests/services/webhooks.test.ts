@@ -13,7 +13,7 @@ describe("webhooks", () => {
   it("registers, lists, scopes to a project, and removes", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const p = createProject(db, { key: "SYD", name: "Switchyard" });
+    const p = createProject(db, human, { key: "SYD", name: "Switchyard" });
     const all = addWebhook(db, human, { url: "http://example.com/hook" });
     const scoped = addWebhook(db, human, {
       url: "http://example.com/syd",

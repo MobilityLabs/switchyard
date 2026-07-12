@@ -11,8 +11,8 @@ describe("GET /events", () => {
   it("returns the joined, newest-first feed and honors ?limit", async () => {
     const db = openDb(":memory:");
     const { token } = createActor(db, { name: "sean", type: "human" });
-    createProject(db, { key: "SYD", name: "Switchyard" });
     const human = createActor(db, { name: "someone-else", type: "human" }).actor;
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
     updateIssue(db, human, "SYD-1", { status: "todo" });
 
@@ -53,8 +53,8 @@ describe("GET /events", () => {
   it("pages via before_id and signals truncation with X-Truncated/X-Next-Cursor headers (SYD-89)", async () => {
     const db = openDb(":memory:");
     const { token } = createActor(db, { name: "sean", type: "human" });
-    createProject(db, { key: "SYD", name: "Switchyard" });
     const human = createActor(db, { name: "someone-else", type: "human" }).actor;
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Busy issue" }); // 1 event
     for (let i = 0; i < 4; i++) {
       recordEvent(db, { issueId: issue.id, actorId: human.id, type: "comment", payload: {} });
@@ -90,7 +90,7 @@ describe("GET /unanswered-questions", () => {
     const { token } = createActor(db, { name: "sean", type: "human" });
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     const human = createActor(db, { name: "someone-else", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
     createIssue(db, human, { projectKey: "SYD", title: "Answered already" });
     addComment(db, human, "SYD-1", "@agent what's blocking this?");

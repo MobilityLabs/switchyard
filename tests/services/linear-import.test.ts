@@ -227,7 +227,7 @@ describe("buildImportPlan", () => {
 
   it("marks existing projects/actors and skips already-imported issues", () => {
     const sean = createActor(db, { name: "sean", type: "human" }).actor;
-    const project = createProject(db, { key: "ENG", name: "Engineering" });
+    const project = createProject(db, sean, { key: "ENG", name: "Engineering" });
     db.insert(issues)
       .values({
         projectId: project.id,
@@ -250,7 +250,7 @@ describe("buildImportPlan", () => {
 
   it("refuses a number collision with a non-imported issue", () => {
     const sean = createActor(db, { name: "sean", type: "human" }).actor;
-    const project = createProject(db, { key: "ENG", name: "Engineering" });
+    const project = createProject(db, sean, { key: "ENG", name: "Engineering" });
     db.insert(issues)
       .values({
         projectId: project.id,

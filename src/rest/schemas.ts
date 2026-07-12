@@ -5,6 +5,7 @@ import { SUMMARY_MAX_LENGTH } from "../services/issues.js";
 import { AGENT_SESSION_MODES } from "../services/agent-sessions.js";
 
 export const projectBody = z.object({ key: z.string(), name: z.string() });
+export const projectUpdateBody = z.object({ name: z.string().min(1) });
 export const actorCreateBody = z.object({
   name: z.string().min(1),
   type: z.enum(["human", "agent"]),

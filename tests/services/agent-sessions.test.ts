@@ -27,7 +27,7 @@ beforeEach(() => {
   db = openDb(":memory:");
   human = createActor(db, { name: "sean", type: "human" }).actor;
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, agent, {
     projectKey: "SYD",
     title: "Ship v1",

@@ -9,7 +9,7 @@ describe("issues.parent_id foreign key", () => {
   it("rejects a parentId pointing at a nonexistent issue", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "AIPI", name: "aipi" });
+    createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
     expect(() =>
@@ -30,7 +30,7 @@ describe("issues.parent_id foreign key", () => {
   it("still allows a parentId pointing at a real issue", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "AIPI", name: "aipi" });
+    createProject(db, human, { key: "AIPI", name: "aipi" });
     const parent = createIssue(db, human, { projectKey: "AIPI", title: "Parent" });
     const child = createIssue(db, human, {
       projectKey: "AIPI",

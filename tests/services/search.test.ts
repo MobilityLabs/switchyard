@@ -11,8 +11,8 @@ let db: Db, human: Actor;
 beforeEach(() => {
   db = openDb(":memory:");
   human = createActor(db, { name: "sean", type: "human" }).actor;
-  createProject(db, { key: "AIPI", name: "aipi" });
-  createProject(db, { key: "HAND", name: "housing" });
+  createProject(db, human, { key: "AIPI", name: "aipi" });
+  createProject(db, human, { key: "HAND", name: "housing" });
   createIssue(db, human, { projectKey: "AIPI", title: "Fix flaky API test", labels: ["testing"] });
   createIssue(db, human, { projectKey: "AIPI", title: "Write docs" });
   createIssue(db, human, { projectKey: "HAND", title: "Map layer bug" });
