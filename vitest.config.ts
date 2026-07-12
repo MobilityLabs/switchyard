@@ -16,5 +16,5 @@ if (enginesNode && !nodeVersionSatisfiesEngines(enginesNode, process.version)) {
 }
 
 export default defineConfig({
-  test: { include: ["tests/**/*.test.ts", "ui/src/**/*.test.{ts,tsx}"] },
+  test: { include: ["tests/**/*.test.{ts,mjs}", "ui/src/**/*.test.{ts,tsx}"] },
 });
