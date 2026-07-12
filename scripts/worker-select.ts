@@ -965,6 +965,17 @@ export function buildDockerArgs(
   const image = config.image ?? DEFAULT_WORKER_IMAGE;
   const stackChecks = stackChecksEnv(project.stack);
 
+  // Provider-credential handling depends on the egress mode (SYD-186):
+  // - proxy (default): the syd-egress sidecar injects the real credential, so
+  //   the container holds only a placeholder + the CA public cert (read-only).
+  //   The real key never crosses into the agent container.
+  // - open: no injecting sidecar, so the real credential must reach the
+  //   container — bare `-e VAR` (value from the worker env, never argv).
+  const credArgs =
+    egressMode(config) === "proxy"
+      ? ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
+      : ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
+
   return [
     "run",
     "--rm",
@@ -990,10 +1001,7 @@ export function buildDockerArgs(
     `SWITCHYARD_URL=${config.url}`,
     "-e",
     "SWITCHYARD_TOKEN",
-    "-e",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "-e",
-    "ANTHROPIC_API_KEY",
+    ...credArgs,
     "-e",
     `WORKER_PROMPT=${prompt}`,
     "-e",

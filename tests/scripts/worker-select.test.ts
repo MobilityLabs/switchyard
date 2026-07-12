@@ -752,14 +752,47 @@ describe("buildDockerArgs", () => {
     expect(args[nameIndex + 1]).toBe("syd-SYD-42");
   });
 
-  it("passes secret vars using the bare -e form, never embedding their values", () => {
+  it("passes SWITCHYARD_TOKEN using the bare -e form, never embedding its value", () => {
     const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
-    for (const secretVar of ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]) {
-      expect(args).toContain(secretVar);
-      // Bare form: the var name appears standalone, never as VAR=value.
-      expect(args.some((a) => a.startsWith(`${secretVar}=`))).toBe(false);
-    }
+    // The scoped session token stays a bare env passthrough in every mode.
+    expect(args).toContain("SWITCHYARD_TOKEN");
+    expect(args.some((a) => a.startsWith("SWITCHYARD_TOKEN="))).toBe(false);
+    // No provider secret value ever lands in argv.
     expect(args.join(" ")).not.toContain("oauth-secret");
+  });
+
+  it("proxy mode: agent container gets a placeholder + CA mount and no real credential (SYD-186)", () => {
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      config,
+      { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv,
+    );
+    const joined = args.join(" ");
+    expect(joined).toContain("CLAUDE_CODE_OAUTH_TOKEN=placeholder");
+    expect(joined).not.toContain("sk-ant-oat-REAL"); // real value never crosses in
+    expect(joined).toMatch(/-v [^ ]*egress-ca[^ ]*:\/ca:ro/); // CA mounted read-only
+    // No bare passthrough of the real provider vars.
+    const passesRealCred = args.some(
+      (a, i) => a === "-e" && (args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN" || args[i + 1] === "ANTHROPIC_API_KEY"),
+    );
+    expect(passesRealCred).toBe(false);
+  });
+
+  it("open mode: the real credential is passed bare (no injecting sidecar) and no CA is mounted", () => {
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, egress: "open" },
+      { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv,
+    );
+    // Without a sidecar the container needs the real key — bare, value from env.
+    const passesRealCred = args.some((a, i) => a === "-e" && args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN");
+    expect(passesRealCred).toBe(true);
+    const joined = args.join(" ");
+    expect(joined).not.toContain("CLAUDE_CODE_OAUTH_TOKEN=placeholder");
+    expect(joined).not.toContain(":/ca:ro");
+    expect(joined).not.toContain("sk-ant-oat-REAL"); // still bare, never a value in argv
   });
 
   it("respects a custom image", () => {
