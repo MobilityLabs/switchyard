@@ -56,7 +56,7 @@ describe("searchIssues", () => {
 
   it("attention filter (SYD-94) restricts to issues with an unresolved delivery_failed", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "delivery_failed",
       message: "merge conflict",
     });
@@ -71,11 +71,11 @@ describe("searchIssues", () => {
 
   it("attention filter clears once a later delivered event fires", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "delivery_failed",
       message: "merge conflict",
     });
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "delivered",
       prNumber: 7,
       mergeSha: "abc123",
@@ -86,7 +86,7 @@ describe("searchIssues", () => {
 
   it("attention filter combines (ANDed) with other filters", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "delivery_failed",
       message: "merge conflict",
     });
@@ -118,7 +118,7 @@ describe("searchIssues", () => {
 
   it("openPr filter (SYD-171) restricts to issues with a still-open agent PR", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",
@@ -137,12 +137,12 @@ describe("searchIssues", () => {
 
   it("openPr filter clears once the PR is delivered", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",
     });
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "delivered",
       prNumber: 41,
       mergeSha: "abc123",
@@ -154,7 +154,7 @@ describe("searchIssues", () => {
   it("openPr filter combines (ANDed) with status, e.g. done-but-not-yet-merged", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     updateIssue(db, human, "AIPI-2", { status: "todo" });
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",

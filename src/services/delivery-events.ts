@@ -6,6 +6,7 @@
 
 import type { Db } from "../db/index.js";
 import type { Actor } from "./actors.js";
+import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
 
@@ -22,6 +23,18 @@ export function recordDeliveryEvent(
   ref: string,
   input: DeliveryEventInput,
 ): void {
+  // SYD-108: these events are load-bearing — getOpenPr treats `delivered`
+  // after `pr_opened` as "PR closed out" (clearing the SYD-99 claim gate) and
+  // getAttention treats it as clearing a delivery_failed. An agent that could
+  // post them could unblock its own issue or hide a failed delivery. The
+  // legit posters (deliver.ts, agent-worker.ts) authenticate with the
+  // worker's human-typed infra token (same identity rule as /github-events,
+  // SYD-107); dispatched agents' own tokens are refused here.
+  if (actor.type === "agent") {
+    throw new SwitchyardError(
+      "Only the delivery infrastructure (a human-typed token) may record delivery events — agents cannot post delivery status.",
+    );
+  }
   const issue = getIssue(db, ref);
   const { type, ...payload } = input;
   recordEvent(db, { issueId: issue.id, actorId: actor.id, type, payload });

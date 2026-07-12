@@ -62,7 +62,7 @@ describe("dependencies", () => {
 
   it("nextTask skips a todo issue with an open PR from a released prior claim (SYD-99)", () => {
     claimIssue(db, agent, "AIPI-2"); // urgent, would otherwise win
-    recordDeliveryEvent(db, agent, "AIPI-2", {
+    recordDeliveryEvent(db, human, "AIPI-2", {
       type: "pr_opened",
       prNumber: 41,
       url: "https://x/41",
