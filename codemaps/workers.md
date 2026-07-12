@@ -1,4 +1,4 @@
-> Generated: 2026-07-08 | Token-lean format for LLM context
+> Generated: 2026-07-12 | Token-lean format for LLM context
 
 # Satellite processes (`scripts/`, `worker-sdk/`)
 
