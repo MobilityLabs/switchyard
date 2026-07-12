@@ -53,6 +53,17 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
   exit 1
 fi
 
+# Trust the egress proxy's CA so the container's intercepted TLS to provider
+# hosts (api.anthropic.com) verifies (SYD-186). The syd-egress sidecar MITMs
+# provider traffic with a leaf cert signed by its own CA and injects the real
+# credential; this container holds only the CA *public* cert (read-only mount
+# at /ca) plus a placeholder credential, never the real key. NODE_EXTRA_CA_CERTS
+# covers the Node-based Claude Code CLI; Codex (Rust, Project 2) will instead
+# need this cert installed into the system trust store (update-ca-certificates).
+if [ -f /ca/mitmproxy-ca-cert.pem ]; then
+  export NODE_EXTRA_CA_CERTS=/ca/mitmproxy-ca-cert.pem
+fi
+
 # Bind mounts on plain-Linux Docker preserve host UIDs; without this, git
 # refuses the clone with "detected dubious ownership".
 git config --global --add safe.directory /origin
