@@ -43,7 +43,7 @@ try {
       console.error("add-project needs: <KEY> <name...>");
       process.exit(1);
     }
-    const project = createProject(db, { key, name: nameParts.join(" ") || key });
+    const project = createProject(db, cliActor, { key, name: nameParts.join(" ") || key });
     console.log(`created project ${project.key}: ${project.name}`);
   } else if (cmd === "mint-login") {
     const [name] = args;

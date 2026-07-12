@@ -14,7 +14,7 @@ beforeEach(() => {
   const h = createActor(db, { name: "sean", type: "human" });
   human = h.actor;
   humanH = { authorization: `Bearer ${h.token}`, "content-type": "application/json" };
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Schema" }); // SYD-1
   createIssue(db, human, { projectKey: "SYD", title: "API" }); // SYD-2
   for (const ref of ["SYD-1", "SYD-2"]) updateIssue(db, human, ref, { status: "todo" });

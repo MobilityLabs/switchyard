@@ -1,5 +1,12 @@
 export type Actor = { id: number; name: string; type: "human" | "agent" };
-export type Project = { id: number; key: string; name: string };
+export type ActorWithStatus = Actor & { createdAt: number; hasToken: boolean };
+export type Project = {
+  id: number;
+  key: string;
+  name: string;
+  nextIssueNumber: number;
+  createdAt: number;
+};
 export const STATUSES = [
   "triage",
   "backlog",
@@ -66,4 +73,28 @@ export type AgentSession = {
   startedAt: number;
   endedAt: number | null;
   lastNote: { note: string; createdAt: number } | null;
+};
+
+export type WebhookView = {
+  id: number;
+  url: string;
+  projectId: number | null;
+  active: boolean;
+  createdAt: number;
+  hasSecret: boolean;
+};
+export type GithubRepoView = {
+  id: number;
+  fullName: string;
+  projectId: number | null;
+  createdAt: number;
+  hasSecret: boolean;
+};
+
+export type SettingView = {
+  key: string;
+  value: unknown;
+  default: unknown;
+  isDefault: boolean;
+  description: string | null;
 };

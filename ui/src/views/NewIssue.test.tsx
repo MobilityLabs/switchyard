@@ -23,8 +23,8 @@ import type { Issue, Project } from "../types";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const PROJECTS: Project[] = [
-  { id: 1, key: "SYD", name: "Switchyard" },
-  { id: 2, key: "ACME", name: "Acme" },
+  { id: 1, key: "SYD", name: "Switchyard", nextIssueNumber: 1, createdAt: 1751900000 },
+  { id: 2, key: "ACME", name: "Acme", nextIssueNumber: 1, createdAt: 1751900000 },
 ];
 
 function issue(o: Partial<Issue> = {}): Issue {

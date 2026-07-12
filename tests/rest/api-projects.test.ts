@@ -53,6 +53,40 @@ describe("api auth + projects", () => {
     );
   });
 
+  it("renames a project via PATCH for humans and rejects agents (SYD-157)", async () => {
+    await app.request("/projects", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ key: "SYD", name: "Switchyard" }),
+    });
+
+    const renamed = await app.request("/projects/SYD", {
+      method: "PATCH",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Switchyard (prod)" }),
+    });
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as { name: string }).name).toBe("Switchyard (prod)");
+
+    const denied = await app.request("/projects/SYD", {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+      body: JSON.stringify({ name: "agent rename" }),
+    });
+    expect(denied.status).toBe(400);
+    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans/i);
+  });
+
+  it("rejects agent-token project creation (SYD-157)", async () => {
+    const res = await app.request("/projects", {
+      method: "POST",
+      headers: { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+      body: JSON.stringify({ key: "AGT", name: "agent project" }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/only humans/i);
+  });
+
   it("lists actors without leaking token hashes", async () => {
     const res = await app.request("/actors", { headers: { cookie } });
     const list = (await res.json()) as Record<string, unknown>[];

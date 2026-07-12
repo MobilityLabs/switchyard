@@ -19,7 +19,7 @@ beforeEach(() => {
   db = openDb(":memory:");
   human = createActor(db, { name: "sean", type: "human" }).actor;
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-  createProject(db, { key: "AIPI", name: "aipi" });
+  createProject(db, human, { key: "AIPI", name: "aipi" });
   createIssue(db, human, { projectKey: "AIPI", title: "Schema", priority: "high" }); // AIPI-1
   createIssue(db, human, { projectKey: "AIPI", title: "API", priority: "urgent" }); // AIPI-2
   createIssue(db, human, { projectKey: "AIPI", title: "Docs", priority: "low" }); // AIPI-3

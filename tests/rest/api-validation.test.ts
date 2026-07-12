@@ -8,11 +8,12 @@ import { SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 let db: Db, app: ReturnType<typeof buildApiRoutes>, h: Record<string, string>;
 beforeEach(() => {
   db = openDb(":memory:");
+  const sean = createActor(db, { name: "sean", type: "human" });
   h = {
-    authorization: `Bearer ${createActor(db, { name: "sean", type: "human" }).token}`,
+    authorization: `Bearer ${sean.token}`,
     "content-type": "application/json",
   };
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, sean.actor, { key: "SYD", name: "Switchyard" });
   app = buildApiRoutes(db);
 });
 

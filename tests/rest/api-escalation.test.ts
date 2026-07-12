@@ -19,7 +19,7 @@ beforeEach(() => {
   const human = createActor(db, { name: "sean", type: "human" });
   agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, human.actor, { key: "SYD", name: "Switchyard" });
   app = buildApiRoutes(db);
 });
 

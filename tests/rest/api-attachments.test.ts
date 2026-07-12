@@ -14,7 +14,7 @@ beforeEach(() => {
   db = openDb(":memory:");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
   agentH = { authorization: `Bearer ${agent.token}` };
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, createActor(db, { name: "sean", type: "human" }).actor, { key: "SYD", name: "Switchyard" });
   attachmentsDir = mkdtempSync(path.join(tmpdir(), "syd-attachments-"));
   app = buildApiRoutes(db, attachmentsDir);
 });

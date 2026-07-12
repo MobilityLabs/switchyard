@@ -27,7 +27,7 @@ beforeEach(async () => {
   db = openDb(":memory:");
   human = createActor(db, { name: "sean", type: "human" }).actor;
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-  createProject(db, { key: "AIPI", name: "aipi" });
+  createProject(db, human, { key: "AIPI", name: "aipi" });
   createIssue(db, human, { projectKey: "AIPI", title: "Ship v1", priority: "high" });
   updateIssue(db, human, "AIPI-1", { status: "todo" });
   client = await connect(agent);

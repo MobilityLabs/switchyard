@@ -19,7 +19,7 @@ describe("listRecentEvents", () => {
   it("returns events newest-first, joined with issue ref, title, project key, and actor name", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event: created
     updateIssue(db, human, "SYD-1", { status: "todo" }); // 1 event: status change
 
@@ -40,7 +40,7 @@ describe("listRecentEvents", () => {
   it("filters by since (strictly after the given unix timestamp)", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Old one" });
     updateIssue(db, human, "SYD-1", { status: "todo" });
 
@@ -62,7 +62,7 @@ describe("listRecentEvents", () => {
   it("defaults the limit to 200 and caps it at 500", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Only issue" });
 
     expect(listRecentEvents(db, {}).length).toBeLessThanOrEqual(DEFAULT_RECENT_EVENTS_LIMIT);
@@ -81,7 +81,7 @@ describe("listRecentEventsPage", () => {
   function setupManyEvents(count: number) {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Busy issue" }); // 1 "created" event
     for (let i = 0; i < count - 1; i++) {
       recordEvent(db, { issueId: issue.id, actorId: human.id, type: "comment", payload: {} });
@@ -136,7 +136,7 @@ describe("listUnansweredQuestions", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     return { db, human, agent };
   }
 

@@ -13,7 +13,7 @@ describe("github repos", () => {
   it("links, lists, scopes to a project, and unlinks", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const p = createProject(db, { key: "SYD", name: "Switchyard" });
+    const p = createProject(db, human, { key: "SYD", name: "Switchyard" });
     const unscoped = addGithubRepo(db, human, { fullName: "acme/widgets" });
     const scoped = addGithubRepo(db, human, {
       fullName: "acme/syd",
@@ -33,7 +33,7 @@ describe("github repos", () => {
   it("rejects malformed full names, unknown projects, and duplicate links", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
     expect(() => addGithubRepo(db, human, { fullName: "not-a-repo" })).toThrowError(
       /must be "owner\/repo"/i,
     );

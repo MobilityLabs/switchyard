@@ -14,7 +14,7 @@ beforeEach(() => {
   // human-typed token (SYD-107/108) — agent tokens are rejected below.
   const worker = createActor(db, { name: "delivery-worker", type: "human" });
   workerH = { authorization: `Bearer ${worker.token}`, "content-type": "application/json" };
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, worker.actor, { key: "SYD", name: "Switchyard" });
   createIssue(db, worker.actor, {
     projectKey: "SYD",
     title: "Ship v1",

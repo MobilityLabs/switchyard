@@ -205,6 +205,14 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
               <span className="badge">{liveSessions.data.length}</span>
             )}
           </a>
+          {props.me.type === "human" && (
+            <a
+              href={href({ view: "settings", tab: "projects" })}
+              className={route.view === "settings" ? "active" : ""}
+            >
+              Settings
+            </a>
+          )}
         </nav>
         <SearchBox route={route} />
         {(route.view === "board" || route.view === "triage" || route.view === "review") && (

@@ -10,7 +10,7 @@ describe("comments and activity", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    createProject(db, { key: "AIPI", name: "aipi" });
+    createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     addComment(db, agent, "AIPI-1", "Implemented and verified with vitest — 12 tests pass.");
     const activity = getActivity(db, "AIPI-1");
@@ -23,7 +23,7 @@ describe("comments and activity", () => {
   it("emits agent_question when a human leads a comment with @agent", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "AIPI", name: "aipi" });
+    createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
     addComment(db, human, "AIPI-1", "@agent what's blocking this?");
@@ -36,7 +36,7 @@ describe("comments and activity", () => {
   it("matches @agent case-insensitively and tolerates leading whitespace", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "AIPI", name: "aipi" });
+    createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
     addComment(db, human, "AIPI-1", "  @AGENT any update?");
@@ -50,7 +50,7 @@ describe("comments and activity", () => {
   it("does not emit agent_question for an ordinary comment or a mid-sentence mention", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
-    createProject(db, { key: "AIPI", name: "aipi" });
+    createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
     addComment(db, human, "AIPI-1", "looks good to me");
@@ -62,7 +62,7 @@ describe("comments and activity", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     const agentActor = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    createProject(db, { key: "AIPI", name: "aipi" });
+    createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
     addComment(db, agentActor, "AIPI-1", "@agent can someone else confirm?");

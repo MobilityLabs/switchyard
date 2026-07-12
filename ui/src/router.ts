@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
 import { projectKeyFromRef } from "./refs";
 
+export const SETTINGS_TABS = ["projects", "actors", "integrations", "config"] as const;
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+
 export type Route =
   | { view: "triage"; project: string | null }
   | { view: "board"; project: string }
@@ -8,7 +11,8 @@ export type Route =
   | { view: "review"; project: string | null; ref: string | null }
   | { view: "new-issue" }
   | { view: "search"; query: string }
-  | { view: "agents" };
+  | { view: "agents" }
+  | { view: "settings"; tab: SettingsTab };
 
 // Matches a project key (e.g. "SYD"), as opposed to an issue ref like
 // "SYD-66" — lets /review/:project? disambiguate from /review/:ref
@@ -84,6 +88,13 @@ function matchRoute(pathname: string, search: string): Route | null {
   }
   if (parts[0] === "new" && parts.length === 1) return { view: "new-issue" };
   if (parts[0] === "agents" && parts.length === 1) return { view: "agents" };
+  if (parts[0] === "settings") {
+    if (parts.length === 1) return { view: "settings", tab: "projects" };
+    if (parts.length === 2 && (SETTINGS_TABS as readonly string[]).includes(parts[1])) {
+      return { view: "settings", tab: parts[1] as SettingsTab };
+    }
+    return null;
+  }
   return null;
 }
 
@@ -107,6 +118,9 @@ export function href(route: Route): string {
   if (route.view === "search")
     return route.query ? `/search?q=${encodeURIComponent(route.query)}` : "/search";
   if (route.view === "agents") return "/agents";
+  if (route.view === "settings") {
+    return route.tab === "projects" ? "/settings" : `/settings/${route.tab}`;
+  }
   return "/";
 }
 

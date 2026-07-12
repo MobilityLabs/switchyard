@@ -445,3 +445,30 @@ describe("Shell agents nav (SYD-43)", () => {
     }
   });
 });
+
+describe("Shell settings nav (SYD-158)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    history.replaceState(null, "", "/");
+  });
+
+  it("shows the Settings link for human actors", async () => {
+    const container = await renderShell();
+    expect(navLink(container, "Settings").getAttribute("href")).toBe("/settings");
+  });
+
+  it("hides the Settings link for agent actors", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <Shell me={{ id: 9, name: "claude/dev", type: "agent" }} projects={PROJECTS}>
+          {null}
+        </Shell>,
+      );
+    });
+    const links = [...container.querySelectorAll("nav a")];
+    expect(links.some((a) => a.textContent?.startsWith("Settings"))).toBe(false);
+  });
+});

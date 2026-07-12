@@ -11,7 +11,7 @@ function setup() {
   const human = createActor(db, { name: "sean", type: "human" }).actor;
   const humanToken = createActor(db, { name: "github-poller", type: "human" }).token;
   const agentToken = createActor(db, { name: "claude/dev", type: "agent" }).token;
-  createProject(db, { key: "SYD", name: "Switchyard" });
+  createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Poll fallback target" });
   const app = buildApiRoutes(db);
   return { db, app, humanToken, agentToken };

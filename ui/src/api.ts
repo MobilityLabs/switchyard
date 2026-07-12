@@ -1,5 +1,6 @@
 import type {
   Actor,
+  ActorWithStatus,
   AgentSession,
   Attachment,
   Issue,
@@ -7,6 +8,9 @@ import type {
   Priority,
   Project,
   Status,
+  WebhookView,
+  GithubRepoView,
+  SettingView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -44,10 +48,23 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const getMe = () => api<Actor>("/api/me");
-export const listActors = () => api<Actor[]>("/api/actors");
+export const listActors = () => api<ActorWithStatus[]>("/api/actors");
+export const createActor = (input: { name: string; type: "human" | "agent" }) =>
+  api<{ actor: Actor; token: string }>("/api/actors", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const rotateActorToken = (id: number) =>
+  api<{ token: string }>(`/api/actors/${id}/rotate-token`, { method: "POST" });
+export const revokeActorToken = (id: number) =>
+  api<{ ok: true }>(`/api/actors/${id}/token`, { method: "DELETE" });
+export const mintLoginLink = (id: number) =>
+  api<{ url: string }>(`/api/actors/${id}/login-link`, { method: "POST" });
 export const listProjects = () => api<Project[]>("/api/projects");
 export const createProject = (input: { key: string; name: string }) =>
   api<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });
+export const updateProject = (key: string, input: { name: string }) =>
+  api<Project>(`/api/projects/${key}`, { method: "PATCH", body: JSON.stringify(input) });
 export const listIssues = (
   filters: {
     project?: string;
@@ -142,3 +159,21 @@ export async function uploadAttachment(
   if (!res.ok) throw await toApiError(res);
   return (await res.json().catch(() => ({}))) as { id: number; url: string; markdown: string };
 }
+
+export const listWebhooks = () => api<WebhookView[]>("/api/webhooks");
+export const addWebhook = (input: { url: string; projectKey?: string; secret?: string }) =>
+  api<WebhookView>("/api/webhooks", { method: "POST", body: JSON.stringify(input) });
+export const setWebhookActive = (id: number, active: boolean) =>
+  api<WebhookView>(`/api/webhooks/${id}`, { method: "PATCH", body: JSON.stringify({ active }) });
+export const removeWebhook = (id: number) =>
+  api<{ ok: true }>(`/api/webhooks/${id}`, { method: "DELETE" });
+export const listGithubRepos = () => api<GithubRepoView[]>("/api/github-repos");
+export const addGithubRepo = (input: { fullName: string; projectKey?: string; secret?: string }) =>
+  api<GithubRepoView>("/api/github-repos", { method: "POST", body: JSON.stringify(input) });
+export const removeGithubRepo = (id: number) =>
+  api<{ ok: true }>(`/api/github-repos/${id}`, { method: "DELETE" });
+export const listSettings = () => api<SettingView[]>("/api/settings");
+export const putSetting = (key: string, value: unknown) =>
+  api<SettingView>(`/api/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) });
+export const resetSetting = (key: string) =>
+  api<SettingView>(`/api/settings/${key}`, { method: "DELETE" });
