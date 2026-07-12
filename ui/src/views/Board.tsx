@@ -17,12 +17,36 @@ const LABELS: Record<string, string> = {
 // SYD-171: the done column is where delivery problems surface — bounced
 // (delivery_failed) or not-yet-merged (open PR) cards are otherwise
 // indistinguishable from cleanly-shipped ones without opening each issue.
+// SYD-175: the actionable view is the DEFAULT (during a queue recovery the
+// actionable set was 9 of 150+ cards); the full history sits behind an
+// explicit "all" pill, and an explicit choice persists per browser.
 type DoneFilter = "errors" | "not_merged";
+
+const DONE_FILTERS_STORAGE_KEY = "switchyard:done-filters";
+const DEFAULT_DONE_FILTERS: DoneFilter[] = ["errors", "not_merged"];
+
+function loadDoneFilters(): Set<DoneFilter> {
+  try {
+    const stored = localStorage.getItem(DONE_FILTERS_STORAGE_KEY);
+    if (stored !== null) return new Set(JSON.parse(stored) as DoneFilter[]);
+  } catch {
+    // Storage disabled or corrupted — fall through to the default.
+  }
+  return new Set(DEFAULT_DONE_FILTERS);
+}
+
+function storeDoneFilters(filters: Set<DoneFilter>): void {
+  try {
+    localStorage.setItem(DONE_FILTERS_STORAGE_KEY, JSON.stringify([...filters]));
+  } catch {
+    // Storage disabled — the choice just won't stick.
+  }
+}
 
 export default function Board({ project }: { project: string }) {
   const { data, error, reload } = usePoll(() => listIssues({ project }), [project]);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [doneFilters, setDoneFilters] = useState<Set<DoneFilter>>(new Set());
+  const [doneFilters, setDoneFilters] = useState<Set<DoneFilter>>(loadDoneFilters);
 
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
@@ -41,6 +65,14 @@ export default function Board({ project }: { project: string }) {
       const next = new Set(prev);
       if (next.has(f)) next.delete(f);
       else next.add(f);
+      storeDoneFilters(next);
+      return next;
+    });
+
+  const showAllDone = () =>
+    setDoneFilters(() => {
+      const next = new Set<DoneFilter>();
+      storeDoneFilters(next);
       return next;
     });
 
@@ -94,6 +126,15 @@ export default function Board({ project }: { project: string }) {
                       onClick={() => toggleDoneFilter("not_merged")}
                     >
                       🔀 not merged
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill filter-pill${doneFilters.size === 0 ? " active" : ""}`}
+                      aria-pressed={doneFilters.size === 0}
+                      title="Show the full done history"
+                      onClick={showAllDone}
+                    >
+                      all
                     </button>
                   </span>
                 )}
