@@ -59,6 +59,7 @@ The REST endpoint is **already covered** by `tests/rest/api-attachments.test.ts`
 - `saveAttachment`'s guarantees (type allowlist, 20MB cap, filename sanitize, no-SVG) are untouched.
 - base64 `attach_file` remains as a fallback.
 - The *norm* of when to attach (UI → screenshot, architecture → diagram) is SYD-183; this issue only makes the upload cheap and reachable.
+- SVG stays rejected here; safe SVG support (sanitize + safe Content-Disposition), which would let architecture diagrams be attached as vectors instead of rasterized PNGs, is tracked separately in SYD-184.
 
 ## Security
 
