@@ -195,4 +195,17 @@ describe("getMergedPrEvent", () => {
     recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 42, mergeSha: "b", deploy: { ran: false } });
     expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(42);
   });
+
+  it("returns the most recent merge event across delivered and gh_pr_merged types", () => {
+    const { db, human, agent } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 41, mergeSha: "a", deploy: { ran: false } });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 42, url: "https://github.com/acme/widgets/pull/42", mergeSha: "b" },
+    });
+    expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(42);
+  });
 });
