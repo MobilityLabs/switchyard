@@ -46,8 +46,17 @@ if (!hasLockfile) {
   process.exit(0);
 }
 
+// SYD-110: npm ci runs third-party lifecycle scripts before the session
+// starts — with the worker's secrets still in env, one compromised
+// transitive dep exfiltrates them with zero agent involvement. Strip the
+// secrets for the install; native-module builds (the reason we don't use
+// --ignore-scripts) don't need them.
+const SECRET_VARS = ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+const sanitizedEnv = { ...process.env };
+for (const key of SECRET_VARS) delete sanitizedEnv[key];
+
 try {
-  execFileSync("npm", ["ci"], { cwd: workspace, stdio: "inherit" });
+  execFileSync("npm", ["ci"], { cwd: workspace, stdio: "inherit", env: sanitizedEnv });
 } catch {
   let npmVersion = "unknown";
   try {
