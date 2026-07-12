@@ -74,3 +74,19 @@ export type AgentSession = {
   endedAt: number | null;
   lastNote: { note: string; createdAt: number } | null;
 };
+
+export type WebhookView = {
+  id: number;
+  url: string;
+  projectId: number | null;
+  active: boolean;
+  createdAt: number;
+  hasSecret: boolean;
+};
+export type GithubRepoView = {
+  id: number;
+  fullName: string;
+  projectId: number | null;
+  createdAt: number;
+  hasSecret: boolean;
+};

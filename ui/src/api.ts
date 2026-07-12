@@ -8,6 +8,8 @@ import type {
   Priority,
   Project,
   Status,
+  WebhookView,
+  GithubRepoView,
 } from "./types";
 
 export class ApiError extends Error {
@@ -156,3 +158,16 @@ export async function uploadAttachment(
   if (!res.ok) throw await toApiError(res);
   return (await res.json().catch(() => ({}))) as { id: number; url: string; markdown: string };
 }
+
+export const listWebhooks = () => api<WebhookView[]>("/api/webhooks");
+export const addWebhook = (input: { url: string; projectKey?: string; secret?: string }) =>
+  api<WebhookView>("/api/webhooks", { method: "POST", body: JSON.stringify(input) });
+export const setWebhookActive = (id: number, active: boolean) =>
+  api<WebhookView>(`/api/webhooks/${id}`, { method: "PATCH", body: JSON.stringify({ active }) });
+export const removeWebhook = (id: number) =>
+  api<{ ok: true }>(`/api/webhooks/${id}`, { method: "DELETE" });
+export const listGithubRepos = () => api<GithubRepoView[]>("/api/github-repos");
+export const addGithubRepo = (input: { fullName: string; projectKey?: string; secret?: string }) =>
+  api<GithubRepoView>("/api/github-repos", { method: "POST", body: JSON.stringify(input) });
+export const removeGithubRepo = (id: number) =>
+  api<{ ok: true }>(`/api/github-repos/${id}`, { method: "DELETE" });

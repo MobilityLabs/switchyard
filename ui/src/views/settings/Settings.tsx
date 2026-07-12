@@ -2,6 +2,7 @@ import type { SettingsTab } from "../../router";
 import { href, SETTINGS_TABS } from "../../router";
 import ProjectsTab from "./ProjectsTab";
 import ActorsTab from "./ActorsTab";
+import IntegrationsTab from "./IntegrationsTab";
 
 const TAB_LABELS: Record<SettingsTab, string> = {
   projects: "Projects",
@@ -25,6 +26,7 @@ export default function Settings({ tab }: { tab: SettingsTab }) {
       </nav>
       {tab === "projects" && <ProjectsTab />}
       {tab === "actors" && <ActorsTab />}
+      {tab === "integrations" && <IntegrationsTab />}
     </main>
   );
 }
