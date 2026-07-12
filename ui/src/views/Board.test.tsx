@@ -149,7 +149,9 @@ describe("Board Card keyboard accessibility", () => {
 
 // SYD-171: with the queue flow bouncing instead of repairing, spotting a
 // delivery_failed or not-yet-merged card in a crowded done column needs to
-// be one glance (a toggle), not opening every card.
+// be one glance. SYD-175: the actionable view IS the default — the chips
+// start ON and the full history sits behind an explicit "all" pill, with the
+// user's explicit choice persisted per browser.
 describe("Board done-column filter chips", () => {
   const DONE_ISSUES: Issue[] = [
     issue({ ref: "SYD-1", title: "Clean ship" }),
@@ -176,67 +178,67 @@ describe("Board done-column filter chips", () => {
     return container;
   }
 
+  function doneColumn(container: HTMLElement): Element {
+    return [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Done"),
+    )!;
+  }
+
+  function chip(column: Element, label: string): HTMLButtonElement {
+    return [...column.querySelectorAll("button")].find(
+      (b) => b.textContent === label,
+    )! as HTMLButtonElement;
+  }
+
+  function refs(column: Element): (string | null)[] {
+    return [...column.querySelectorAll(".card .ref")].map((el) => el.textContent);
+  }
+
   beforeEach(() => {
+    localStorage.clear();
     vi.mocked(listIssues).mockClear();
     vi.mocked(listIssues).mockResolvedValue(DONE_ISSUES);
   });
 
-  it("shows every done card with both filter chips off", async () => {
+  it("defaults to the actionable view: errors + not-merged chips ON (SYD-175)", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
-      c.querySelector("h3")?.textContent?.includes("Done"),
-    )!;
-    expect(doneColumn.querySelectorAll(".card")).toHaveLength(3);
+    const done = doneColumn(container);
+    expect(refs(done).sort()).toEqual(["SYD-2", "SYD-3"]);
+    expect(chip(done, "⛔ errors").getAttribute("aria-pressed")).toBe("true");
+    expect(chip(done, "🔀 not merged").getAttribute("aria-pressed")).toBe("true");
+    expect(chip(done, "all").getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("narrows to delivery_failed cards when the errors chip is toggled on", async () => {
+  it("the all pill shows the full done history (SYD-175)", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
-      c.querySelector("h3")?.textContent?.includes("Done"),
-    )!;
-    const errorsChip = [...doneColumn.querySelectorAll("button")].find(
-      (b) => b.textContent === "⛔ errors",
-    )!;
-
-    await act(async () => errorsChip.click());
-
-    const refs = [...doneColumn.querySelectorAll(".card .ref")].map((el) => el.textContent);
-    expect(refs).toEqual(["SYD-2"]);
-    expect(errorsChip.getAttribute("aria-pressed")).toBe("true");
+    const done = doneColumn(container);
+    await act(async () => chip(done, "all").click());
+    expect(done.querySelectorAll(".card")).toHaveLength(3);
+    expect(chip(done, "all").getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("narrows to open-PR cards when the not-merged chip is toggled on", async () => {
+  it("persists the explicit choice per browser: all sticks across renders (SYD-175)", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
-      c.querySelector("h3")?.textContent?.includes("Done"),
-    )!;
-    const notMergedChip = [...doneColumn.querySelectorAll("button")].find(
-      (b) => b.textContent === "🔀 not merged",
-    )!;
+    await act(async () => chip(doneColumn(container), "all").click());
 
-    await act(async () => notMergedChip.click());
+    const container2 = await renderBoard();
+    expect(doneColumn(container2).querySelectorAll(".card")).toHaveLength(3);
+  });
 
-    const refs = [...doneColumn.querySelectorAll(".card .ref")].map((el) => el.textContent);
-    expect(refs).toEqual(["SYD-3"]);
+  it("toggling a default chip off narrows to the other filter and persists", async () => {
+    const container = await renderBoard();
+    const done = doneColumn(container);
+    await act(async () => chip(done, "⛔ errors").click());
+    expect(refs(done)).toEqual(["SYD-3"]);
+
+    const container2 = await renderBoard();
+    expect(refs(doneColumn(container2))).toEqual(["SYD-3"]);
   });
 
   it("combines both chips with OR semantics", async () => {
     const container = await renderBoard();
-    const doneColumn = [...container.querySelectorAll(".column")].find((c) =>
-      c.querySelector("h3")?.textContent?.includes("Done"),
-    )!;
-    const errorsChip = [...doneColumn.querySelectorAll("button")].find(
-      (b) => b.textContent === "⛔ errors",
-    )!;
-    const notMergedChip = [...doneColumn.querySelectorAll("button")].find(
-      (b) => b.textContent === "🔀 not merged",
-    )!;
-
-    await act(async () => errorsChip.click());
-    await act(async () => notMergedChip.click());
-
-    const refs = [...doneColumn.querySelectorAll(".card .ref")].map((el) => el.textContent);
-    expect(refs.sort()).toEqual(["SYD-2", "SYD-3"]);
+    const done = doneColumn(container);
+    expect(refs(done).sort()).toEqual(["SYD-2", "SYD-3"]);
   });
 
   it("does not add filter chips to other columns", async () => {
