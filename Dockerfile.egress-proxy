@@ -1,0 +1,19 @@
+# Egress-allowlist proxy sidecar for Switchyard's containerized dispatch
+# (SYD-110). Dispatch containers live on an --internal Docker network with no
+# route out; this sidecar is dual-homed (internal network + default bridge)
+# and forwards only to the hostnames in ALLOWED_DOMAINS — see
+# scripts/egress-proxy-entry.sh and ensureEgressGuard in
+# scripts/worker-select.ts.
+FROM alpine:3.20
+
+RUN apk add --no-cache tinyproxy
+
+COPY scripts/egress-proxy-entry.sh /entry.sh
+RUN chmod +x /entry.sh \
+    && mkdir -p /etc/tinyproxy \
+    && chown -R tinyproxy:tinyproxy /etc/tinyproxy
+
+# Same posture as Dockerfile.worker (SYD-117): no root inside the sidecar.
+USER tinyproxy
+
+ENTRYPOINT ["/bin/sh", "/entry.sh"]

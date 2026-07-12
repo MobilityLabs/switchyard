@@ -23,6 +23,8 @@ import {
   runGated,
   withRetry,
   HttpStatusError,
+  egressMode,
+  ensureEgressGuard,
   type WorkerConfig,
   type WorkerProject,
 } from "./worker-select.js";
@@ -66,6 +68,10 @@ import {
   pollUntilMergeable,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileP = promisify(execFile);
 
 const DEFAULT_POLL_SECONDS = 30;
 
@@ -605,6 +611,22 @@ async function main(): Promise<void> {
   }
   const config = loadConfig();
   const gate = newTickGate();
+
+  // SYD-110: conflict-resolution dispatches are containers too — make sure
+  // the egress guard exists before any might launch. Best-effort here (unlike
+  // agent-worker's hard fail): merges/deploys must keep working even if
+  // docker or the proxy image is unavailable; a conflict dispatch would then
+  // fail visibly through the SYD-100 escalation path.
+  if (egressMode(config) === "proxy" && !dryRun) {
+    await ensureEgressGuard(config, async (cmd, cmdArgs) => execFileP(cmd, cmdArgs)).catch(
+      (err: Error) =>
+        console.error(
+          `WARNING: egress guard setup failed (SYD-110): ${err.message} — ` +
+            "conflict-resolution dispatches will fail until `npm run build:worker-image` " +
+            'has built the proxy image (or egress: "open" explicitly opts out)',
+        ),
+    );
+  }
 
   // Dry runs are non-mutating (never merge/deploy/comment/advance the
   // cursor), so they're safe to overlap with a live worker or each other —

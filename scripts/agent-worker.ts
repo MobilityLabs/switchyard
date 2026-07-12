@@ -78,6 +78,8 @@ import {
   applyDispatchPolicy,
   containerNameFor,
   partitionContainerSessions,
+  egressMode,
+  ensureEgressGuard,
   type WorkerConfig,
   type WorkerProject,
   type WorkerIssue,
@@ -1205,6 +1207,22 @@ async function main(): Promise<void> {
 
   const config = loadConfig(defaultConfigPath());
   await refreshDispatchPolicy(config, token);
+
+  // SYD-110: containerized sessions only run behind the egress allowlist.
+  // Refusing to start beats silently dispatching with full egress — the
+  // explicit opt-out is `egress: "open"` in switchyard-worker.json.
+  if (config.containerized && egressMode(config) === "proxy") {
+    try {
+      await ensureEgressGuard(config, async (cmd, cmdArgs) => execFileP(cmd, cmdArgs));
+    } catch (err) {
+      console.error(
+        `FATAL: could not set up the egress guard (SYD-110): ${(err as Error).message}\n` +
+          "Build the proxy image with `npm run build:worker-image`, or set egress: \"open\" " +
+          "in switchyard-worker.json to explicitly opt out of the allowlist.",
+      );
+      process.exit(1);
+    }
+  }
 
   if (once) {
     // Single ticks (incl. init-worker's --self-test) may run alongside a live
