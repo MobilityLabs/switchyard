@@ -1,5 +1,11 @@
 export type Actor = { id: number; name: string; type: "human" | "agent" };
-export type Project = { id: number; key: string; name: string };
+export type Project = {
+  id: number;
+  key: string;
+  name: string;
+  nextIssueNumber: number;
+  createdAt: number;
+};
 export const STATUSES = [
   "triage",
   "backlog",

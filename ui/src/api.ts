@@ -48,6 +48,8 @@ export const listActors = () => api<Actor[]>("/api/actors");
 export const listProjects = () => api<Project[]>("/api/projects");
 export const createProject = (input: { key: string; name: string }) =>
   api<Project>("/api/projects", { method: "POST", body: JSON.stringify(input) });
+export const updateProject = (key: string, input: { name: string }) =>
+  api<Project>(`/api/projects/${key}`, { method: "PATCH", body: JSON.stringify(input) });
 export const listIssues = (
   filters: {
     project?: string;
