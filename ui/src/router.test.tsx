@@ -210,3 +210,22 @@ describe("agents route (SYD-43)", () => {
     expect(href({ view: "agents" })).toBe("/agents");
   });
 });
+
+describe("settings route (SYD-158)", () => {
+  it("parses /settings to the default projects tab", () => {
+    expect(parsePath("/settings")).toEqual({ view: "settings", tab: "projects" });
+  });
+  it("parses each known tab", () => {
+    for (const tab of ["projects", "actors", "integrations", "config"] as const) {
+      expect(parsePath(`/settings/${tab}`)).toEqual({ view: "settings", tab });
+    }
+  });
+  it("treats unknown tabs as an unknown path (falls back to triage)", () => {
+    expect(isKnownPath("/settings/bogus")).toBe(false);
+    expect(parsePath("/settings/bogus")).toEqual({ view: "triage", project: null });
+  });
+  it("round-trips through href", () => {
+    expect(href({ view: "settings", tab: "projects" })).toBe("/settings");
+    expect(href({ view: "settings", tab: "config" })).toBe("/settings/config");
+  });
+});
