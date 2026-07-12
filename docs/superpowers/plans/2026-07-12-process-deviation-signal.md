@@ -177,14 +177,6 @@ function ageAllEvents(db: Db, issueId: number, secondsAgo: number) {
   db.update(events).set({ createdAt: old }).where(eq(events.issueId, issueId)).run();
 }
 
-function openPr(db: Db, ref: string, prNumber: number) {
-  recordDeliveryEvent(db, /* human */ undefined as never, ref, {
-    type: "pr_opened",
-    prNumber,
-    url: `https://github.com/acme/widgets/pull/${prNumber}`,
-  });
-}
-
 describe("getDeviation — open_pr_not_in_review", () => {
   it("flags an in_progress issue with an open PR", () => {
     const { db, human, agent } = setup();
@@ -323,8 +315,6 @@ describe("listDeviationByIssueId", () => {
   });
 });
 ```
-
-Note: the `openPr` helper stub above is illustrative only — the tests call `recordDeliveryEvent(db, human, ...)` directly. Delete the unused `openPr` helper before running if your linter flags it.
 
 - [ ] **Step 3: Run test to verify it fails**
 
@@ -1044,6 +1034,6 @@ Start the dev server (`npm run dev`), create/claim an issue and open a PR event 
 - `attention` search filter now includes deviations (intended) → falls out of Task 3 since `search.ts` uses `listAttentionByIssueId` unchanged. ✓
 - Tests for each case + negatives → Tasks 1–5. ✓
 
-**Placeholder scan:** no TBD/TODO; every code + test step shows real content. The `openPr` helper stub in Task 2's test is explicitly called out as deletable. ✓
+**Placeholder scan:** no TBD/TODO; every code + test step shows real content. ✓
 
 **Type consistency:** `DeviationReason` / `DeviationFlag` / `DeviationComputation` names and the `{ prNumber, eventId }` shape of `getMergedPrEvent` match across Tasks 1, 2, 4. `AttentionFlag = { reason: "delivery_failed"; message } | DeviationFlag` (Task 3) matches the UI union (Task 5). `attentionChip` signature matches its test. `emitProcessDeviations(db): number` consistent across Task 4 impl/test/wiring. ✓
