@@ -20,8 +20,12 @@
 // Config: the `githubPoll` block of switchyard-worker.json (pollSeconds,
 // default 120s — kept well above deliver.ts's 30s since this burns GitHub
 // API rate limit per linked repo, not just a Switchyard event-feed request).
-// Per-repo/per-PR state persists in .superpowers/github-poll-state.json so a
-// restart doesn't re-announce PRs/checks it already reported.
+// Per-repo/per-PR state persists in .superpowers/github-poll-state.json so
+// close/merge transitions and check conclusions fire once per change. Note
+// "opened" is NOT state-gated (SYD-177): it re-emits for every open PR each
+// tick and relies on the server's per-(issue, prNumber) dedupe, so a lost
+// pr_opened/gh_pr_opened heals within one tick instead of leaving the SYD-99
+// claim gate blind to an in-flight PR.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -88,16 +92,25 @@ async function fetchLinkedRepos(url: string, token: string): Promise<LinkedRepo[
   return (await res.json()) as LinkedRepo[];
 }
 
-async function postGithubEvent(url: string, token: string, ev: PollEvent): Promise<void> {
+type GithubEventOutcome = { duplicate?: boolean };
+
+async function postGithubEvent(
+  url: string,
+  token: string,
+  ev: PollEvent,
+): Promise<GithubEventOutcome> {
   const res = await fetch(`${url.replace(/\/$/, "")}/api/github-events`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
     body: JSON.stringify(ev),
   });
   if (!res.ok) throw new Error(`POST /api/github-events failed: ${res.status} ${await res.text()}`);
+  return (await res.json().catch(() => ({}))) as GithubEventOutcome;
 }
 
-async function pollRepo(
+// Exported for tests (SYD-177): the state-persistence ordering below is what
+// keeps a failed POST from permanently swallowing a PR's events.
+export async function pollRepo(
   fullName: string,
   config: WorkerConfig,
   token: string,
@@ -113,16 +126,22 @@ async function pollRepo(
     ),
   );
   const { events, next } = diffRepoState(prs, runs, state[fullName] ?? {});
-  state[fullName] = next;
 
   for (const ev of events) {
     if (dryRun) {
       console.log(`[dry-run] ${fullName}: would POST ${ev.event} — ${JSON.stringify(ev.payload)}`);
       continue;
     }
-    await postGithubEvent(config.url, token, ev);
-    console.log(`${fullName}: posted ${ev.event}`);
+    const outcome = await postGithubEvent(config.url, token, ev);
+    // Steady-state "opened" reconciliation (SYD-177) is deduped server-side
+    // every tick; only log events the server actually recorded.
+    if (!outcome.duplicate) console.log(`${fullName}: posted ${ev.event}`);
   }
+
+  // Advance the persisted state only after every event landed (SYD-177): a
+  // failed POST leaves the old state in place, so the next tick re-diffs and
+  // re-emits — the server's dedupe drops anything that did make it through.
+  state[fullName] = next;
 }
 
 async function tick(config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {

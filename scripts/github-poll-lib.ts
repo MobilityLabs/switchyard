@@ -32,8 +32,10 @@ export type GhRun = {
   url: string;
 };
 
-/** Last-seen state per PR number, persisted across ticks so re-polling the
- * same unchanged PR never re-emits an event. */
+/** Last-seen state per PR number, persisted across ticks so close/merge
+ * transitions and check conclusions fire once per change. "opened" is
+ * deliberately NOT gated on this (SYD-177) — it re-emits for every open PR
+ * and relies on the server's dedupe instead. */
 export type TrackedPr = {
   state: GhPrState;
   lastRunConclusion: string | null;
@@ -77,7 +79,12 @@ function checkSuitePayload(pr: GhPr, run: GhRun): Record<string, unknown> {
  * known) against the last-seen state and returns the events that changed
  * since, plus the updated state to persist.
  *
- * - A PR seen for the first time while OPEN → "opened".
+ * - Every PR currently OPEN → "opened", on every tick, not just the first
+ *   (SYD-177): the server dedupes by (issue, type, prNumber), so repeats are
+ *   dropped there — and a PR whose original opened event was lost anywhere
+ *   in the pipeline (worker crashed before posting pr_opened, a POST from
+ *   here failed after state was persisted) gets it backfilled within one
+ *   tick instead of staying invisible to the SYD-99 claim gate forever.
  * - A PR previously tracked OPEN that is no longer OPEN → "closed" (the
  *   payload's `merged` flag distinguishes a merge from a plain close, same
  *   as the real webhook's `pull_request.closed` action).
@@ -102,11 +109,9 @@ export function diffRepoState(
 
   for (const pr of prs) {
     const known = prior[pr.number];
-    if (!known) {
-      if (pr.state === "OPEN") {
-        events.push({ event: "pull_request", payload: prPayload(pr, "opened") });
-      }
-    } else if (known.state === "OPEN" && pr.state !== "OPEN") {
+    if (pr.state === "OPEN") {
+      events.push({ event: "pull_request", payload: prPayload(pr, "opened") });
+    } else if (known?.state === "OPEN") {
       events.push({ event: "pull_request", payload: prPayload(pr, "closed") });
     }
 
