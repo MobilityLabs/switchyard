@@ -27,6 +27,7 @@ import {
   wellKnownCliInstall,
   workerLaunchdLabel,
   type UserStackCapture,
+  findStableClaudeBinDir,
 } from "../scripts/init-worker-lib.js";
 
 describe("parseDotEnv", () => {
@@ -50,6 +51,63 @@ describe("parseDotEnv", () => {
     // survive verbatim — a bash `. .env` would have executed or expanded them.
     const env = parseDotEnv("A=a b && rm -rf /\nB=has$dollar`backtick`");
     expect(env).toEqual({ A: "a b && rm -rf /", B: "has$dollar`backtick`" });
+  });
+});
+
+describe("findStableClaudeBinDir", () => {
+  // The SYD-153 incident: --install-launchd run inside a cmux session baked
+  // `dirname $(which claude)` — a per-session shim in a temp dir — into the
+  // plist PATH; under launchd the shim can't resolve a real claude and every
+  // answer session exits 127.
+  const home = "/Users/sean";
+  const tmpdir = "/var/folders/xx/yyy/T";
+
+  it("rejects a which-result inside a temp shim dir and falls back to a known install location", () => {
+    const shimDir = `${tmpdir}/cmux-cli-shims/ABC123`;
+    const resolved = findStableClaudeBinDir({
+      whichPath: `${shimDir}/claude`,
+      home,
+      tmpdir,
+      isExecutable: (p) => p === `${shimDir}/claude` || p === `${home}/.local/bin/claude`,
+    });
+    expect(resolved).toEqual({ dir: `${home}/.local/bin`, volatile: false });
+  });
+
+  it("accepts a which-result in a stable directory as-is", () => {
+    const resolved = findStableClaudeBinDir({
+      whichPath: "/opt/homebrew/bin/claude",
+      home,
+      tmpdir,
+      isExecutable: (p) => p === "/opt/homebrew/bin/claude",
+    });
+    expect(resolved).toEqual({ dir: "/opt/homebrew/bin", volatile: false });
+  });
+
+  it("returns the volatile dir, flagged, when no stable install exists anywhere", () => {
+    const shimDir = `${tmpdir}/cmux-cli-shims/ABC123`;
+    const resolved = findStableClaudeBinDir({
+      whichPath: `${shimDir}/claude`,
+      home,
+      tmpdir,
+      isExecutable: (p) => p === `${shimDir}/claude`,
+    });
+    expect(resolved).toEqual({ dir: shimDir, volatile: true });
+  });
+
+  it("finds a known location even when which finds nothing at all", () => {
+    const resolved = findStableClaudeBinDir({
+      whichPath: null,
+      home,
+      tmpdir,
+      isExecutable: (p) => p === `${home}/.claude/local/claude`,
+    });
+    expect(resolved).toEqual({ dir: `${home}/.claude/local`, volatile: false });
+  });
+
+  it("returns null when claude is nowhere to be found", () => {
+    expect(
+      findStableClaudeBinDir({ whichPath: null, home, tmpdir, isExecutable: () => false }),
+    ).toBeNull();
   });
 });
 
