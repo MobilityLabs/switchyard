@@ -1213,7 +1213,7 @@ async function main(): Promise<void> {
   // explicit opt-out is `egress: "open"` in switchyard-worker.json.
   if (config.containerized && egressMode(config) === "proxy") {
     try {
-      await ensureEgressGuard(config, async (cmd, cmdArgs) => execFileP(cmd, cmdArgs));
+      await ensureEgressGuard(config, async (cmd, cmdArgs) => execFileP(cmd, cmdArgs), process.env);
     } catch (err) {
       console.error(
         `FATAL: could not set up the egress guard (SYD-110): ${(err as Error).message}\n` +

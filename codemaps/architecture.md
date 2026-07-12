@@ -1,4 +1,4 @@
-> Generated: 2026-07-08 | Token-lean format for LLM context
+> Generated: 2026-07-12 | Token-lean format for LLM context
 
 # Architecture
 
@@ -45,6 +45,7 @@ Actor `type: human | agent` drives enforcement — triage exit, `done` transitio
 - Agent-filed issues always land in `triage` with required provenance (`sourceType`/`sourceDetail`/`sourceUrl`).
 - Merging agent branches is a human decision; containers only ever push `agent/<ref>`.
 - Tokens never appear in argv (env or file handoff only).
+- Real provider credentials (and the egress CA private key) live only in the trusted `syd-egress` sidecar — agent containers hold a placeholder + the CA public cert; the sidecar TLS-MITMs provider hosts and injects the real key (SYD-186; see `codemaps/workers.md`).
 
 ## Build / run
 

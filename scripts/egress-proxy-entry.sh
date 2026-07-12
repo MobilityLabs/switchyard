@@ -1,17 +1,29 @@
 #!/bin/sh
-# Entrypoint for Switchyard's egress-proxy sidecar (SYD-110, see
-# Dockerfile.egress-proxy). Renders a default-deny tinyproxy config whose
-# domain allowlist comes from ALLOWED_DOMAINS (comma-separated hostnames),
-# then execs tinyproxy in the foreground.
+# Entrypoint for Switchyard's egress-proxy sidecar (SYD-186, see
+# Dockerfile.egress-proxy). Runs mitmproxy (mitmdump) with the
+# credential-injection + allowlist addon (scripts/egress-inject-addon.py):
+# provider hosts are MITM'd and the real credential injected, allowlisted
+# non-provider hosts tunnel un-intercepted, everything else is refused.
+# Replaces the previous tinyproxy config (which only allowlisted — it could
+# not inject credentials).
 #
 # Dispatch containers sit on an --internal Docker network with no route out;
 # this sidecar (dual-homed: that network + the default bridge) is their only
-# exit, so whatever isn't in ALLOWED_DOMAINS is unreachable — including
-# wherever a prompt-injected session or malicious npm lifecycle script would
-# exfiltrate tokens to.
+# exit. The real provider keys and the CA *private* key live only here; agent
+# containers hold only a placeholder credential + the CA *public* cert.
 #
-# Overridable for tests (no Docker needed): CONF_DIR (default /etc/tinyproxy),
-# TINYPROXY_BIN (default tinyproxy).
+# The addon reads its policy inputs straight from this container's env:
+#   ALLOWED_DOMAINS         comma-separated hostnames the proxy may tunnel to
+#   CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
+#                           the real provider credentials to inject
+#
+# The CA is generated once by mitmproxy into CONFDIR and persisted via a
+# mounted volume, so it survives sidecar recreation (agent containers must keep
+# trusting the same CA across dispatches — never regenerate it).
+#
+# Overridable for tests (no Docker needed): CONFDIR (default
+# /home/mitmproxy/.mitmproxy), ADDON (default /egress-inject-addon.py),
+# MITMDUMP_BIN (default mitmdump).
 
 set -eu
 
@@ -20,27 +32,19 @@ if [ -z "${ALLOWED_DOMAINS:-}" ]; then
   exit 1
 fi
 
-CONF_DIR="${CONF_DIR:-/etc/tinyproxy}"
-mkdir -p "$CONF_DIR"
+CONFDIR="${CONFDIR:-/home/mitmproxy/.mitmproxy}"
+ADDON="${ADDON:-/egress-inject-addon.py}"
+mkdir -p "$CONFDIR"
 
-# One anchored ERE per hostname: dots escaped, exact match only — "evil
-# api.anthropic.com.attacker.net" must not slip past a substring match.
-: > "$CONF_DIR/filter"
-echo "$ALLOWED_DOMAINS" | tr ',' '\n' | while IFS= read -r domain; do
-  [ -n "$domain" ] || continue
-  escaped=$(printf '%s' "$domain" | sed 's/\./\\./g')
-  printf '^%s$\n' "$escaped" >> "$CONF_DIR/filter"
-done
-
-cat > "$CONF_DIR/tinyproxy.conf" <<CONFEOF
-Port 8888
-Listen 0.0.0.0
-Timeout 600
-MaxClients 64
-FilterType ere
-FilterURLs No
-FilterDefaultDeny Yes
-Filter "$CONF_DIR/filter"
-CONFEOF
-
-exec "${TINYPROXY_BIN:-tinyproxy}" -d -c "$CONF_DIR/tinyproxy.conf"
+# --set block_global=false: our clients connect from the internal Docker
+#   network (private IPs); don't reject them as "global".
+# --set confdir: pin the persisted CA location (mitmdump generates the CA here
+#   on first run and reuses it thereafter).
+# Upstream cert verification stays at mitmproxy's secure default (no
+# --ssl-insecure) — the proxy still validates the real provider's certificate.
+exec "${MITMDUMP_BIN:-mitmdump}" \
+  --listen-host 0.0.0.0 \
+  --listen-port 8888 \
+  --set confdir="$CONFDIR" \
+  --set block_global=false \
+  -s "$ADDON"

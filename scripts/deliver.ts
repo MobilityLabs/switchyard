@@ -618,7 +618,7 @@ async function main(): Promise<void> {
   // docker or the proxy image is unavailable; a conflict dispatch would then
   // fail visibly through the SYD-100 escalation path.
   if (egressMode(config) === "proxy" && !dryRun) {
-    await ensureEgressGuard(config, async (cmd, cmdArgs) => execFileP(cmd, cmdArgs)).catch(
+    await ensureEgressGuard(config, async (cmd, cmdArgs) => execFileP(cmd, cmdArgs), process.env).catch(
       (err: Error) =>
         console.error(
           `WARNING: egress guard setup failed (SYD-110): ${err.message} — ` +
