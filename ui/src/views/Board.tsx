@@ -190,12 +190,12 @@ export function Card({
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
       {issue.attention &&
         (() => {
-          const chip = attentionChip(issue.attention)!;
-          return (
+          const chip = attentionChip(issue.attention);
+          return chip ? (
             <span className={chip.className} title={issue.attention.message}>
               {chip.label}
             </span>
-          );
+          ) : null;
         })()}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
       {issue.labels.length > 0 && (

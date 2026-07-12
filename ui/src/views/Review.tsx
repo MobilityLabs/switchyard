@@ -228,12 +228,12 @@ export default function Review({
             <span className={`badge prio prio-${current.priority}`}>{current.priority}</span>
             {current.attention &&
               (() => {
-                const chip = attentionChip(current.attention)!;
-                return (
+                const chip = attentionChip(current.attention);
+                return chip ? (
                   <span className={chip.className} title={current.attention.message}>
                     {chip.label}
                   </span>
-                );
+                ) : null;
               })()}
           </div>
 
