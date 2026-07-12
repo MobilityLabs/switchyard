@@ -53,10 +53,12 @@ describe("diffRepoState / pull requests", () => {
     expect(next).toEqual({ 1: { state: "OPEN", lastRunConclusion: null } });
   });
 
-  it("does not re-emit opened on an unchanged open PR", () => {
+  it("re-emits opened for an already-tracked open PR (SYD-177: server dedupes, heals lost events)", () => {
     const prior: RepoPollState = { 1: { state: "OPEN", lastRunConclusion: null } };
     const { events } = diffRepoState([pr({})], new Map(), prior);
-    expect(events).toEqual([]);
+    expect(events).toEqual([
+      { event: "pull_request", payload: expect.objectContaining({ action: "opened" }) },
+    ]);
   });
 
   it("emits closed (merged:false) when a tracked-open PR is later closed unmerged", () => {
@@ -137,15 +139,16 @@ describe("diffRepoState / checks", () => {
     const prior: RepoPollState = { 1: { state: "OPEN", lastRunConclusion: "success" } };
     const runs = new Map([[1, run({ conclusion: "success" })]]);
     const { events } = diffRepoState([pr({})], runs, prior);
-    expect(events).toEqual([]);
+    expect(events.filter((e) => e.event === "check_suite")).toEqual([]);
   });
 
   it("emits check_suite again when the conclusion flips from failure to success (a re-run)", () => {
     const prior: RepoPollState = { 1: { state: "OPEN", lastRunConclusion: "failure" } };
     const runs = new Map([[1, run({ conclusion: "success" })]]);
     const { events } = diffRepoState([pr({})], runs, prior);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
+    const checkEvents = events.filter((e) => e.event === "check_suite");
+    expect(checkEvents).toHaveLength(1);
+    expect(checkEvents[0]).toMatchObject({
       event: "check_suite",
       payload: { check_suite: { conclusion: "success" } },
     });
@@ -156,7 +159,7 @@ describe("diffRepoState / checks", () => {
     const { events } = diffRepoState([pr({})], runs, {
       1: { state: "OPEN", lastRunConclusion: null },
     });
-    expect(events).toEqual([]);
+    expect(events.filter((e) => e.event === "check_suite")).toEqual([]);
   });
 
   it("ignores checks entirely once the PR is no longer open", () => {
@@ -174,7 +177,7 @@ describe("diffRepoState / checks", () => {
     const { events } = diffRepoState([pr({})], new Map(), {
       1: { state: "OPEN", lastRunConclusion: null },
     });
-    expect(events).toEqual([]);
+    expect(events.filter((e) => e.event === "check_suite")).toEqual([]);
   });
 });
 
