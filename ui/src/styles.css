@@ -1172,6 +1172,253 @@ kbd {
   margin-top: 14px;
 }
 
+/* ═══ Settings (SYD-181) ═══
+   The four admin tabs shipped with no styling of their own: `.settings` and
+   `.tabs` were referenced but never defined, so the nav collapsed into
+   run-together links, tables had no cell rhythm, and generic <input>s fell back
+   to the browser's white default — which is why the themed buttons dwarfed the
+   fields beside them. This is the shared design system for all of /settings,
+   scoped to `.settings`, establishing three levels: page › section › card. */
+.settings {
+  max-width: 860px;
+  margin: 0 auto;
+}
+.settings > h1 {
+  margin: 0 0 18px;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+
+/* Tab bar — an underline switcher reads as top-level navigation between admin
+   areas, clearly distinct from the content below it. */
+.settings > .tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 28px;
+  overflow-x: auto;
+}
+.settings > .tabs a {
+  color: var(--muted);
+  padding: 9px 15px;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  border-radius: 6px 6px 0 0;
+}
+.settings > .tabs a:hover {
+  color: var(--text);
+  background: var(--panel);
+}
+.settings > .tabs a.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* Section header — the level between the page and a card: names the area and
+   gives one line of context. */
+.settings-head {
+  margin: 0 0 14px;
+}
+.settings-head h2 {
+  display: block;
+  margin: 0;
+  font-size: 17px;
+}
+.settings-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* Form controls — the core clash fix: match every field to the app theme so a
+   field and the button beside it read as the same size and family. */
+.settings input,
+.settings select,
+.settings textarea {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 14px;
+}
+.settings input:focus,
+.settings select:focus,
+.settings textarea:focus {
+  outline: none;
+  border-color: var(--accent-2);
+}
+.settings input::placeholder {
+  color: var(--muted);
+}
+
+/* Tables — cell rhythm, a quiet header, hairline row dividers (not a boxed
+   grid), and a subtle hover to tie rows to their actions. */
+.settings table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 24px;
+}
+.settings thead th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 0 14px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.settings tbody td {
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  vertical-align: middle;
+}
+.settings tbody tr:last-child td {
+  border-bottom: none;
+}
+.settings tbody tr:hover {
+  background: var(--panel);
+}
+.settings td.num {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.settings td.actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.settings .proj-key {
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--accent);
+}
+.settings .rename-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings .rename-edit input {
+  width: 180px;
+  padding: 5px 8px;
+}
+.settings .rename-edit .error-bar {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* Compact ghost buttons for in-table actions — the fix for "buttons bigger
+   than inputs": a secondary action shouldn't outweigh the data it acts on. */
+.settings button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.settings button.ghost:hover {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+.settings button.ghost.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* Cards — create/edit forms and grouped settings sit in their own surface with
+   real breathing room, below the list they belong to. */
+.settings .panel {
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.settings .panel > h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+.settings form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.settings form label input,
+.settings form label select {
+  font-weight: 400;
+  color: var(--text);
+}
+.settings .form-grid {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 14px;
+}
+.settings form .hint {
+  margin: -6px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.settings form button.primary {
+  align-self: flex-start;
+  padding: 8px 16px;
+}
+
+/* The permanent-key notice is a caution, not an alarm — an inline note rather
+   than the heavy bordered banner it renders as by default. */
+.settings form .banner.warn {
+  margin: 0;
+  padding: 9px 12px;
+  font-size: 12.5px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--warn) 32%, var(--line));
+  color: color-mix(in srgb, var(--warn) 55%, var(--text));
+}
+
+/* Config tab — key/description/value stacked, actions beneath, hairline rows. */
+.settings .setting-field {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.settings .setting-field:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.settings .setting-field > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.settings .setting-field label code {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.settings .setting-field .hint {
+  margin: 8px 0 12px;
+}
+.settings .setting-field button {
+  margin-right: 8px;
+}
+
+@media (max-width: 720px) {
+  .settings .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Collapsed progress_note runs in the activity feed (SYD-104) */
 .progress-note-group {
   display: flex;
