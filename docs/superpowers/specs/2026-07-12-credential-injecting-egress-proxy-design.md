@@ -4,6 +4,10 @@
 - **Status:** Draft — awaiting review
 - **Project 1 of 2.** This spec covers the shared proxy infrastructure. A
   follow-up spec (Codex & Gemini containerized workers) builds on it.
+- **Revision (2026-07-12):** interception method changed from base-URL override
+  to **TLS MITM + a private CA**, following prior art in
+  [onecli](https://github.com/onecli/onecli) (see §H). Earlier base-URL-override
+  sections are superseded.
 
 ## Context & goal
 
@@ -19,28 +23,27 @@ once a high-value credential is an env var in a networked container, careful
 argv hygiene doesn't stop a compromised session from *reading* it.
 
 The goal: **real provider account credentials never enter an agent container.**
-A single trusted proxy sidecar holds the keys and injects them into outbound
-provider requests; agent containers carry only a dummy key and a base-URL that
-points at the proxy. This is a stronger model than "keys in a locked room," and
-it is the foundation the Codex and Gemini workers (Project 2) will require,
-since their credentials (an OpenAI key, a Gemini key) are equally worth keeping
-out of an untrusted session.
+A single trusted proxy sidecar holds the keys, intercepts the container's
+outbound TLS to the provider hosts, and injects the real credential into each
+request. Agent containers carry only a **placeholder** credential (enough to
+make the CLI attempt the call) and trust the proxy's CA.
 
-Because the mechanism is novel, we **prove it on the Claude worker first** — the
-engine already running in production — before adding new engines.
+Because the mechanism is novel to this codebase, we **prove it on the Claude
+worker first** — the engine already running in production — before adding new
+engines.
 
 ## Non-goals
 
 - Codex and Gemini worker engines themselves — separate follow-up spec (Project
-  2). This spec only builds the proxy and retrofits Claude onto it.
+  2). This spec builds the proxy and retrofits Claude onto it; the OpenAI/Gemini
+  injection rules are provisioned but only exercised by Project 2.
 - Bare-host (non-containerized) dispatch. The injecting proxy is a
-  containerized-dispatch concern; the bare-host `cli`/`sdk` runners are
-  out of scope.
+  containerized-dispatch concern; the bare-host `cli`/`sdk` runners are out of
+  scope.
 - Rotating or minting provider keys. The proxy injects whatever key it is
   configured with; key management stays a host/`.env` concern.
 - Replacing `SWITCHYARD_TOKEN` handling. That token is the session's *intended*
-  identity (scoped, low-value); it stays an env var in the agent container as
-  today.
+  identity (scoped, low-value); it stays an env var in the agent container.
 
 ## Background: what exists today
 
@@ -69,178 +72,202 @@ this work.
 
 ## Design
 
-### A. One unified proxy sidecar (replaces tinyproxy)
+### A. One intercepting proxy sidecar (replaces tinyproxy)
 
-A single sidecar, `syd-egress`, takes on **both** responsibilities:
+A single sidecar, `syd-egress`, is a **TLS-intercepting forward proxy**. Agent
+containers point `HTTP_PROXY`/`HTTPS_PROXY` at it exactly as today; **provider
+base URLs are unchanged** (the CLIs still address `api.anthropic.com` etc.). Per
+`CONNECT`:
 
-1. **Domain-allowlist forward proxy** (the tinyproxy role today). Agent
-   containers point `HTTP_PROXY`/`HTTPS_PROXY` at it; it enforces a default-deny
-   hostname allowlist for general egress (npm, git, the switchyard MCP call).
-   HTTPS is handled via the `CONNECT` method: the proxy validates the target
-   host against the allowlist, then tunnels bytes without terminating TLS.
-2. **Credential-injecting reverse proxy** (new). Each engine's *provider* API
-   base-URL is overridden to target this proxy on a per-provider path prefix.
-   The proxy reverse-proxies the request to the real provider host, **injecting
-   the real credential** and overwriting any dummy key the CLI sent.
+1. **Provider host** (in the injection table, §B) → **MITM**: the proxy
+   completes the `CONNECT`, then terminates TLS itself using a leaf certificate
+   generated on the fly and signed by the proxy's own CA, decrypts the request,
+   **strips the caller's auth header and injects the real credential**, and
+   re-encrypts to the real provider over a genuine TLS connection. Response
+   streams straight back (SSE-safe).
+2. **Allowlisted non-provider host** (npm, git, the switchyard MCP call) →
+   **plain tunnel**: validate the host against the default-deny allowlist and
+   pipe bytes through without terminating TLS (today's tinyproxy behavior).
+3. **Anything else** → refused.
 
-One component means the allowlist and the injection routes live together and
-share one lifecycle; provider hosts are implicitly reachable because they are
-the injector's fixed upstreams. The cost is re-implementing the `CONNECT`
-forward-proxy path in Node (tinyproxy did this for free) — see the spike in §H.
+One component owns both the allowlist and the injection, sharing one lifecycle.
+The cost versus the old tinyproxy is TLS interception + CA distribution — which
+is why the **recommended implementation is `mitmproxy` with a small
+header-injection addon** rather than hand-rolling TLS termination and on-the-fly
+cert minting. mitmproxy is purpose-built for exactly this (CA generation, SNI
+leaf-cert minting, streaming, an addon hook to rewrite headers, and an
+allowlist/kill filter for non-provider hosts); onecli's bespoke Rust interceptor
+(`apps/gateway/src/ca.rs`, `gateway/mitm.rs`) is the analog. The **pure
+host→injection mapping** (§B) stays a tiny, unit-tested module regardless of the
+proxy engine. *(If we prefer to keep everything in-repo TypeScript, a Node MITM
+is possible but carries the cert-minting complexity mitmproxy already solves —
+flagged as an implementation choice, not settled here.)*
 
-**Implementation:** a small TypeScript service, `scripts/inject-proxy.ts` (name
-TBD; it is the whole egress proxy now, so `scripts/egress-proxy.ts` may read
-better), plus `Dockerfile.egress-proxy` rebuilt to run it instead of tinyproxy.
-Same idiom as `scripts/slack-notifier.ts`: a Hono app for the origin-form
-(reverse-proxy) routes, a raw `http.Server` `connect` handler for the
-forward-proxy `CONNECT` path, and an injectable `fetch`/`net.connect` so the
-logic is unit-testable without Docker or real upstreams.
+### B. Injection table (keyed by host)
 
-### B. Injection routing table
+Fixed target host → credential rewrite. The proxy only MITMs these hosts; it can
+never be pointed at an arbitrary upstream.
 
-Fixed prefix → upstream + credential map (the proxy can never be used as an
-open relay to an arbitrary host):
+| Provider host                          | Rewrite                                                                                 |
+|----------------------------------------|-----------------------------------------------------------------------------------------|
+| `api.anthropic.com`                    | If token starts `sk-ant-oat` (OAuth): set `Authorization: Bearer <token>`. If `sk-ant-api` (API key): set `x-api-key: <token>`, remove `authorization`. |
+| `api.openai.com`                       | Set `Authorization: Bearer $OPENAI_API_KEY` *(Project 2)*                                |
+| `generativelanguage.googleapis.com`    | Set `x-goog-api-key: $GEMINI_API_KEY` *(Project 2)*                                      |
 
-| Prefix        | Upstream                                   | Injected credential                         |
-|---------------|--------------------------------------------|---------------------------------------------|
-| `/anthropic/*`| `https://api.anthropic.com/*`              | Claude auth (OAuth bearer or API key — §H)  |
-| `/openai/*`   | `https://api.openai.com/*`                 | `Authorization: Bearer $OPENAI_API_KEY`     |
-| `/gemini/*`   | `https://generativelanguage.googleapis.com/*` | `x-goog-api-key: $GEMINI_API_KEY`        |
+The Anthropic rule is confirmed from onecli's `apps/gateway/src/secret_inject.rs`
+(§H). In all cases the caller's own auth header is stripped first; the client's
+`anthropic-version`/`anthropic-beta` (and equivalents) pass through untouched
+because they originate from the CLI, not the credential.
 
-(`/openai` and `/gemini` rows are provisioned now but only exercised by Project
-2. Claude is the row we prove.)
-
-Requirements on the reverse-proxy path:
-- **Stream** request and response bodies (LLM APIs are SSE — never buffer).
-- Preserve method, remaining path, query string, and headers, **except** the
-  auth headers, which are stripped and replaced with the injected credential.
-- Return the upstream status/headers/stream unchanged otherwise.
+Requirements on the intercept path:
+- **Stream** bodies (LLM APIs are SSE — never buffer).
+- Rewrite only the auth header(s); leave method, path, query, and other headers
+  intact.
+- Return upstream status/headers/stream unchanged.
 
 ### C. Credential model
 
-- The **real** provider credentials exist **only** in the `syd-egress`
-  container's environment, passed `-e` from the host `.env` (0600) at
-  `docker run` time (values from the launcher's env, never argv). This container
-  runs **no agent code and mounts no repo** — it is a minimal trusted component,
-  so a compromised *session* container cannot reach the key material.
+- The **real** provider credentials **and the CA private key** exist **only** in
+  the `syd-egress` container's environment/volume, never in an agent container
+  and never in argv. This container runs **no agent code and mounts no repo** —
+  a minimal trusted component, so a compromised *session* container cannot reach
+  the key material or the CA signing key.
 - Agent containers receive:
-  - a **dummy** provider key (e.g. `sk-dummy-switchyard`) so the CLI's own
-    "is a key present" check passes;
-  - a **base-URL override** pointing at `syd-egress` on the provider's prefix.
+  - a **placeholder** credential so the CLI attempts the request. For Claude
+    OAuth this is `CLAUDE_CODE_OAUTH_TOKEN=placeholder` (onecli's literal
+    pattern — the SDK still performs its token exchange; the proxy overwrites the
+    resulting auth header);
+  - the CA **public** certificate (read-only mount) installed into the trust
+    store — `NODE_EXTRA_CA_CERTS` for Node-based CLIs (Claude Code, Gemini) and
+    the system store (`update-ca-certificates`) for others (Codex, Project 2).
 - `SWITCHYARD_TOKEN` continues to be passed to the agent container (unchanged).
 
 Residual risk (documented, accepted): a prompt-injected session can still *use*
 the provider through the proxy (that is how the agent legitimately runs) and
-could burn provider quota, but it **cannot read the credential** and **cannot
-reach any host outside the allowlist / fixed upstreams**. This is a large
-reduction from today's "key readable in-env."
+could burn provider quota, but it **cannot read the credential**, **cannot reach
+any host outside the allowlist / injection hosts**, and **cannot obtain the CA
+signing key** (only the public cert is in the container). Large reduction from
+today's "key readable in-env."
 
-### D. Base-URL override per engine
+### D. CA lifecycle & trust distribution
 
-- **Claude Code (proved here):** `ANTHROPIC_BASE_URL=http://syd-egress:PORT/anthropic`.
-- Codex → `config.toml` `[model_providers.*].base_url` + dummy `env_key`
-  (Project 2).
-- Gemini → `GOOGLE_GEMINI_BASE_URL` (Project 2).
+- The proxy owns a **stable CA** (private key + cert), generated once and
+  **persisted** (a Docker volume or a host-mounted 0600 dir) so it survives
+  sidecar restarts — agent containers must keep trusting the same CA across
+  dispatches.
+- Only the CA **public cert** is exposed to agent containers (read-only mount
+  from the persisted location). `container-entry.sh` installs it into the trust
+  store and exports `NODE_EXTRA_CA_CERTS` before launching the CLI.
+- `ensureEgressGuard` guarantees the CA exists before standing up the sidecar.
 
-### E. Networking nuance
+### E. Networking
 
-With both a base-URL override and `HTTPS_PROXY` set, the client must send
-provider requests **directly** to `syd-egress` (origin-form) rather than
-tunneling to it *through* itself. Achieve this by adding the proxy's own
-hostname to `NO_PROXY` so provider base-URL traffic goes direct (plain HTTP on
-the internal network — the network is the trust boundary, so no TLS to the proxy
-is needed), while all other egress still flows through `HTTP(S)_PROXY` →
-`CONNECT`. Validating this interaction is part of the spike (§H).
+All agent egress flows through `HTTP(S)_PROXY` → the sidecar via `CONNECT`
+(unchanged from today). Provider hosts are MITM'd; everything else is
+allowlist-tunneled. There is **no base-URL override and no `NO_PROXY` special
+case** for provider traffic — a key simplification versus the superseded
+base-URL approach, paid for by CA trust (§D).
 
 ### F. Lifecycle
 
-`ensureEgressGuard(config, exec)` evolves to stand up the unified proxy: same
-race-tolerant idempotent pattern, dual-homed onto `syd-workers`, but now also
-passing the provider-key env vars into the sidecar and recreating it when the
-allowlist **or** the injected-key set changes. The `docker inspect` freshness
-check extends to cover the key-var presence (not the values — never logged or
-compared in cleartext beyond a presence/hash check).
+`ensureEgressGuard(config, exec)` evolves to: (1) ensure the persisted CA (§D);
+(2) stand up the intercepting sidecar with the same race-tolerant idempotent
+pattern, dual-homed onto `syd-workers`, now passing the provider-key env vars
+into the sidecar; (3) recreate the sidecar when the allowlist **or** the
+injected-key set changes (freshness check compares key-var *names*, never
+values). The CA is never regenerated on a recreate (that would break existing
+trust).
 
 ### G. Claude retrofit + acceptance
 
-Flip the Claude containerized path in `buildDockerArgs`:
+Flip the Claude containerized path in `buildDockerArgs` + `container-entry.sh`:
 - **Remove** `-e ANTHROPIC_API_KEY` / `-e CLAUDE_CODE_OAUTH_TOKEN` from the agent
   container.
-- **Add** `-e ANTHROPIC_BASE_URL=http://syd-egress:PORT/anthropic` and a dummy
-  key var.
+- **Add** `-e CLAUDE_CODE_OAUTH_TOKEN=placeholder` and the read-only CA-cert
+  mount; `container-entry.sh` installs the CA + sets `NODE_EXTRA_CA_CERTS`.
 - Route the real Claude credential to the `syd-egress` container instead.
 
 **Acceptance (manual integration):** dispatch a real Claude-labeled SYD issue;
-confirm it still produces its `agent/<ref>` PR, **and** `docker exec` into the
-running agent container shows **no** real Anthropic credential in its
-environment (only the dummy key + base-URL).
+confirm it still produces its `agent/<ref>` PR (the injected OAuth path actually
+reaches Anthropic), **and** `docker exec` into the running agent container shows
+**no** real Anthropic credential in its environment (only the placeholder + the
+CA cert).
 
-## H. OAuth spike (do first)
+## H. Prior art & remaining spike
 
-Claude Code currently authenticates with `CLAUDE_CODE_OAUTH_TOKEN` (a Claude
-subscription credential), not a plain `ANTHROPIC_API_KEY`. Two unknowns must be
-resolved before the retrofit is trustworthy:
+onecli (https://github.com/onecli/onecli) is a mature credential-injecting
+gateway that specifically proxies Claude Code. Verified from its source and now
+baked into this design:
 
-1. **Does Claude Code, pointed at a custom `ANTHROPIC_BASE_URL`, drive its
-   requests in a way the proxy can inject the OAuth bearer into?** The user
-   reports an existing CLI ("onecli") already proxies Claude Code OAuth
-   successfully — **consult it as prior art** for the exact headers/endpoints and
-   any OAuth-specific request shape (e.g. beta headers, token audience).
-2. **Token refresh.** If the OAuth access token can expire within a session
-   (≤1h watchdog), decide whether the proxy injects a static token for the
-   session or must refresh. Prefer static-for-session if the token outlives the
-   session; document the refresh path if not.
+- **Anthropic injection** (`apps/gateway/src/secret_inject.rs`): `sk-ant-oat` →
+  `Authorization: Bearer`; `sk-ant-api` → `x-api-key` + remove authorization
+  (§B).
+- **Placeholder-in-container** (`packages/api/src/routes/container-config.ts`):
+  `CLAUDE_CODE_OAUTH_TOKEN=placeholder` in the agent container (§C).
+- **No mid-session refresh** for Anthropic — inject the token statically.
+- **Interception via TLS MITM + CA** (`ca.rs`, `gateway/mitm.rs`) — base URL
+  stays `api.anthropic.com`. This is why this spec now uses MITM (§A) rather than
+  base-URL override.
 
-Deliverable of the spike: a one-page note confirming the injected-request shape
-for Claude OAuth, folded back into this spec before implementation. If OAuth
-proves impractical, the fallback proof is Codex-with-API-key — but the user's
-prior-art pointer suggests OAuth is the intended, feasible path.
+Remaining spike (small): stand up a mitmproxy addon locally, point a throwaway
+`claude -p` run through it with the CA trusted, and confirm (a) Claude Code's
+OAuth token-exchange completes through the MITM and the session works, and
+(b) the injected `Authorization: Bearer` reaches Anthropic. onecli demonstrates
+this works; the spike is a local confirmation + pinning the mitmproxy addon
+shape, not an open feasibility question.
 
 ## Security invariants (preserved + added)
 
-- Real provider credentials: **only** in the trusted `syd-egress` container
-  (no agent code, no repo mount); never in an agent container, never in argv.
-- Injector upstreams are a **fixed table** — not caller-controlled — so the
-  proxy cannot be turned into an open relay.
+- Real provider credentials **and the CA private key**: only in the trusted
+  `syd-egress` container; never in an agent container, never in argv. Agent
+  containers hold only the CA **public** cert.
+- Injection hosts are a **fixed table** — not caller-controlled — so the proxy
+  cannot be turned into an open relay.
 - Domain allowlist (default-deny) remains for all non-provider egress.
 - `SWITCHYARD_TOKEN` handling unchanged (scoped identity, intended for the
   session).
 - `npm ci` continues to run with the secret vars stripped from its environment
-  (existing `npm-ci-guard.mjs` behavior) — and there are now *fewer* secrets to
-  strip in the agent container.
+  (existing `npm-ci-guard.mjs`) — and there are now *fewer* secrets in the agent
+  container to strip.
 
 ## Testing
 
-- **Unit (injector):** prefix routing → correct upstream + injected header;
-  streaming passthrough (no buffering); dummy-key overwrite; unknown paths
-  rejected; upstreams not caller-overridable; `CONNECT` allowlist enforcement
-  (allowed host tunnels, disallowed host 403s). Injectable `fetch`/socket, per
-  repo idiom.
-- **Unit (`ensureEgressGuard`):** idempotency and recreate-on-change for both
-  allowlist and key-set; race tolerance preserved.
-- **Unit (`buildDockerArgs`):** Claude agent container gets base-URL + dummy key
-  and **no** real Anthropic credential; the real credential appears only in the
-  sidecar's run args (as bare `-e`, never a value in argv).
+- **Unit (pure mapping):** host → injection rule (`sk-ant-oat` vs `sk-ant-api`
+  branch; OpenAI/Gemini rules); caller auth header always stripped before
+  injection; unknown host has no rule. Kept as a small standalone module even if
+  the proxy engine is mitmproxy.
+- **Unit (`ensureEgressGuard`):** CA-exists precondition; idempotency and
+  recreate-on-change for both allowlist and key-set; CA never regenerated on
+  recreate; race tolerance preserved.
+- **Unit (`buildDockerArgs`):** Claude agent container gets the placeholder +
+  CA-cert mount and **no** real Anthropic credential; the real credential appears
+  only in the sidecar's run args (bare `-e`, never a value in argv).
+- **Integration (mitmproxy addon):** a request to an intercepted host emerges
+  upstream with the caller auth replaced by the injected credential and the body
+  streamed; a non-provider allowlisted host tunnels un-intercepted; a
+  disallowed host is refused.
 - **Manual integration:** the §G acceptance.
 
 ## Rollout & relationship to Project 2
 
-1. OAuth spike (§H) → fold results in.
-2. Build the unified proxy + `ensureEgressGuard` evolution + Claude retrofit,
-   behind the existing containerized path (default engine = Claude, no config
-   migration for existing workers beyond the retrofit).
+1. Spike (§H) → pin the mitmproxy addon shape + confirm Claude OAuth through
+   MITM.
+2. Build the intercepting proxy + CA lifecycle + `ensureEgressGuard` evolution +
+   Claude retrofit, behind the existing containerized path (default engine =
+   Claude; existing workers get the retrofit, no other config migration).
 3. Prove via §G acceptance.
-4. **Project 2** (separate spec) adds the Codex and Gemini engines: the `/openai`
-   and `/gemini` injector routes are already provisioned, so Project 2 is engine
-   config + Dockerfiles + entry scripts + per-engine `buildDockerArgs`, pointing
-   each engine's base-URL at the corresponding prefix.
+4. **Project 2** (separate spec) adds the Codex and Gemini engines: the OpenAI
+   and Gemini injection rules are already provisioned, so Project 2 is engine
+   config + Dockerfiles + entry scripts + CA trust for non-Node CLIs (Codex uses
+   the system store) + per-engine `buildDockerArgs`.
 
 Per the repo's board-driven-dev norm, this spec → an implementation plan →
 filed SYD issues for triage, not an in-session build.
 
 ## Open questions
 
-- Final service filename (`scripts/egress-proxy.ts` vs `inject-proxy.ts`) and
-  whether the proxy port stays 8888 or splits forward/origin listeners.
-- Exact dummy-key format each CLI will accept without a preflight validation
-  error (resolve per engine; Claude in the spike).
+- **Implementation engine:** mitmproxy+addon (recommended) vs in-repo Node MITM.
+  Decides the image, the test harness, and whether a Python dep enters the repo.
+- CA persistence mechanism (named Docker volume vs host-mounted 0600 dir) and
+  how the public cert is surfaced to agent containers (same volume, read-only).
+- Whether the sidecar keeps port 8888 as the single proxy listener.

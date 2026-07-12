@@ -2,395 +2,221 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the tinyproxy egress sidecar with a unified Node proxy that both domain-allowlists general egress and injects real provider credentials into outbound API calls, so agent containers never hold real provider keys — proven end-to-end on the Claude worker.
+**Goal:** Replace the tinyproxy egress sidecar with a TLS-intercepting proxy that both domain-allowlists general egress and injects real provider credentials into outbound API calls via MITM, so agent containers never hold real provider keys — proven end-to-end on the Claude worker.
 
-**Architecture:** One sidecar (`syd-egress`) does two jobs: a forward proxy (`CONNECT` + absolute-URI) that enforces a default-deny hostname allowlist for general egress (npm, git, MCP), and a reverse proxy on fixed per-provider path prefixes that rewrites the request to the real provider host with the real credential injected. The real keys live only in the sidecar's env; agent containers get a dummy key plus a base-URL override pointing at the sidecar.
+**Architecture:** One sidecar (`syd-egress`) runs `mitmproxy` with a header-injection addon. Agent containers proxy all egress through it (`HTTP(S)_PROXY`, unchanged) and trust its CA. For provider hosts the proxy terminates TLS, strips the caller's auth header, injects the real credential, and re-encrypts to the real provider; for allowlisted non-provider hosts it tunnels un-intercepted; everything else is refused. Real keys and the CA private key live only in the sidecar; agent containers get a placeholder credential + the CA public cert.
 
-**Tech Stack:** TypeScript, Node 24 (`http`/`net` for the forward-proxy path, Hono for the reverse-proxy routes — matching `scripts/slack-notifier.ts`), Docker, Vitest.
+**Tech Stack:** mitmproxy (Python addon), Docker, TypeScript (`scripts/worker-select.ts` + Vitest for the Docker-args/lifecycle logic).
 
 ## Global Constraints
 
-- **Real provider credentials appear only in the `syd-egress` container's env** — never in an agent container, never in any process argv. (Bare `-e VAR` passthrough, values from the launcher env.)
-- **Injector upstreams are a fixed table**, never caller-controlled — the proxy can never be turned into an open relay.
+- **Real provider credentials AND the CA private key appear only in the `syd-egress` container** — never in an agent container, never in any process argv. Agent containers hold only the CA **public** cert + a placeholder credential.
+- **Injection hosts are a fixed table** (`api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`), never caller-controlled.
+- **Anthropic rule:** `sk-ant-oat*` → `Authorization: Bearer <token>`; `sk-ant-api*` → `x-api-key: <token>` + remove `authorization`. Caller auth header always stripped before injection. (Confirmed from onecli `apps/gateway/src/secret_inject.rs`.)
 - **Domain allowlist stays default-deny** for all non-provider egress.
-- **Response bodies stream** (LLM APIs are SSE) — never buffer a proxied body.
-- **`SWITCHYARD_TOKEN` handling is unchanged** — it stays an env var in the agent container (scoped, intended identity).
-- Existing worker image base is `node:24-slim`; the proxy runs as a non-root user where practical.
+- **Bodies stream** (LLM APIs are SSE) — never buffer.
+- **The CA is stable/persisted** — never regenerated on a sidecar recreate (that breaks container trust).
+- **`SWITCHYARD_TOKEN` handling unchanged** — stays an env var in the agent container.
 - Spec: `docs/superpowers/specs/2026-07-12-credential-injecting-egress-proxy-design.md`.
 
 ---
 
 ## File Structure
 
-- Create `scripts/egress-proxy-routes.ts` — **pure** logic: the injection route table, request-target classification (inject-route vs forward-proxy), header rewrite, and hostname allowlist matching. No I/O. The unit-test surface.
-- Create `scripts/egress-proxy.ts` — the runnable sidecar: an `http.Server` wiring the pure logic to real sockets (`CONNECT` tunneling) and a Hono app (inject routes with streaming). Injectable `fetch`/`net.connect`/`env` so it is testable.
-- Modify `Dockerfile.egress-proxy` — build+run the Node proxy instead of tinyproxy.
-- Retire `scripts/egress-proxy-entry.sh` — replaced by the Node entrypoint (kept only if a fallback is wanted; default is delete).
-- Modify `scripts/worker-select.ts` — evolve `ensureEgressGuard` (pass provider-key env into the sidecar; recreate on key-set change), add the injection route/base-URL helpers, and change `buildDockerArgs` (Claude: drop real cred, add base-URL + dummy key, extend `NO_PROXY`).
-- Create `tests/scripts/egress-proxy-routes.test.ts`, `tests/scripts/egress-proxy.test.ts`; modify `tests/scripts/worker-select.*.test.ts`.
-- Modify `codemaps/workers.md` — one-line note that egress is now injecting+allowlisting.
+- Create `scripts/egress-inject-addon.py` — the mitmproxy addon: the fixed host→injection rules (with the `sk-ant-oat`/`sk-ant-api` branch), the default-deny allowlist decision for non-intercepted hosts, and a `--selftest` block of pure-function assertions (no pytest dependency).
+- Modify `Dockerfile.egress-proxy` — base on mitmproxy, add the addon + a CA-load/persist entrypoint.
+- Create `scripts/egress-proxy-entry.sh` — **repurposed** (was tinyproxy): load-or-generate the persisted CA, then `exec mitmdump` with the addon, allowlist, and provider keys from env.
+- Modify `scripts/container-entry.sh` — install the mounted CA public cert into the trust store + export `NODE_EXTRA_CA_CERTS` before `claude -p`.
+- Modify `scripts/worker-select.ts` — `ensureEgressGuard` (ensure CA; pass provider keys to sidecar; recreate on allowlist/key-set change), `buildDockerArgs` (Claude: drop real cred, add placeholder + CA-cert mount).
+- Modify `tests/scripts/worker-select.*.test.ts`.
+- Modify `codemaps/workers.md`.
 
 ---
 
-## Task 1: OAuth injection spike (gate)
+## Task 1: Spike — mitmproxy addon + Claude OAuth through MITM (gate)
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-12-credential-injecting-egress-proxy-design.md` (fold results into §B/§H)
+- Modify: `docs/superpowers/specs/2026-07-12-credential-injecting-egress-proxy-design.md` (fold results into §A/§H; resolve the "Open questions" implementation-engine item)
 
 **Interfaces:**
-- Produces: `CLAUDE_INJECTION` — a concrete description of the header set the proxy must set on `/anthropic/*` requests: the auth header name + value source (`CLAUDE_CODE_OAUTH_TOKEN` vs `ANTHROPIC_API_KEY`), plus any required constant headers (e.g. `anthropic-version`, beta headers) and whether any inbound header must be stripped. Consumed by Task 2's route table.
+- Produces: a confirmed, minimal mitmproxy addon shape (`request(flow)` hook rewriting `flow.request.headers`) and the exact CA-trust steps a Node CLI needs (`NODE_EXTRA_CA_CERTS` path + system-store install), captured in the spec.
 
-- [ ] **Step 1: Capture Claude Code's real request shape against a custom base URL.** Point a throwaway Claude Code run at a logging endpoint: `ANTHROPIC_BASE_URL=http://127.0.0.1:8899/anthropic claude -p "say hi" --permission-mode acceptEdits` with a tiny Node logger on :8899 that prints method, path, and **all** headers (redacting the token value) then returns 200 with a canned minimal response. Record: which auth header carries the OAuth token, any `anthropic-*` version/beta headers, and the exact path Claude appends after the base URL.
+- [ ] **Step 1: Stand up mitmproxy locally with a trivial inject addon.** `pip install mitmproxy` (or `pipx`/`uvx`), write a 10-line addon that, for `flow.request.pretty_host == "api.anthropic.com"`, sets `flow.request.headers["authorization"] = "Bearer <REAL_OAUTH_TOKEN>"`. Run `mitmdump -s addon.py --listen-port 8888`.
 
-- [ ] **Step 2: Consult the "onecli" prior art the user cited** for OAuth-through-proxy — confirm whether the OAuth access token is used verbatim as a bearer, whether a refresh is needed within a ≤1h session, and any audience/beta-header requirements it sets. Cross-check against Step 1's capture.
+- [ ] **Step 2: Trust the CA and run Claude Code through it.** Export the mitmproxy CA (`~/.mitmproxy/mitmproxy-ca-cert.pem`), then run `HTTPS_PROXY=http://127.0.0.1:8888 NODE_EXTRA_CA_CERTS=~/.mitmproxy/mitmproxy-ca-cert.pem CLAUDE_CODE_OAUTH_TOKEN=placeholder claude -p "say hi"`. Confirm: the session completes, and the addon log shows the request to `api.anthropic.com` with the injected bearer.
 
-- [ ] **Step 3: Decide static-vs-refresh.** If the OAuth access token outlives a session (≤1h watchdog), the proxy injects it statically. If not, document the refresh flow (endpoint + refresh token source) as a follow-up task; do **not** silently ship a proxy that stops working mid-session.
+- [ ] **Step 3: Confirm the OAuth token-exchange survives MITM.** Verify Claude Code's OAuth flow (the "token exchange" the SDK does with the placeholder) works end-to-end through the intercept — if it needs extra headers preserved, note them. Cross-check against onecli's `secret_inject.rs` behavior.
 
-- [ ] **Step 4: Write the results into the spec** — replace the `/anthropic` row's "OAuth bearer or API key — §H" with the confirmed header set, and mark §H resolved. Commit.
+- [ ] **Step 4: Write results into the spec** — pin the addon hook shape, the CA-trust steps, and mark §H resolved / choose the implementation engine. Commit.
 
 ```bash
 git add docs/superpowers/specs/2026-07-12-credential-injecting-egress-proxy-design.md
-git commit -m "docs: resolve OAuth injection spike for egress proxy (Task 1)"
+git commit -m "docs: resolve MITM/mitmproxy spike for egress proxy (Task 1)"
 ```
 
-> **Gate:** Tasks 3+ can be written generically, but the `/anthropic` route's config values come from this task. Do not fabricate them.
+> **Gate:** Task 2's rule module is written generically, but any Claude-OAuth-specific header nuance comes from this task.
 
 ---
 
-## Task 2: Pure routing + injection core
+## Task 2: mitmproxy injection addon + allowlist
 
 **Files:**
-- Create: `scripts/egress-proxy-routes.ts`
-- Test: `tests/scripts/egress-proxy-routes.test.ts`
+- Create: `scripts/egress-inject-addon.py`
+- Test: self-contained `--selftest` (run via `python3 scripts/egress-inject-addon.py --selftest`)
 
 **Interfaces:**
-- Produces:
-  - `type InjectionRoute = { prefix: string; upstreamHost: string; setHeaders: (env: NodeJS.ProcessEnv) => Record<string,string>; stripHeaders: string[] }`
-  - `INJECTION_ROUTES: InjectionRoute[]` — the fixed `/anthropic`, `/openai`, `/gemini` table (values for `/anthropic` from Task 1).
-  - `matchInjectionRoute(path: string): { route: InjectionRoute; upstreamPath: string } | null`
-  - `rewriteHeaders(incoming: Record<string,string>, route: InjectionRoute, env: NodeJS.ProcessEnv): Record<string,string>` — drops `route.stripHeaders` (case-insensitive) and any inbound `authorization`/`x-api-key`/`x-goog-api-key`, then applies `route.setHeaders(env)`; also rewrites `host` to `upstreamHost`.
-  - `hostAllowed(host: string, allowlist: ReadonlySet<string>): boolean` — exact, case-insensitive hostname match (mirrors the anchored-ERE semantics of the old tinyproxy filter: no substring matches).
+- Produces (pure functions, importable + self-tested):
+  - `injection_for(host: str, env: Mapping[str,str]) -> list[tuple[str,str|None]] | None` — returns header ops `(name, value|None)` (`None` = remove) for a provider host, else `None`. Anthropic branch reads `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY` and picks by `sk-ant-oat`/`sk-ant-api` prefix; openai/gemini read their keys.
+  - `host_allowed(host: str, allowlist: set[str]) -> bool` — exact, case-insensitive (mirrors the old anchored-ERE semantics: no substring matches).
+  - a mitmproxy `request(flow)` hook applying `injection_for`, and a `http_connect(flow)`/`tls_clienthello` gate that refuses/`kill()`s hosts that are neither a provider nor allowlisted.
 
-- [ ] **Step 1: Write failing tests for route matching and header rewrite.**
+- [ ] **Step 1: Write the addon with pure functions + a `--selftest` block.**
 
-```ts
-import { describe, it, expect } from "vitest";
-import { matchInjectionRoute, rewriteHeaders, hostAllowed, INJECTION_ROUTES } from "../../scripts/egress-proxy-routes.js";
+```python
+#!/usr/bin/env python3
+"""mitmproxy addon: inject real provider credentials, default-deny the rest.
+Real keys come from the proxy container's env; agent containers never hold them.
+"""
+import os, sys
+from collections.abc import Mapping
 
-describe("matchInjectionRoute", () => {
-  it("maps a known prefix to its upstream and preserves the remaining path+query", () => {
-    const m = matchInjectionRoute("/openai/v1/responses?stream=true");
-    expect(m?.route.upstreamHost).toBe("api.openai.com");
-    expect(m?.upstreamPath).toBe("/v1/responses?stream=true");
-  });
-  it("returns null for an unknown prefix", () => {
-    expect(matchInjectionRoute("/evil/v1/models")).toBeNull();
-  });
-});
+PROVIDER_HOSTS = {"api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com"}
 
-describe("rewriteHeaders", () => {
-  it("replaces caller auth with the injected credential and rewrites host", () => {
-    const route = INJECTION_ROUTES.find(r => r.prefix === "/openai")!;
-    const out = rewriteHeaders(
-      { authorization: "Bearer sk-dummy", host: "syd-egress:8888", "content-type": "application/json" },
-      route,
-      { OPENAI_API_KEY: "sk-real-123" } as NodeJS.ProcessEnv,
-    );
-    expect(out.authorization).toBe("Bearer sk-real-123");
-    expect(out.host).toBe("api.openai.com");
-    expect(out["content-type"]).toBe("application/json");
-  });
-});
+def injection_for(host: str, env: Mapping) -> list | None:
+    h = host.lower()
+    if h == "api.anthropic.com":
+        tok = env.get("CLAUDE_CODE_OAUTH_TOKEN") or env.get("ANTHROPIC_API_KEY") or ""
+        if tok.startswith("sk-ant-oat"):
+            return [("authorization", f"Bearer {tok}")]
+        return [("x-api-key", tok), ("authorization", None)]
+    if h == "api.openai.com":
+        return [("authorization", f"Bearer {env.get('OPENAI_API_KEY','')}")]
+    if h == "generativelanguage.googleapis.com":
+        return [("x-goog-api-key", env.get("GEMINI_API_KEY",""))]
+    return None
 
-describe("hostAllowed", () => {
-  const allow = new Set(["registry.npmjs.org"]);
-  it("allows an exact host", () => expect(hostAllowed("registry.npmjs.org", allow)).toBe(true));
-  it("rejects a look-alike suffix", () => expect(hostAllowed("registry.npmjs.org.attacker.net", allow)).toBe(false));
-});
+def host_allowed(host: str, allowlist: set) -> bool:
+    return host.lower() in {a.lower() for a in allowlist}
+
+def _apply(headers, ops):
+    # strip any caller-supplied auth first, then apply injected ops
+    for k in ("authorization", "x-api-key", "x-goog-api-key"):
+        if k in headers: del headers[k]
+    for name, value in ops:
+        if value is None:
+            if name in headers: del headers[name]
+        else:
+            headers[name] = value
+
+# --- mitmproxy hooks (only imported when run under mitmdump) ---
+def request(flow):  # noqa: ANN001
+    ops = injection_for(flow.request.pretty_host, os.environ)
+    if ops is not None:
+        _apply(flow.request.headers, ops)
+
+def _selftest():
+    a = injection_for("api.anthropic.com", {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-XYZ"})
+    assert a == [("authorization", "Bearer sk-ant-oat-XYZ")], a
+    b = injection_for("api.anthropic.com", {"ANTHROPIC_API_KEY": "sk-ant-api-XYZ"})
+    assert b == [("x-api-key", "sk-ant-api-XYZ"), ("authorization", None)], b
+    assert injection_for("evil.example.com", {}) is None
+    assert host_allowed("registry.npmjs.org", {"registry.npmjs.org"})
+    assert not host_allowed("registry.npmjs.org.attacker.net", {"registry.npmjs.org"})
+    print("selftest ok")
+
+if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        _selftest()
 ```
 
-- [ ] **Step 2: Run tests — verify they fail** (module not found).
+- [ ] **Step 2: Run the selftest — verify it passes.**
 
-Run: `npx vitest run tests/scripts/egress-proxy-routes.test.ts`
-Expected: FAIL — cannot resolve `../../scripts/egress-proxy-routes.js`.
+Run: `python3 scripts/egress-inject-addon.py --selftest`
+Expected: `selftest ok`.
 
-- [ ] **Step 3: Implement `scripts/egress-proxy-routes.ts`.** Fixed route table; `/anthropic` `setHeaders`/`stripHeaders` use the Task 1 result (shown here with the OAuth-bearer shape as the expected outcome — adjust to the spike's confirmed values). `/openai` and `/gemini` as in the tests.
+- [ ] **Step 3: Add the connect-time allowlist gate.** Implement the `http_connect`/`tls_clienthello` hook: if the target host is neither in `PROVIDER_HOSTS` nor in the `ALLOWED_DOMAINS` env allowlist, `flow.kill()` (default-deny). Confirm the addon loads under `mitmdump -s scripts/egress-inject-addon.py` without error.
 
-```ts
-export type InjectionRoute = {
-  prefix: string;
-  upstreamHost: string;
-  setHeaders: (env: NodeJS.ProcessEnv) => Record<string, string>;
-  stripHeaders: string[];
-};
+Run: `ALLOWED_DOMAINS=registry.npmjs.org mitmdump -s scripts/egress-inject-addon.py --listen-port 8899 &` then a quick allowed vs disallowed CONNECT probe; stop it.
+Expected: allowed host tunnels; disallowed host is killed.
 
-const AUTH_HEADERS = ["authorization", "x-api-key", "x-goog-api-key"];
-
-export const INJECTION_ROUTES: InjectionRoute[] = [
-  {
-    prefix: "/anthropic",
-    upstreamHost: "api.anthropic.com",
-    // Values confirmed in Task 1. Placeholder shown is the OAuth-bearer shape.
-    setHeaders: (env) => ({ authorization: `Bearer ${env.CLAUDE_CODE_OAUTH_TOKEN ?? ""}` }),
-    stripHeaders: [],
-  },
-  {
-    prefix: "/openai",
-    upstreamHost: "api.openai.com",
-    setHeaders: (env) => ({ authorization: `Bearer ${env.OPENAI_API_KEY ?? ""}` }),
-    stripHeaders: [],
-  },
-  {
-    prefix: "/gemini",
-    upstreamHost: "generativelanguage.googleapis.com",
-    setHeaders: (env) => ({ "x-goog-api-key": env.GEMINI_API_KEY ?? "" }),
-    stripHeaders: [],
-  },
-];
-
-export function matchInjectionRoute(path: string): { route: InjectionRoute; upstreamPath: string } | null {
-  for (const route of INJECTION_ROUTES) {
-    if (path === route.prefix || path.startsWith(route.prefix + "/")) {
-      return { route, upstreamPath: path.slice(route.prefix.length) || "/" };
-    }
-  }
-  return null;
-}
-
-export function rewriteHeaders(
-  incoming: Record<string, string>,
-  route: InjectionRoute,
-  env: NodeJS.ProcessEnv,
-): Record<string, string> {
-  const drop = new Set([...AUTH_HEADERS, ...route.stripHeaders].map((h) => h.toLowerCase()));
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(incoming)) {
-    if (!drop.has(k.toLowerCase()) && k.toLowerCase() !== "host") out[k] = v;
-  }
-  out.host = route.upstreamHost;
-  return { ...out, ...route.setHeaders(env) };
-}
-
-export function hostAllowed(host: string, allowlist: ReadonlySet<string>): boolean {
-  const h = host.toLowerCase().replace(/:\d+$/, "");
-  for (const a of allowlist) if (a.toLowerCase() === h) return true;
-  return false;
-}
-```
-
-- [ ] **Step 4: Run tests — verify they pass.**
-
-Run: `npx vitest run tests/scripts/egress-proxy-routes.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Commit.**
+- [ ] **Step 4: Commit.**
 
 ```bash
-git add scripts/egress-proxy-routes.ts tests/scripts/egress-proxy-routes.test.ts
-git commit -m "feat: pure routing + credential-injection core for egress proxy (Task 2)"
+git add scripts/egress-inject-addon.py
+git commit -m "feat: mitmproxy credential-injection + allowlist addon (Task 2)"
 ```
 
 ---
 
-## Task 3: Reverse-proxy inject routes (streaming)
-
-**Files:**
-- Create: `scripts/egress-proxy.ts` (Hono app portion)
-- Test: `tests/scripts/egress-proxy.test.ts`
-
-**Interfaces:**
-- Consumes: `matchInjectionRoute`, `rewriteHeaders` (Task 2).
-- Produces: `createInjectApp(deps: { fetch: typeof fetch; env: NodeJS.ProcessEnv }): Hono` — a Hono app whose catch-all handler proxies a matched inject-route to `https://<upstreamHost><upstreamPath>` with rewritten headers and a **streamed** response body; returns 404 for unmatched paths.
-
-- [ ] **Step 1: Write a failing test** that a request to an inject route reaches the injected upstream with the real key and streams the body back. Use an injected `fetch` fake.
-
-```ts
-import { describe, it, expect } from "vitest";
-import { createInjectApp } from "../../scripts/egress-proxy.js";
-
-describe("inject app", () => {
-  it("proxies /openai/* to api.openai.com with the real key and streams the body", async () => {
-    let seenUrl = "", seenAuth = "";
-    const fakeFetch = (async (url: string, init: RequestInit) => {
-      seenUrl = url; seenAuth = (init.headers as Record<string,string>).authorization;
-      return new Response("data: hi\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
-    }) as unknown as typeof fetch;
-    const app = createInjectApp({ fetch: fakeFetch, env: { OPENAI_API_KEY: "sk-real" } as NodeJS.ProcessEnv });
-    const res = await app.request("/openai/v1/responses", { method: "POST", body: "{}" });
-    expect(seenUrl).toBe("https://api.openai.com/v1/responses");
-    expect(seenAuth).toBe("Bearer sk-real");
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe("data: hi\n\n");
-  });
-
-  it("404s an unmatched path", async () => {
-    const app = createInjectApp({ fetch: fetch, env: {} as NodeJS.ProcessEnv });
-    const res = await app.request("/evil/x");
-    expect(res.status).toBe(404);
-  });
-});
-```
-
-- [ ] **Step 2: Run test — verify it fails** (module/export missing).
-
-Run: `npx vitest run tests/scripts/egress-proxy.test.ts`
-Expected: FAIL.
-
-- [ ] **Step 3: Implement `createInjectApp`.** Catch-all handler: match route → build upstream URL → `rewriteHeaders` → `deps.fetch` with the original method/body → return a `Response` that passes the upstream body stream through unchanged (no buffering). Verify Hono's streaming/`c.body(stream)` API against the installed version during implementation.
-
-```ts
-import { Hono } from "hono";
-import { matchInjectionRoute, rewriteHeaders } from "./egress-proxy-routes.js";
-
-export function createInjectApp(deps: { fetch: typeof fetch; env: NodeJS.ProcessEnv }): Hono {
-  const app = new Hono();
-  app.all("*", async (c) => {
-    const m = matchInjectionRoute(c.req.path);
-    if (!m) return c.notFound();
-    const url = `https://${m.route.upstreamHost}${m.upstreamPath}`;
-    const headers = rewriteHeaders(Object.fromEntries(c.req.raw.headers), m.route, deps.env);
-    const upstream = await deps.fetch(url, {
-      method: c.req.method,
-      headers,
-      body: ["GET", "HEAD"].includes(c.req.method) ? undefined : c.req.raw.body,
-      // @ts-expect-error Node fetch duplex for streamed request bodies
-      duplex: "half",
-    });
-    return new Response(upstream.body, { status: upstream.status, headers: upstream.headers });
-  });
-  return app;
-}
-```
-
-- [ ] **Step 4: Run test — verify it passes.**
-
-Run: `npx vitest run tests/scripts/egress-proxy.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git add scripts/egress-proxy.ts tests/scripts/egress-proxy.test.ts
-git commit -m "feat: streaming credential-injection reverse proxy (Task 3)"
-```
-
----
-
-## Task 4: Forward-proxy `CONNECT` + allowlist
-
-**Files:**
-- Modify: `scripts/egress-proxy.ts` (add the `http.Server` + `connect` handler and `main()`)
-- Test: `tests/scripts/egress-proxy.test.ts` (add allowlist-decision tests)
-
-**Interfaces:**
-- Consumes: `hostAllowed` (Task 2), `createInjectApp` (Task 3).
-- Produces: `connectAllowed(hostHeaderOrAuthority: string, allowlist: ReadonlySet<string>): boolean` (thin wrapper over `hostAllowed` that parses `host:port`); `startProxy(deps)` binding the Hono app to origin requests and a `server.on("connect", …)` that tunnels to allowlisted hosts via `net.connect`, and `403`/`Connection refused`s the rest. `ALLOWED_DOMAINS` (CSV) + provider-key vars read from `deps.env`.
-
-- [ ] **Step 1: Write failing tests** for `connectAllowed`.
-
-```ts
-import { describe, it, expect } from "vitest";
-import { connectAllowed } from "../../scripts/egress-proxy.js";
-
-describe("connectAllowed", () => {
-  const allow = new Set(["registry.npmjs.org", "100.85.158.109"]);
-  it("allows an allowlisted CONNECT authority", () => expect(connectAllowed("registry.npmjs.org:443", allow)).toBe(true));
-  it("rejects a non-allowlisted host", () => expect(connectAllowed("evil.example.com:443", allow)).toBe(false));
-});
-```
-
-- [ ] **Step 2: Run — verify fail.** Run: `npx vitest run tests/scripts/egress-proxy.test.ts` — Expected: FAIL (no `connectAllowed`).
-
-- [ ] **Step 3: Implement the forward-proxy path.** `connectAllowed` parses the authority and delegates to `hostAllowed`. `startProxy` creates an `http.Server` whose normal requests are served by the Hono app (via `@hono/node-server`), and whose `"connect"` event tunnels allowlisted authorities with `net.connect`, writing `HTTP/1.1 200 Connection Established` then piping both directions; disallowed authorities get `HTTP/1.1 403 Forbidden` and the socket destroyed. `main()` reads `ALLOWED_DOMAINS` + keys from `process.env` and calls `startProxy`. (Verify `@hono/node-server` request-listener adapter and the `connect` event wiring during implementation.)
-
-```ts
-import { createServer } from "node:http";
-import { connect as netConnect } from "node:net";
-import { hostAllowed } from "./egress-proxy-routes.js";
-
-export function connectAllowed(authority: string, allowlist: ReadonlySet<string>): boolean {
-  return hostAllowed(authority, allowlist); // hostAllowed already strips :port
-}
-
-export function startProxy(deps: { env: NodeJS.ProcessEnv; port: number; requestListener: import("http").RequestListener }) {
-  const allow = new Set((deps.env.ALLOWED_DOMAINS ?? "").split(",").map((s) => s.trim()).filter(Boolean));
-  const server = createServer(deps.requestListener);
-  server.on("connect", (req, clientSocket, head) => {
-    const authority = req.url ?? "";
-    if (!connectAllowed(authority, allow)) {
-      clientSocket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
-      clientSocket.destroy();
-      return;
-    }
-    const [host, port] = authority.split(":");
-    const upstream = netConnect(Number(port) || 443, host, () => {
-      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      upstream.write(head);
-      upstream.pipe(clientSocket);
-      clientSocket.pipe(upstream);
-    });
-    upstream.on("error", () => clientSocket.destroy());
-  });
-  server.listen(deps.port);
-  return server;
-}
-```
-
-- [ ] **Step 4: Run — verify pass.** Run: `npx vitest run tests/scripts/egress-proxy.test.ts` — Expected: PASS.
-
-- [ ] **Step 5: Commit.**
-
-```bash
-git add scripts/egress-proxy.ts tests/scripts/egress-proxy.test.ts
-git commit -m "feat: forward-proxy CONNECT + allowlist in egress proxy (Task 4)"
-```
-
----
-
-## Task 5: Dockerfile — run the Node proxy
+## Task 3: Proxy image — mitmproxy + addon + persisted CA
 
 **Files:**
 - Modify: `Dockerfile.egress-proxy`
-- Retire: `scripts/egress-proxy-entry.sh`
+- Modify (repurpose): `scripts/egress-proxy-entry.sh`
 
 **Interfaces:**
-- Produces: an image (still tagged `switchyard-egress-proxy`) whose entrypoint runs `scripts/egress-proxy.ts` via `tsx`, listening on 8888, reading `ALLOWED_DOMAINS` + provider-key vars from env.
+- Produces: image `switchyard-egress-proxy` running `mitmdump` on 8888 with the addon, reading provider keys + `ALLOWED_DOMAINS` from env, and loading a **persisted** CA from a mounted volume (`/home/mitmproxy/.mitmproxy`) — generating it once if absent.
 
-- [ ] **Step 1: Rewrite `Dockerfile.egress-proxy`** to `FROM node:24-slim`, copy `scripts/egress-proxy.ts`, `scripts/egress-proxy-routes.ts`, and a minimal `package.json` with `hono` + `@hono/node-server` + `tsx`, `npm ci`, drop to non-root, `ENTRYPOINT ["npx","tsx","/app/egress-proxy.ts"]`. (Confirm the dependency install strategy — a tiny dedicated `package.json` under a build context dir keeps the image lean.)
+- [ ] **Step 1: Rewrite `Dockerfile.egress-proxy`** to base on `mitmproxy/mitmproxy` (or `python:3.12-slim` + `pip install mitmproxy`), `COPY scripts/egress-inject-addon.py` and `scripts/egress-proxy-entry.sh`, non-root, `ENTRYPOINT ["/entry.sh"]`.
 
-- [ ] **Step 2: Build the image.**
+- [ ] **Step 2: Rewrite `scripts/egress-proxy-entry.sh`** to: require `ALLOWED_DOMAINS`; ensure the CA dir exists (mitmproxy auto-generates the CA on first run into `~/.mitmproxy`, persisted via the volume); `exec mitmdump --listen-host 0.0.0.0 --listen-port 8888 -s /egress-inject-addon.py --set block_global=false`. (Verify the exact mitmdump flags for headless/allow-proxied-hosts during implementation.)
 
-Run: `docker build -f Dockerfile.egress-proxy -t switchyard-egress-proxy .`
-Expected: builds clean.
+- [ ] **Step 3: Build the image.** Run: `docker build -f Dockerfile.egress-proxy -t switchyard-egress-proxy .` — Expected: builds clean.
 
-- [ ] **Step 3: Smoke-test the container** with a dummy allowlist and no real keys: `docker run --rm -e ALLOWED_DOMAINS=registry.npmjs.org -p 8888:8888 switchyard-egress-proxy &` then `curl -x http://127.0.0.1:8888 https://registry.npmjs.org/ -I` (allowed) and a disallowed host (expect 403). Stop the container.
-
-- [ ] **Step 4: Delete `scripts/egress-proxy-entry.sh`** (tinyproxy entry no longer referenced).
+- [ ] **Step 4: Smoke-test** with a named volume for the CA and a dummy allowlist (no real keys): confirm `mitmdump` starts, writes `mitmproxy-ca-cert.pem` into the volume, and an allowed-host CONNECT tunnels. Stop the container.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
 git add Dockerfile.egress-proxy scripts/egress-proxy-entry.sh
-git commit -m "feat: egress-proxy image runs the Node injecting proxy (Task 5)"
+git commit -m "feat: egress-proxy image runs mitmproxy with injection addon + persisted CA (Task 3)"
 ```
 
 ---
 
-## Task 6: `ensureEgressGuard` passes provider keys to the sidecar
+## Task 4: CA trust in the agent container
 
 **Files:**
-- Modify: `scripts/worker-select.ts` (`ensureEgressGuard`, and a helper for the key-var set)
-- Test: `tests/scripts/worker-select.egress.test.ts` (or the existing egress test file)
+- Modify: `scripts/container-entry.sh`
 
 **Interfaces:**
-- Consumes: existing `EGRESS_PROXY_NAME`, `egressAllowlist`.
-- Produces: `injectKeyEnvArgs(env): string[]` — bare `-e VAR` for each present provider key var (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`); `ensureEgressGuard` now passes those into the `docker run` of the sidecar and recreates the sidecar when the **key-var set** changes (not just the allowlist).
+- Consumes: a read-only mount of the CA public cert at a known path (e.g. `/ca/mitmproxy-ca-cert.pem`).
+- Produces: the CA installed into the trust store + `NODE_EXTRA_CA_CERTS` exported before `claude -p`.
 
-- [ ] **Step 1: Write failing tests** (extend the injected-`exec` pattern already used for `ensureEgressGuard`): assert the sidecar `docker run` args include `-e CLAUDE_CODE_OAUTH_TOKEN` when present in env and omit `-e OPENAI_API_KEY` when absent; assert a change in which key vars are present triggers an `rm -f` + recreate. (Mirror the existing `ensureEgressGuard` test setup in `tests/scripts/`.)
+- [ ] **Step 1: Add CA-trust setup** near the top of `container-entry.sh` (after the clone, before `claude -p`): if `/ca/mitmproxy-ca-cert.pem` exists, `cp` it into `/usr/local/share/ca-certificates/switchyard-egress.crt` + `update-ca-certificates` (needs root or a pre-baked writable dir — verify against the non-root `node` user; may instead rely solely on `NODE_EXTRA_CA_CERTS` for the Node-based Claude CLI), and `export NODE_EXTRA_CA_CERTS=/ca/mitmproxy-ca-cert.pem`.
+
+```sh
+# Trust the egress proxy's CA so intercepted TLS to provider hosts verifies.
+if [ -f /ca/mitmproxy-ca-cert.pem ]; then
+  export NODE_EXTRA_CA_CERTS=/ca/mitmproxy-ca-cert.pem
+fi
+```
+
+- [ ] **Step 2: Verify** (deferred to Task 7's live run) that Claude Code honors `NODE_EXTRA_CA_CERTS` for the intercepted connection. Note in the script comment that Codex (Rust, Project 2) will need the system-store install instead.
+
+- [ ] **Step 3: Commit.**
+
+```bash
+git add scripts/container-entry.sh
+git commit -m "feat: agent container trusts the egress proxy CA (Task 4)"
+```
+
+---
+
+## Task 5: `ensureEgressGuard` — CA + provider keys + recreate-on-change
+
+**Files:**
+- Modify: `scripts/worker-select.ts`
+- Test: `tests/scripts/worker-select.egress.test.ts`
+
+**Interfaces:**
+- Produces: `injectKeyEnvArgs(env): string[]` (bare `-e VAR` for each present provider key: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`); a CA volume/mount constant; `ensureEgressGuard` now runs the sidecar with the CA volume + those keys and recreates it when the **key-var set** changes (sentinel env `INJECT_KEYS=<sorted,names>`), never regenerating the CA.
+
+- [ ] **Step 1: Write failing tests** (extend the injected-`exec` pattern already used for `ensureEgressGuard`): the sidecar `docker run` args include the CA volume mount and `-e CLAUDE_CODE_OAUTH_TOKEN` when present; omit `-e OPENAI_API_KEY` when absent; a change in the present key-var set triggers `rm -f` + recreate; the CA volume is never removed/regenerated on recreate.
 
 - [ ] **Step 2: Run — verify fail.**
 
-- [ ] **Step 3: Implement.** Add `injectKeyEnvArgs`; include its output in the sidecar `run` argv; extend the freshness check so `inspectProxy().sameKeys` compares the **names** of present key vars (never values) baked as a sentinel env `INJECT_KEYS=<sorted,csv,of,names>` on the sidecar, recreating when it differs. Keep the race-tolerant structure intact.
+- [ ] **Step 3: Implement.** Add `injectKeyEnvArgs`; mount a named CA volume (e.g. `syd-egress-ca:/home/mitmproxy/.mitmproxy`) on the sidecar; bake `INJECT_KEYS=<sorted key-var names>` as the freshness sentinel (names only, never values); extend `inspectProxy().sameKeys` to compare it; keep the race-tolerant structure.
 
 - [ ] **Step 4: Run — verify pass.**
 
@@ -398,76 +224,67 @@ git commit -m "feat: egress-proxy image runs the Node injecting proxy (Task 5)"
 
 ```bash
 git add scripts/worker-select.ts tests/scripts/worker-select.egress.test.ts
-git commit -m "feat: egress sidecar holds provider keys; recreate on key-set change (Task 6)"
+git commit -m "feat: egress sidecar holds keys + persisted CA; recreate on key-set change (Task 5)"
 ```
 
 ---
 
-## Task 7: `buildDockerArgs` — base-URL + dummy key, drop real cred (Claude)
+## Task 6: `buildDockerArgs` — placeholder + CA mount, drop real cred (Claude)
 
 **Files:**
-- Modify: `scripts/worker-select.ts` (`buildDockerArgs`, `egressDockerArgs`)
+- Modify: `scripts/worker-select.ts`
 - Test: `tests/scripts/worker-select.test.ts`
 
 **Interfaces:**
-- Consumes: `EGRESS_PROXY_NAME`, `EGRESS_PROXY_PORT`.
-- Produces: for a containerized Claude dispatch, the agent-container argv includes `-e ANTHROPIC_BASE_URL=http://syd-egress:8888/anthropic` and `-e ANTHROPIC_API_KEY=<dummy sentinel>` (or the dummy var Claude accepts), **excludes** any real Anthropic credential, and adds the proxy hostname to `NO_PROXY`.
+- Produces: for a containerized Claude dispatch, the agent-container argv includes `-e CLAUDE_CODE_OAUTH_TOKEN=placeholder`, a **read-only** CA-cert mount (`-v syd-egress-ca:/ca:ro` or a cert-file mount), the existing `HTTP(S)_PROXY` egress args, and **excludes** any real Anthropic credential.
 
 - [ ] **Step 1: Write failing tests.**
 
 ```ts
-it("Claude agent container gets the base-URL + dummy key and no real credential", () => {
-  const args = buildDockerArgs(issue, project, config, { CLAUDE_CODE_OAUTH_TOKEN: "real-oauth" } as NodeJS.ProcessEnv);
+it("Claude agent container gets a placeholder + CA mount and no real credential", () => {
+  const args = buildDockerArgs(issue, project, config, { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv);
   const joined = args.join(" ");
-  expect(joined).toContain("ANTHROPIC_BASE_URL=http://syd-egress:8888/anthropic");
-  expect(joined).not.toContain("real-oauth");           // value never in argv
-  // the real cred is NOT forwarded into the agent container:
-  const eIdx = args.reduce((n, a, i) => (a === "-e" && args[i+1]?.startsWith("CLAUDE_CODE_OAUTH_TOKEN") ? i : n), -1);
-  expect(eIdx).toBe(-1);
-});
-it("adds the proxy host to NO_PROXY so provider base-URL traffic goes direct", () => {
-  const args = buildDockerArgs(issue, project, config, { CLAUDE_CODE_OAUTH_TOKEN: "x" } as NodeJS.ProcessEnv);
-  expect(args.join(" ")).toMatch(/NO_PROXY=[^ ]*syd-egress/);
+  expect(joined).toContain("CLAUDE_CODE_OAUTH_TOKEN=placeholder");
+  expect(joined).not.toContain("sk-ant-oat-REAL");            // real value never crosses into the agent container
+  expect(joined).toMatch(/-v [^ ]*egress-ca[^ ]*:\/ca:ro/);   // CA mounted read-only
+  const passesRealCred = args.some((a, i) => a === "-e" && args[i+1] === "CLAUDE_CODE_OAUTH_TOKEN"); // bare passthrough of the real var
+  expect(passesRealCred).toBe(false);
 });
 ```
 
 - [ ] **Step 2: Run — verify fail.**
 
-- [ ] **Step 3: Implement.** In `egressDockerArgs`, append `EGRESS_PROXY_NAME` to the `NO_PROXY`/`no_proxy` values. In `buildDockerArgs`, when engine is Claude (the default/only engine here): remove the real-cred `-e CLAUDE_CODE_OAUTH_TOKEN`/`-e ANTHROPIC_API_KEY` passthrough; add `-e ANTHROPIC_BASE_URL=http://${EGRESS_PROXY_NAME}:${EGRESS_PROXY_PORT}/anthropic` and `-e ANTHROPIC_API_KEY=<dummy>` (dummy value confirmed acceptable in Task 1). Update the "requires auth env" guard so it validates the key is present in the **worker/sidecar** env (for the injector) rather than requiring it inside the agent container.
+- [ ] **Step 3: Implement.** In `buildDockerArgs` (Claude path): remove the real-cred `-e CLAUDE_CODE_OAUTH_TOKEN`/`-e ANTHROPIC_API_KEY` passthrough; add `-e CLAUDE_CODE_OAUTH_TOKEN=placeholder` and `-v <ca-volume>:/ca:ro`; keep `egressDockerArgs`. Update the "requires auth env" guard to validate the key is present in the **worker/sidecar** env (for the injector), not in the agent container.
 
-- [ ] **Step 4: Run — verify pass.** Also run the full worker-select suite: `npx vitest run tests/scripts/`.
+- [ ] **Step 4: Run — verify pass.** Also `npx vitest run tests/scripts/`.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
 git add scripts/worker-select.ts tests/scripts/worker-select.test.ts
-git commit -m "feat: Claude agent container uses injecting proxy, no real key in-container (Task 7)"
+git commit -m "feat: Claude agent container uses MITM proxy; placeholder + CA, no real key (Task 6)"
 ```
 
 ---
 
-## Task 8: End-to-end acceptance + codemap
+## Task 7: End-to-end acceptance + codemap
 
 **Files:**
 - Modify: `codemaps/workers.md`
-- (No code — verification task.)
 
-**Interfaces:**
-- Consumes: everything above.
+- [ ] **Step 1: Full gate.** `npm run typecheck` and `npm test`; both green.
 
-- [ ] **Step 1: Full gate.** Run `npm run typecheck` and `npm test`; both green.
+- [ ] **Step 2: Bring up the guard.** Start the worker (or call the guard directly): `ensureEgressGuard` stands up `syd-egress` (mitmproxy + addon + CA volume + real Anthropic cred in the sidecar env + `ALLOWED_DOMAINS`). Confirm `docker ps` shows it and the CA volume holds `mitmproxy-ca-cert.pem`.
 
-- [ ] **Step 2: Bring up the guard.** Start the worker (or call the guard directly) so `ensureEgressGuard` stands up `syd-egress` with the real Anthropic cred in the sidecar env and `ALLOWED_DOMAINS` set. Confirm `docker ps` shows the sidecar and `docker inspect syd-egress` shows the key var present (value not logged).
+- [ ] **Step 3: Dispatch a real Claude SYD issue** (containerized). Confirm it produces its `agent/<ref>` PR — i.e. the intercepted+injected OAuth path reaches Anthropic and the session works with the CA trusted.
 
-- [ ] **Step 3: Dispatch a real Claude SYD issue** labeled for containerized dispatch. Confirm it produces its `agent/<ref>` PR (session runs, commits, pushes) — i.e. the injected OAuth path actually reaches Anthropic.
+- [ ] **Step 4: Prove the key is absent from the agent container.** `docker exec <syd-ref> env | grep -Ei 'anthropic|claude'` shows **only** `CLAUDE_CODE_OAUTH_TOKEN=placeholder` (+ `NODE_EXTRA_CA_CERTS`) — no real credential. Capture as acceptance evidence and attach to the tracking issue (visual-verification norm).
 
-- [ ] **Step 4: Prove the key is absent from the agent container.** While the session runs (or via a deliberately long test issue), `docker exec <syd-ref> env | grep -Ei 'anthropic|claude'` shows **only** `ANTHROPIC_BASE_URL` + the dummy key — no real credential. Capture this output as the acceptance evidence (attach to the tracking issue per the visual-verification norm).
-
-- [ ] **Step 5: Update `codemaps/workers.md`** — the egress line now reads "injecting + allowlisting proxy: holds provider keys, agent containers carry only a dummy key + base-URL." Commit.
+- [ ] **Step 5: Update `codemaps/workers.md`** — egress line now reads "TLS-intercepting mitmproxy: injects provider creds by host, allowlists the rest; agent containers hold only a placeholder + the CA public cert." Commit.
 
 ```bash
 git add codemaps/workers.md
-git commit -m "docs: codemap note for injecting egress proxy (Task 8)"
+git commit -m "docs: codemap note for intercepting egress proxy (Task 7)"
 ```
 
 ---
@@ -475,19 +292,19 @@ git commit -m "docs: codemap note for injecting egress proxy (Task 8)"
 ## Self-Review
 
 **Spec coverage:**
-- §A unified proxy → Tasks 3+4 (inject + forward/allowlist), Task 5 (image). ✅
-- §B routing table → Task 2. ✅
-- §C credential model (keys only in sidecar; dummy in agent) → Tasks 6 + 7; proven in Task 8 Step 4. ✅
-- §D base-URL override (Claude) → Task 7. ✅
-- §E NO_PROXY nuance → Task 7 Step 3 + test. ✅
-- §F lifecycle → Task 6. ✅
-- §G Claude retrofit + acceptance → Task 7 + Task 8. ✅
-- §H OAuth spike → Task 1 (gate). ✅
-- Testing section → per-task unit tests + Task 8 integration. ✅
-- Codex/Gemini rows provisioned but not exercised (Project 2) → Task 2 table includes them; no engine wiring (correct — out of scope). ✅
+- §A intercepting proxy (MITM provider hosts, tunnel allowlist, refuse rest) → Tasks 2 (addon) + 3 (image). ✅
+- §B host-keyed injection table (oat/api branch, openai, gemini) → Task 2. ✅
+- §C credential model (keys+CA-priv only in sidecar; placeholder + CA-pub in agent) → Tasks 5 + 6; proven in Task 7 Step 4. ✅
+- §D CA lifecycle/trust distribution → Task 3 (persist/generate) + Task 4 (trust in agent) + Task 5 (CA volume, never regen). ✅
+- §E networking (all egress via proxy; no base-URL/NO_PROXY special case) → unchanged `egressDockerArgs`, asserted in Task 6. ✅
+- §F lifecycle → Task 5. ✅
+- §G Claude retrofit + acceptance → Tasks 4/6 + Task 7. ✅
+- §H spike → Task 1 (gate). ✅
+- Testing section → Task 2 selftest, Task 5/6 vitest, Task 3 smoke, Task 7 manual. ✅
+- OpenAI/Gemini rules provisioned but not exercised (Project 2) → Task 2 covers them; no engine wiring. ✅
 
-**Placeholder scan:** The only deferred values are the `/anthropic` route header specifics, which are explicitly the deliverable of the gating Task 1 — not a hidden placeholder. `<dummy>` sentinel value is resolved in Task 1/Task 7. No "TBD/handle errors/similar to" placeholders. ✅
+**Placeholder scan:** the literal string `placeholder` is the *intended* container credential (onecli's pattern), not a plan gap. mitmdump flags (Task 3), CA-trust-under-non-root specifics (Task 4), and any Claude-OAuth header nuance (Task 1) are confirmed in-task against the real tools — flagged honestly, not hand-waved. No "TBD/handle errors/similar to". ✅
 
-**Type consistency:** `matchInjectionRoute` / `rewriteHeaders` / `hostAllowed` / `connectAllowed` / `createInjectApp` / `startProxy` / `injectKeyEnvArgs` names are used consistently across Tasks 2–7. `InjectionRoute` shape is defined once (Task 2) and consumed unchanged. ✅
+**Type/name consistency:** `injection_for` / `host_allowed` / `_apply` (Task 2), `injectKeyEnvArgs` / `INJECT_KEYS` sentinel / CA volume `syd-egress-ca` (Tasks 5–6) used consistently. The Anthropic `sk-ant-oat`→Bearer / `sk-ant-api`→x-api-key rule is identical in the Global Constraints, §B, and Task 2 code. ✅
 
-**Implementation-verification notes (honest gaps):** exact Hono streaming API (`Task 3`), `@hono/node-server` + `connect`-event wiring (`Task 4`), and the Claude-OAuth header set (`Task 1`) are confirmed against the installed versions/live capture during their tasks rather than asserted here.
+**Implementation-verification notes (honest gaps):** exact `mitmdump` flags for headless + allow-arbitrary-proxied-hosts (Task 3), CA install under the non-root user vs `NODE_EXTRA_CA_CERTS`-only (Task 4), and the Claude-OAuth-through-MITM confirmation (Task 1) are validated against the live tools in their tasks.
