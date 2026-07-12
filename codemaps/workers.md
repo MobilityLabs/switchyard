@@ -26,7 +26,9 @@ tick (intervalSeconds, default 300s)        pollEvents (eventPollSeconds, 15s)
 
 ### Containerized mode (`Dockerfile.worker`, `scripts/container-entry.sh`)
 
-Host repo mounted at `/origin` (rw) → container clones to `/work`, checks out `agent/<ref>`, runs `claude -p`, pushes `agent/<ref>` back to `/origin` iff commits exist. No host FS beyond the mount, no GitHub creds in the container. Auth passthrough: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` via bare `-e VAR` (`buildDockerArgs`). Rebuild image after upgrading `@anthropic-ai/claude-code`: `npm run build:worker-image`.
+Host repo mounted at `/origin` (rw) → container clones to `/work`, checks out `agent/<ref>`, runs `claude -p`, pushes `agent/<ref>` back to `/origin` iff commits exist. No host FS beyond the mount, no GitHub creds in the container. Rebuild image after upgrading `@anthropic-ai/claude-code`: `npm run build:worker-image`.
+
+**Egress + credentials (SYD-110/SYD-186):** sessions run on an `--internal` network whose only exit is the `syd-egress` sidecar — a TLS-intercepting mitmproxy (`Dockerfile.egress-proxy`, `scripts/egress-inject-addon.py`) that injects the real provider credential by host and allowlists the rest, refusing everything else. The real keys + the CA private key live only in the sidecar (`ensureEgressGuard` passes them + a persisted CA volume, recreating on key-set change); the agent container holds only `CLAUDE_CODE_OAUTH_TOKEN=placeholder` + the CA public cert (`-v syd-egress-ca:/ca:ro`, `NODE_EXTRA_CA_CERTS` in `container-entry.sh`), never the real key (`buildDockerArgs`). `egress: "open"` opts out — real key passed bare, no sidecar.
 
 ### SDK runner (`worker-sdk/`)
 
