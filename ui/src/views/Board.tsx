@@ -4,6 +4,7 @@ import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { href, navigate } from "../router";
 import type { Issue, Status } from "../types";
+import { attentionChip } from "../attention";
 
 const BOARD_COLUMNS: Status[] = ["backlog", "todo", "in_progress", "in_review", "done"];
 const LABELS: Record<string, string> = {
@@ -187,11 +188,15 @@ export function Card({
       </a>
       <p>{issue.title}</p>
       <span className={`badge prio prio-${issue.priority}`}>{issue.priority}</span>
-      {issue.attention && (
-        <span className="badge danger" title={issue.attention.message}>
-          ⛔ delivery failed
-        </span>
-      )}
+      {issue.attention &&
+        (() => {
+          const chip = attentionChip(issue.attention)!;
+          return (
+            <span className={chip.className} title={issue.attention.message}>
+              {chip.label}
+            </span>
+          );
+        })()}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
       {issue.labels.length > 0 && (
         <div className="label-chips-ro">

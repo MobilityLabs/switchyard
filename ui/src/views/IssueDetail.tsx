@@ -247,10 +247,11 @@ export function AttentionBanner({
   onRetry?: () => void;
 }) {
   if (!attention) return null;
+  const isError = attention.reason === "delivery_failed";
   return (
-    <p className="banner danger issue-attention">
-      ⛔ {attention.message}
-      {onRetry && (
+    <p className={`banner ${isError ? "danger" : "warn"} issue-attention`}>
+      {isError ? "⛔" : "⚠"} {attention.message}
+      {isError && onRetry && (
         <button className="retry-delivery" onClick={onRetry}>
           Retry delivery
         </button>
