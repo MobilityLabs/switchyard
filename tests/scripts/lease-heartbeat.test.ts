@@ -1,33 +1,74 @@
 import { describe, it, expect } from "vitest";
 import {
   heartbeatTick,
+  heartbeatMissLimit,
   HEARTBEAT_MISS_LIMIT,
+  HEARTBEAT_INVALID_LIMIT,
   HEARTBEAT_INTERVAL_MS,
+  type WorkerConfig,
 } from "../../scripts/worker-select.js";
 
-describe("heartbeatTick (SYD-210 Layer B)", () => {
-  it("cancels only after missLimit consecutive failures", () => {
-    let failures = 0;
-    for (let i = 0; i < HEARTBEAT_MISS_LIMIT - 1; i++) {
-      const r = heartbeatTick(failures, false);
-      failures = r.failures;
+const cfg = (over: Partial<WorkerConfig> = {}): WorkerConfig =>
+  ({ url: "http://x", intervalSeconds: 300, maxConcurrent: 1, projects: {}, ...over }) as WorkerConfig;
+
+const zero = { misses: 0, invalids: 0 };
+
+describe("heartbeatTick (SYD-210 Layer B, tri-state)", () => {
+  it("a success resets both counters and never cancels", () => {
+    expect(heartbeatTick({ misses: 5, invalids: 1 }, "ok")).toEqual({
+      misses: 0,
+      invalids: 0,
+      cancel: false,
+    });
+  });
+
+  it("cancels FAST on a definitive 4xx (lease gone via takeover/expiry)", () => {
+    // one 'invalid' short of the limit does not cancel...
+    let s = zero;
+    for (let i = 0; i < HEARTBEAT_INVALID_LIMIT - 1; i++) {
+      const r = heartbeatTick(s, "invalid");
+      s = { misses: r.misses, invalids: r.invalids };
       expect(r.cancel).toBe(false);
     }
-    const last = heartbeatTick(failures, false);
-    expect(last.failures).toBe(HEARTBEAT_MISS_LIMIT);
+    // ...the limit-th does. Cancels in far fewer than the transient miss limit.
+    const last = heartbeatTick(s, "invalid");
     expect(last.cancel).toBe(true);
+    expect(HEARTBEAT_INVALID_LIMIT).toBeLessThan(HEARTBEAT_MISS_LIMIT);
   });
 
-  it("a success resets the streak so a single blip never cancels", () => {
-    expect(heartbeatTick(HEARTBEAT_MISS_LIMIT - 1, true)).toEqual({ failures: 0, cancel: false });
+  it("is patient on transient unreachable errors — cancels only after the full miss limit", () => {
+    let s = zero;
+    for (let i = 0; i < HEARTBEAT_MISS_LIMIT - 1; i++) {
+      const r = heartbeatTick(s, "unreachable");
+      s = { misses: r.misses, invalids: r.invalids };
+      expect(r.cancel).toBe(false);
+    }
+    expect(heartbeatTick(s, "unreachable").cancel).toBe(true);
   });
 
-  it("respects a custom missLimit", () => {
-    expect(heartbeatTick(1, false, 2)).toEqual({ failures: 2, cancel: true });
+  it("a recovery (ok) between transient blips prevents cancellation", () => {
+    let s = zero;
+    for (let i = 0; i < HEARTBEAT_MISS_LIMIT - 1; i++) s = heartbeatTick(s, "unreachable");
+    s = heartbeatTick(s, "ok"); // recovered
+    expect(s).toEqual({ misses: 0, invalids: 0, cancel: false });
+    expect(heartbeatTick(s, "unreachable").cancel).toBe(false);
   });
 
-  it("uses a 60s interval and N=10 window (~10 min)", () => {
+  it("60s interval, 10 transient misses (~10 min), 2 definitive 4xx", () => {
     expect(HEARTBEAT_INTERVAL_MS).toBe(60_000);
     expect(HEARTBEAT_MISS_LIMIT).toBe(10);
+    expect(HEARTBEAT_INVALID_LIMIT).toBe(2);
+  });
+});
+
+describe("heartbeatMissLimit (host cadence derived from server window)", () => {
+  it("falls back to the default when the tracker advertised no window", () => {
+    expect(heartbeatMissLimit(cfg())).toBe(HEARTBEAT_MISS_LIMIT);
+  });
+
+  it("derives misses = window / interval so host and server can't diverge", () => {
+    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 600 }))).toBe(10); // 600 / 60
+    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 300 }))).toBe(5); // operator lowered it
+    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 30 }))).toBe(1); // floored at 1 interval
   });
 });

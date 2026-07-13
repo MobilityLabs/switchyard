@@ -143,6 +143,9 @@ export type WorkerConfig = {
   intervalSeconds: number;
   /** How often to scan the event feed for answered escalations (default 15s). */
   eventPollSeconds?: number;
+  /** SYD-210 Layer B: server lease heartbeat window (from dispatch-policy); the
+   * host derives its miss-limit from it. Undefined until first policy fetch. */
+  heartbeatWindowSeconds?: number;
   maxConcurrent: number;
   projects: Record<string, WorkerProject>;
   allowedTools?: string[];
@@ -227,6 +230,10 @@ export type DispatchPolicy = {
   maxAnswerConcurrent: number;
   intervalSeconds: number;
   eventPollSeconds: number;
+  // SYD-210 Layer B: the server's lease heartbeat window; the host derives its
+  // miss-limit from it so the two can't diverge. Optional so an un-upgraded
+  // tracker (no field) falls back to the host default.
+  heartbeatWindowSeconds?: number;
 };
 
 /**
@@ -243,6 +250,23 @@ export function applyDispatchPolicy(config: WorkerConfig, policy: DispatchPolicy
   config.maxAnswerConcurrent = policy.maxAnswerConcurrent;
   config.intervalSeconds = policy.intervalSeconds;
   config.eventPollSeconds = policy.eventPollSeconds;
+  if (policy.heartbeatWindowSeconds !== undefined) {
+    config.heartbeatWindowSeconds = policy.heartbeatWindowSeconds;
+  }
+}
+
+/**
+ * SYD-210 Layer B: the host's consecutive-miss cancel limit, derived from the
+ * server's heartbeat window (if the tracker advertised one via dispatch-policy)
+ * so the host cancels a session on the SAME timeline the server expires its
+ * lease — an operator lowering claims.heartbeat_window_seconds can't leave the
+ * host cancelling later than the server releases (double-work), nor higher
+ * (premature kill). Falls back to the compile-time default for an un-upgraded
+ * tracker. At least 1 (the interval is the floor).
+ */
+export function heartbeatMissLimit(config: WorkerConfig): number {
+  if (config.heartbeatWindowSeconds === undefined) return HEARTBEAT_MISS_LIMIT;
+  return Math.max(1, Math.round((config.heartbeatWindowSeconds * 1000) / HEARTBEAT_INTERVAL_MS));
 }
 
 export function projectKeyOf(ref: string): string {
@@ -1137,21 +1161,36 @@ export function partitionContainerSessions(
 // redeploy can't mass-expire live leases regardless.
 export const HEARTBEAT_INTERVAL_MS = 60_000;
 export const HEARTBEAT_MISS_LIMIT = 10;
+// A definitive 4xx means the lease is GONE server-side (takeover / expiry) —
+// unrecoverable, and the session is now doing sanctioned double-work on exactly
+// the SYD-93 failure mode. Cancel fast (a couple of confirming beats) rather
+// than waiting out the full transient window.
+export const HEARTBEAT_INVALID_LIMIT = 2;
+
+/** A single heartbeat's classified outcome. `invalid` = 4xx (lease revoked,
+ * permanent); `unreachable` = network error / timeout / 5xx (transient). */
+export type HeartbeatOutcome = "ok" | "invalid" | "unreachable";
 
 /**
- * Fold one heartbeat outcome into the consecutive-failure count and decide
- * whether to cancel the session. A success resets the count; `cancel` becomes
- * true once `missLimit` beats fail in a row (~missLimit x interval of silence),
- * which the host uses to terminate a session whose lease it can no longer
- * renew rather than racing a re-dispatch. Pure so the decision is unit-tested
- * independently of the timer/fetch wiring.
+ * Fold one classified heartbeat outcome into the running counters and decide
+ * whether to cancel the session. `ok` resets both counters. A definitive 4xx
+ * (`invalid`) cancels after `invalidLimit` — the lease is gone, so stop the
+ * zombie promptly. A transient `unreachable` cancels only after the full
+ * `missLimit` — the tracker may just be briefly unreachable while the
+ * server-side lease is still safe, so be patient. Pure, so the two-class
+ * decision is unit-tested independently of the timer/fetch wiring.
  */
 export function heartbeatTick(
-  failures: number,
-  ok: boolean,
+  state: { misses: number; invalids: number },
+  outcome: HeartbeatOutcome,
   missLimit: number = HEARTBEAT_MISS_LIMIT,
-): { failures: number; cancel: boolean } {
-  if (ok) return { failures: 0, cancel: false };
-  const next = failures + 1;
-  return { failures: next, cancel: next >= missLimit };
+  invalidLimit: number = HEARTBEAT_INVALID_LIMIT,
+): { misses: number; invalids: number; cancel: boolean } {
+  if (outcome === "ok") return { misses: 0, invalids: 0, cancel: false };
+  if (outcome === "invalid") {
+    const invalids = state.invalids + 1;
+    return { misses: state.misses, invalids, cancel: invalids >= invalidLimit };
+  }
+  const misses = state.misses + 1;
+  return { misses, invalids: state.invalids, cancel: misses >= missLimit };
 }

@@ -175,6 +175,10 @@ export type DispatchPolicy = {
   maxAnswerConcurrent: number;
   intervalSeconds: number;
   eventPollSeconds: number;
+  // SYD-210 Layer B: the server's lease heartbeat window, so the host derives
+  // its cancellation cadence (misses × interval) from the SAME value the server
+  // expires and grace-gates on — they can't drift if an operator retunes it.
+  heartbeatWindowSeconds: number;
 };
 
 // Worker-facing subset of the registry (GET /api/dispatch-policy) — the only
@@ -187,5 +191,6 @@ export function getDispatchPolicy(db: Db): DispatchPolicy {
     maxAnswerConcurrent: getSetting(db, "dispatch.max_answer_concurrent"),
     intervalSeconds: getSetting(db, "dispatch.poll_seconds"),
     eventPollSeconds: getSetting(db, "dispatch.event_poll_seconds"),
+    heartbeatWindowSeconds: getSetting(db, "claims.heartbeat_window_seconds"),
   };
 }

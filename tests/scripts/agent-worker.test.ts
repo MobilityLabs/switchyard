@@ -17,6 +17,10 @@ vi.mock("node:fs", async (importOriginal) => {
     mkdirSync: vi.fn(),
     openSync: vi.fn(() => 1),
     closeSync: vi.fn(),
+    // SYD-210: dispatch now persists the lease / writes a per-dispatch CLI MCP
+    // config; keep these off the real fs (the test's repo paths are fictional).
+    writeFileSync: vi.fn(),
+    rmSync: vi.fn(),
   };
 });
 

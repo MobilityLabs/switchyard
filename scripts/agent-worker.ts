@@ -45,7 +45,16 @@
 
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync, mkdirSync, openSync, closeSync, appendFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  appendFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
@@ -82,8 +91,11 @@ import {
   egressMode,
   ensureEgressGuard,
   heartbeatTick,
+  heartbeatMissLimit,
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_MISS_LIMIT,
+  HEARTBEAT_INVALID_LIMIT,
+  type HeartbeatOutcome,
   type WorkerConfig,
   type WorkerProject,
   type WorkerIssue,
@@ -369,35 +381,44 @@ async function claimIssueHost(
   }
 }
 
+const HEARTBEAT_FETCH_TIMEOUT_MS = 10_000;
+
 /**
- * SYD-210 Layer B: renew a dispatched session's lease on the tracker. Returns
- * true on a 2xx. The host calls this on a timer (startLeaseHeartbeat) so a
- * live-but-quiet container keeps its claim, and a session the host can no
- * longer reach loses it within the heartbeat window.
+ * SYD-210 Layer B: renew a dispatched session's lease on the tracker, returning
+ * a classified outcome. A 2xx is `ok`; a 4xx is `invalid` (the lease is gone —
+ * takeover/expiry — permanent); a 5xx / network error / timeout is
+ * `unreachable` (transient). The per-request AbortSignal timeout stops a
+ * black-holing tracker from holding a beat open for undici's ~300s default.
  */
 async function postHeartbeat(
   config: WorkerConfig,
   token: string,
   leaseToken: string,
   ref: string,
-): Promise<boolean> {
+): Promise<HeartbeatOutcome> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/heartbeat`;
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "X-Switchyard-Lease": leaseToken },
+      signal: AbortSignal.timeout(HEARTBEAT_FETCH_TIMEOUT_MS),
     });
-    return res.ok;
+    if (res.ok) return "ok";
+    return res.status >= 400 && res.status < 500 ? "invalid" : "unreachable";
   } catch {
-    return false;
+    return "unreachable";
   }
 }
 
 /**
  * Starts the host-side heartbeat loop for a running session and returns a stop
- * function. Every interval it renews the lease; after HEARTBEAT_MISS_LIMIT
- * consecutive failures it calls `onExhausted` (which kills the session) and
- * stops — the honest-liveness cancellation that replaces the 4h idle guess.
+ * function. Fires an immediate first beat (so a session that dies before the
+ * first interval still collapses its 8h mint TTL to the heartbeat window right
+ * away), then self-reschedules with `setTimeout` — awaiting each beat so a slow
+ * tracker can't stack overlapping requests or glitch the counters with
+ * out-of-order completions (the `setInterval` re-entrancy the review flagged).
+ * Cancels FAST on a definitive 4xx (lease revoked → the session is doing
+ * double-work), and only after the full transient miss window on network/5xx.
  */
 function startLeaseHeartbeat(
   config: WorkerConfig,
@@ -407,22 +428,88 @@ function startLeaseHeartbeat(
   onExhausted: () => void,
   log: (message: string) => void,
 ): () => void {
-  let failures = 0;
-  const timer = setInterval(() => {
-    void postHeartbeat(config, token, leaseToken, ref).then((ok) => {
-      const r = heartbeatTick(failures, ok);
-      failures = r.failures;
-      if (!ok) log(`[worker] ${ref}: lease heartbeat failed (${failures}/${HEARTBEAT_MISS_LIMIT})`);
-      if (r.cancel) {
-        log(`[worker] ${ref}: ${HEARTBEAT_MISS_LIMIT} missed heartbeats — cancelling session`);
-        stop();
-        onExhausted();
-      }
-    });
-  }, HEARTBEAT_INTERVAL_MS);
-  timer.unref?.();
-  const stop = () => clearInterval(timer);
+  let state = { misses: 0, invalids: 0 };
+  let stopped = false;
+  let timer: NodeJS.Timeout | null = null;
+  const missLimit = heartbeatMissLimit(config); // derived from the server window
+  const stop = () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+  const beat = async () => {
+    if (stopped) return;
+    const outcome = await postHeartbeat(config, token, leaseToken, ref);
+    if (stopped) return;
+    const r = heartbeatTick(state, outcome, missLimit);
+    state = { misses: r.misses, invalids: r.invalids };
+    if (outcome !== "ok") {
+      log(
+        `[worker] ${ref}: lease heartbeat ${outcome} ` +
+          `(4xx ${state.invalids}/${HEARTBEAT_INVALID_LIMIT}, transient ${state.misses}/${HEARTBEAT_MISS_LIMIT})\n`,
+      );
+    }
+    if (r.cancel) {
+      log(`[worker] ${ref}: lease unrenewable (${outcome}) — cancelling session\n`);
+      stop();
+      onExhausted();
+      return;
+    }
+    timer = setTimeout(() => void beat(), HEARTBEAT_INTERVAL_MS);
+    timer.unref?.();
+  };
+  void beat(); // immediate first beat
   return stop;
+}
+
+// SYD-210 Layer B: a containerized session survives a worker restart (SYD-121
+// adoption), but its lease token lives only in the dead worker's memory. Persist
+// it to a 0600 file beside the session log so the startup reconciler can recover
+// it and resume heartbeats — otherwise the adopted container's already-collapsed
+// ~10-min lease expires mid-work and its issue is wrongly re-dispatched. Same
+// file-handoff idiom as the rest of the worker's out-of-band secrets.
+function leaseFilePath(repo: string, ref: string): string {
+  return path.join(repo, ".superpowers", "worker-logs", `${ref}.lease`);
+}
+function persistLeaseToken(repo: string, ref: string, leaseToken: string): void {
+  try {
+    writeFileSync(leaseFilePath(repo, ref), leaseToken, { mode: 0o600 });
+  } catch (err) {
+    console.error(`could not persist lease for ${ref}: ${(err as Error).message}`);
+  }
+}
+function readPersistedLeaseToken(repo: string, ref: string): string | null {
+  try {
+    return readFileSync(leaseFilePath(repo, ref), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+function clearPersistedLeaseToken(repo: string, ref: string): void {
+  try {
+    rmSync(leaseFilePath(repo, ref), { force: true });
+  } catch {
+    /* best-effort: a lingering lease file is re-read only if the ref is re-adopted */
+  }
+}
+
+// SYD-210 Layer B: the bare-host `claude -p` runner can't inherit a per-session
+// MCP header the way the container (env → container-entry.sh) and SDK
+// (sdk-runner header) paths do. Write a per-dispatch MCP config carrying both
+// the bearer and the X-Switchyard-Lease header (0600, value in the file not
+// argv — same discipline as container-entry.sh), passed via `--mcp-config`.
+function writeCliMcpConfig(repo: string, ref: string, url: string, token: string, leaseToken: string): string {
+  const p = path.join(repo, ".superpowers", "worker-logs", `${ref}.mcp.json`);
+  const cfg = {
+    mcpServers: {
+      switchyard: {
+        type: "http",
+        url: `${url.replace(/\/$/, "")}/mcp`,
+        headers: { Authorization: `Bearer ${token}`, "X-Switchyard-Lease": leaseToken },
+      },
+    },
+  };
+  writeFileSync(p, JSON.stringify(cfg), { mode: 0o600 });
+  return p;
 }
 
 export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
@@ -586,6 +673,10 @@ export function dispatch(
 
   const fd = openSync(logPath, "a");
 
+  // SYD-210 Layer B: the bare-CLI runner's per-dispatch MCP config carrying the
+  // lease header (cleaned up on exit). null for container/no-lease dispatch.
+  let cliMcpConfigPath: string | null = null;
+
   let child: ChildProcess;
   try {
     if (config.containerized) {
@@ -616,22 +707,33 @@ export function dispatch(
         "Grep",
         "Glob",
       ];
-      child = spawn(
-        "claude",
-        [
-          "-p",
-          buildPrompt(issue.ref, opts),
-          "--permission-mode",
-          "acceptEdits",
-          "--allowedTools",
-          allowedTools.join(","),
-        ],
-        {
-          cwd: project.repo,
-          detached: true,
-          stdio: ["ignore", fd, fd],
-        },
-      );
+      const cliArgs = [
+        "-p",
+        buildPrompt(issue.ref, opts),
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        allowedTools.join(","),
+      ];
+      // SYD-210 Layer B: inject the lease as an MCP header via a per-dispatch
+      // --mcp-config file (the bare-CLI path has no env→header bridge like the
+      // container/SDK paths). Without this, the no-reclaim prompt would leave the
+      // session unable to authorize its claim-scoped writes.
+      if (opts.leaseToken) {
+        cliMcpConfigPath = writeCliMcpConfig(
+          project.repo,
+          issue.ref,
+          config.url,
+          token,
+          opts.leaseToken,
+        );
+        cliArgs.push("--mcp-config", cliMcpConfigPath);
+      }
+      child = spawn("claude", cliArgs, {
+        cwd: project.repo,
+        detached: true,
+        stdio: ["ignore", fd, fd],
+      });
     }
   } catch (err) {
     console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
@@ -643,6 +745,17 @@ export function dispatch(
   active.set(issue.ref, child);
   activeMode.set(issue.ref, config.containerized ? "container" : "cli");
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
+
+  // SYD-210 Layer B: persist the lease for a container so a worker restart can
+  // re-adopt it and resume heartbeats (see adoptContainerSession). Bare-CLI
+  // sessions are killed on restart (not adopted), so they don't need this.
+  if (opts.leaseToken && config.containerized) {
+    persistLeaseToken(project.repo, issue.ref, opts.leaseToken);
+  }
+  const cleanupLeaseArtifacts = () => {
+    if (config.containerized) clearPersistedLeaseToken(project.repo, issue.ref);
+    if (cliMcpConfigPath) rmSync(cliMcpConfigPath, { force: true });
+  };
 
   // SYD-210 Layer B: heartbeat the lease while the session runs; after N missed
   // renewals, kill it (honest liveness — a dead/wedged session loses its claim
@@ -682,6 +795,7 @@ export function dispatch(
   child.on("exit", (code) => {
     clearTimeout(watchdog);
     stopHeartbeat();
+    cleanupLeaseArtifacts();
     active.delete(issue.ref);
     activeMode.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
@@ -691,6 +805,7 @@ export function dispatch(
   child.on("error", (err) => {
     clearTimeout(watchdog);
     stopHeartbeat();
+    cleanupLeaseArtifacts();
     active.delete(issue.ref);
     activeMode.delete(issue.ref);
     // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
@@ -752,7 +867,7 @@ function dispatchSdk(
   const sdkAbort = new AbortController();
   const stopHeartbeat = opts.leaseToken
     ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () => sdkAbort.abort(), (m) =>
-        safeAppend(`${m}\n`),
+        safeAppend(m),
       )
     : () => {};
 
@@ -1204,12 +1319,27 @@ export function adoptContainerSession(
   console.log(`adopted ${session.ref}: still-running container from before the restart`);
   logLine(`[worker] adopted running container after a worker restart\n`);
 
+  // SYD-210 Layer B: the pre-restart worker was heartbeating this container's
+  // lease; that lease has already been collapsed to the ~10-min window, so
+  // without resuming heartbeats it would expire mid-work and the tracker would
+  // wrongly re-dispatch the issue (SYD-121 adopt contract). Recover the token
+  // the dispatching worker persisted and resume the loop. If no lease file
+  // exists (pre-upgrade container, or non-lease dispatch), skip — same as today.
+  const leaseToken = readPersistedLeaseToken(project.repo, session.ref);
+  const stopHeartbeat = leaseToken
+    ? startLeaseHeartbeat(config, token, leaseToken, session.ref, () =>
+        killSession(child, containerNameFor(session.ref)),
+      logLine)
+    : () => {};
+
   let output = "";
   child.stdout?.on("data", (chunk: Buffer) => {
     output += chunk.toString();
   });
 
   child.on("exit", () => {
+    stopHeartbeat();
+    clearPersistedLeaseToken(project.repo, session.ref);
     active.delete(session.ref);
     activeMode.delete(session.ref);
     const parsed = Number.parseInt(output.trim(), 10);
@@ -1226,6 +1356,7 @@ export function adoptContainerSession(
     );
   });
   child.on("error", (err) => {
+    stopHeartbeat();
     active.delete(session.ref);
     activeMode.delete(session.ref);
     console.error(`failed to adopt container session for ${session.ref}: ${err.message}`);

@@ -135,6 +135,7 @@ describe("settings routes", () => {
       maxAnswerConcurrent: 2,
       intervalSeconds: 300,
       eventPollSeconds: 15,
+      heartbeatWindowSeconds: 600,
     });
   });
 });
