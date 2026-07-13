@@ -1,15 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   agentBranch,
-  findDeliverableRefs,
-  findRedeliverRefs,
-  feedGap,
+  filterWorkToProjects,
+  resumeActionFor,
+  crashedAttemptComment,
   buildPushArgs,
   buildPrListArgs,
   buildPrCreateArgs,
   buildPrMergeArgs,
   buildPrViewUrlArgs,
   buildPrViewFreshnessArgs,
+  buildPrViewLiveStateArgs,
   buildPrViewMergeShaArgs,
   parseOwnerRepo,
   buildPrTitle,
@@ -39,7 +40,6 @@ import {
   CONFLICT_RESOLUTION_ALLOWED_TOOLS,
   formatPublishOutcome,
   parsePrNumberFromUrl,
-  parseCursorText,
   tailOf,
   isQueueMode,
   shouldRetryQueueRebase,
@@ -47,113 +47,74 @@ import {
   queueRebaseConflictComment,
   queueVerifyFailedComment,
   queueDeliveredNote,
-  type DeliveryFeedEvent,
+  type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
 import type { WorkerConfig, WorkerProject } from "../../scripts/worker-select.js";
 
-const ev = (o: Partial<DeliveryFeedEvent>): DeliveryFeedEvent => ({
-  id: 1,
-  type: "status_changed",
-  issue: "SYD-9",
-  payload: { from: "in_review", to: "done" },
-  ...o,
-});
+describe("filterWorkToProjects", () => {
+  const work: DeliveryWork = {
+    pending: [
+      { authorizationId: 1, ref: "SYD-9", kind: "done_stamp", pin: null },
+      { authorizationId: 2, ref: "OTHER-1", kind: "done_stamp", pin: null },
+    ],
+    unfinished: [
+      {
+        id: 10,
+        issueRef: "SYD-8",
+        prNumber: 42,
+        headSha: null,
+        authorizationId: 3,
+        startedAt: 0,
+      },
+      {
+        id: 11,
+        issueRef: "OTHER-2",
+        prNumber: 7,
+        headSha: null,
+        authorizationId: 4,
+        startedAt: 0,
+      },
+    ],
+    deployRetries: [
+      { authorizationId: 5, ref: "SYD-7", prNumber: 1, headSha: null, retryNumber: 1 },
+      { authorizationId: 6, ref: "OTHER-3", prNumber: 2, headSha: null, retryNumber: 1 },
+    ],
+  };
 
-describe("findDeliverableRefs", () => {
-  const keys = ["SYD"];
-
-  it("null cursor initializes to newest id without firing on history", () => {
-    const feed = [ev({ id: 7 }), ev({ id: 3 })];
-    expect(findDeliverableRefs(feed, keys, null)).toEqual({ refs: [], lastEventId: 7 });
+  it("drops pending/unfinished/deployRetries rows whose ref is outside the configured projects", () => {
+    const filtered = filterWorkToProjects(work, ["SYD"]);
+    expect(filtered.pending.map((p) => p.ref)).toEqual(["SYD-9"]);
+    expect(filtered.unfinished.map((a) => a.issueRef)).toEqual(["SYD-8"]);
+    expect(filtered.deployRetries.map((r) => r.ref)).toEqual(["SYD-7"]);
   });
 
-  it("empty feed leaves the cursor untouched", () => {
-    expect(findDeliverableRefs([], keys, null)).toEqual({ refs: [], lastEventId: null });
-    expect(findDeliverableRefs([], keys, 5)).toEqual({ refs: [], lastEventId: 5 });
-  });
-
-  it("fires on status_changed→done newer than the cursor", () => {
-    const feed = [ev({ id: 10 })];
-    expect(findDeliverableRefs(feed, keys, 5)).toEqual({ refs: ["SYD-9"], lastEventId: 10 });
-  });
-
-  it("ignores events at or below the cursor", () => {
-    expect(findDeliverableRefs([ev({ id: 5 })], keys, 5).refs).toEqual([]);
-  });
-
-  it("ignores non-done transitions and other event types", () => {
-    const feed = [
-      ev({ id: 11, payload: { from: "todo", to: "in_progress" } }),
-      ev({ id: 12, type: "commented", payload: {} }),
-    ];
-    expect(findDeliverableRefs(feed, keys, 5).refs).toEqual([]);
-  });
-
-  it("ignores unconfigured projects and dedupes refs", () => {
-    const feed = [ev({ id: 11, issue: "OTHER-1" }), ev({ id: 12 }), ev({ id: 13 })];
-    expect(findDeliverableRefs(feed, keys, 5).refs).toEqual(["SYD-9"]);
-  });
-
-  it("never moves the cursor backwards", () => {
-    expect(findDeliverableRefs([ev({ id: 3 })], keys, 9).lastEventId).toBe(9);
+  it("keeps every row when all refs are configured", () => {
+    const filtered = filterWorkToProjects(work, ["SYD", "OTHER"]);
+    expect(filtered.pending).toHaveLength(2);
+    expect(filtered.unfinished).toHaveLength(2);
+    expect(filtered.deployRetries).toHaveLength(2);
   });
 });
 
-describe("findRedeliverRefs", () => {
-  const keys = ["SYD"];
-  const redeliver = (o: Partial<DeliveryFeedEvent>): DeliveryFeedEvent =>
-    ev({ type: "redeliver_requested", payload: {}, ...o });
-
-  it("null cursor initializes to newest id without firing on history", () => {
-    const feed = [redeliver({ id: 7 }), redeliver({ id: 3 })];
-    expect(findRedeliverRefs(feed, keys, null)).toEqual({ refs: [], lastEventId: 7 });
-  });
-
-  it("fires on redeliver_requested newer than the cursor", () => {
-    const feed = [redeliver({ id: 10 })];
-    expect(findRedeliverRefs(feed, keys, 5)).toEqual({ refs: ["SYD-9"], lastEventId: 10 });
-  });
-
-  it("ignores events at or below the cursor", () => {
-    expect(findRedeliverRefs([redeliver({ id: 5 })], keys, 5).refs).toEqual([]);
-  });
-
-  it("ignores a done-stamp (that's findDeliverableRefs's job, not this one's)", () => {
-    const feed = [
-      ev({ id: 11, type: "status_changed", payload: { from: "in_review", to: "done" } }),
-    ];
-    expect(findRedeliverRefs(feed, keys, 5).refs).toEqual([]);
-  });
-
-  it("ignores unconfigured projects and dedupes refs", () => {
-    const feed = [
-      redeliver({ id: 11, issue: "OTHER-1" }),
-      redeliver({ id: 12 }),
-      redeliver({ id: 13 }),
-    ];
-    expect(findRedeliverRefs(feed, keys, 5).refs).toEqual(["SYD-9"]);
+describe("resumeActionFor", () => {
+  it("finishes delivery only for MERGED; OPEN and CLOSED fail quiet", () => {
+    expect(resumeActionFor("MERGED")).toBe("finish-delivery");
+    expect(resumeActionFor("OPEN")).toBe("fail-quiet");
+    expect(resumeActionFor("CLOSED")).toBe("fail-quiet");
   });
 });
 
-describe("feedGap", () => {
-  it("null cursor ⇒ null", () => {
-    expect(feedGap([ev({ id: 9 })], null)).toBeNull();
+describe("crashedAttemptComment", () => {
+  it("names the PR when one was pinned and says the merge never landed", () => {
+    const body = crashedAttemptComment("SYD-9", 42);
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("PR #42");
+    expect(body).toContain("No merge landed");
+    expect(body).toContain("Retry delivery");
   });
 
-  it("empty feed ⇒ null", () => {
-    expect(feedGap([], 5)).toBeNull();
-  });
-
-  it("contiguous window (oldest === cursor + 1) ⇒ null", () => {
-    expect(feedGap([ev({ id: 6 }), ev({ id: 10 })], 5)).toBeNull();
-  });
-
-  it("overlapping window (oldest <= cursor) ⇒ null", () => {
-    expect(feedGap([ev({ id: 3 }), ev({ id: 10 })], 5)).toBeNull();
-  });
-
-  it("gap between cursor and window's oldest id", () => {
-    expect(feedGap([ev({ id: 9 }), ev({ id: 15 })], 5)).toEqual({ from: 6, to: 8 });
+  it("handles a crash with no PR pinned", () => {
+    expect(crashedAttemptComment("SYD-9", null)).toContain("no PR was pinned");
   });
 });
 
@@ -257,6 +218,18 @@ describe("argv builders", () => {
       "acme/widgets",
       "--json",
       "headRefOid,updatedAt",
+    ]);
+  });
+
+  it("buildPrViewLiveStateArgs asks gh for state, head, and merge commit", () => {
+    expect(buildPrViewLiveStateArgs(41, "acme/widgets")).toEqual([
+      "pr",
+      "view",
+      "41",
+      "-R",
+      "acme/widgets",
+      "--json",
+      "state,headRefOid,mergeCommit",
     ]);
   });
 
@@ -710,18 +683,6 @@ describe("comment bodies", () => {
     expect(body).toContain("deploy skipped");
     expect(body).toContain("main is red");
     expect(body).toContain("Shell.test.tsx(15,19): error TS2352");
-  });
-});
-
-describe("parseCursorText", () => {
-  it("parses a plain integer", () => {
-    expect(parseCursorText("42\n")).toBe(42);
-  });
-  it("rejects junk", () => {
-    expect(parseCursorText("")).toBeNull();
-    expect(parseCursorText("abc")).toBeNull();
-    expect(parseCursorText("-3")).toBeNull();
-    expect(parseCursorText("1.5")).toBeNull();
   });
 });
 

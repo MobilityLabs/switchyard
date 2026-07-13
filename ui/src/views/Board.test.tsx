@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import Board, { Card } from "./Board";
-import { listIssues } from "../api";
+import { listIssues, updateIssue } from "../api";
 import type { Issue } from "../types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -163,7 +163,12 @@ describe("Board done-column filter chips", () => {
     issue({
       ref: "SYD-3",
       title: "Not merged yet",
-      openPr: { prNumber: 41, url: "https://github.com/acme/widgets/pull/41" },
+      openPr: {
+        prNumber: 41,
+        url: "https://github.com/acme/widgets/pull/41",
+        repo: "acme/widgets",
+        headSha: "deadbeef",
+      },
     }),
   ];
 
@@ -247,5 +252,95 @@ describe("Board done-column filter chips", () => {
       c.querySelector("h3")?.textContent?.includes("Todo"),
     )!;
     expect(todoColumn.querySelector(".done-filters")).toBeNull();
+  });
+});
+
+// SYD-208: a done-stamp over an open agent PR must carry the head sha the
+// human actually saw rendered on the card, so the server can refuse the
+// stamp if the PR moved underneath them between page-load and click.
+describe("Board move sends the rendered PR head sha on done-stamp (SYD-208)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(listIssues).mockClear();
+    vi.mocked(updateIssue).mockClear();
+  });
+
+  async function renderBoardWith(cards: Issue[]): Promise<HTMLElement> {
+    vi.mocked(listIssues).mockResolvedValue(cards);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<Board project="SYD" />);
+    });
+    await act(async () => {}); // flush the usePoll effect
+    return container;
+  }
+
+  function moveSelect(container: HTMLElement, ref: string): HTMLSelectElement {
+    return [...container.querySelectorAll<HTMLSelectElement>(".card-move")].find(
+      (s) => s.getAttribute("aria-label") === `Move ${ref} to a different status`,
+    )!;
+  }
+
+  it("sends the openPr headSha as expectedHeadSha when moving a card to done", async () => {
+    const container = await renderBoardWith([
+      issue({
+        ref: "SYD-5",
+        status: "in_review",
+        openPr: {
+          prNumber: 12,
+          url: "https://github.com/acme/widgets/pull/12",
+          repo: "acme/widgets",
+          headSha: "abc123",
+        },
+      }),
+    ]);
+    const select = moveSelect(container, "SYD-5");
+    await act(async () => {
+      select.value = "done";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(updateIssue).toHaveBeenCalledWith("SYD-5", {
+      status: "done",
+      expectedHeadSha: "abc123",
+    });
+  });
+
+  it("omits expectedHeadSha when moving a card to a non-done status", async () => {
+    const container = await renderBoardWith([
+      issue({
+        ref: "SYD-6",
+        status: "todo",
+        openPr: {
+          prNumber: 12,
+          url: "https://github.com/acme/widgets/pull/12",
+          repo: "acme/widgets",
+          headSha: "abc123",
+        },
+      }),
+    ]);
+    const select = moveSelect(container, "SYD-6");
+    await act(async () => {
+      select.value = "in_progress";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(updateIssue).toHaveBeenCalledWith("SYD-6", {
+      status: "in_progress",
+      expectedHeadSha: undefined,
+    });
+  });
+
+  it("omits expectedHeadSha when stamping done with no open PR", async () => {
+    const container = await renderBoardWith([issue({ ref: "SYD-7", status: "in_review" })]);
+    const select = moveSelect(container, "SYD-7");
+    await act(async () => {
+      select.value = "done";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(updateIssue).toHaveBeenCalledWith("SYD-7", {
+      status: "done",
+      expectedHeadSha: undefined,
+    });
   });
 });

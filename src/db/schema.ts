@@ -196,6 +196,58 @@ export const prState = sqliteTable(
   (t) => [primaryKey({ columns: [t.repo, t.prNumber] }), index("pr_state_issue_ref_idx").on(t.issueRef)],
 );
 
+// The delivery-side twin of pr_state (SYD-208, spec: docs/2026-07-12-sync-
+// simplification-assessment.md Step 2): one row per delivery attempt, keyed by
+// the human authorization event (a done-stamp or redeliver_requested) that
+// authorized it. The trigger query — done issues with an authorization that
+// has no attempt row — replaces the deliver-cursor, so "once per human
+// trigger" is a table constraint, not a cursor invariant. headSha is the
+// authorized head (S0); derivedHeadSha is the post-rebase head (S1) the
+// SYD-209 orchestrator persists for crash re-anchoring. outcome is null while
+// an attempt is running; a start row with no finish is crash evidence, resumed
+// against live GitHub (never pr_state).
+export const DELIVERY_OUTCOMES = [
+  "merged_deployed",
+  "merged_deploy_failed",
+  "verify_failed",
+  "conflict_bounced",
+  "merge_failed",
+  "checks_timeout",
+  "sha_chain_disarmed",
+  "skipped_rollout",
+] as const;
+export type DeliveryOutcome = (typeof DELIVERY_OUTCOMES)[number];
+
+export const deliveryAttempts = sqliteTable(
+  "delivery_attempts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueRef: text("issue_ref").notNull(),
+    prNumber: integer("pr_number"),
+    headSha: text("head_sha"),
+    derivedHeadSha: text("derived_head_sha"),
+    authorizationId: integer("authorization_id")
+      .notNull()
+      .references(() => events.id),
+    startedAt: integer("started_at").notNull().default(now()),
+    finishedAt: integer("finished_at"),
+    outcome: text("outcome", { enum: DELIVERY_OUTCOMES }),
+  },
+  (t) => [
+    index("delivery_attempts_authorization_id_idx").on(t.authorizationId),
+    index("delivery_attempts_issue_ref_idx").on(t.issueRef),
+  ],
+);
+
+// One-row marker: the SYD-208 rollout backfill (skipped_rollout rows for every
+// pre-existing authorization) ran. A marker, not an empty-table check — on a
+// fresh install the table stays empty until the first real stamp, and that
+// stamp must not be swallowed by a restart.
+export const deliveryRollout = sqliteTable("delivery_rollout", {
+  id: integer("id").primaryKey(),
+  completedAt: integer("completed_at").notNull().default(now()),
+});
+
 // Config knobs (SYD-154): rows exist only for values overriding the
 // compile-time registry default in src/services/settings.ts — "reset to
 // default" deletes the row. Not an events-table concern (same reasoning as

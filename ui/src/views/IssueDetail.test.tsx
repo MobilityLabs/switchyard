@@ -5,18 +5,20 @@
 // state the issue view renders — PR link + open/merged, merge sha, deploy
 // result, and a delivery-failure banner that clears once a later delivery
 // succeeds.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../api", () => ({
   addComment: vi.fn(),
   addDependency: vi.fn(),
   getIssue: vi.fn(),
   removeDependency: vi.fn(),
-  updateIssue: vi.fn(),
+  updateIssue: vi.fn(() => Promise.resolve({})),
+  redeliverIssue: vi.fn(() => Promise.resolve({})),
+  listActors: vi.fn(() => Promise.resolve([])),
   listAgentSessions: vi.fn(() => Promise.resolve([])),
 }));
 
-import {
+import IssueDetail, {
   ActivityFeed,
   AgentSessionStrip,
   AttentionBanner,
@@ -26,8 +28,8 @@ import {
   groupProgressNotes,
   withAttachmentIds,
 } from "./IssueDetail";
-import { listAgentSessions } from "../api";
-import type { Activity, Attachment, Issue } from "../types";
+import { getIssue, listAgentSessions, redeliverIssue, updateIssue } from "../api";
+import type { Activity, Attachment, IssueDetail as IssueDetailType, Issue } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -603,5 +605,119 @@ describe("AgentSessionStrip (SYD-43)", () => {
       root.render(<AgentSessionStrip refId="SYD-1" />);
     });
     expect(container.textContent).toBe("");
+  });
+});
+
+// SYD-208: a done-stamp over an open agent PR, and a Retry over a pinned
+// delivery attempt, must both carry the head sha the human actually saw
+// rendered on the page — not whatever the server's PR row says right now —
+// so the server can refuse the action if the PR moved underneath them.
+describe("IssueDetail status select and Retry send the rendered PR head sha (SYD-208)", () => {
+  function detail(o: Partial<IssueDetailType> = {}): IssueDetailType {
+    return {
+      id: 1,
+      ref: "SYD-1",
+      title: "Ship it",
+      description: "",
+      summary: null,
+      status: "in_review",
+      priority: "none",
+      assigneeId: null,
+      creatorId: 1,
+      labels: [],
+      sourceType: null,
+      sourceDetail: null,
+      sourceUrl: null,
+      needsInput: false,
+      snoozedUntil: null,
+      createdAt: 0,
+      updatedAt: 0,
+      attention: null,
+      openPr: null,
+      deliveryPin: null,
+      activity: [],
+      dependencies: { blockedBy: [], blocks: [] },
+      attachments: [],
+      ...o,
+    };
+  }
+
+  async function renderIssueDetail(d: IssueDetailType): Promise<HTMLElement> {
+    vi.mocked(getIssue).mockResolvedValue(d);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<IssueDetail refId={d.ref} />);
+    });
+    await act(async () => {}); // flush the usePoll effects (getIssue, listActors)
+    return container;
+  }
+
+  beforeEach(() => {
+    vi.mocked(updateIssue).mockClear();
+    vi.mocked(redeliverIssue).mockClear();
+  });
+
+  it("sends the openPr headSha as expectedHeadSha when the status select is changed to done", async () => {
+    const container = await renderIssueDetail(
+      detail({
+        openPr: {
+          prNumber: 12,
+          url: "https://github.com/acme/widgets/pull/12",
+          repo: "acme/widgets",
+          headSha: "abc123",
+        },
+      }),
+    );
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "done";
+      // `Event` is locally shadowed by the imported IssueDetail component of
+      // the same name (used by the "Event rendering" describe blocks above),
+      // so the native DOM constructor must be reached via `window`.
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", {
+      status: "done",
+      expectedHeadSha: "abc123",
+    });
+  });
+
+  it("omits expectedHeadSha when the status select is changed to a non-done status", async () => {
+    const container = await renderIssueDetail(
+      detail({
+        status: "todo",
+        openPr: {
+          prNumber: 12,
+          url: "https://github.com/acme/widgets/pull/12",
+          repo: "acme/widgets",
+          headSha: "abc123",
+        },
+      }),
+    );
+    const select = container.querySelector("select")!;
+    await act(async () => {
+      select.value = "in_progress";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", {
+      status: "in_progress",
+      expectedHeadSha: undefined,
+    });
+  });
+
+  it("sends the deliveryPin headSha to redeliverIssue when Retry delivery is clicked", async () => {
+    const container = await renderIssueDetail(
+      detail({
+        attention: { reason: "delivery_failed", message: "merge conflict" },
+        deliveryPin: { repo: "acme/widgets", prNumber: 12, headSha: "def456", status: "open" },
+      }),
+    );
+    const button = container.querySelector(".retry-delivery") as HTMLButtonElement;
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(redeliverIssue).toHaveBeenCalledWith("SYD-1", "def456");
   });
 });

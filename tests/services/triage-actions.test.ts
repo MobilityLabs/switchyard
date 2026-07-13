@@ -9,6 +9,9 @@ import { listIssueEvents } from "../../src/services/events.js";
 import { searchIssues } from "../../src/services/search.js";
 import { snoozeIssue, markDuplicate, redeliverIssue } from "../../src/services/triage-actions.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
+
+const REPO = "acme/widgets";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -125,16 +128,119 @@ describe("redeliverIssue", () => {
   });
 
   it("records a redeliver_requested event without changing issue status", () => {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "sha1",
+    });
     recordDeliveryEvent(db, human, "AIPI-1", {
       type: "delivery_failed",
       message: "merge conflict",
     });
     const before = getIssue(db, "AIPI-1");
-    const updated = redeliverIssue(db, human, "AIPI-1");
+    const updated = redeliverIssue(db, human, "AIPI-1", "sha1");
     expect(updated.status).toBe(before.status);
     const events = listIssueEvents(db, updated.id);
     const requested = events.at(-1)!;
     expect(requested.type).toBe("redeliver_requested");
     expect(requested.actorName).toBe(human.name);
+  });
+});
+
+describe("redeliverIssue SHA pin (SYD-208)", () => {
+  it("refuses without expectedHeadSha", () => {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "sha1",
+    });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    expect(() => redeliverIssue(db, human, "AIPI-1")).toThrowError(/expectedHeadSha/);
+  });
+
+  it("refuses a moved head, naming old and new SHAs", () => {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "old-sha",
+      ghUpdatedAt: "2026-07-13T10:00:00Z",
+    });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    // Head moves (a new push) after the human looked at old-sha.
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "new-sha",
+      ghUpdatedAt: "2026-07-13T11:00:00Z",
+    });
+    expect(() => redeliverIssue(db, human, "AIPI-1", "old-sha")).toThrowError(/old-sha/);
+    expect(() => redeliverIssue(db, human, "AIPI-1", "old-sha")).toThrowError(/new-sha/);
+  });
+
+  it("records redeliver_requested with the pin when the SHA matches", () => {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "sha1",
+    });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    const updated = redeliverIssue(db, human, "AIPI-1", "sha1");
+    const requested = listIssueEvents(db, updated.id).at(-1)!;
+    expect(requested.type).toBe("redeliver_requested");
+    expect(requested.payload).toEqual({ pin: { repo: REPO, prNumber: 7, headSha: "sha1" } });
+  });
+
+  it("pins the merged PR when no open PR exists (deploy-retry authorization)", () => {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 9,
+      url: `https://github.com/${REPO}/pull/9`,
+      headSha: "sha-merged",
+    });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivered",
+      prNumber: 9,
+      mergeSha: "mergesha",
+      deploy: { ran: false },
+    });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "deploy script failed",
+    });
+    const updated = redeliverIssue(db, human, "AIPI-1", "sha-merged");
+    const requested = listIssueEvents(db, updated.id).at(-1)!;
+    expect(requested.type).toBe("redeliver_requested");
+    expect(requested.payload).toEqual({
+      pin: { repo: REPO, prNumber: 9, headSha: "sha-merged" },
+    });
+  });
+
+  it("refuses when the issue has no attributed PR row at all", () => {
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    expect(() => redeliverIssue(db, human, "AIPI-1", "whatever")).toThrowError(
+      /no agent PR on record/i,
+    );
   });
 });

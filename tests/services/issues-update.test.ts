@@ -14,6 +14,8 @@ import { requestHumanInput } from "../../src/services/needs-input.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 
+const REPO = "acme/widgets";
+
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
   db = openDb(":memory:");
@@ -285,6 +287,95 @@ describe("updateIssue", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("done-stamp SHA pin (SYD-208)", () => {
+  it("stamps done with no open PR without any pin", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const updated = updateIssue(db, human, "AIPI-1", { status: "done" });
+    expect(updated.status).toBe("done");
+    const done = listIssueEvents(db, updated.id)
+      .filter((e) => e.type === "status_changed")
+      .at(-1)!;
+    expect(done.payload).toEqual({ from: "in_review", to: "done" });
+  });
+
+  it("refuses stamping done over an open agent PR without expectedHeadSha", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "sha1",
+    });
+    expect(() => updateIssue(db, human, "AIPI-1", { status: "done" })).toThrowError(
+      /expectedHeadSha/,
+    );
+    expect(getIssue(db, "AIPI-1").status).toBe("in_review");
+  });
+
+  it("refuses when expectedHeadSha does not match pr_state's current head, naming both SHAs", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "current-sha",
+    });
+    expect(() =>
+      updateIssue(db, human, "AIPI-1", { status: "done", expectedHeadSha: "stale-sha" }),
+    ).toThrowError(/stale-sha/);
+    expect(() =>
+      updateIssue(db, human, "AIPI-1", { status: "done", expectedHeadSha: "stale-sha" }),
+    ).toThrowError(/current-sha/);
+    expect(getIssue(db, "AIPI-1").status).toBe("in_review");
+  });
+
+  it("records the pin on the status_changed payload when the SHA matches", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "matching-sha",
+    });
+    const updated = updateIssue(db, human, "AIPI-1", {
+      status: "done",
+      expectedHeadSha: "matching-sha",
+    });
+    expect(updated.status).toBe("done");
+    const statusChanged = listIssueEvents(db, updated.id)
+      .filter((e) => e.type === "status_changed")
+      .at(-1)!;
+    expect(statusChanged.payload).toEqual({
+      from: "in_review",
+      to: "done",
+      pin: { repo: REPO, prNumber: 7, headSha: "matching-sha" },
+    });
+  });
+
+  it("fails closed when the open PR row has no headSha", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+    });
+    expect(() =>
+      updateIssue(db, human, "AIPI-1", { status: "done", expectedHeadSha: "whatever" }),
+    ).toThrowError(/no recorded head SHA/i);
+    expect(getIssue(db, "AIPI-1").status).toBe("in_review");
   });
 });
 

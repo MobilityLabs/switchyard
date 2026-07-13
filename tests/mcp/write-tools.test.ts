@@ -11,6 +11,8 @@ import { getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { snoozeIssue } from "../../src/services/triage-actions.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 import { getActivity } from "../../src/services/comments.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
+import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 let db: Db, human: Actor, agent: Actor, client: Client;
 
@@ -144,6 +146,52 @@ describe("MCP write tools", () => {
       ),
     );
     expect(reviewed.status).toBe("in_review");
+  });
+
+  it("update_issue's expected_head_sha threads through to done-stamp SHA pinning (SYD-208 final review)", async () => {
+    const humanClient = await connect(human);
+    await humanClient.callTool({
+      name: "file_issue",
+      arguments: { project_key: "AIPI", title: "Ship v1" },
+    });
+    await humanClient.callTool({
+      name: "update_issue",
+      arguments: { ref: "AIPI-1", status: "todo" },
+    });
+    await client.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } });
+    await client.callTool({
+      name: "update_issue",
+      arguments: { ref: "AIPI-1", status: "in_review" },
+    });
+
+    // Seed an open agent PR the same way the real delivery worker does.
+    addGithubRepo(db, human, { fullName: "acme/widgets", projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      headSha: "sha-good",
+    });
+
+    // Wrong expected_head_sha: the service's compare-and-set 400s (isError)
+    // with the moved-head message, naming both SHAs, and the issue stays put.
+    const wrong = await humanClient.callTool({
+      name: "update_issue",
+      arguments: { ref: "AIPI-1", status: "done", expected_head_sha: "sha-stale" },
+    });
+    expect(wrong.isError).toBe(true);
+    expect(text(wrong)).toMatch(/head moved/i);
+    expect(text(wrong)).toMatch(/sha-stale/);
+    expect(text(wrong)).toMatch(/sha-good/);
+    expect(getIssue(db, "AIPI-1").status).toBe("in_review");
+
+    // Right expected_head_sha: succeeds and stamps done.
+    const ok = await humanClient.callTool({
+      name: "update_issue",
+      arguments: { ref: "AIPI-1", status: "done", expected_head_sha: "sha-good" },
+    });
+    const updated = JSON.parse(text(ok));
+    expect(updated.status).toBe("done");
   });
 
   it("add_dependency makes next_task skip the blocked issue", async () => {

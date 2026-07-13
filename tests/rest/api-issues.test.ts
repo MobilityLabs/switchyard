@@ -143,10 +143,15 @@ describe("issue routes", () => {
       }),
     });
 
-    const detail = await body<{ openPr: { prNumber: number; url: string } | null }>(
-      await app.request("/issues/SYD-1", { headers: humanH }),
-    );
-    expect(detail.openPr).toEqual({ prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+    const detail = await body<{
+      openPr: { prNumber: number; url: string; repo: string; headSha: string | null } | null;
+    }>(await app.request("/issues/SYD-1", { headers: humanH }));
+    expect(detail.openPr).toEqual({
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+      repo: "acme/widgets",
+      headSha: null,
+    });
 
     const list = await body<{ ref: string; openPr: unknown }[]>(
       await app.request("/issues?project=SYD", { headers: humanH }),
@@ -154,6 +159,8 @@ describe("issue routes", () => {
     expect(list.find((i) => i.ref === "SYD-1")?.openPr).toEqual({
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",
+      repo: "acme/widgets",
+      headSha: null,
     });
 
     // A different actor claiming while the PR is open is refused.
@@ -164,6 +171,60 @@ describe("issue routes", () => {
     expect((await body<{ error: string }>(denied)).error).toMatch(
       /already claimed by claude\/dev/i,
     );
+  });
+
+  it("requires a matching expectedHeadSha to stamp done over an open PR, and detail carries deliveryPin (SYD-208)", async () => {
+    await app.request("/issues", {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ projectKey: "SYD", title: "Ship it" }),
+    });
+    await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "todo" }),
+    });
+    await app.request("/issues/SYD-1/claim", { method: "POST", headers: agentH });
+    await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({
+        type: "pr_opened",
+        prNumber: 41,
+        url: "https://github.com/acme/widgets/pull/41",
+        headSha: "sha41",
+      }),
+    });
+
+    const missing = await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(missing.status).toBe(400);
+    expect((await body<{ error: string }>(missing)).error).toMatch(/current head: sha41/i);
+
+    const ok = await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done", expectedHeadSha: "sha41" }),
+    });
+    expect(ok.status).toBe(200);
+
+    const detail = await body<{
+      deliveryPin: {
+        repo: string;
+        prNumber: number;
+        headSha: string | null;
+        status: string;
+      } | null;
+    }>(await app.request("/issues/SYD-1", { headers: humanH }));
+    expect(detail.deliveryPin).toEqual({
+      repo: "acme/widgets",
+      prNumber: 41,
+      headSha: "sha41",
+      status: "open",
+    });
   });
 
   it("filters the list to done-but-not-yet-merged via ?open_pr=true (SYD-171)", async () => {
@@ -192,6 +253,7 @@ describe("issue routes", () => {
         type: "pr_opened",
         prNumber: 41,
         url: "https://github.com/acme/widgets/pull/41",
+        headSha: "sha41",
       }),
     });
     await app.request("/issues/SYD-2/delivery-events", {
@@ -213,13 +275,20 @@ describe("issue routes", () => {
         deploy: { ran: false },
       }),
     });
-    for (const ref of ["SYD-1", "SYD-2"]) {
-      await app.request(`/issues/${ref}`, {
-        method: "PATCH",
-        headers: humanH,
-        body: JSON.stringify({ status: "done" }),
-      });
-    }
+    // SYD-208: stamping SYD-1 done (still-open PR) now carries the
+    // compare-and-set expectedHeadSha through the REST PATCH body — this
+    // test is about the open_pr filter, not the pin gate itself, which gets
+    // its own dedicated test below.
+    await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done", expectedHeadSha: "sha41" }),
+    });
+    await app.request("/issues/SYD-2", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done" }),
+    });
 
     const list = await body<{ ref: string }[]>(
       await app.request("/issues?project=SYD&status=done&open_pr=true", { headers: humanH }),

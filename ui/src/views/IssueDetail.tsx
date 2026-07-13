@@ -373,7 +373,15 @@ export default function IssueDetail({ refId }: { refId: string }) {
         <h2>{data.title}</h2>
         <select
           value={data.status}
-          onChange={(e) => act(() => updateIssue(refId, { status: e.target.value as Status }))}
+          onChange={(e) =>
+            act(() =>
+              updateIssue(refId, {
+                status: e.target.value as Status,
+                expectedHeadSha:
+                  e.target.value === "done" ? (data.openPr?.headSha ?? undefined) : undefined,
+              }),
+            )
+          }
         >
           {STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -401,7 +409,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
       </header>
       <AttentionBanner
         attention={data.attention}
-        onRetry={() => act(() => redeliverIssue(refId))}
+        onRetry={() => act(() => redeliverIssue(refId, data.deliveryPin?.headSha ?? undefined))}
       />
       <div className="labels-row">
         {otherLabels.map((label) => (

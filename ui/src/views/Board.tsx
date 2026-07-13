@@ -52,14 +52,19 @@ export default function Board({ project }: { project: string }) {
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
 
-  const move = (ref: string, status: Status) =>
-    updateIssue(ref, { status }).then(
+  const move = (ref: string, status: Status) => {
+    const issue = data.find((i) => i.ref === ref);
+    return updateIssue(ref, {
+      status,
+      expectedHeadSha: status === "done" ? (issue?.openPr?.headSha ?? undefined) : undefined,
+    }).then(
       () => {
         setActionError(null);
         reload();
       },
       (e) => setActionError(e.message),
     );
+  };
 
   const toggleDoneFilter = (f: DoneFilter) =>
     setDoneFilters((prev) => {

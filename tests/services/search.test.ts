@@ -162,8 +162,9 @@ describe("searchIssues", () => {
       type: "pr_opened",
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",
+      headSha: "sha41",
     });
-    updateIssue(db, human, "AIPI-2", { status: "done" });
+    updateIssue(db, human, "AIPI-2", { status: "done", expectedHeadSha: "sha41" });
     expect(searchIssues(db, { status: "done", openPr: true }).map((i) => i.ref)).toEqual([
       "AIPI-2",
     ]);
