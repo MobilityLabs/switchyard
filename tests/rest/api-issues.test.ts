@@ -1,17 +1,20 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
-import { createActor } from "../../src/services/actors.js";
+import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
+import { updateIssue } from "../../src/services/issues.js";
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
 let agentH: Record<string, string>, humanH: Record<string, string>;
+let humanActor: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
   const human = createActor(db, { name: "sean", type: "human" });
+  humanActor = human.actor;
   agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };
   createProject(db, human.actor, { key: "SYD", name: "Switchyard" });
@@ -143,10 +146,15 @@ describe("issue routes", () => {
       }),
     });
 
-    const detail = await body<{ openPr: { prNumber: number; url: string } | null }>(
-      await app.request("/issues/SYD-1", { headers: humanH }),
-    );
-    expect(detail.openPr).toEqual({ prNumber: 41, url: "https://github.com/acme/widgets/pull/41" });
+    const detail = await body<{
+      openPr: { prNumber: number; url: string; repo: string; headSha: string | null } | null;
+    }>(await app.request("/issues/SYD-1", { headers: humanH }));
+    expect(detail.openPr).toEqual({
+      prNumber: 41,
+      url: "https://github.com/acme/widgets/pull/41",
+      repo: "acme/widgets",
+      headSha: null,
+    });
 
     const list = await body<{ ref: string; openPr: unknown }[]>(
       await app.request("/issues?project=SYD", { headers: humanH }),
@@ -154,6 +162,8 @@ describe("issue routes", () => {
     expect(list.find((i) => i.ref === "SYD-1")?.openPr).toEqual({
       prNumber: 41,
       url: "https://github.com/acme/widgets/pull/41",
+      repo: "acme/widgets",
+      headSha: null,
     });
 
     // A different actor claiming while the PR is open is refused.
@@ -192,6 +202,7 @@ describe("issue routes", () => {
         type: "pr_opened",
         prNumber: 41,
         url: "https://github.com/acme/widgets/pull/41",
+        headSha: "sha41",
       }),
     });
     await app.request("/issues/SYD-2/delivery-events", {
@@ -213,13 +224,16 @@ describe("issue routes", () => {
         deploy: { ran: false },
       }),
     });
-    for (const ref of ["SYD-1", "SYD-2"]) {
-      await app.request(`/issues/${ref}`, {
-        method: "PATCH",
-        headers: humanH,
-        body: JSON.stringify({ status: "done" }),
-      });
-    }
+    // SYD-208: the PATCH route doesn't carry expectedHeadSha through to
+    // updateIssue until Task 4 wires it into issueUpdateBody, so stamping
+    // SYD-1 done (still-open PR) is driven through the service directly here
+    // — this test is about the open_pr filter, not the pin gate itself.
+    updateIssue(db, humanActor, "SYD-1", { status: "done", expectedHeadSha: "sha41" });
+    await app.request("/issues/SYD-2", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done" }),
+    });
 
     const list = await body<{ ref: string }[]>(
       await app.request("/issues?project=SYD&status=done&open_pr=true", { headers: humanH }),

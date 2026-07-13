@@ -157,6 +157,10 @@ export type UpdateIssueInput = {
   assigneeName?: string | null;
   labels?: string[];
   workerPreference?: string | null;
+  /** SYD-208: required to stamp done over an issue with an open agent PR —
+   * the head SHA the human reviewed, compared-and-set against pr_state's
+   * current head. */
+  expectedHeadSha?: string;
 };
 
 /**
@@ -244,10 +248,39 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
           assertAssignee(tx, actor, current, patch.status);
         }
       }
+      // SYD-208: stamping done on an issue with an open agent PR authorizes
+      // delivery, so it is compare-and-set on the PR head — the client submits
+      // the SHA it displayed, and a third-party push landing seconds before
+      // the click is rejected instead of silently authorized. The validated
+      // pin rides the status_changed payload; the delivery trigger reads it
+      // from there.
+      let donePin: { repo: string; prNumber: number; headSha: string } | null = null;
+      if (patch.status === "done") {
+        const open = getOpenPr(tx, current.id);
+        if (open) {
+          if (open.headSha === null) {
+            throw new SwitchyardError(
+              `${ref}'s open agent PR #${open.prNumber} has no recorded head SHA yet — wait for the poller/webhook to record one, then stamp again.`,
+            );
+          }
+          if (patch.expectedHeadSha === undefined) {
+            throw new SwitchyardError(
+              `Stamping ${ref} done authorizes delivery of PR #${open.prNumber} — pass expectedHeadSha (the head SHA you reviewed) to confirm. Current head: ${open.headSha}.`,
+            );
+          }
+          if (patch.expectedHeadSha !== open.headSha) {
+            throw new SwitchyardError(
+              `${ref}'s PR #${open.prNumber} head moved since you looked: you reviewed ${patch.expectedHeadSha}, but the head is now ${open.headSha} — review the new commits, then stamp again.`,
+            );
+          }
+          donePin = { repo: open.repo, prNumber: open.prNumber, headSha: open.headSha };
+        }
+      }
+
       changes.status = patch.status;
       toRecord.push({
         type: "status_changed",
-        payload: { from: current.status, to: patch.status },
+        payload: { from: current.status, to: patch.status, ...(donePin ? { pin: donePin } : {}) },
       });
       // Mirror claimIssue: a bare PATCH to in_progress on an unclaimed issue
       // must assign the caller, or a second actor's identical PATCH would

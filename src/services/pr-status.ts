@@ -15,11 +15,11 @@
 // getOpenPr to refuse a second claim while one is already in flight — the gap
 // that let SYD-93 get fixed twice in parallel.
 import { sql } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 
-export type OpenPr = { prNumber: number; url: string };
+export type OpenPr = { prNumber: number; url: string; repo: string; headSha: string | null };
 
-type Row = { issueId: number; prNumber: number; url: string };
+type Row = { issueId: number; prNumber: number; url: string; repo: string; headSha: string | null };
 
 // issueRef is denormalized text ("SYD-42"), so rows join back to issues via
 // project key + number. Ordered by prNumber so listOpenPrByIssueId's Map
@@ -29,7 +29,9 @@ function openRows(db: Db, issueId?: number): Row[] {
   return db.all<Row>(sql`
     SELECT i.id AS issueId,
            ps.pr_number AS prNumber,
-           COALESCE(ps.url, '') AS url
+           COALESCE(ps.url, '') AS url,
+           ps.repo AS repo,
+           ps.head_sha AS headSha
     FROM pr_state ps, issues i, projects p
     WHERE i.project_id = p.id
       AND ps.issue_ref = p.key || '-' || i.number
@@ -42,11 +44,41 @@ function openRows(db: Db, issueId?: number): Row[] {
 export function getOpenPr(db: Db, issueId: number): OpenPr | null {
   const rows = openRows(db, issueId);
   const row = rows[rows.length - 1];
-  return row ? { prNumber: row.prNumber, url: row.url } : null;
+  return row ? { prNumber: row.prNumber, url: row.url, repo: row.repo, headSha: row.headSha } : null;
 }
 
 export function listOpenPrByIssueId(db: Db): Map<number, OpenPr> {
-  return new Map(openRows(db).map((r) => [r.issueId, { prNumber: r.prNumber, url: r.url }]));
+  return new Map(
+    openRows(db).map((r) => [
+      r.issueId,
+      { prNumber: r.prNumber, url: r.url, repo: r.repo, headSha: r.headSha },
+    ]),
+  );
+}
+
+export type DeliveryPin = {
+  repo: string;
+  prNumber: number;
+  headSha: string | null;
+  status: "open" | "merged" | "closed";
+};
+
+/** The issue's attributed pr_state row a Retry would re-authorize — preferring
+ * open over merged over closed, newest first (SYD-208). Called both from
+ * plain `Db` reads (redeliverIssue) and from inside updateIssue's transaction
+ * (done-stamp pin), hence DbOrTx. */
+export function deliveryPinFor(db: DbOrTx, issueId: number): DeliveryPin | null {
+  const row = db.all<DeliveryPin>(sql`
+    SELECT ps.repo AS repo, ps.pr_number AS prNumber, ps.head_sha AS headSha, ps.status AS status
+    FROM pr_state ps, issues i, projects p
+    WHERE i.project_id = p.id
+      AND i.id = ${issueId}
+      AND ps.issue_ref = p.key || '-' || i.number
+    ORDER BY CASE ps.status WHEN 'open' THEN 0 WHEN 'merged' THEN 1 ELSE 2 END,
+             COALESCE(ps.gh_updated_at, 0) DESC, ps.pr_number DESC
+    LIMIT 1
+  `)[0];
+  return row ?? null;
 }
 
 /** The canonical transition event id (upsertPrState's co-write) for an

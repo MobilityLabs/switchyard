@@ -7,7 +7,12 @@ import { addGithubRepo } from "../../src/services/github-repos.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { recordEvent } from "../../src/services/events.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
-import { getOpenPr, listOpenPrByIssueId, getMergedPr } from "../../src/services/pr-status.js";
+import {
+  getOpenPr,
+  listOpenPrByIssueId,
+  getMergedPr,
+  deliveryPinFor,
+} from "../../src/services/pr-status.js";
 
 const REPO = "acme/widgets";
 
@@ -53,6 +58,22 @@ describe("getOpenPr (pr_state-derived, SYD-207)", () => {
     expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toEqual({
       prNumber: 41,
       url: `https://github.com/${REPO}/pull/41`,
+      repo: REPO,
+      headSha: null,
+    });
+  });
+
+  it("carries repo and headSha (SYD-208)", () => {
+    const { db, human } = setup();
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+      headSha: "abc123",
+    });
+    expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toEqual({
+      prNumber: 41,
+      url: `https://github.com/${REPO}/pull/41`,
+      repo: REPO,
+      headSha: "abc123",
     });
   });
 
@@ -112,6 +133,8 @@ describe("getOpenPr (pr_state-derived, SYD-207)", () => {
     expect(getOpenPr(db, issueId)).toEqual({
       prNumber: 2,
       url: `https://github.com/${REPO}/pull/2`,
+      repo: REPO,
+      headSha: null,
     });
   });
 
@@ -149,6 +172,8 @@ describe("listOpenPrByIssueId (pr_state-derived, SYD-207)", () => {
     expect(flags.get(open.id)).toEqual({
       prNumber: 41,
       url: `https://github.com/${REPO}/pull/41`,
+      repo: REPO,
+      headSha: null,
     });
     expect(flags.has(clean.id)).toBe(false);
   });
@@ -199,5 +224,69 @@ describe("getMergedPr (pr_state-derived, SYD-207)", () => {
       ghUpdatedAt: "2026-07-13T11:00:00Z",
     });
     expect(getMergedPr(db, issueId)?.prNumber).toBe(41);
+  });
+});
+
+describe("deliveryPinFor (SYD-208)", () => {
+  it("returns null when the issue has no pr_state rows", () => {
+    const { db } = setup();
+    expect(deliveryPinFor(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+
+  it("prefers an open row over merged or closed rows", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
+      headSha: "sha-closed",
+    });
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 41, "merged", "2026-07-13T10:00:00Z"),
+      headSha: "sha-merged",
+    });
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 42, "open", "2026-07-13T08:00:00Z"),
+      headSha: "sha-open",
+    });
+    expect(deliveryPinFor(db, issueId)).toEqual({
+      repo: REPO,
+      prNumber: 42,
+      headSha: "sha-open",
+      status: "open",
+    });
+  });
+
+  it("prefers merged over closed when no open row exists", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
+      headSha: "sha-closed",
+    });
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 41, "merged", "2026-07-13T10:00:00Z"),
+      headSha: "sha-merged",
+    });
+    expect(deliveryPinFor(db, issueId)).toEqual({
+      repo: REPO,
+      prNumber: 41,
+      headSha: "sha-merged",
+      status: "merged",
+    });
+  });
+
+  it("falls back to a closed row when nothing else exists", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
+      headSha: "sha-closed",
+    });
+    expect(deliveryPinFor(db, issueId)).toEqual({
+      repo: REPO,
+      prNumber: 40,
+      headSha: "sha-closed",
+      status: "closed",
+    });
   });
 });

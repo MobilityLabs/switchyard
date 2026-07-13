@@ -246,15 +246,15 @@ describe("escalation, snooze, and duplicate routes", () => {
     expect(denied.status).toBe(400);
     expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
 
+    // SYD-208: redeliverIssue now requires a compare-and-set expectedHeadSha
+    // against pr_state's attributed pin — the REST route doesn't carry that
+    // param through until Task 4, and this issue has no pr_state row at all,
+    // so the retry is refused rather than succeeding.
     const retried = await app.request(`/issues/${filed.ref}/redeliver`, {
       method: "POST",
       headers: humanH,
     });
-    expect(retried.status).toBe(200);
-
-    const detail = await body<{ activity: { type: string }[] }>(
-      await app.request(`/issues/${filed.ref}`, { headers: humanH }),
-    );
-    expect(detail.activity.some((a) => a.type === "redeliver_requested")).toBe(true);
+    expect(retried.status).toBe(400);
+    expect((await body<{ error: string }>(retried)).error).toMatch(/no agent PR on record/i);
   });
 });
