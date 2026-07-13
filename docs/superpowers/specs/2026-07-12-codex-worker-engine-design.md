@@ -83,12 +83,16 @@ CLI), the exact request shape is proven with a **spike first** (mirrors SYD-185)
 - The **real ChatGPT OAuth token lives only in `syd-egress`** (like Claude's
   `sk-ant-oat`), never in a Codex container.
 - The Codex container gets a **placeholder `${CODEX_HOME}/auth.json`** so `codex`
-  believes it is logged in and issues the request (onecli's pattern); the proxy
-  strips the placeholder auth and injects the real token.
-- Injection host/header confirmed by the spike (§F). Expected: the ChatGPT
-  backend host with an `Authorization: Bearer <real-oauth-token>`.
-- **CA trust:** Codex is a Rust binary → the CA is installed into the container's
-  **system trust store** (`update-ca-certificates`), not `NODE_EXTRA_CA_CERTS`.
+  believes it is logged in and issues the request (onecli's pattern). It holds
+  the **real `account_id`** (a non-secret UUID — codex sends it as the
+  `chatgpt-account-id` header, which must match the injected token's account) +
+  a **placeholder `access_token`**; the proxy injects the real `Authorization:
+  Bearer` (§Spike results).
+- Injection host/header (confirmed by the spike, §Spike results): **`chatgpt.com`**
+  (`/backend-api/...`), header `Authorization: Bearer <real access_token>`.
+- **CA trust:** Codex is a Rust binary → it honors **`SSL_CERT_FILE`** pointing
+  at the mounted CA (confirmed by the spike), not `NODE_EXTRA_CA_CERTS` and not
+  `update-ca-certificates`.
 - `SWITCHYARD_TOKEN` stays a bare `-e` passthrough (scoped identity, unchanged).
 
 ### C. Addon change (new Codex injection rule)
@@ -192,14 +196,36 @@ Results pin §C's rule and §B's placeholder, then commit into this spec.
    provisioned `x-goog-api-key` rule — its own spike + addon rule + Node-CLI CA
    trust (`NODE_EXTRA_CA_CERTS`, like Claude) + `engine: "gemini"`.
 
-## Open questions
+## Spike results (Task 1 — resolved 2026-07-12)
 
-- **ChatGPT OAuth token source on the host:** `codex login` writes
-  `${CODEX_HOME}/auth.json`; the real access token must be extracted into the
-  worker/`.env` so `ensureEgressGuard` can hand it to the sidecar. The spike
-  confirms the exact field + whether a refresh token must travel too.
-- **Token refresh / session lifetime** (§G(d)) — if sessions can outlive the
-  access token, decide between accepting the risk (short sessions, like onecli)
-  or teaching the sidecar to refresh. Deferred to the spike's findings.
-- **Codex host exactness:** `api.openai.com` vs `chatgpt.com`/backend-api for a
-  ChatGPT-login session — pinned by the spike before the addon rule is finalized.
+Validated with the real `codex` CLI (0.142.5) + `~/.codex/auth.json` (ChatGPT
+Plus login) through an ephemeral mitmproxy:
+
+- **codex honors `HTTP(S)_PROXY`** ✓ — the whole proxy design applies unchanged.
+- **Injection host = `chatgpt.com`** (path `/backend-api/...`), NOT
+  `api.openai.com`. Also observed: `ab.chatgpt.com` (analytics — its TLS failing
+  did **not** break the session; the worker allowlist can deny it) and
+  `github.com` (so the Codex worker's `egressAllow` must include `github.com`).
+- **Auth header = `Authorization: Bearer <access_token>`** where `access_token`
+  is `auth.json`'s `.tokens.access_token` (a JWT, `iss: auth.openai.com`,
+  `aud: api.openai.com/v1`).
+- **Token lifetime ≈ 10 days** (JWT `exp` was refresh + 10d). A session (minutes)
+  fits comfortably → **static injection, no mid-session refresh** (matches onecli).
+- **CA trust = `SSL_CERT_FILE`** — codex trusted the MITM CA via that env var and
+  completed the request. This replaces the assumed `update-ca-certificates`.
+- **`chatgpt-account-id` header** — codex sends the `account_id` from `auth.json`;
+  the backend matches it against the injected token's account. So the container's
+  placeholder `auth.json` must carry the **real `account_id`** (a non-secret UUID,
+  supplied as a container env var / written by the entry script) with a
+  **placeholder `access_token`**. The proxy injects only the `Authorization`.
+- **`codex exec` flags (0.142.5):** `--ask-for-approval never` is **gone**; use
+  `--dangerously-bypass-approvals-and-sandbox` for headless full-auto (the
+  container is the sandbox) and `--skip-git-repo-check` is unnecessary inside the
+  `/work` clone (it is a git repo). Prompt via argv; stdin from `/dev/null`.
+- **Token source on the host:** `.tokens.access_token` from `codex login`'s
+  `auth.json` → worker `.env` as `CODEX_OAUTH_TOKEN` (for the sidecar); the
+  non-secret `.tokens.account_id` → `CODEX_ACCOUNT_ID` (for the container).
+
+These pin Task 2 (host `chatgpt.com`, `CODEX_OAUTH_TOKEN` → Bearer), Task 3/6
+(`--dangerously-bypass-approvals-and-sandbox`, `SSL_CERT_FILE`, placeholder
+`auth.json` with real `account_id`), and Task 7 (provisioning both env vars).
