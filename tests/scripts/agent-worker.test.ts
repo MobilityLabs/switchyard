@@ -40,7 +40,11 @@ describe("buildPrompt", () => {
   it("builds the standard work prompt", () => {
     const prompt = buildPrompt("SYD-7");
     expect(prompt).toContain("SYD-7");
-    expect(prompt).toContain("claim_issue");
+    // SYD-210: the host pre-claims + holds the lease, so the session must NOT
+    // re-claim (a re-claim would fail loudly). Assert the new instruction, not
+    // just the substring "claim_issue" (which survives the inversion).
+    expect(prompt).toMatch(/do not call claim_issue/i);
+    expect(prompt).toMatch(/already claimed for your session/i);
     expect(prompt).toContain("in_review");
     expect(prompt).not.toMatch(/escalat/i);
   });

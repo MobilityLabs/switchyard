@@ -1070,7 +1070,12 @@ export function buildDockerArgs(
     // spawn env, never argv) exactly like SWITCHYARD_TOKEN — container-entry.sh
     // adds it as the X-Switchyard-Lease MCP header so the session's
     // claim-scoped writes carry the lease without it entering the transcript.
-    ...(opts.leaseToken ? ["-e", "SWITCHYARD_LEASE"] : []),
+    // Claude engine ONLY: container-entry.codex.sh has no header mechanism yet
+    // (codex config.toml exposes bearer_token_env_var but header support is
+    // unverified on codex 0.142.5), so injecting the env there would be a no-op
+    // that only misleads. Leased codex dispatch is a tracked follow-up; until
+    // then codex claim-scoped writes are not lease-authorized.
+    ...(opts.leaseToken && engine === "claude" ? ["-e", "SWITCHYARD_LEASE"] : []),
     ...credArgs,
     "-e",
     `WORKER_PROMPT=${prompt}`,
