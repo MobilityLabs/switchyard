@@ -26,6 +26,7 @@ import {
   roleRunsCode,
   roleRunsAnswer,
   parseRole,
+  configPathFromArgs,
   workerPidFileName,
   checkRoleLockConflict,
   DEFAULT_MAX_ANSWER_CONCURRENT,
@@ -468,6 +469,30 @@ describe("parseRole", () => {
 
   it("throws when --role is the last argument with no value", () => {
     expect(() => parseRole(["--role"])).toThrow(/--role/);
+  });
+});
+
+describe("configPathFromArgs", () => {
+  const ROOT = "/repo";
+  const DEFAULT = "/repo/switchyard-worker.json";
+
+  it("returns the default path when --config is absent", () => {
+    expect(configPathFromArgs([], DEFAULT, ROOT)).toBe(DEFAULT);
+    expect(configPathFromArgs(["--role", "code"], DEFAULT, ROOT)).toBe(DEFAULT);
+  });
+
+  it("uses an absolute --config path as-is", () => {
+    expect(configPathFromArgs(["--config", "/etc/w.json"], DEFAULT, ROOT)).toBe("/etc/w.json");
+  });
+
+  it("resolves a relative --config path against repoRoot", () => {
+    expect(configPathFromArgs(["--config", "switchyard-worker.codex.json"], DEFAULT, ROOT)).toBe(
+      "/repo/switchyard-worker.codex.json",
+    );
+  });
+
+  it("falls back to the default when --config is the last arg with no value", () => {
+    expect(configPathFromArgs(["--config"], DEFAULT, ROOT)).toBe(DEFAULT);
   });
 });
 

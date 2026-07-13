@@ -217,6 +217,12 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, engine: "codex" })).toEqual([]);
   });
 
+  it("accepts a string token env-var name and rejects a non-string / empty one", () => {
+    expect(validateWorkerConfig({ ...good, token: "SWITCHYARD_CODEX_TOKEN" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, token: 123 })).toHaveLength(1);
+    expect(validateWorkerConfig({ ...good, token: "" })).toHaveLength(1);
+  });
+
   it("accepts an absent maxAnswersPerIssue and rejects a non-positive-integer one", () => {
     expect(validateWorkerConfig(good)).toEqual([]);
     expect(validateWorkerConfig({ ...good, maxAnswersPerIssue: 5 })).toEqual([]);
