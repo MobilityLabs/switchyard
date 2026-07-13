@@ -1736,15 +1736,51 @@ The new `leases.ts`/`lease-cutover.ts` services and `claim_leases` table are str
 
 ---
 
-## Layer B — fast-follow (documented, NOT built in this plan)
+## Layer B — honest liveness (heartbeats)
 
-Layer B replaces the residual idle-guess with honest liveness. It is a separate execution pass (and couples a tracker deploy with a worker-host upgrade — see the design §6 deploy-coordination note). Tasks, at a glance:
+Layer B replaces the residual idle-guess with honest liveness: a supervising worker heartbeats its container's lease, and a lease that stops being heartbeated expires in ~10 min instead of waiting out the 8h TTL. It couples a tracker deploy with a worker-host upgrade (design §6 deploy-coordination note), so the enforcing deploy from Layer A should land together with the Layer B worker-host upgrade (or with the worker host down, which it currently is).
 
-- **B1 — `heartbeatLease(db, issueId, actorId, token)`** in `leases.ts`: validate, then renew `last_beat_at = now` and `expires_at = now + ttl`. Test: a renewal pushes `expires_at` out; a wrong/absent token is rejected.
-- **B2 — `heartbeat(ref, lease_token)` tool + route** on both adapters (MCP tool, REST `POST /issues/:ref/heartbeat` reading `X-Switchyard-Lease`). Test: heartbeat by the holder extends the lease; a non-holder/no-token is rejected.
-- **B3 — host-side heartbeat loop** in `scripts/agent-worker.ts` + `worker-sdk/`: the supervising worker heartbeats the container's lease on a **60s** interval; after **N = 10** missed renewals it fires a cancellation signal and terminates its own workload rather than racing a re-dispatch. Token is injected host-side (env → SDK → tool arg), never in the LLM transcript.
-- **B4 — server-uptime expiry gate**: `expireLeases` must not mass-expire live leases right after a tracker redeploy (a correlated outage). Gate expiry on the server having been continuously up for the lease window (e.g. a process-start timestamp; only expire leases whose window fully elapsed since start). Test: leases do not expire within `N×interval` of a simulated restart.
-- **B5 — interactive TTL**: already covered by `claims.lease_ttl_seconds` (8h) from Layer A; a session that loses its token to compaction re-acquires via opt-in takeover (Task 5). No new work beyond confirming the interactive path in docs.
+### Locked design decisions
+
+1. **A heartbeat renewal SHORTENS the window.** `claimIssue` mints with `claims.lease_ttl_seconds` (8h) — the interactive fallback, since a fresh claim doesn't know whether it's a container or an interactive session. `heartbeatLease` renews `expires_at = now + claims.heartbeat_window_seconds` (**default 600s = N×interval**). So the *first* heartbeat from a container collapses its effective window from 8h to ~10 min; a container that keeps beating stays alive indefinitely, a dead one loses its lease within one window. An interactive session never heartbeats, so it keeps the long 8h TTL and recovers via takeover after compaction. This is the whole point — heartbeat = short honest window, no heartbeat = long TTL.
+2. **New setting `claims.heartbeat_window_seconds`** (default 600). Both `heartbeatLease`'s renewal and the server-uptime grace period read it, so they can never drift.
+3. **Server-uptime expiry gate.** A tracker redeploy is a *correlated* outage: every container's heartbeats fail at once during the ~5–15 s restart. To stop the first post-restart sweep from mass-expiring every live lease, `expireLeases` skips the entire sweep until the server has been continuously up for one full `heartbeat_window_seconds` — giving every live container a full window to re-establish its heartbeat before any expiry can fire. Process start time is captured once at server boot and threaded into the sweep.
+4. **Host-side loop (B3).** The supervising `agent-worker`/SDK process heartbeats on the container's behalf every **60 s**; after **N = 10** consecutive failures (~10 min) it fires a cancellation signal and terminates its own workload rather than racing a re-dispatch. The lease token is injected host-side (env → SDK → tool arg), **never** written into the LLM transcript.
+
+### Task B1 — `claims.heartbeat_window_seconds` + `heartbeatLease`
+
+**Files:** `src/services/settings.ts` (registry), `src/services/leases.ts`, `tests/services/lease-heartbeat.test.ts`
+
+- `heartbeatLease(db, issueId, actorId, token): ClaimLease` — `validateLease` first, then renew `last_beat_at = now` and `expires_at = now + getSetting(db, "claims.heartbeat_window_seconds")`; return the updated row.
+- Tests: a renewal moves `expires_at` to `now + window` (shorter than the 8h mint) and updates `last_beat_at`; a wrong/absent/expired/non-holder token is rejected (reuses `validateLease`).
+
+### Task B2 — `heartbeat` surface on both adapters
+
+**Files:** `src/mcp/server.ts`, `src/rest/api-routes.ts`, `tests/mcp/lease-tools.test.ts` (extend), `tests/rest/lease-header.test.ts` (extend)
+
+- MCP: new `heartbeat` tool `{ ref, lease_token }` → `heartbeatLease(db, actor, ...)`; returns `{ ok: true, expires_at }`. Description: "Keep your claim's lease alive — the host worker calls this on a timer; the LLM should not."
+- REST: `POST /issues/:ref/heartbeat` reading `c.var.leaseToken` (the `X-Switchyard-Lease` header); returns `{ ok: true, expiresAt }`.
+- Tests: the holder heartbeats and `expires_at` moves out; a no-token / stale-token / non-holder call is rejected.
+
+### Task B3 — host-side heartbeat loop + cancellation
+
+**Files:** `scripts/agent-worker.ts`, `worker-sdk/` (the SDK runner), plus a doctor/self-test touch if warranted
+
+- On dispatch, the host receives the lease token from `claim_issue` (already returned in Layer A) and holds it out-of-band (env/file handoff — never argv, never transcript).
+- A self-rescheduling 60 s loop calls `POST /issues/<ref>/heartbeat` with the `X-Switchyard-Lease` header. Count consecutive failures; at **10** (~10 min) fire the existing cancellation/kill path for that workload and stop the loop.
+- This is deploy-coupled host code and largely integration-shaped; unit-test the failure-counter/cancellation decision as a pure function where practical, and `log()` what was skipped. Full exercise happens on the worker host at go-live (gated on SYD-213).
+
+### Task B4 — server-uptime expiry gate
+
+**Files:** `src/services/leases.ts` (`expireLeases` signature), `src/services/webhook-dispatcher.ts` (capture + thread process start), `tests/services/lease-expiry.test.ts` (extend)
+
+- `expireLeases(db, now?, serverStartedAt?)`: when `serverStartedAt` is given and `now - serverStartedAt < getSetting(db, "claims.heartbeat_window_seconds")`, return 0 (skip the whole sweep). Otherwise behave as today.
+- `startWebhookDispatcher` captures a process-start timestamp once and passes it on every `expireLeases` call.
+- Tests: within the grace window after a simulated restart, an already-expired lease is NOT swept; past the grace window it is. (Threads an explicit `serverStartedAt`/`now` — no reliance on wall-clock.)
+
+### B5 — interactive TTL
+
+Already covered by `claims.lease_ttl_seconds` (8h) from Layer A; a session that loses its token to compaction re-acquires via opt-in takeover (Task 5). No new code — the interactive path is confirmed by the existing Layer A tests.
 
 `claims.deviation_seconds` (the "claimed but idle" attention chip, 1h) is unchanged — it powers a chip, not release.
 
