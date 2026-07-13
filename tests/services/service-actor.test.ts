@@ -20,6 +20,7 @@ import { addGithubRepo } from "../../src/services/github-repos.js";
 import { setSetting } from "../../src/services/settings.js";
 import { addWebhook } from "../../src/services/webhooks.js";
 import { snoozeIssue, markDuplicate } from "../../src/services/triage-actions.js";
+import { requestHumanInput } from "../../src/services/needs-input.js";
 import { getIssue } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
@@ -133,6 +134,14 @@ describe("service actor — DENIED all issue create/modify (fail-closed)", () =>
     expect(() =>
       createIssue(db, service, { projectKey: "AIPI", title: "injected" }),
     ).toThrowError(/cannot create.*issues/i);
+  });
+
+  it("cannot flag an issue needs-input (would stall auto-dispatch)", () => {
+    // deliver.ts escalates via delivery_failed events, never needsInput — so a
+    // service token has no legitimate use for this, and it writes board state.
+    expect(() => requestHumanInput(db, service, "AIPI-1", "please advise")).toThrowError(
+      /cannot (create or )?modify issues/i,
+    );
   });
 });
 

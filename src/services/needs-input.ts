@@ -25,6 +25,14 @@ export function requestHumanInput(
   }
   return db.transaction((tx) => {
     const issue = getIssue(tx, ref);
+    // SYD-213: a `service` token never mutates board state — needsInput is board
+    // state, and the delivery worker escalates failures via delivery_failed
+    // events, not needsInput. Fail-closed, matching createIssue/updateIssue.
+    if (actor.type === "service") {
+      throw new SwitchyardError(
+        "Service actors post events, read, and comment — they cannot modify issues.",
+      );
+    }
     // SYD-210: escalating an issue you HOLD is a claim-scoped mutation — the
     // holder must present the lease minted at claim time (design §3: "an
     // already-claimed issue by its holder"). A non-holder agent escalating an
