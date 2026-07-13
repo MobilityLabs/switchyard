@@ -45,7 +45,11 @@ set -eu
 # (NODE_EXTRA_CA_CERTS in container-entry.sh), there's no system trust store
 # install needed here (spike, Task 1).
 if [ -f /ca/mitmproxy-ca-cert.pem ]; then
-  export SSL_CERT_FILE=/ca/mitmproxy-ca-cert.pem
+  # Trust the egress-proxy CA additively (system roots + the MITM CA) so codex
+  # verifies both the intercepted chatgpt.com AND any real-cert host it reaches.
+  cat /etc/ssl/certs/ca-certificates.crt /ca/mitmproxy-ca-cert.pem > /tmp/ca-bundle.pem 2>/dev/null \
+    || cp /ca/mitmproxy-ca-cert.pem /tmp/ca-bundle.pem
+  export SSL_CERT_FILE=/tmp/ca-bundle.pem
 fi
 
 # Bind mounts on plain-Linux Docker preserve host UIDs; without this, git
