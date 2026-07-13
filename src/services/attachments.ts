@@ -1,5 +1,6 @@
 import path from "node:path";
-import { promises as fs } from "node:fs";
+import { promises as fs, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { attachments, actors } from "../db/schema.js";
@@ -74,33 +75,49 @@ export async function saveAttachment(
     );
   }
 
-  const row = db.transaction((tx) => {
-    const issue = getIssue(tx, ref);
-    const inserted = tx
-      .insert(attachments)
-      .values({
+  // Durability ordering (SYD-192): events is an append-only audit log, so
+  // attachment_added must never be recorded for bytes that aren't on disk —
+  // and once recorded it cannot be deleted. Write the bytes to a temp path
+  // BEFORE touching the DB (this is where the realistic failures — perms,
+  // disk full, bad dir — happen), then insert the row + event and rename the
+  // temp file to its id-named path as the LAST step inside the synchronous
+  // transaction: if the rename throws, the transaction rolls back and neither
+  // the row nor the event survives. The only remaining crash window (after
+  // rename, before commit) leaves a file with no DB row — a harmless orphan,
+  // unlike an event that points at a file that doesn't exist.
+  await fs.mkdir(attachmentsDir, { recursive: true });
+  const tmpPath = path.join(attachmentsDir, `.tmp-${randomUUID()}`);
+  await fs.writeFile(tmpPath, data);
+
+  let row: AttachmentRow;
+  try {
+    row = db.transaction((tx) => {
+      const issue = getIssue(tx, ref);
+      const inserted = tx
+        .insert(attachments)
+        .values({
+          issueId: issue.id,
+          actorId: actor.id,
+          filename: sanitized,
+          contentType,
+          size: data.length,
+        })
+        .returning()
+        .get();
+      recordEvent(tx, {
         issueId: issue.id,
         actorId: actor.id,
-        filename: sanitized,
-        contentType,
-        size: data.length,
-      })
-      .returning()
-      .get();
-    recordEvent(tx, {
-      issueId: issue.id,
-      actorId: actor.id,
-      type: "attachment_added",
-      payload: { id: inserted.id, filename: sanitized, size: data.length, contentType },
+        type: "attachment_added",
+        payload: { id: inserted.id, filename: sanitized, size: data.length, contentType },
+      });
+      renameSync(tmpPath, path.join(attachmentsDir, String(inserted.id)));
+      return inserted;
     });
-    return inserted;
-  });
-
-  try {
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, String(row.id)), data);
   } catch (err) {
-    db.delete(attachments).where(eq(attachments.id, row.id)).run();
+    // A file with no DB row is a harmless orphan, but don't accumulate temp
+    // files. If the rename already happened (commit-time failure), the temp
+    // is gone and this is a no-op.
+    await fs.unlink(tmpPath).catch(() => {});
     throw err;
   }
 
