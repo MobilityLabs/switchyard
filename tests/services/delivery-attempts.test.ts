@@ -3,10 +3,12 @@ import { eq } from "drizzle-orm";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue } from "../../src/services/issues.js";
+import { createIssue, getIssue } from "../../src/services/issues.js";
 import { updateIssue } from "../../src/services/issues.js";
 import { recordEvent } from "../../src/services/events.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
+import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { deliveryAttempts, deliveryRollout, DELIVERY_OUTCOMES } from "../../src/db/schema.js";
 import {
   listPendingDeliveryAuthorizations,
@@ -31,9 +33,31 @@ function setup() {
 }
 
 /** Human-created issues land in "backlog" — a human can move straight to
- * "done" from there (only agents are gated on that transition). */
+ * "done" from there (only agents are gated on that transition).
+ *
+ * Also authors a pin on the stamp, matching what a real done-stamp over an
+ * open agent PR produces (Fix 1, SYD-208 final review): a pin-less
+ * done-stamp is interactive work and is no longer a pending delivery
+ * authorization at all (see the "listPendingDeliveryAuthorizations" describe
+ * block below), and most tests in this file only need *some* live
+ * authorization to drive the start/finish-attempt flows they're actually
+ * testing. Tests that specifically exercise the pin-less/interactive-skip
+ * path call updateIssue directly instead of this helper. */
+let stampDonePinSeq = 0;
 function stampDone(db: ReturnType<typeof openDb>, human: ReturnType<typeof createActor>["actor"], ref: string) {
+  const issue = getIssue(db, ref);
   updateIssue(db, human, ref, { status: "done" });
+  stampDonePinSeq += 1;
+  recordEvent(db, {
+    issueId: issue.id,
+    actorId: human.id,
+    type: "status_changed",
+    payload: {
+      from: "done",
+      to: "done",
+      pin: { repo: REPO, prNumber: stampDonePinSeq, headSha: `sha-${stampDonePinSeq}` },
+    },
+  });
 }
 
 describe("delivery_attempts schema", () => {
@@ -84,9 +108,11 @@ describe("listPendingDeliveryAuthorizations", () => {
       branch: `agent/${issue.ref}`,
       headSha: "abc",
     });
-    // Plain human stamp (Task 3's pin-stamping isn't wired yet) — records a
-    // vanilla status_changed event with no pin.
-    stampDone(db, human, issue.ref);
+    // Plain human stamp, bypassing the stampDone helper's auto-pin — this
+    // issue has no bound github repo, so getOpenPr can't attribute the
+    // upsertPrState row above anyway: a vanilla status_changed event with no
+    // pin, same as real production behavior for interactive work.
+    updateIssue(db, human, issue.ref, { status: "done" });
     // Author the pinned stamp directly, newer than the plain one above, so
     // it — and only it — is the live authorization (latest-stamp-per-issue).
     const pinnedEventId = recordEvent(db, {
@@ -179,6 +205,58 @@ describe("listPendingDeliveryAuthorizations", () => {
 
     // pr_state was never re-observed as merged (still "open") — the attempt
     // row alone is what disarms the authorization, not pr_state.
+    expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
+  });
+
+  it("interactive done-stamp is never pending: no open agent PR means no pin, and no authorization", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Fix a typo" });
+
+    // A human stamps done via the real production path — no pr_state row for
+    // this issue at all, so updateIssue's getOpenPr check finds nothing and
+    // the status_changed event carries no pin (ordinary interactive work).
+    updateIssue(db, human, issue.ref, { status: "done" });
+
+    expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
+
+    // The rollout backfill consumes the exact same predicate (parity by
+    // construction), so it must not write a row for this issue either.
+    const result = ensureRolloutBackfill(db);
+    expect(result).toEqual({ backfilled: 0, alreadyDone: false });
+    expect(db.select().from(deliveryAttempts).all()).toEqual([]);
+  });
+
+  it("an older PINNED stamp does not resurrect once the newest stamp on the issue is pin-less", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
+
+    // A real open agent PR — the done-stamp below is pinned via the actual
+    // production expectedHeadSha flow.
+    recordDeliveryEvent(db, human, issue.ref, {
+      type: "pr_opened",
+      prNumber: 21,
+      url: `https://github.com/${REPO}/pull/21`,
+      headSha: "sha-open",
+    });
+    updateIssue(db, human, issue.ref, { status: "done", expectedHeadSha: "sha-open" });
+    expect(listPendingDeliveryAuthorizations(db)).toHaveLength(1); // sanity: it WAS pending
+
+    // Retract — the human's retract explicitly withdraws that trigger.
+    updateIssue(db, human, issue.ref, { status: "in_review" });
+
+    // The PR merges (no longer open), then the human re-stamps done. With no
+    // open PR left, the real production path attaches no pin this time.
+    recordDeliveryEvent(db, human, issue.ref, {
+      type: "delivered",
+      prNumber: 21,
+      mergeSha: "sha-open",
+      deploy: { ran: false },
+    });
+    updateIssue(db, human, issue.ref, { status: "done" });
+
+    // The newest stamp governs, and it's pin-less — nothing pending, even
+    // though an OLDER pinned stamp exists earlier in this issue's history.
     expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
   });
 });

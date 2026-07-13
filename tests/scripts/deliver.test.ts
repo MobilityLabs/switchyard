@@ -174,17 +174,25 @@ describe("delivery worker trigger (SYD-208)", () => {
     expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
   });
 
-  it("a pending pin with no PR finishes merge_failed and posts a delivery_failed event", async () => {
+  it("a pending authorization with no pin is a quiet no-op skip (interactive work, defensive only)", async () => {
     installFetch(pendingWork(null));
 
     await tick(config, token, newTickGate(), false);
 
+    // The server predicate (SYD-208 final review) never emits a pin-less
+    // done_stamp authorization any more — pin-less done-stamps are
+    // interactive work, not delivery authorizations. This branch is
+    // unreachable in production; it stays only as belt-and-braces. It must
+    // never start an attempt, PATCH one, post a delivery_failed event, or
+    // comment on the issue — a false "Delivery FAILED" on an ordinary
+    // interactive issue is exactly the bug this fixes.
     expect(prLiveState).not.toHaveBeenCalled();
     expect(mergeAgentPr).not.toHaveBeenCalled();
-    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merge_failed" });
-    const events = deliveryEventCalls("SYD-9");
-    expect(events).toHaveLength(1);
-    expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
+    expect(startCalls("SYD-9")).toHaveLength(0);
+    expect(patchCalls()).toHaveLength(0);
+    expect(deliveryEventCalls("SYD-9")).toHaveLength(0);
+    const comments = fetchMock().mock.calls.filter(([u]) => String(u).endsWith("/comments"));
+    expect(comments).toHaveLength(0);
   });
 
   it("a failed post-rebase verify finishes verify_failed and posts a delivery_failed event (Retry keeps working)", async () => {

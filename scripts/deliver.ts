@@ -9,7 +9,10 @@
 // down is simply still pending on restart, because its authorization still has
 // no attempt row. Crash resumption reads an attempt left open by a prior crash
 // and consults the PR's LIVE GitHub state (never pr_state or the tracker) to
-// decide whether the merge landed.
+// decide whether the merge landed. Pin-less done-stamps are interactive work
+// (no agent PR) and are never delivery authorizations — the server predicate
+// excludes them entirely, so this worker never sees one to skip; redelivers
+// always count, pin or no pin.
 //
 //   SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts            # loop forever
 //   SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts --once     # single scan
@@ -592,21 +595,16 @@ async function deliverPending(
   let attemptId: number | null = null;
   try {
     if (auth.pin === null) {
-      const started = await startAttempt(config, token, ref, {
-        authorizationId: auth.authorizationId,
-      });
-      attemptId = started.id;
-      const id = attemptId;
-      attemptId = null;
-      await finishAttempt(config, token, id, { outcome: "merge_failed" });
-      const message = "authorization carries no PR pin — nothing to merge";
-      await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
-        console.error(`could not comment the failure on ${ref}: ${e.message}`),
-      );
-      await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
-        (e: Error) =>
-          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
-      );
+      // Defensive only (SYD-208 final review): the server predicate
+      // (listPendingDeliveryAuthorizations) now requires a pin on the
+      // status_changed arm, so a pin-less done_stamp authorization is never
+      // emitted any more — pin-less done-stamps are interactive work (no
+      // agent PR), not delivery authorizations, and are skipped silently.
+      // This branch should be unreachable; if it's ever hit anyway (a stale
+      // server, a future regression) it must stay a quiet skip rather than
+      // starting an attempt and posting a false "Delivery FAILED" comment on
+      // an ordinary interactive issue.
+      console.log(`${ref}: authorization ${auth.authorizationId} carries no PR pin — skipping`);
       return;
     }
 

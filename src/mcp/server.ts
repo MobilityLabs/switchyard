@@ -215,7 +215,10 @@ export function buildMcpServer(
         "a human or a review step does that. " +
         "Issues in triage can only be moved out by humans (enforced by the server). " +
         "Agents may only self-assign (prefer claim_issue) — assigning someone else or clearing " +
-        "an assignee is human-only (enforced by the server).",
+        "an assignee is human-only (enforced by the server). " +
+        "Stamping status: done over an issue with an open agent PR authorizes delivery, so the " +
+        "server requires expected_head_sha (the head SHA you reviewed) — it 400s naming the current " +
+        "head if the PR moved since you looked.",
       inputSchema: {
         ref: z.string(),
         status: z.enum(STATUSES).optional(),
@@ -226,6 +229,7 @@ export function buildMcpServer(
         assignee: z.string().nullable().optional(),
         labels: z.array(z.string()).optional(),
         worker_preference: z.string().nullable().optional(),
+        expected_head_sha: z.string().optional(),
       },
     },
     guard(
@@ -239,6 +243,7 @@ export function buildMcpServer(
         assignee?: string | null;
         labels?: string[];
         worker_preference?: string | null;
+        expected_head_sha?: string;
       }) =>
         updateIssue(db, actor, a.ref, {
           status: a.status,
@@ -249,6 +254,7 @@ export function buildMcpServer(
           assigneeName: a.assignee,
           labels: a.labels,
           workerPreference: a.worker_preference,
+          expectedHeadSha: a.expected_head_sha,
         }),
     ),
   );

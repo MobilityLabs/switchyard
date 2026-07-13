@@ -340,27 +340,34 @@ the issue `done`. Three pieces (SYD-49):
    SWITCHYARD_TOKEN=... npx tsx scripts/deliver.ts --dry-run  # print, don't merge
    ```
 
-   It polls `GET /api/events` (every `delivery.pollSeconds`, default 30s) for
-   `status_changed → done` — a transition only humans can make, server-enforced
-   — merges the open `agent/<ref>` PR, deploys via `npm run deploy` from a
-   dedicated clean clone (`delivery.cloneDir`, default
-   `~/.switchyard/deliver-clones` — never a working tree), and comments the
-   merge SHA + deploy result on the issue. Issues without an open agent PR
-   (interactive work) are skipped: interactive sessions keep direct merges.
-   The event cursor persists in `.superpowers/deliver-cursor`, so approvals
-   stamped while the worker was down are delivered on restart. A crash or
-   shutdown between the merge and the deploy leaves the PR merged but not
-   deployed and not commented — on restart the ref is skipped (its PR is no
-   longer open), so if an issue is stamped done and its PR shows merged but no
-   delivery comment ever lands, re-run the deploy manually (`npm run deploy`)
-   or re-deliver by hand. If a deploy ships a broken build, roll back with
-   `scripts/deploy-nas.sh <previous-good-sha>` — ships that commit's tree
-   instead of the working tree and rebuilds, no NAS access needed. The NAS
-   host defaults to its Tailscale IP; override with `SWITCHYARD_NAS_HOST`. If
-   delivery fails, re-stamping an already-`done`
+   It triggers off the `delivery_attempts` ledger via `GET /api/delivery-work`
+   (SYD-208) instead of polling the event feed with a cursor. A human moving
+   an issue to `done` over an open agent PR (agents can't — server-enforced,
+   and the human must confirm the PR's current head SHA) or clicking **Retry
+   delivery** becomes a pending authorization, consumed exactly once
+   (once-per-authorization enforced server-side). Pin-less done-stamps — an
+   issue with no open agent PR — are interactive work and are never
+   authorizations; those sessions keep direct merges and the worker skips
+   them silently. For a real authorization the worker merges the open
+   `agent/<ref>` PR, deploys via `npm run deploy` from a dedicated clean clone
+   (`delivery.cloneDir`, default `~/.switchyard/deliver-clones` — never a
+   working tree), and comments the merge SHA + deploy result on the issue.
+   There is no cursor file: an approval stamped while the worker is down
+   simply stays pending, because its authorization has no attempt row yet —
+   the next tick (or restart) sees it exactly as if it had just happened. A
+   crash between the merge and the deploy leaves an attempt open; on restart
+   the worker resolves it against the PR's LIVE GitHub state (never pr_state
+   or the tracker) — MERGED resumes the deploy tail and finishes the attempt
+   normally, anything else finishes `merge_failed` and comments a crash
+   notice for a human to re-authorize. If a deploy ships a broken build, roll
+   back with `scripts/deploy-nas.sh <previous-good-sha>` — ships that
+   commit's tree instead of the working tree and rebuilds, no NAS access
+   needed. The NAS host defaults to its Tailscale IP; override with
+   `SWITCHYARD_NAS_HOST`. If delivery fails, re-stamping an already-`done`
    issue done is a no-op (unchanged status emits no event) — instead click
    **Retry delivery** on the issue's attention banner, which fires a
-   `redeliver_requested` event the worker also polls for (SYD-102).
+   `redeliver_requested` event — its own authorization, independent of the
+   done-stamp history, that the worker also picks up (SYD-102).
 3. **Branch protection on `main`** blocks force-pushes and deletion. Required
    PR reviews stay off for now: all pushes authenticate as one GitHub identity
    and GitHub forbids self-approval — full can't-push-to-main enforcement is

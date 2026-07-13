@@ -12,6 +12,18 @@
 // redeliver_requested event is always its own authorization, independent of
 // the done-stamp history.
 //
+// Pin required, done-stamp arm only: a status_changed->done event only
+// authorizes delivery when its payload carries a pin (an open agent PR the
+// human reviewed at stamp time). Interactive work — an issue with no agent
+// PR — has no pin, and is never a delivery authorization; the worker skips it
+// silently. This governs strictly by recency too: if the NEWEST done-stamp on
+// an issue is pin-less (e.g. stamped again after the PR closed/merged), an
+// OLDER pinned stamp earlier in that issue's history must NOT resurrect — the
+// newest human action always governs. redeliver_requested carries no such
+// requirement: every redeliver is always its own authorization regardless of
+// pin, and the one-time rollout backfill still has to fence off historical
+// pin-less redelivers with skipped_rollout rows.
+//
 // Parity-by-construction: ensureRolloutBackfill (the one-time SYD-208
 // cutover backfill) calls the exact same listPendingDeliveryAuthorizations
 // the live trigger consumes, so whatever the backfill doesn't see at
@@ -64,6 +76,10 @@ type PendingRow = {
  * that has no delivery_attempts row yet. This is THE trigger predicate — the
  * live delivery worker and the one-time rollout backfill both call it, so
  * they can never see a different set of "what's owed a delivery attempt".
+ *
+ * Pin-less done-stamps are interactive work, never delivery authorizations —
+ * they are excluded from the status_changed arm entirely (see file header).
+ * Redelivers always count, pin or no pin.
  */
 export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorization[] {
   const rows = db.all<PendingRow>(sql`
@@ -82,6 +98,7 @@ export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorizat
         OR (
           e.type = 'status_changed'
           AND json_extract(e.payload, '$.to') = 'done'
+          AND json_extract(e.payload, '$.pin.prNumber') IS NOT NULL
           AND e.id = (
             SELECT MAX(e2.id) FROM events e2
             WHERE e2.issue_id = e.issue_id
