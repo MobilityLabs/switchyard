@@ -145,19 +145,10 @@ export function validateWorkerConfig(raw: unknown): string[] {
       ) {
         problems.push("`delivery.cloneDir` must be a non-empty path");
       }
-      for (const key of [
-        "openPrs",
-        "deploy",
-        "verify",
-        "autoRebase",
-        "conflictResolution",
-      ] as const) {
+      for (const key of ["openPrs", "deploy"] as const) {
         if (d[key] !== undefined && typeof d[key] !== "boolean") {
           problems.push(`\`delivery.${key}\` must be true or false`);
         }
-      }
-      if (d.mode !== undefined && d.mode !== "legacy" && d.mode !== "queue") {
-        problems.push('`delivery.mode` must be "legacy" or "queue"');
       }
     }
   }
