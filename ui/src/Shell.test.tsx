@@ -229,132 +229,80 @@ describe("Shell triage/review project scoping", () => {
   });
 });
 
-// SYD-51: project creation had no UI — onboarding a new project required a
-// raw curl call. The "+ Project" popover on Shell fills that gap.
-describe("Shell new project form", () => {
+// SYD-214: the header's own "+ Project" popover was redundant with the
+// Settings → Projects "New project" form, and was removed as part of the
+// header collapse. Guard against it silently reappearing.
+describe("Shell header (SYD-214)", () => {
   beforeEach(() => {
     localStorage.clear();
     history.replaceState(null, "", "/");
   });
 
-  it("toggles open and closed", async () => {
+  it("no longer renders the header's own new-project popover or its toggle", async () => {
     const container = await renderShell();
     expect(container.querySelector(".new-project-popover")).toBeNull();
-
-    await click(findButton(container, "+ Project"));
-    expect(container.querySelector(".new-project-popover")).not.toBeNull();
-
-    await click(findButton(container, "Cancel"));
-    expect(container.querySelector(".new-project-popover")).toBeNull();
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "+ Project")).toBe(
+      false,
+    );
   });
 
-  it("keeps the submit button disabled for an invalid or taken key, and enables it once valid", async () => {
+  it("always shows + New issue, the actor badge, and Log out", async () => {
     const container = await renderShell();
-    await click(findButton(container, "+ Project"));
+    expect(findButton(container, "+ New issue")).toBeTruthy();
+    expect(container.querySelector(".badge.actor")?.textContent).toBe("sean");
+    expect(findButton(container, "Log out")).toBeTruthy();
+  });
+});
 
-    const keyInput = container.querySelector(
-      '.new-project-popover input[placeholder="ACME"]',
-    ) as HTMLInputElement;
-    const nameInput = container.querySelector(
-      '.new-project-popover input[placeholder="Acme Corp"]',
-    ) as HTMLInputElement;
-    const submit = findButton(container, "Create project");
-    expect(submit.disabled).toBe(true);
-
-    // lowercase input is uppercased automatically; single letter is too short
-    await type(keyInput, "a");
-    expect(keyInput.value).toBe("A");
-    expect(container.querySelector(".new-project-popover")!.textContent).toContain(
-      "2–10 uppercase letters",
-    );
-    expect(submit.disabled).toBe(true);
-
-    // a key already in use is flagged and blocks submit even once well-formed
-    await type(keyInput, "acme");
-    expect(container.querySelector(".new-project-popover")!.textContent).toContain(
-      'key "ACME" already exists',
-    );
-    expect(submit.disabled).toBe(true);
-
-    await type(keyInput, "foo");
-    await type(nameInput, "Foo Inc");
-    expect(submit.disabled).toBe(false);
+// SYD-214: below the header-collapse breakpoint, the nav links (Triage /
+// Board / Review / Agents / Settings) move into a disclosure menu toggled by
+// a small menu button, controlled by a CSS breakpoint the menu-toggle button
+// and the nav's "open" class exist for regardless of viewport width.
+describe("Shell nav disclosure menu (SYD-214)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    history.replaceState(null, "", "/");
   });
 
-  it("creates the project, closes the popover, and navigates to its board", async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe("/api/projects");
-      expect(init?.method).toBe("POST");
-      expect(JSON.parse(init!.body as string)).toEqual({ key: "FOO", name: "Foo Inc" });
-      return { ok: true, json: async () => ({ id: 3, key: "FOO", name: "Foo Inc" }) } as Response;
-    });
-    vi.stubGlobal("fetch", fetchMock);
+  function menuToggle(container: HTMLElement): HTMLButtonElement {
+    const button = container.querySelector(".menu-toggle");
+    if (!button) throw new Error("no .menu-toggle button");
+    return button as HTMLButtonElement;
+  }
 
-    try {
-      const container = await renderShell();
-      await click(findButton(container, "+ Project"));
-      const keyInput = container.querySelector(
-        '.new-project-popover input[placeholder="ACME"]',
-      ) as HTMLInputElement;
-      const nameInput = container.querySelector(
-        '.new-project-popover input[placeholder="Acme Corp"]',
-      ) as HTMLInputElement;
-      await type(keyInput, "foo");
-      await type(nameInput, "Foo Inc");
+  function nav(container: HTMLElement): HTMLElement {
+    return container.querySelector("nav") as HTMLElement;
+  }
 
-      await click(findButton(container, "Create project"));
+  it("renders nav closed by default and opens it on toggle click", async () => {
+    const container = await renderShell();
+    expect(nav(container).className).toBe("");
+    expect(menuToggle(container).getAttribute("aria-expanded")).toBe("false");
 
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/projects",
-        expect.objectContaining({ method: "POST" }),
-      );
-      expect(container.querySelector(".new-project-popover")).toBeNull();
-      expect(location.pathname).toBe("/board/FOO");
-      // optimistic splice: the new project shows up in the switcher immediately,
-      // without waiting for the next projects poll.
-      expect(
-        [...container.querySelectorAll("select option")].some(
-          (o) => o.textContent === "FOO — Foo Inc",
-        ),
-      ).toBe(true);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    await click(menuToggle(container));
+    expect(nav(container).className).toBe("open");
+    expect(menuToggle(container).getAttribute("aria-expanded")).toBe("true");
+
+    await click(menuToggle(container));
+    expect(nav(container).className).toBe("");
   });
 
-  it("surfaces a server error inline and leaves the popover open", async () => {
-    const fetchMock = vi.fn(
-      async () =>
-        ({
-          ok: false,
-          status: 400,
-          json: async () => ({
-            error: 'A project with key "ACME" already exists — call list_projects to see it.',
-          }),
-        }) as Response,
-    );
-    vi.stubGlobal("fetch", fetchMock);
+  it("closes the menu after picking a nav link", async () => {
+    const container = await renderShell();
+    await click(menuToggle(container));
+    expect(nav(container).className).toBe("open");
 
-    try {
-      const container = await renderShell();
-      await click(findButton(container, "+ Project"));
-      const keyInput = container.querySelector(
-        '.new-project-popover input[placeholder="ACME"]',
-      ) as HTMLInputElement;
-      const nameInput = container.querySelector(
-        '.new-project-popover input[placeholder="Acme Corp"]',
-      ) as HTMLInputElement;
-      // key isn't in the local `projects` prop, so client-side validation passes;
-      // the server still rejects it (e.g. another actor claimed it moments earlier)
-      await type(keyInput, "zzz");
-      await type(nameInput, "Zzz Inc");
-      await click(findButton(container, "Create project"));
+    await click(navLink(container, "Board"));
+    expect(nav(container).className).toBe("");
+  });
 
-      expect(container.querySelector(".new-project-popover")).not.toBeNull();
-      expect(container.querySelector(".error-bar")?.textContent).toContain("already exists");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  it("keeps every nav item (including the Review badge) present in the DOM regardless of menu state", async () => {
+    const container = await renderShell();
+    expect(navLink(container, "Triage")).toBeTruthy();
+    expect(navLink(container, "Board")).toBeTruthy();
+    expect(navLink(container, "Review")).toBeTruthy();
+    expect(navLink(container, "Agents")).toBeTruthy();
+    expect(navLink(container, "Settings")).toBeTruthy();
   });
 });
 
