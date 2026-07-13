@@ -876,6 +876,25 @@ describe("buildDockerArgs", () => {
     expect(optIndex).toBeGreaterThan(-1);
     expect(args[optIndex + 1]).toBe("no-new-privileges");
   });
+
+  it("codex engine: image + CA mount, no real credential and no Claude placeholder (SYD-187)", () => {
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, engine: "codex" },
+      { CODEX_OAUTH_TOKEN: "cxo-REAL" } as NodeJS.ProcessEnv,
+    );
+    const joined = args.join(" ");
+    expect(args[args.length - 1]).toBe("switchyard-worker-codex");
+    expect(joined).toMatch(/-v [^ ]*egress-ca[^ ]*:\/ca:ro/);
+    expect(joined).not.toContain("cxo-REAL");
+    expect(joined).not.toContain("CLAUDE_CODE_OAUTH_TOKEN"); // no Claude cred/placeholder on the codex path
+    const passesToken = args.some((a, i) => a === "-e" && args[i + 1] === "CODEX_OAUTH_TOKEN");
+    expect(passesToken).toBe(false); // real token stays in the sidecar, not the container
+    const passesAcct = args.some((a, i) => a === "-e" && args[i + 1] === "CODEX_ACCOUNT_ID");
+    expect(passesAcct).toBe(true); // non-secret account UUID goes to the container (for auth.json)
+    expect(args).toContain("SWITCHYARD_TOKEN"); // scoped token still bare-passed
+  });
 });
 
 describe("stackChecksEnv", () => {
