@@ -1,7 +1,8 @@
-import { and, eq, gt, isNull } from "drizzle-orm";
-import type { DbOrTx } from "../db/index.js";
-import { claimLeases } from "../db/schema.js";
+import { and, eq, gt, isNull, lte, sql } from "drizzle-orm";
+import type { Db, DbOrTx } from "../db/index.js";
+import { claimLeases, issues } from "../db/schema.js";
 import { SwitchyardError } from "./errors.js";
+import { recordEvent } from "./events.js";
 import { hashToken, mintToken } from "./tokens.js";
 
 export type ClaimLease = typeof claimLeases.$inferSelect;
@@ -81,4 +82,70 @@ export function validateLease(
         "it over, that session now owns the work.",
     );
   }
+}
+
+/**
+ * Marks the active lease of an issue invalidated (takeover / self-release /
+ * human-answer release). No-op if there is no active lease. The REASON is
+ * carried by the event the caller co-records (claim_released{reason} /
+ * lease_taken_over), not stored on the lease row.
+ */
+export function invalidateLease(tx: DbOrTx, issueId: number): void {
+  const active = getActiveLease(tx, issueId);
+  if (!active) return;
+  tx.update(claimLeases)
+    .set({ invalidatedAt: sql`(unixepoch())` })
+    .where(eq(claimLeases.id, active.id))
+    .run();
+}
+
+/**
+ * Sweep: for every non-invalidated lease past expires_at, atomically release
+ * the still-matching in_progress claim (re-assert status/needsInput inside the
+ * UPDATE, exactly like releaseStaleClaims — a legit transition that landed
+ * first wins the race, .changes === 0 ⇒ skip the event), record
+ * claim_released{reason:"lease_expired"}, and mark the lease invalidated (so it
+ * leaves future sweeps). Replaces the 4h idle guess for leased claims.
+ * Returns the number of issues released.
+ */
+export function expireLeases(db: Db, now: number = nowSeconds()): number {
+  const expired = db
+    .select()
+    .from(claimLeases)
+    .where(and(isNull(claimLeases.invalidatedAt), lte(claimLeases.expiresAt, now)))
+    .all();
+  let released = 0;
+  for (const lease of expired) {
+    const issue = db.select().from(issues).where(eq(issues.id, lease.issueId)).get();
+    const actorId = issue?.assigneeId ?? issue?.creatorId ?? lease.actorId;
+    const wasReleased = db.transaction((tx) => {
+      // Always invalidate the expired lease, even if the issue moved on, so the
+      // next sweep does not re-scan it.
+      tx.update(claimLeases)
+        .set({ invalidatedAt: sql`(unixepoch())` })
+        .where(eq(claimLeases.id, lease.id))
+        .run();
+      const result = tx
+        .update(issues)
+        .set({ status: "todo", assigneeId: null, updatedAt: sql`(unixepoch())` })
+        .where(
+          and(
+            eq(issues.id, lease.issueId),
+            eq(issues.status, "in_progress"),
+            eq(issues.needsInput, false),
+          ),
+        )
+        .run();
+      if (result.changes === 0) return false;
+      recordEvent(tx, {
+        issueId: lease.issueId,
+        actorId,
+        type: "claim_released",
+        payload: { reason: "lease_expired" },
+      });
+      return true;
+    });
+    if (wasReleased) released++;
+  }
+  return released;
 }

@@ -3,6 +3,7 @@ import type { Db } from "../db/index.js";
 import { issues, events } from "../db/schema.js";
 import { recordEvent } from "./events.js";
 import { getSetting } from "./settings.js";
+import { getActiveLease } from "./leases.js";
 
 /**
  * Releases `in_progress` issues whose newest event is older than `maxIdleSeconds`.
@@ -29,6 +30,10 @@ export function releaseStaleClaims(
   let released = 0;
   for (const issue of inProgress) {
     if (issue.needsInput) continue; // an agent that escalated correctly must not be punished
+    // SYD-210: a leased claim is governed by lease expiry (8h TTL), not the 4h
+    // idle guess — a healthy quiet container keeps its lease. Only lease-less
+    // claims (none after the hard cutover) still fall to this idle sweep.
+    if (getActiveLease(db, issue.id)) continue;
     const newest = db
       .select({ createdAt: max(events.createdAt) })
       .from(events)
