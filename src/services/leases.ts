@@ -134,8 +134,24 @@ export function invalidateLease(tx: DbOrTx, issueId: number): void {
  * claim_released{reason:"lease_expired"}, and mark the lease invalidated (so it
  * leaves future sweeps). Replaces the 4h idle guess for leased claims.
  * Returns the number of issues released.
+ *
+ * SYD-210 Layer B server-uptime gate: a tracker redeploy is a correlated
+ * outage — every container's heartbeats fail at once during the ~5–15s
+ * restart. When `serverStartedAt` is given, the sweep is skipped entirely
+ * until the server has been continuously up for one full heartbeat window,
+ * giving every live container a chance to re-heartbeat before any expiry fires.
  */
-export function expireLeases(db: Db, now: number = nowSeconds()): number {
+export function expireLeases(
+  db: Db,
+  now: number = nowSeconds(),
+  serverStartedAt?: number,
+): number {
+  if (
+    serverStartedAt !== undefined &&
+    now - serverStartedAt < getSetting(db, "claims.heartbeat_window_seconds")
+  ) {
+    return 0;
+  }
   const expired = db
     .select()
     .from(claimLeases)

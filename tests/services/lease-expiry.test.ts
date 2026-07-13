@@ -41,6 +41,18 @@ describe("expireLeases", () => {
     expect(expireLeases(db)).toBe(0); // idempotent — lease now invalidated
   });
 
+  it("does not sweep within the server-uptime grace window after a restart (SYD-210 Layer B)", () => {
+    const id = claimThenExpireLease();
+    const now = Math.floor(Date.now() / 1000);
+    // server just came up (within the 600s heartbeat window): a correlated
+    // redeploy outage must not mass-expire live leases before they re-heartbeat.
+    expect(expireLeases(db, now, now - 60)).toBe(0);
+    expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
+    // once the server has been up longer than the window, expiry resumes.
+    expect(expireLeases(db, now, now - 601)).toBe(1);
+    expect(getIssue(db, "AIPI-1").status).toBe("todo");
+  });
+
   it("leaves a still-valid lease alone", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "t" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
