@@ -214,6 +214,17 @@ export function buildMcpServer(
       inputSchema: { ref: z.string(), takeover: z.boolean().optional() },
     },
     guard(({ ref, takeover }: { ref: string; takeover?: boolean }) => {
+      // SYD-210: a host-supervised container session already holds a
+      // host-minted lease (injected as the connection token). Refuse claim_issue
+      // for it — otherwise a prompt-injection in an untrusted issue body could
+      // coax it into claim_issue(takeover:true), which would mint a fresh token
+      // straight into the LLM transcript / a durable comment (and DoS the host's
+      // heartbeat by invalidating its lease). Its writes are already authorized.
+      if (connectionLeaseToken) {
+        throw new SwitchyardError(
+          `${ref} is already claimed for your session — do not call claim_issue; your writes are already authorized. Just proceed with the work.`,
+        );
+      }
       const { issue, leaseToken } = claimIssue(db, actor, ref, { takeover });
       return { ...issue, lease_token: leaseToken };
     }),
@@ -285,20 +296,27 @@ export function buildMcpServer(
     ),
   );
 
-  server.registerTool(
-    "heartbeat",
-    {
-      description:
-        "Keep your claim's lease alive by renewing it. The supervising host worker calls this on a " +
-        "timer for container sessions — you normally do NOT need to call it yourself. Pass the " +
-        "lease_token returned by claim_issue.",
-      inputSchema: { ref: z.string(), lease_token: z.string().optional() },
-    },
-    guard(({ ref, lease_token }: { ref: string; lease_token?: string }) => {
-      const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token ?? connectionLeaseToken);
-      return { ok: true, expires_at: expiresAt };
-    }),
-  );
+  // SYD-210: register the model-facing heartbeat tool ONLY for a host-supervised
+  // container session (one carrying a connection lease). Exposing it to ordinary
+  // interactive sessions is a footgun: a single call would collapse their 8h
+  // lease to the ~10-min heartbeat window (heartbeatLease shortens expires_at),
+  // and an idle interactive session would then be released mid-work. The host
+  // renews container leases over REST, so no ordinary session needs this tool.
+  if (connectionLeaseToken) {
+    server.registerTool(
+      "heartbeat",
+      {
+        description:
+          "Keep your claim's lease alive by renewing it. The supervising host worker already does " +
+          "this on a timer — you normally do NOT need to call it yourself.",
+        inputSchema: { ref: z.string(), lease_token: z.string().optional() },
+      },
+      guard(({ ref, lease_token }: { ref: string; lease_token?: string }) => {
+        const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token ?? connectionLeaseToken);
+        return { ok: true, expires_at: expiresAt };
+      }),
+    );
+  }
 
   server.registerTool(
     "comment",
