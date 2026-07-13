@@ -26,6 +26,7 @@ export const issueCreateBody = z.object({
   labels: z.array(z.string()).optional(),
   parentRef: z.string().optional(),
   provenance: provenance.optional(),
+  workerPreference: z.string().nullable().optional(),
 });
 
 export const issueUpdateBody = z.object({
@@ -36,6 +37,7 @@ export const issueUpdateBody = z.object({
   description: z.string().optional(),
   assigneeName: z.string().nullable().optional(),
   labels: z.array(z.string()).optional(),
+  workerPreference: z.string().nullable().optional(),
 });
 
 export const commentBody = z.object({ body: z.string() });

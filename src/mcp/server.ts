@@ -161,6 +161,7 @@ export function buildMcpServer(
         source_type: z.enum(["session", "todo", "ci", "manual"]).optional(),
         source_detail: z.string().optional(),
         source_url: z.string().optional(),
+        worker_preference: z.string().nullable().optional(),
       },
     },
     guard(
@@ -175,6 +176,7 @@ export function buildMcpServer(
         source_type?: "session" | "todo" | "ci" | "manual";
         source_detail?: string;
         source_url?: string;
+        worker_preference?: string | null;
       }) =>
         createIssue(db, actor, {
           projectKey: a.project_key,
@@ -187,6 +189,7 @@ export function buildMcpServer(
           provenance: a.source_type
             ? { sourceType: a.source_type, detail: a.source_detail, url: a.source_url }
             : undefined,
+          workerPreference: a.worker_preference,
         }),
     ),
   );
@@ -220,6 +223,7 @@ export function buildMcpServer(
         description: z.string().optional(),
         assignee: z.string().nullable().optional(),
         labels: z.array(z.string()).optional(),
+        worker_preference: z.string().nullable().optional(),
       },
     },
     guard(
@@ -232,6 +236,7 @@ export function buildMcpServer(
         description?: string;
         assignee?: string | null;
         labels?: string[];
+        worker_preference?: string | null;
       }) =>
         updateIssue(db, actor, a.ref, {
           status: a.status,
@@ -241,6 +246,7 @@ export function buildMcpServer(
           description: a.description,
           assigneeName: a.assignee,
           labels: a.labels,
+          workerPreference: a.worker_preference,
         }),
     ),
   );

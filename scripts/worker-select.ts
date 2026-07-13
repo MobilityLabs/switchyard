@@ -34,6 +34,14 @@ export type WorkerIssue = {
   priority?: string;
   /** Creation timestamp, the oldest-first tiebreak within a priority (SYD-160). */
   createdAt?: number;
+  /**
+   * Soft dispatch routing (SYD-201): the preferred worker classification (its
+   * engine, e.g. "codex"). A worker sorts issues matching its classification
+   * ahead of neutral (null) ones, and foreign-preferred ones last — never
+   * excluded, so an idle worker still falls back to them. Optional/unknown =
+   * neutral.
+   */
+  workerPreference?: string | null;
 };
 
 /**
@@ -338,10 +346,25 @@ export function selectDispatchable<T extends WorkerIssue>(
   const capacity = config.maxConcurrent - countWorkActive(active);
   if (capacity <= 0) return [];
 
-  // Mirror next_task's (PRIORITY_RANK, createdAt) ordering so dispatch honors
-  // priority regardless of the order /api/issues returned rows in (desc(id),
-  // i.e. newest-first). Array.sort is stable, so equal keys keep feed order.
+  // Soft routing (SYD-201): this worker's classification is its engine. An
+  // issue matching it sorts first, neutral (no preference) next, another
+  // classification's last — ahead of priority, so each worker prefers its own
+  // but (since nothing is excluded below) still falls back to foreign-preferred
+  // work when it's all that's left. No preference set anywhere => all neutral,
+  // i.e. today's behavior unchanged.
+  const classification = config.engine ?? "claude";
+  const affinity = (issue: T): number => {
+    const pref = issue.workerPreference;
+    if (pref == null) return 1; // neutral
+    return pref === classification ? 0 : 2; // match : foreign
+  };
+
+  // Then mirror next_task's (PRIORITY_RANK, createdAt) ordering so dispatch
+  // honors priority regardless of the order /api/issues returned rows in
+  // (desc(id), i.e. newest-first). Array.sort is stable, so equal keys keep feed order.
   const ordered = [...issues].sort((a, b) => {
+    const byAffinity = affinity(a) - affinity(b);
+    if (byAffinity !== 0) return byAffinity;
     const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
     if (byPriority !== 0) return byPriority;
     return (a.createdAt ?? 0) - (b.createdAt ?? 0);
