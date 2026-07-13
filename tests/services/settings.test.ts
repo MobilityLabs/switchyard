@@ -102,6 +102,7 @@ describe("settings", () => {
       maxAnswerConcurrent: REGISTRY["dispatch.max_answer_concurrent"].default,
       intervalSeconds: REGISTRY["dispatch.poll_seconds"].default,
       eventPollSeconds: REGISTRY["dispatch.event_poll_seconds"].default,
+      heartbeatWindowSeconds: REGISTRY["claims.heartbeat_window_seconds"].default,
     });
   });
 

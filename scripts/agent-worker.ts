@@ -45,7 +45,18 @@
 
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync, mkdirSync, openSync, closeSync, appendFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  closeSync,
+  appendFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
@@ -81,6 +92,12 @@ import {
   partitionContainerSessions,
   egressMode,
   ensureEgressGuard,
+  heartbeatTick,
+  heartbeatMissLimit,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_FETCH_TIMEOUT_MS,
+  HEARTBEAT_INVALID_LIMIT,
+  type HeartbeatOutcome,
   type WorkerConfig,
   type WorkerProject,
   type WorkerIssue,
@@ -322,9 +339,13 @@ export async function refreshDispatchPolicy(config: WorkerConfig, token: string)
  * coordinating human session) both select the same unassigned todo and spin
  * up sessions before either calls claim_issue — selection and claim are now
  * atomic from this worker's side, not just from the dispatched session's.
- * The session still calls claim_issue itself per the prompt, but that just
- * reclaims the same actor's own issue at that point (a no-op check) since
- * the session authenticates with this same worker's token.
+ * The host claim mints the session-scoped lease (SYD-210); its plaintext token
+ * is returned here ONCE and threaded to the dispatched session out-of-band (an
+ * MCP connection header, never argv, never the LLM transcript) so its
+ * claim-scoped calls carry the lease, and the host heartbeats it while the
+ * session runs. The dispatched session must therefore NOT call claim_issue —
+ * a same-actor re-claim against the active lease would fail loudly (see
+ * buildPrompt).
  *
  * A refusal (already claimed, now blocked) means another actor won the race
  * — logged and treated as "skip this ref", not an error: it needs no retry
@@ -333,25 +354,220 @@ export async function refreshDispatchPolicy(config: WorkerConfig, token: string)
  * failures still retry across a self-deploy restart via withRetry, same as
  * the other tracker writes.
  */
-async function claimIssueHost(config: WorkerConfig, token: string, ref: string): Promise<boolean> {
+async function claimIssueHost(
+  config: WorkerConfig,
+  token: string,
+  ref: string,
+): Promise<string | null> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/claim`;
   try {
-    await withRetry(async () => {
+    return await withRetry(async () => {
       const res = await fetch(url, {
         method: "POST",
         headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new HttpStatusError(res.status, await res.text());
+      const body = (await res.json()) as { leaseToken?: string };
+      // A claim always mints a lease; an absent token is a server/version
+      // mismatch (un-upgraded tracker) — skip rather than dispatch a session
+      // that can't authenticate its writes. Log LOUDLY: the claim DID commit
+      // server-side (the issue is now in_progress with an 8h lease held by
+      // nobody), so a silent skip would strand it until the TTL. Not auto-released
+      // here because a bare todo-PATCH can't prove we're the holder without the
+      // very token we didn't get; surfaced for operator attention instead.
+      if (!body.leaseToken) {
+        console.error(
+          `claimed ${ref} but the tracker returned no lease token — it is now claimed with an ` +
+            `unpresentable lease (un-upgraded tracker?); skipping dispatch. It will free on the lease TTL.`,
+        );
+        return null;
+      }
+      return body.leaseToken;
     });
-    return true;
   } catch (err) {
     if (err instanceof HttpStatusError && err.status < 500) {
       console.log(`skipping ${ref}: lost the claim race (${err.message})`);
     } else {
       console.error(`could not claim ${ref} before dispatch: ${(err as Error).message}`);
     }
-    return false;
+    return null;
   }
+}
+
+/**
+ * SYD-210 Layer B: renew a dispatched session's lease on the tracker, returning
+ * a classified outcome. A 2xx is `ok`; a 4xx is `invalid` (the lease is gone —
+ * takeover/expiry — permanent); a 5xx / network error / timeout is
+ * `unreachable` (transient). The per-request AbortSignal timeout stops a
+ * black-holing tracker from holding a beat open for undici's ~300s default.
+ */
+async function postHeartbeat(
+  config: WorkerConfig,
+  token: string,
+  leaseToken: string,
+  ref: string,
+): Promise<HeartbeatOutcome> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/heartbeat`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "X-Switchyard-Lease": leaseToken },
+      signal: AbortSignal.timeout(HEARTBEAT_FETCH_TIMEOUT_MS),
+    });
+    if (res.ok) return "ok";
+    return res.status >= 400 && res.status < 500 ? "invalid" : "unreachable";
+  } catch {
+    return "unreachable";
+  }
+}
+
+/**
+ * SYD-210 Layer B: compensating release. Dispatch setup failed AFTER the host
+ * claimed host-side, so the issue is now claimed with a lease no session will
+ * ever present — it would sit stranded in_progress until the lease TTL. Release
+ * it back to todo, presenting our own lease header (the host is the holder), so
+ * it's immediately re-dispatchable. Best-effort (SYD-210 review, codex HIGH).
+ */
+async function releaseClaimHost(
+  config: WorkerConfig,
+  token: string,
+  leaseToken: string,
+  ref: string,
+): Promise<void> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}`;
+  try {
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "X-Switchyard-Lease": leaseToken,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ status: "todo" }),
+      signal: AbortSignal.timeout(HEARTBEAT_FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) console.error(`could not release ${ref} after a dispatch failure: HTTP ${res.status}`);
+  } catch (err) {
+    console.error(`could not release ${ref} after a dispatch failure: ${(err as Error).message}`);
+  }
+}
+
+/**
+ * Starts the host-side heartbeat loop for a running session and returns a stop
+ * function. Fires an immediate first beat (so a session that dies before the
+ * first interval still collapses its 8h mint TTL to the heartbeat window right
+ * away), then self-reschedules with `setTimeout` — awaiting each beat so a slow
+ * tracker can't stack overlapping requests or glitch the counters with
+ * out-of-order completions (the `setInterval` re-entrancy the review flagged).
+ * Cancels FAST on a definitive 4xx (lease revoked → the session is doing
+ * double-work), and only after the full transient miss window on network/5xx.
+ */
+export function startLeaseHeartbeat(
+  config: WorkerConfig,
+  token: string,
+  leaseToken: string,
+  ref: string,
+  onExhausted: () => void,
+  log: (message: string) => void,
+): () => void {
+  let state = { misses: 0, invalids: 0 };
+  let stopped = false;
+  let timer: NodeJS.Timeout | null = null;
+  const stop = () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+  const beat = async () => {
+    if (stopped) return;
+    const outcome = await postHeartbeat(config, token, leaseToken, ref);
+    if (stopped) return;
+    // Re-derive the limit each beat so a mid-session dispatch-policy retune of
+    // the heartbeat window takes effect on a live loop (SYD-210 review, codex
+    // HIGH), not just at the next dispatch.
+    const missLimit = heartbeatMissLimit(config);
+    const r = heartbeatTick(state, outcome, missLimit);
+    state = { misses: r.misses, invalids: r.invalids };
+    if (outcome !== "ok") {
+      log(
+        `[worker] ${ref}: lease heartbeat ${outcome} ` +
+          `(4xx ${state.invalids}/${HEARTBEAT_INVALID_LIMIT}, transient ${state.misses}/${missLimit})\n`,
+      );
+    }
+    if (r.cancel) {
+      log(`[worker] ${ref}: lease unrenewable (${outcome}) — cancelling session\n`);
+      stop();
+      onExhausted();
+      return;
+    }
+    timer = setTimeout(() => void beat(), HEARTBEAT_INTERVAL_MS);
+    timer.unref?.();
+  };
+  void beat(); // immediate first beat
+  return stop;
+}
+
+// SYD-210 Layer B: a containerized session survives a worker restart (SYD-121
+// adoption), but its lease token lives only in the dead worker's memory. Persist
+// it to a 0600 file beside the session log so the startup reconciler can recover
+// it and resume heartbeats — otherwise the adopted container's already-collapsed
+// ~10-min lease expires mid-work and its issue is wrongly re-dispatched. Same
+// file-handoff idiom as the rest of the worker's out-of-band secrets.
+function leaseFilePath(repo: string, ref: string): string {
+  return path.join(repo, ".superpowers", "worker-logs", `${ref}.lease`);
+}
+export function persistLeaseToken(repo: string, ref: string, leaseToken: string): void {
+  try {
+    writeFileSync(leaseFilePath(repo, ref), leaseToken, { mode: 0o600 });
+  } catch (err) {
+    console.error(`could not persist lease for ${ref}: ${(err as Error).message}`);
+  }
+}
+export function readPersistedLeaseToken(repo: string, ref: string): string | null {
+  try {
+    return readFileSync(leaseFilePath(repo, ref), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+function clearPersistedLeaseToken(repo: string, ref: string): void {
+  try {
+    rmSync(leaseFilePath(repo, ref), { force: true });
+  } catch {
+    /* best-effort: a lingering lease file is re-read only if the ref is re-adopted */
+  }
+}
+
+// SYD-210 Layer B: the bare-host `claude -p` runner can't inherit a per-session
+// MCP header the way the container (env → container-entry.sh) and SDK
+// (sdk-runner header) paths do. Write a per-dispatch MCP config carrying both
+// the bearer and the X-Switchyard-Lease header (0600, value in the file not
+// argv — same discipline as container-entry.sh), passed via `--mcp-config`.
+//
+// Written into a FRESH mkdtemp dir under the OS temp dir (SYD-210 review):
+// - out of the repo working tree, so a prompt-injected session can't `Glob` the
+//   worker bearer token out of its own cwd (pentester MINOR); and
+// - a unique never-before-existing path, so a local writer can't pre-place a
+//   symlink at a predictable name to redirect the 0600 write (codex MEDIUM).
+// Returns the tmp dir so the caller can remove it wholesale on exit.
+export function writeCliMcpConfig(
+  ref: string,
+  url: string,
+  token: string,
+  leaseToken: string,
+): { configPath: string; tmpDir: string } {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), `syd-${ref}-`));
+  const configPath = path.join(tmpDir, "switchyard-mcp.json");
+  const cfg = {
+    mcpServers: {
+      switchyard: {
+        type: "http",
+        url: `${url.replace(/\/$/, "")}/mcp`,
+        headers: { Authorization: `Bearer ${token}`, "X-Switchyard-Lease": leaseToken },
+      },
+    },
+  };
+  writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+  return { configPath, tmpDir };
 }
 
 export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
@@ -363,7 +579,11 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
   return (
     resumedPreamble +
     `Work Switchyard issue ${ref} using the switchyard MCP tools. ` +
-    `Call claim_issue first. ` +
+    // SYD-210: the dispatch host already claimed this issue for your session and
+    // holds its lease — do NOT call claim_issue (a re-claim would fail). Your
+    // claim-scoped calls (update_issue, request_human_input) are authorized
+    // automatically; just call get_issue to read it and start work.
+    `This issue is already claimed for your session — do not call claim_issue; call get_issue to read it. ` +
     `Record a one-line note with the progress_note tool each time you start a new ` +
     `step (reading code, writing tests, implementing, verifying) so humans can ` +
     `watch progress live. ` +
@@ -489,11 +709,23 @@ export function dispatch(
   config: WorkerConfig,
   token: string,
   role: WorkerRole,
-  opts: { resumed?: boolean } = {},
+  opts: { resumed?: boolean; leaseToken?: string } = {},
 ): void {
   const project = config.projects[projectKeyOf(issue.ref)];
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
-  mkdirSync(logDir, { recursive: true });
+  // SYD-210 review (codex): setup runs AFTER the host claimed, so any failure
+  // before a heartbeat can start must release the lease or the issue strands
+  // until the TTL. mkdirSync/openSync are the pre-`try` failure points.
+  const releaseOnSetupFailure = (err: unknown, what: string): void => {
+    console.error(`failed to ${what} for ${issue.ref}: ${(err as Error).message}`);
+    if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
+  };
+  try {
+    mkdirSync(logDir, { recursive: true });
+  } catch (err) {
+    releaseOnSetupFailure(err, "prepare the log dir");
+    return;
+  }
   const logPath = path.join(logDir, `${issue.ref}.log`);
 
   if ((config.runner ?? "cli") === "sdk") {
@@ -509,7 +741,18 @@ export function dispatch(
     }
   };
 
-  const fd = openSync(logPath, "a");
+  let fd: number;
+  try {
+    fd = openSync(logPath, "a");
+  } catch (err) {
+    releaseOnSetupFailure(err, "open the session log");
+    return;
+  }
+
+  // SYD-210 Layer B: the bare-CLI runner's per-dispatch MCP-config temp dir
+  // carrying the lease header (removed wholesale on exit). null for
+  // container/no-lease dispatch.
+  let cliMcpTmpDir: string | null = null;
 
   let child: ChildProcess;
   try {
@@ -521,6 +764,13 @@ export function dispatch(
       child = spawn("docker", dockerArgs, {
         detached: true,
         stdio: ["ignore", fd, fd],
+        // SYD-210 Layer B: hand the lease to the container via the spawn env
+        // (bare -e SWITCHYARD_LEASE in dockerArgs reads it here) so it never
+        // appears in argv. Per-spawn env avoids collisions across concurrent
+        // containers.
+        env: opts.leaseToken
+          ? { ...process.env, SWITCHYARD_LEASE: opts.leaseToken }
+          : process.env,
       });
     } else {
       // Headless sessions can't answer permission prompts — grant the tools the
@@ -534,25 +784,40 @@ export function dispatch(
         "Grep",
         "Glob",
       ];
-      child = spawn(
-        "claude",
-        [
-          "-p",
-          buildPrompt(issue.ref, opts),
-          "--permission-mode",
-          "acceptEdits",
-          "--allowedTools",
-          allowedTools.join(","),
-        ],
-        {
-          cwd: project.repo,
-          detached: true,
-          stdio: ["ignore", fd, fd],
-        },
-      );
+      const cliArgs = [
+        "-p",
+        buildPrompt(issue.ref, opts),
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        allowedTools.join(","),
+      ];
+      // SYD-210 Layer B: inject the lease as an MCP header via a per-dispatch
+      // --mcp-config file (the bare-CLI path has no env→header bridge like the
+      // container/SDK paths). Without this, the no-reclaim prompt would leave the
+      // session unable to authorize its claim-scoped writes.
+      if (opts.leaseToken) {
+        const { configPath, tmpDir } = writeCliMcpConfig(
+          issue.ref,
+          config.url,
+          token,
+          opts.leaseToken,
+        );
+        cliMcpTmpDir = tmpDir;
+        cliArgs.push("--mcp-config", configPath);
+      }
+      child = spawn("claude", cliArgs, {
+        cwd: project.repo,
+        detached: true,
+        stdio: ["ignore", fd, fd],
+      });
     }
   } catch (err) {
     console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
+    // The host already claimed this issue; setup failed before any heartbeat
+    // could start, so release the lease-held claim rather than strand it.
+    if (cliMcpTmpDir) rmSync(cliMcpTmpDir, { recursive: true, force: true });
+    if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
     return;
   } finally {
     closeSync(fd);
@@ -561,6 +826,26 @@ export function dispatch(
   active.set(issue.ref, child);
   activeMode.set(issue.ref, config.containerized ? "container" : "cli");
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
+
+  // SYD-210 Layer B: persist the lease for a container so a worker restart can
+  // re-adopt it and resume heartbeats (see adoptContainerSession). Bare-CLI
+  // sessions are killed on restart (not adopted), so they don't need this.
+  if (opts.leaseToken && config.containerized) {
+    persistLeaseToken(project.repo, issue.ref, opts.leaseToken);
+  }
+  const cleanupLeaseArtifacts = () => {
+    if (config.containerized) clearPersistedLeaseToken(project.repo, issue.ref);
+    if (cliMcpTmpDir) rmSync(cliMcpTmpDir, { recursive: true, force: true });
+  };
+
+  // SYD-210 Layer B: heartbeat the lease while the session runs; after N missed
+  // renewals, kill it (honest liveness — a dead/wedged session loses its claim
+  // within the window instead of holding it out to the 8h TTL).
+  const stopHeartbeat = opts.leaseToken
+    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () =>
+        killSession(child, config.containerized ? `syd-${issue.ref}` : null),
+      logLine)
+    : () => {};
 
   // Watchdog (SYD-115): a hung `claude -p` or stuck `docker run` would
   // otherwise hold this maxConcurrent slot forever. Cleared on exit/error
@@ -590,6 +875,8 @@ export function dispatch(
 
   child.on("exit", (code) => {
     clearTimeout(watchdog);
+    stopHeartbeat();
+    cleanupLeaseArtifacts();
     active.delete(issue.ref);
     activeMode.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
@@ -598,6 +885,8 @@ export function dispatch(
 
   child.on("error", (err) => {
     clearTimeout(watchdog);
+    stopHeartbeat();
+    cleanupLeaseArtifacts();
     active.delete(issue.ref);
     activeMode.delete(issue.ref);
     // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
@@ -605,6 +894,12 @@ export function dispatch(
     void reportSessionEnd(config, token, sessionId, null, (message) =>
       logLine(`[worker] ${message}\n`),
     );
+    // SYD-210 review (codex): spawn usually reports failure (ENOENT for a
+    // missing `claude`/`docker`, exec errors) ASYNCHRONOUSLY here, not by
+    // throwing into the catch — so release the just-claimed lease here too, or
+    // the issue strands until the TTL. (Harmless if the immediate heartbeat
+    // already collapsed the window; a release is still the honest outcome.)
+    if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
     console.error(`failed to spawn claude for ${issue.ref}: ${err.message}`);
   });
 }
@@ -622,7 +917,7 @@ function dispatchSdk(
   token: string,
   role: WorkerRole,
   logPath: string,
-  opts: { resumed?: boolean },
+  opts: { resumed?: boolean; leaseToken?: string },
 ): void {
   const allowedTools = config.allowedTools ?? [
     "mcp__switchyard__*",
@@ -653,6 +948,16 @@ function dispatchSdk(
     (message) => safeAppend(`[worker] ${message}\n`),
   );
 
+  // SYD-210 Layer B: heartbeat the lease while the SDK session runs; on N missed
+  // renewals, abort the query (the SDK's own cancellation) rather than racing a
+  // re-dispatch. Stopped when the session settles (finally, below).
+  const sdkAbort = new AbortController();
+  const stopHeartbeat = opts.leaseToken
+    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () => sdkAbort.abort(), (m) =>
+        safeAppend(m),
+      )
+    : () => {};
+
   const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
   import(runnerPath)
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
@@ -661,9 +966,11 @@ function dispatchSdk(
         cwd: repo,
         switchyardUrl: config.url,
         switchyardToken: token,
+        switchyardLeaseToken: opts.leaseToken,
         allowedTools,
         logPath,
         timeoutMs: sessionTimeoutMs(config),
+        externalAbortSignal: sdkAbort.signal,
       }),
     )
     .then(
@@ -683,12 +990,17 @@ function dispatchSdk(
         void reportSessionEnd(config, token, sessionId, null, (message) =>
           safeAppend(`[worker] ${message}\n`),
         );
+        // SYD-210 review (codex): an SDK import/startup rejection means the
+        // session never ran — release the just-claimed lease rather than let it
+        // strand (stopHeartbeat in .finally already halts the immediate beat).
+        if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
       },
     )
     .catch((err: Error) =>
       console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`),
     )
     .finally(() => {
+      stopHeartbeat();
       active.delete(issue.ref);
       if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
     });
@@ -906,10 +1218,22 @@ export async function runTick(
             );
             continue;
           }
-          if (!(await claimIssueHost(config, token, issue.ref))) continue;
+          // SYD-210 review (codex): leased dispatch requires the session to
+          // present its lease as an MCP header. The codex container can't yet
+          // (SYD-220), so a codex worker would claim host-side and then dispatch
+          // a session whose every claim-scoped write is rejected — stranding the
+          // issue in_progress. Skip BEFORE claiming so nothing is stranded.
+          if ((config.engine ?? "claude") === "codex") {
+            console.log(
+              `skipping ${issue.ref}: codex leased dispatch not yet supported — see SYD-220`,
+            );
+            continue;
+          }
+          const leaseToken = await claimIssueHost(config, token, issue.ref);
+          if (!leaseToken) continue;
           recordAttempt(retryState, issue.ref, issue.updatedAt);
           const resumed = resumeRefs.delete(issue.ref);
-          dispatch(issue, config, token, role, { resumed });
+          dispatch(issue, config, token, role, { resumed, leaseToken });
         }
       } catch (err) {
         console.error(`poll failed: ${(err as Error).message}`);
@@ -1097,12 +1421,27 @@ export function adoptContainerSession(
   console.log(`adopted ${session.ref}: still-running container from before the restart`);
   logLine(`[worker] adopted running container after a worker restart\n`);
 
+  // SYD-210 Layer B: the pre-restart worker was heartbeating this container's
+  // lease; that lease has already been collapsed to the ~10-min window, so
+  // without resuming heartbeats it would expire mid-work and the tracker would
+  // wrongly re-dispatch the issue (SYD-121 adopt contract). Recover the token
+  // the dispatching worker persisted and resume the loop. If no lease file
+  // exists (pre-upgrade container, or non-lease dispatch), skip — same as today.
+  const leaseToken = readPersistedLeaseToken(project.repo, session.ref);
+  const stopHeartbeat = leaseToken
+    ? startLeaseHeartbeat(config, token, leaseToken, session.ref, () =>
+        killSession(child, containerNameFor(session.ref)),
+      logLine)
+    : () => {};
+
   let output = "";
   child.stdout?.on("data", (chunk: Buffer) => {
     output += chunk.toString();
   });
 
   child.on("exit", () => {
+    stopHeartbeat();
+    clearPersistedLeaseToken(project.repo, session.ref);
     active.delete(session.ref);
     activeMode.delete(session.ref);
     const parsed = Number.parseInt(output.trim(), 10);
@@ -1119,6 +1458,7 @@ export function adoptContainerSession(
     );
   });
   child.on("error", (err) => {
+    stopHeartbeat();
     active.delete(session.ref);
     activeMode.delete(session.ref);
     console.error(`failed to adopt container session for ${session.ref}: ${err.message}`);

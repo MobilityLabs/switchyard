@@ -79,6 +79,10 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
 }
 
 export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
+  // SYD-210 Layer B: capture process start once so lease expiry can gate on
+  // server uptime — a redeploy's correlated heartbeat outage must not
+  // mass-expire live leases before they re-heartbeat.
+  const serverStartedAt = Math.floor(Date.now() / 1000);
   const timer = setInterval(() => {
     try {
       emitProcessDeviations(db);
@@ -89,13 +93,14 @@ export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
     try {
       // No explicit staleSeconds: releaseStaleClaims reads claims.stale_seconds
       // fresh from settings every tick, so a human's edit in the UI takes
-      // effect on the next sweep, not just at process start.
-      releaseStaleClaims(db);
+      // effect on the next sweep, not just at process start. serverStartedAt
+      // shares the lease sweep's post-restart grace (SYD-210 review).
+      releaseStaleClaims(db, undefined, serverStartedAt);
     } catch (err) {
       console.error("stale claim release:", err);
     }
     try {
-      expireLeases(db);
+      expireLeases(db, Math.floor(Date.now() / 1000), serverStartedAt);
     } catch (err) {
       console.error("lease expiry sweep:", err);
     }

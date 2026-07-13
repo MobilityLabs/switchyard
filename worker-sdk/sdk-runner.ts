@@ -21,10 +21,17 @@ export type SdkSessionOpts = {
   cwd: string;
   switchyardUrl: string;
   switchyardToken: string;
+  /** SYD-210 Layer B: the session-scoped claim lease, sent as the
+   * X-Switchyard-Lease MCP header so claim-scoped writes carry it — never in
+   * argv, never in the LLM transcript. Omitted for non-lease (answer) sessions. */
+  switchyardLeaseToken?: string;
   allowedTools: string[];
   logPath: string;
   /** Watchdog (SYD-115): abort the query if it runs longer than this. No timeout when omitted. */
   timeoutMs?: number;
+  /** SYD-210 Layer B: host-side cancellation — the worker aborts the query when
+   * its lease heartbeat has failed N times in a row. */
+  externalAbortSignal?: AbortSignal;
 };
 
 /** Run one issue's session to completion. Resolves to an exit-code-like
@@ -48,6 +55,12 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
   // SDK's own cancellation mechanism — aborting stops the query and cleans
   // up its resources so the `finally` below always runs.
   const abortController = new AbortController();
+  // SYD-210 Layer B: fold the host's heartbeat-cancellation signal into the
+  // query's own abort so a lease the worker can no longer renew stops the run.
+  if (o.externalAbortSignal) {
+    if (o.externalAbortSignal.aborted) abortController.abort();
+    else o.externalAbortSignal.addEventListener("abort", () => abortController.abort());
+  }
   const watchdog =
     o.timeoutMs !== undefined
       ? setTimeout(() => {
@@ -55,6 +68,8 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
           abortController.abort();
         }, o.timeoutMs)
       : null;
+  const headers: Record<string, string> = { Authorization: `Bearer ${o.switchyardToken}` };
+  if (o.switchyardLeaseToken) headers["X-Switchyard-Lease"] = o.switchyardLeaseToken;
   try {
     const stream = query({
       prompt: o.prompt,
@@ -67,7 +82,7 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
           switchyard: {
             type: "http",
             url: `${o.switchyardUrl.replace(/\/$/, "")}/mcp`,
-            headers: { Authorization: `Bearer ${o.switchyardToken}` },
+            headers,
           },
         },
       },

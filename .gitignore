@@ -8,3 +8,4 @@ node_modules
 dist/
 switchyard-worker.json
 .env
+.tmp/

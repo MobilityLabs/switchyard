@@ -143,6 +143,9 @@ export type WorkerConfig = {
   intervalSeconds: number;
   /** How often to scan the event feed for answered escalations (default 15s). */
   eventPollSeconds?: number;
+  /** SYD-210 Layer B: server lease heartbeat window (from dispatch-policy); the
+   * host derives its miss-limit from it. Undefined until first policy fetch. */
+  heartbeatWindowSeconds?: number;
   maxConcurrent: number;
   projects: Record<string, WorkerProject>;
   allowedTools?: string[];
@@ -227,6 +230,10 @@ export type DispatchPolicy = {
   maxAnswerConcurrent: number;
   intervalSeconds: number;
   eventPollSeconds: number;
+  // SYD-210 Layer B: the server's lease heartbeat window; the host derives its
+  // miss-limit from it so the two can't diverge. Optional so an un-upgraded
+  // tracker (no field) falls back to the host default.
+  heartbeatWindowSeconds?: number;
 };
 
 /**
@@ -243,6 +250,34 @@ export function applyDispatchPolicy(config: WorkerConfig, policy: DispatchPolicy
   config.maxAnswerConcurrent = policy.maxAnswerConcurrent;
   config.intervalSeconds = policy.intervalSeconds;
   config.eventPollSeconds = policy.eventPollSeconds;
+  if (policy.heartbeatWindowSeconds !== undefined) {
+    config.heartbeatWindowSeconds = policy.heartbeatWindowSeconds;
+  }
+}
+
+/**
+ * SYD-210 Layer B: the host's consecutive-transient-miss cancel limit, derived
+ * from the server's heartbeat window so the host cancels a session BEFORE the
+ * server can expire its lease (the double-work direction), never after.
+ *
+ * The server expires a lease `window` seconds after the last successful beat.
+ * A worst-case miss cycle is up to `interval + fetchTimeout` (a black-holing
+ * tracker holds each beat open the full timeout, then the loop waits `interval`
+ * before the next), so N misses take up to N·(interval+timeout). Solving
+ * N·(interval+timeout) < window with `floor` guarantees the Nth miss lands
+ * strictly inside the window — leaving margin for the 2s sweep. (SYD-210 review,
+ * codex HIGH: the old `round(window/interval)` put the last miss AT/after
+ * expiry.) Falls back to the default window for an un-upgraded tracker; ≥1.
+ */
+export function heartbeatMissLimit(config: WorkerConfig): number {
+  const windowSeconds = config.heartbeatWindowSeconds ?? DEFAULT_HEARTBEAT_WINDOW_SECONDS;
+  const cycleMs = HEARTBEAT_INTERVAL_MS + HEARTBEAT_FETCH_TIMEOUT_MS;
+  // Largest N with N·cycle STRICTLY < window. `ceil(x)-1` is `floor(x)` for a
+  // non-integer ratio and `x-1` when window divides evenly by the cycle — so an
+  // operator retuning to a multiple (e.g. 140s → 1 miss @ 70s, not 2 @ 140s =
+  // expiry) still cancels before the server can release (SYD-210 review, codex).
+  // Floored at 1: a sub-cycle window is an operator misconfig, not defensible.
+  return Math.max(1, Math.ceil((windowSeconds * 1000) / cycleMs) - 1);
 }
 
 export function projectKeyOf(ref: string): string {
@@ -699,7 +734,11 @@ export function buildContainerizedPrompt(
   return (
     resumedPreamble +
     `Work Switchyard issue ${ref} using the switchyard MCP tools. ` +
-    `Call claim_issue first. Implement the work with tests. Comment verification ` +
+    // SYD-210: the dispatch host already claimed this issue for your session and
+    // holds its lease — do NOT call claim_issue (a re-claim would fail); your
+    // claim-scoped writes are authorized automatically. Call get_issue to read it.
+    `This issue is already claimed for your session — do not call claim_issue; call get_issue to read it. ` +
+    `Implement the work with tests. Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
@@ -995,7 +1034,7 @@ export function buildDockerArgs(
   project: WorkerProject,
   config: WorkerConfig,
   env: NodeJS.ProcessEnv,
-  opts: { resumed?: boolean } = {},
+  opts: { resumed?: boolean; leaseToken?: string } = {},
 ): string[] {
   const engine = config.engine ?? "claude";
 
@@ -1062,6 +1101,16 @@ export function buildDockerArgs(
     `SWITCHYARD_URL=${config.url}`,
     "-e",
     "SWITCHYARD_TOKEN",
+    // SYD-210 Layer B: the session-scoped lease, passed bare (value from the
+    // spawn env, never argv) exactly like SWITCHYARD_TOKEN — container-entry.sh
+    // adds it as the X-Switchyard-Lease MCP header so the session's
+    // claim-scoped writes carry the lease without it entering the transcript.
+    // Claude engine ONLY: container-entry.codex.sh has no header mechanism yet
+    // (codex config.toml exposes bearer_token_env_var but header support is
+    // unverified on codex 0.142.5), so injecting the env there would be a no-op
+    // that only misleads. Leased codex dispatch is a tracked follow-up; until
+    // then codex claim-scoped writes are not lease-authorized.
+    ...(opts.leaseToken && engine === "claude" ? ["-e", "SWITCHYARD_LEASE"] : []),
     ...credArgs,
     "-e",
     `WORKER_PROMPT=${prompt}`,
@@ -1115,4 +1164,52 @@ export function partitionContainerSessions(
     (liveContainerNames.has(containerNameFor(s.ref)) ? live : orphaned).push(s);
   }
   return { orphaned, live };
+}
+
+// SYD-210 Layer B host-side heartbeat cadence. Interval 60s x miss-limit 10 =
+// a ~10-min window that comfortably exceeds the worst-case tracker redeploy
+// (~5-15s, SYD-66) — and the server also gates expiry on its own uptime, so a
+// redeploy can't mass-expire live leases regardless.
+export const HEARTBEAT_INTERVAL_MS = 60_000;
+export const HEARTBEAT_MISS_LIMIT = 10;
+// Per-beat fetch timeout (agent-worker postHeartbeat). A worst-case miss cycle
+// is up to interval + this (a black-holing tracker holds each beat open the
+// full timeout), so the host's effective cancel deadline must budget for it —
+// see heartbeatMissLimit.
+export const HEARTBEAT_FETCH_TIMEOUT_MS = 10_000;
+// Default lease window when the tracker hasn't advertised one (matches the
+// server's claims.heartbeat_window_seconds default).
+export const DEFAULT_HEARTBEAT_WINDOW_SECONDS = 600;
+// A definitive 4xx means the lease is GONE server-side (takeover / expiry) —
+// unrecoverable, and the session is now doing sanctioned double-work on exactly
+// the SYD-93 failure mode. Cancel fast (a couple of confirming beats) rather
+// than waiting out the full transient window.
+export const HEARTBEAT_INVALID_LIMIT = 2;
+
+/** A single heartbeat's classified outcome. `invalid` = 4xx (lease revoked,
+ * permanent); `unreachable` = network error / timeout / 5xx (transient). */
+export type HeartbeatOutcome = "ok" | "invalid" | "unreachable";
+
+/**
+ * Fold one classified heartbeat outcome into the running counters and decide
+ * whether to cancel the session. `ok` resets both counters. A definitive 4xx
+ * (`invalid`) cancels after `invalidLimit` — the lease is gone, so stop the
+ * zombie promptly. A transient `unreachable` cancels only after the full
+ * `missLimit` — the tracker may just be briefly unreachable while the
+ * server-side lease is still safe, so be patient. Pure, so the two-class
+ * decision is unit-tested independently of the timer/fetch wiring.
+ */
+export function heartbeatTick(
+  state: { misses: number; invalids: number },
+  outcome: HeartbeatOutcome,
+  missLimit: number = HEARTBEAT_MISS_LIMIT,
+  invalidLimit: number = HEARTBEAT_INVALID_LIMIT,
+): { misses: number; invalids: number; cancel: boolean } {
+  if (outcome === "ok") return { misses: 0, invalids: 0, cancel: false };
+  if (outcome === "invalid") {
+    const invalids = state.invalids + 1;
+    return { misses: state.misses, invalids, cancel: invalids >= invalidLimit };
+  }
+  const misses = state.misses + 1;
+  return { misses, invalids: state.invalids, cancel: misses >= missLimit };
 }

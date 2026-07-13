@@ -17,6 +17,11 @@ vi.mock("node:fs", async (importOriginal) => {
     mkdirSync: vi.fn(),
     openSync: vi.fn(() => 1),
     closeSync: vi.fn(),
+    // SYD-210: dispatch now persists the lease / writes a per-dispatch CLI MCP
+    // config; keep these off the real fs (the test's repo paths are fictional).
+    writeFileSync: vi.fn(),
+    rmSync: vi.fn(),
+    mkdtempSync: vi.fn(() => "/tmp/syd-fake"),
   };
 });
 
@@ -40,7 +45,11 @@ describe("buildPrompt", () => {
   it("builds the standard work prompt", () => {
     const prompt = buildPrompt("SYD-7");
     expect(prompt).toContain("SYD-7");
-    expect(prompt).toContain("claim_issue");
+    // SYD-210: the host pre-claims + holds the lease, so the session must NOT
+    // re-claim (a re-claim would fail loudly). Assert the new instruction, not
+    // just the substring "claim_issue" (which survives the inversion).
+    expect(prompt).toMatch(/do not call claim_issue/i);
+    expect(prompt).toMatch(/already claimed for your session/i);
     expect(prompt).toContain("in_review");
     expect(prompt).not.toMatch(/escalat/i);
   });
@@ -588,7 +597,9 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
     spawnMock.mockReturnValue(child);
     const fetchMock = fetchRouter({
       "/api/issues?status=todo": { ok: true, body: [issue] },
-      [`/api/issues/${ref}/claim`]: { ok: true, body: {} },
+      // SYD-210: the host claim mints the lease and returns its token, which the
+      // worker threads to the session and heartbeats.
+      [`/api/issues/${ref}/claim`]: { ok: true, body: { leaseToken: "lease_test" } },
     });
     vi.stubGlobal("fetch", fetchMock);
 

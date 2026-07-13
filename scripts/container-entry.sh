@@ -119,18 +119,32 @@ fi
 
 # Written as a file rather than `claude mcp add --header ...` so the bearer
 # token never appears in any process argv (visible via ps / docker top).
+# SYD-210 Layer B: when the host injects a session-scoped lease, add it as the
+# X-Switchyard-Lease MCP header so claim-scoped writes carry the lease. Absent
+# for answer/non-lease sessions.
+if [ -n "${SWITCHYARD_LEASE:-}" ]; then
+  MCP_HEADERS="\"Authorization\": \"Bearer $SWITCHYARD_TOKEN\", \"X-Switchyard-Lease\": \"$SWITCHYARD_LEASE\""
+else
+  MCP_HEADERS="\"Authorization\": \"Bearer $SWITCHYARD_TOKEN\""
+fi
 cat > /tmp/switchyard-mcp.json <<MCPEOF
 {
   "mcpServers": {
     "switchyard": {
       "type": "http",
       "url": "$SWITCHYARD_URL/mcp",
-      "headers": { "Authorization": "Bearer $SWITCHYARD_TOKEN" }
+      "headers": { $MCP_HEADERS }
     }
   }
 }
 MCPEOF
 chmod 600 /tmp/switchyard-mcp.json
+# SYD-210 Layer B: the lease is now baked into the 0600 config file and read
+# from there by the MCP client — nothing downstream needs it in the environment.
+# Unset it so it does NOT sit in the agent session's own env (where a Bash tool
+# call could echo it into the transcript). SWITCHYARD_TOKEN stays exported: the
+# in-container attach/CLI helpers read it at runtime.
+unset SWITCHYARD_LEASE
 
 # The container is the sandbox here, not the tool allowlist -- a generous
 # allowlist inside a disposable, network-scoped clone is fine.

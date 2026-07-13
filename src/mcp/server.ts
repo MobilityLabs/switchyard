@@ -10,6 +10,7 @@ import {
   getIssue,
   updateIssue,
   claimIssue,
+  heartbeatClaim,
   SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
 import { nextTask, addDependency } from "../services/dependencies.js";
@@ -51,6 +52,12 @@ export function buildMcpServer(
   db: Db,
   actor: Actor,
   attachmentsDir: string = defaultAttachmentsDir(),
+  // SYD-210 Layer B: a connection-level lease token, extracted once by the /mcp
+  // endpoint from the X-Switchyard-Lease header (mirrors how the actor is baked
+  // into this closure). The host worker sets it for a container session so its
+  // claim-scoped tool calls carry the lease WITHOUT the token ever appearing in
+  // the LLM transcript. An explicit lease_token tool arg still wins when given.
+  connectionLeaseToken?: string,
 ): McpServer {
   const server = new McpServer({ name: "switchyard", version: "0.1.0" });
 
@@ -207,6 +214,17 @@ export function buildMcpServer(
       inputSchema: { ref: z.string(), takeover: z.boolean().optional() },
     },
     guard(({ ref, takeover }: { ref: string; takeover?: boolean }) => {
+      // SYD-210: a host-supervised container session already holds a
+      // host-minted lease (injected as the connection token). Refuse claim_issue
+      // for it — otherwise a prompt-injection in an untrusted issue body could
+      // coax it into claim_issue(takeover:true), which would mint a fresh token
+      // straight into the LLM transcript / a durable comment (and DoS the host's
+      // heartbeat by invalidating its lease). Its writes are already authorized.
+      if (connectionLeaseToken) {
+        throw new SwitchyardError(
+          `${ref} is already claimed for your session — do not call claim_issue; your writes are already authorized. Just proceed with the work.`,
+        );
+      }
       const { issue, leaseToken } = claimIssue(db, actor, ref, { takeover });
       return { ...issue, lease_token: leaseToken };
     }),
@@ -255,7 +273,13 @@ export function buildMcpServer(
         expected_head_sha?: string;
         lease_token?: string;
       }) => {
-        const minted: { token: string | null } = { token: null };
+        // SYD-210 review (pentester): a host-supervised session (connection lease)
+        // gets NO mint container — so update_issue can never mint a fresh lease
+        // into its tool result, and updateIssue's auto-claim is refused for it
+        // (it's scoped to its one pre-claimed issue). Only ordinary sessions
+        // (interactive / bare-CLI without a connection lease) may auto-claim and
+        // receive the once-only token.
+        const minted = connectionLeaseToken ? undefined : { token: null as string | null };
         const issue = updateIssue(
           db,
           actor,
@@ -271,12 +295,34 @@ export function buildMcpServer(
             workerPreference: a.worker_preference,
             expectedHeadSha: a.expected_head_sha,
           },
-          { presented: a.lease_token, minted },
+          { presented: a.lease_token ?? connectionLeaseToken, minted },
         );
-        return minted.token ? { ...issue, lease_token: minted.token } : issue;
+        return minted?.token ? { ...issue, lease_token: minted.token } : issue;
       },
     ),
   );
+
+  // SYD-210: register the model-facing heartbeat tool ONLY for a host-supervised
+  // container session (one carrying a connection lease). Exposing it to ordinary
+  // interactive sessions is a footgun: a single call would collapse their 8h
+  // lease to the ~10-min heartbeat window (heartbeatLease shortens expires_at),
+  // and an idle interactive session would then be released mid-work. The host
+  // renews container leases over REST, so no ordinary session needs this tool.
+  if (connectionLeaseToken) {
+    server.registerTool(
+      "heartbeat",
+      {
+        description:
+          "Keep your claim's lease alive by renewing it. The supervising host worker already does " +
+          "this on a timer — you normally do NOT need to call it yourself.",
+        inputSchema: { ref: z.string(), lease_token: z.string().optional() },
+      },
+      guard(({ ref, lease_token }: { ref: string; lease_token?: string }) => {
+        const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token ?? connectionLeaseToken);
+        return { ok: true, expires_at: expiresAt };
+      }),
+    );
+  }
 
   server.registerTool(
     "comment",
@@ -319,7 +365,7 @@ export function buildMcpServer(
       inputSchema: { ref: z.string(), question: z.string(), lease_token: z.string().optional() },
     },
     guard(({ ref, question, lease_token }: { ref: string; question: string; lease_token?: string }) =>
-      requestHumanInput(db, actor, ref, question, lease_token),
+      requestHumanInput(db, actor, ref, question, lease_token ?? connectionLeaseToken),
     ),
   );
 

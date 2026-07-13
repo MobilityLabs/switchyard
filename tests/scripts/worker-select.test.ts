@@ -786,6 +786,29 @@ describe("buildDockerArgs", () => {
     expect(args.join(" ")).not.toContain("oauth-secret");
   });
 
+  it("passes SWITCHYARD_LEASE bare (value from spawn env, never argv) only when a lease is present (SYD-210)", () => {
+    const withLease = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv, {
+      leaseToken: "lease_abc",
+    });
+    expect(withLease).toContain("SWITCHYARD_LEASE"); // bare -e name
+    expect(withLease.some((a) => a.startsWith("SWITCHYARD_LEASE="))).toBe(false); // value never in argv
+    expect(withLease.join(" ")).not.toContain("lease_abc");
+    // Absent when there is no lease.
+    const noLease = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
+    expect(noLease).not.toContain("SWITCHYARD_LEASE");
+  });
+
+  it("does NOT inject SWITCHYARD_LEASE for the codex engine (its entry script can't send the header yet — SYD-210)", () => {
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, engine: "codex" },
+      { CODEX_OAUTH_TOKEN: "x", CODEX_ACCOUNT_ID: "acct" } as NodeJS.ProcessEnv,
+      { leaseToken: "lease_abc" },
+    );
+    expect(args).not.toContain("SWITCHYARD_LEASE");
+  });
+
   it("proxy mode: agent container gets a placeholder + CA mount and no real credential (SYD-186)", () => {
     const args = buildDockerArgs(
       issue({ ref: "SYD-1" }),
@@ -1063,7 +1086,10 @@ describe("buildContainerizedPrompt", () => {
   it("builds the standard containerized prompt", () => {
     const prompt = buildContainerizedPrompt("SYD-7");
     expect(prompt).toContain("SYD-7");
-    expect(prompt).toContain("claim_issue");
+    // SYD-210: host pre-claims + holds the lease — assert the no-reclaim
+    // instruction, not the substring that survives its inversion.
+    expect(prompt).toMatch(/do not call claim_issue/i);
+    expect(prompt).toMatch(/already claimed for your session/i);
     expect(prompt).toContain("agent/SYD-7");
     expect(prompt).not.toMatch(/escalat/i);
   });

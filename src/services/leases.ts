@@ -4,6 +4,7 @@ import { claimLeases, issues } from "../db/schema.js";
 import { SwitchyardError } from "./errors.js";
 import { recordEvent } from "./events.js";
 import { hashToken, mintToken } from "./tokens.js";
+import { getSetting } from "./settings.js";
 
 export type ClaimLease = typeof claimLeases.$inferSelect;
 
@@ -85,6 +86,32 @@ export function validateLease(
 }
 
 /**
+ * SYD-210 Layer B: renew a lease's liveness window. Validates the holder's
+ * token, then bumps last_beat_at and sets expires_at = now +
+ * claims.heartbeat_window_seconds. The window is SHORTER than the mint TTL, so
+ * the first heartbeat collapses a container claim's 8h fallback to ~10 min of
+ * honest liveness — a container that keeps beating stays alive, a dead one
+ * loses its lease within one window. Interactive claims never heartbeat and
+ * keep the long TTL.
+ */
+export function heartbeatLease(
+  db: DbOrTx,
+  issueId: number,
+  actorId: number,
+  token: string | undefined,
+): ClaimLease {
+  validateLease(db, issueId, actorId, token);
+  const active = getActiveLease(db, issueId)!;
+  const now = nowSeconds();
+  return db
+    .update(claimLeases)
+    .set({ lastBeatAt: now, expiresAt: now + getSetting(db as Db, "claims.heartbeat_window_seconds") })
+    .where(eq(claimLeases.id, active.id))
+    .returning()
+    .get();
+}
+
+/**
  * Marks the active lease of an issue invalidated (takeover / self-release /
  * human-answer release). No-op if there is no active lease. The REASON is
  * carried by the event the caller co-records (claim_released{reason} /
@@ -107,8 +134,36 @@ export function invalidateLease(tx: DbOrTx, issueId: number): void {
  * claim_released{reason:"lease_expired"}, and mark the lease invalidated (so it
  * leaves future sweeps). Replaces the 4h idle guess for leased claims.
  * Returns the number of issues released.
+ *
+ * SYD-210 Layer B server-uptime gate: a tracker redeploy is a correlated
+ * outage — every container's heartbeats fail at once during the ~5–15s restart.
+ * When `serverStartedAt` is given, the sweep is skipped entirely until the
+ * server has been continuously up for one full heartbeat window.
+ *
+ * What this actually buys (do not over-read the guarantee): the PRIMARY
+ * protection against a redeploy is the heartbeat cadence itself — a beat every
+ * 60s keeps expires_at ≥540s out, so any outage shorter than that never lapses
+ * a lease. The gate does NOT resurrect a lease that DID lapse during a longer
+ * outage: heartbeatLease → validateLease → getActiveLease requires
+ * `expires_at > now`, so a lapsed lease can't be re-heartbeated regardless. The
+ * gate closes two remaining gaps: (1) the narrow post-restart window where the
+ * 2s sweep could beat the next 60s heartbeat to a just-lapsed lease, and (2)
+ * paired with releaseStaleClaims' matching grace, it stops the legacy idle
+ * sweep from releasing a lapsed-lease issue the instant the server returns. An
+ * outage longer than the window still loses those leases (the host cancels
+ * those containers on its own missed-beat counter) — an accepted cost.
  */
-export function expireLeases(db: Db, now: number = nowSeconds()): number {
+export function expireLeases(
+  db: Db,
+  now: number = nowSeconds(),
+  serverStartedAt?: number,
+): number {
+  if (
+    serverStartedAt !== undefined &&
+    now - serverStartedAt < getSetting(db, "claims.heartbeat_window_seconds")
+  ) {
+    return 0;
+  }
   const expired = db
     .select()
     .from(claimLeases)
