@@ -94,10 +94,10 @@ fi
 # Codex reads MCP config + auth from $CODEX_HOME (not a CLI flag). The token
 # NAME (not value) goes in config.toml, so the bearer never appears in the
 # file or in argv (parity with container-entry.sh's /tmp/switchyard-mcp.json
-# approach for Claude). The placeholder auth.json (spike, Task 1) carries the
-# REAL account_id (non-secret -- codex sends it as the chatgpt-account-id
-# header, which the backend matches against the injected token's account)
-# plus PLACEHOLDER tokens; the proxy injects the real Authorization: Bearer.
+# approach for Claude). The placeholder auth.json carries the REAL account_id
+# (non-secret -- codex sends it as the chatgpt-account-id header, which the
+# backend matches against the injected token's account); the proxy injects the
+# real Authorization: Bearer over the wire.
 export CODEX_HOME=/tmp/codex-home
 mkdir -p "$CODEX_HOME"
 cat > "$CODEX_HOME/config.toml" <<TOMLEOF
@@ -106,8 +106,20 @@ url = "$SWITCHYARD_URL/mcp"
 bearer_token_env_var = "SWITCHYARD_TOKEN"
 TOMLEOF
 chmod 600 "$CODEX_HOME/config.toml"
+
+# codex PARSES the tokens in auth.json as JWTs locally before sending them, so a
+# literal "placeholder" string is rejected ("invalid ID token format"). The
+# placeholder must be a VALID-FORMAT dummy JWT (header.payload.sig, base64url).
+# A far-future exp stops codex attempting a refresh (which the dummy refresh
+# token can't satisfy); the real (non-secret) account_id claim matches the
+# injected token's account. The dummy carries no credential -- the proxy still
+# replaces Authorization with the real bearer. (Confirmed live, SYD-187 go-live.)
+_b64url() { base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='; }
+_jwt_hdr=$(printf '%s' '{"alg":"none","typ":"JWT"}' | _b64url)
+_jwt_pay=$(printf '{"iss":"https://auth.openai.com","aud":["https://api.openai.com/v1"],"exp":9999999999,"iat":1700000000,"https://api.openai.com/auth":{"chatgpt_account_id":"%s","chatgpt_plan_type":"plus","user_id":"user-placeholder"}}' "$CODEX_ACCOUNT_ID" | _b64url)
+_dummy_jwt="$_jwt_hdr.$_jwt_pay.c2ln"
 cat > "$CODEX_HOME/auth.json" <<AUTHEOF
-{"OPENAI_API_KEY":null,"tokens":{"id_token":"placeholder","access_token":"placeholder","refresh_token":"placeholder","account_id":"$CODEX_ACCOUNT_ID"},"last_refresh":"2026-01-01T00:00:00Z"}
+{"OPENAI_API_KEY":null,"tokens":{"id_token":"$_dummy_jwt","access_token":"$_dummy_jwt","refresh_token":"rt-placeholder","account_id":"$CODEX_ACCOUNT_ID"},"last_refresh":"2026-07-07T00:00:00Z"}
 AUTHEOF
 chmod 600 "$CODEX_HOME/auth.json"
 
