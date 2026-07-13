@@ -8,6 +8,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { GhPr, GhRun } from "./github-poll-lib.js";
+import { originOwnerRepo } from "./delivery-exec.js";
 
 const execFileP = promisify(execFile);
 
@@ -45,6 +46,48 @@ export async function listPullRequests(repo: string, limit = 50): Promise<GhPr[]
 export async function viewPullRequest(repo: string, number: number): Promise<GhPr> {
   const out = await run(["pr", "view", String(number), "--repo", repo, "--json", PR_FIELDS]);
   return JSON.parse(out) as GhPr;
+}
+
+/** All PRs (any state) whose head is `branch` — the backfill's targeted
+ * lookup for agent branches beyond the window (SYD-207). Argv-inert like
+ * every other call here. */
+export async function listPullRequestsForBranch(repo: string, branch: string): Promise<GhPr[]> {
+  const out = await run([
+    "pr",
+    "list",
+    "--repo",
+    repo,
+    "--head",
+    branch,
+    "--state",
+    "all",
+    "--limit",
+    "10",
+    "--json",
+    PR_FIELDS,
+  ]);
+  return JSON.parse(out || "[]") as GhPr[];
+}
+
+/** Resolves each worker-configured project's clone to its GitHub owner/repo
+ * (via the clone's origin remote) — the identity the SYD-207 preflight
+ * checks against the server's linked-repo bindings. A clone that can't be
+ * resolved is reported as a problem, not skipped silently. */
+export async function resolveConfiguredRepos(
+  projects: Record<string, { repo: string }>,
+): Promise<{ configured: { projectKey: string; repo: string }[]; problems: string[] }> {
+  const configured: { projectKey: string; repo: string }[] = [];
+  const problems: string[] = [];
+  for (const [projectKey, project] of Object.entries(projects)) {
+    try {
+      configured.push({ projectKey, repo: await originOwnerRepo(project.repo) });
+    } catch (err) {
+      problems.push(
+        `project "${projectKey}": cannot resolve ${project.repo}'s origin remote: ${(err as Error).message}`,
+      );
+    }
+  }
+  return { configured, problems };
 }
 
 /** The latest workflow run for a branch, or null if it has none yet. */

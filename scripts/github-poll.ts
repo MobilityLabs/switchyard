@@ -36,11 +36,17 @@ import {
   observeRepoState,
   selectRefreshCandidates,
   parsePollStateText,
+  preflightRepoBindings,
   type PollStateFile,
   type PollEvent,
   type RepoPollState,
 } from "./github-poll-lib.js";
-import { listPullRequests, latestRun, viewPullRequest } from "./github-poll-exec.js";
+import {
+  listPullRequests,
+  latestRun,
+  viewPullRequest,
+  resolveConfiguredRepos,
+} from "./github-poll-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
 const DEFAULT_POLL_SECONDS = 120;
@@ -58,7 +64,7 @@ function repoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
-function loadDotEnv(): void {
+export function loadDotEnv(): void {
   const envPath = path.join(repoRoot(), ".env");
   if (!existsSync(envPath)) return;
   for (const [key, value] of Object.entries(parseDotEnv(readFileSync(envPath, "utf8")))) {
@@ -66,7 +72,7 @@ function loadDotEnv(): void {
   }
 }
 
-function loadConfig(): WorkerConfig {
+export function loadConfig(): WorkerConfig {
   const configPath = path.join(repoRoot(), "switchyard-worker.json");
   if (!existsSync(configPath)) {
     throw new Error(`Missing ${configPath} — copy switchyard-worker.example.json and edit it.`);
@@ -93,9 +99,9 @@ function writeState(state: PollStateFile): void {
   writeFileSync(statePath(), JSON.stringify(state, null, 2) + "\n");
 }
 
-type LinkedRepo = { id: number; fullName: string };
+type LinkedRepo = { id: number; fullName: string; projectId: number | null };
 
-async function fetchLinkedRepos(url: string, token: string): Promise<LinkedRepo[]> {
+export async function fetchLinkedRepos(url: string, token: string): Promise<LinkedRepo[]> {
   const res = await fetch(`${url.replace(/\/$/, "")}/api/github-repos`, {
     headers: { authorization: `Bearer ${token}` },
   });
@@ -103,9 +109,20 @@ async function fetchLinkedRepos(url: string, token: string): Promise<LinkedRepo[
   return (await res.json()) as LinkedRepo[];
 }
 
+export async function fetchProjects(
+  url: string,
+  token: string,
+): Promise<{ id: number; key: string }[]> {
+  const res = await fetch(`${url.replace(/\/$/, "")}/api/projects`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error(`GET /api/projects failed: ${res.status} ${await res.text()}`);
+  return (await res.json()) as { id: number; key: string }[];
+}
+
 type GithubEventOutcome = { duplicate?: boolean };
 
-async function postGithubEvent(
+export async function postGithubEvent(
   url: string,
   token: string,
   ev: PollEvent,
@@ -211,8 +228,32 @@ export async function pollRepo(
   state[fullName] = next;
 }
 
+/** Periodic repo-binding check (SYD-207): the cutover preflight's assertion,
+ * re-run every tick so a post-cutover unbinding is caught, not just a
+ * day-one one. Never blocks the poll — an unbound repo is exactly when
+ * observations matter most for the operator to see the problem. */
+async function warnOnBrokenBindings(
+  config: WorkerConfig,
+  token: string,
+  repos: LinkedRepo[],
+): Promise<void> {
+  try {
+    const { configured, problems } = await resolveConfiguredRepos(config.projects);
+    const serverProjects = await fetchProjects(config.url, token);
+    problems.push(...preflightRepoBindings(configured, repos, serverProjects));
+    for (const p of problems) {
+      console.error(
+        `github-poll: BROKEN REPO BINDING — ${p} — agent PRs on this repo are display-only and the claim gate is blind to them`,
+      );
+    }
+  } catch (err) {
+    console.error(`github-poll: repo-binding check failed: ${(err as Error).message}`);
+  }
+}
+
 async function tick(config: WorkerConfig, token: string, dryRun: boolean): Promise<void> {
   const repos = await fetchLinkedRepos(config.url, token);
+  await warnOnBrokenBindings(config, token, repos);
   if (repos.length === 0) return;
   const state = readState();
   // Sequential on purpose: keeps `gh` API usage predictable and the state
