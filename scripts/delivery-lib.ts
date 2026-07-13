@@ -258,6 +258,24 @@ export function buildPrMergeArgs(
   return args;
 }
 
+/**
+ * SYD-165: closes a dead agent PR after a conflict/no-branch bounce —
+ * `agent/<ref>` is dead by definition in both cases (a real conflict, or the
+ * branch no longer existing at all), so regeneration via re-dispatch is the
+ * only path forward, not a hand-fix-and-retry on the same branch/PR. Only the
+ * conflict case has a live branch worth deleting; the no-branch case has
+ * nothing to delete.
+ */
+export function buildPrCloseArgs(
+  prNumber: number,
+  ownerRepo: string,
+  opts: { deleteBranch?: boolean } = {},
+): string[] {
+  const args = ["pr", "close", String(prNumber), "-R", ownerRepo];
+  if (opts.deleteBranch) args.push("--delete-branch");
+  return args;
+}
+
 export function buildPrViewMergeShaArgs(prNumber: number, ownerRepo: string): string[] {
   return [
     "pr",
@@ -690,8 +708,15 @@ export function shouldRetryQueueRebase(
 
 /** Queue-mode rebase hit real conflict hunks — bounced rather than merged, and
  * never handed to a conflict-resolution session (unlike the legacy flow's
- * autoRebaseConflictComment/SYD-100 path). */
-export function queueRebaseConflictComment(ref: string, conflictFiles: string[]): string {
+ * autoRebaseConflictComment/SYD-100 path). SYD-165: `agent/${ref}` is dead by
+ * definition once it's conflicted with main — the worker closes PR #prNumber
+ * and deletes the branch automatically, so the only remediation left is
+ * re-dispatch (there's no branch left to hand-fix and retry). */
+export function queueRebaseConflictComment(
+  ref: string,
+  prNumber: number,
+  conflictFiles: string[],
+): string {
   const fileList =
     conflictFiles.length > 0
       ? conflictFiles.map((f) => `- ${f}`).join("\n")
@@ -699,9 +724,22 @@ export function queueRebaseConflictComment(ref: string, conflictFiles: string[])
   return (
     `Delivery FAILED for ${ref}: rebasing ${agentBranch(ref)} onto ${MAIN_BRANCH} (queue mode) hit real conflicts in:\n` +
     `${fileList}\n` +
-    `Queue mode bounces on conflict rather than repairing in place — ${MAIN_BRANCH} was never touched. Resolve the ` +
-    `conflicts on ${agentBranch(ref)}, push, and click Retry delivery on the attention banner (or re-dispatch the ` +
-    `issue against fresh ${MAIN_BRANCH}).`
+    `${MAIN_BRANCH} was never touched. Closing PR #${prNumber} and deleting ${agentBranch(ref)} automatically — ` +
+    `re-dispatch the issue against fresh ${MAIN_BRANCH} to regenerate the work.`
+  );
+}
+
+/** Queue-mode found PR #prNumber open but its ${agentBranch(ref)} branch gone
+ * from GitHub (SYD-165) — nothing to rebase, verify, or merge. This is a dead
+ * end the same way a real conflict is: the worker closes the PR automatically
+ * (there's no branch left to delete) so the duplicate-work guards (nextTask
+ * exclusion, dispatch-worker skip, claim refusal) stop treating the issue as
+ * "still being worked" and re-dispatch becomes possible again. */
+export function noBranchBounceComment(ref: string, prNumber: number): string {
+  return (
+    `Delivery FAILED for ${ref}: PR #${prNumber} is open, but ${agentBranch(ref)} no longer exists on GitHub — ` +
+    `there is nothing to rebase, verify, or merge. ${MAIN_BRANCH} was never touched. Closing PR #${prNumber} ` +
+    `automatically — re-dispatch the issue against fresh ${MAIN_BRANCH} to regenerate the work.`
   );
 }
 

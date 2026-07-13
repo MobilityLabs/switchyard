@@ -15,6 +15,7 @@ const originOwnerRepo = vi.fn();
 const prFreshness = vi.fn();
 const prLiveState = vi.fn();
 const checkBranchProtection = vi.fn();
+const closeDeadAgentPr = vi.fn();
 
 vi.mock("../../scripts/delivery-exec.js", () => ({
   attemptAutoRebase: (...args: unknown[]) => attemptAutoRebase(...args),
@@ -29,6 +30,7 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   prFreshness: (...args: unknown[]) => prFreshness(...args),
   prLiveState: (...args: unknown[]) => prLiveState(...args),
   checkBranchProtection: (...args: unknown[]) => checkBranchProtection(...args),
+  closeDeadAgentPr: (...args: unknown[]) => closeDeadAgentPr(...args),
 }));
 
 const { deliverQueue, tick, warnOnRelaxedBranchProtection } = await import("../../scripts/deliver.js");
@@ -109,6 +111,7 @@ function resetExecMocks(): void {
     prFreshness,
     prLiveState,
     checkBranchProtection,
+    closeDeadAgentPr,
   ]) {
     m.mockReset();
   }
@@ -119,6 +122,7 @@ function resetExecMocks(): void {
   findMergedAgentPr.mockResolvedValue(null);
   originOwnerRepo.mockResolvedValue("acme/widgets");
   prFreshness.mockRejectedValue(new Error("gh unavailable in tests"));
+  closeDeadAgentPr.mockResolvedValue(undefined);
 }
 
 describe("delivery worker trigger (SYD-208/209)", () => {
@@ -541,13 +545,50 @@ describe("deliverQueue orchestrator (SYD-209)", () => {
     expect(mergeAgentPr).not.toHaveBeenCalled();
   });
 
-  it("a rebase conflict bounces conflict_bounced, never merging", async () => {
+  it("a rebase conflict bounces conflict_bounced, never merging, and closes the dead PR (SYD-165)", async () => {
     attemptAutoRebase.mockResolvedValue({ status: "conflict", files: ["src/a.ts"] });
 
     const result = await call();
 
     expect(result.outcome).toBe("conflict_bounced");
     expect(mergeAgentPr).not.toHaveBeenCalled();
+    expect(closeDeadAgentPr).toHaveBeenCalledWith("/repo/syd", 42, { deleteBranch: true });
+  });
+
+  it("a conflict bounce still returns conflict_bounced even if closing the dead PR fails (SYD-165)", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "conflict", files: ["src/a.ts"] });
+    closeDeadAgentPr.mockRejectedValue(new Error("gh: PR already closed"));
+
+    const result = await call();
+
+    expect(result.outcome).toBe("conflict_bounced");
+  });
+
+  it("a no-branch rebase bounces merge_failed, never merging, and closes the dead PR without deleting a branch (SYD-165)", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "no-branch" });
+
+    const result = await call();
+
+    expect(result.outcome).toBe("merge_failed");
+    expect(waitForChecks).not.toHaveBeenCalled();
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+    expect(closeDeadAgentPr).toHaveBeenCalledWith("/repo/syd", 42, { deleteBranch: false });
+    const eventCalls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/issues/SYD-174/delivery-events"),
+    );
+    expect(eventCalls).toHaveLength(1);
+    expect(JSON.parse((eventCalls[0][1] as RequestInit).body as string)).toMatchObject({
+      type: "delivery_failed",
+    });
+  });
+
+  it("a no-branch bounce still returns merge_failed even if closing the dead PR fails (SYD-165)", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "no-branch" });
+    closeDeadAgentPr.mockRejectedValue(new Error("gh: PR already closed"));
+
+    const result = await call();
+
+    expect(result.outcome).toBe("merge_failed");
   });
 
   it("a red check bounces verify_failed with S1 recorded", async () => {

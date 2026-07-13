@@ -20,6 +20,7 @@ import {
   attemptAutoRebase,
   checkBranchProtection,
   mergeAgentPr,
+  closeDeadAgentPr,
 } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
@@ -381,6 +382,78 @@ describe("mergeAgentPr merge/read atomicity", () => {
     chmodSync(ghPath, 0o755);
 
     await expect(withFakeGhOnPath(binDir, () => mergeAgentPr(repo, 42, "s1def"))).rejects.toThrow();
+  });
+});
+
+// SYD-165: closeDeadAgentPr shells out to `gh pr close`, optionally deleting
+// the branch — a real fake-gh-on-PATH test proves the exact argv it invokes.
+describe("closeDeadAgentPr", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "close-pr-repo-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  /** Fake `gh` that records its argv to `callsFile` (one line per call) and exits 0. */
+  function makeFakeGhRecorder(binDir: string): { callsFile: string } {
+    const callsFile = path.join(binDir, "calls");
+    writeFileSync(callsFile, "");
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, `#!/bin/sh\necho "$@" >> "${callsFile}"\n`);
+    chmodSync(ghPath, 0o755);
+    return { callsFile };
+  }
+
+  it("closes the PR without --delete-branch by default (no-branch bounce)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "close-pr-bin-"));
+    const { callsFile } = makeFakeGhRecorder(binDir);
+
+    await withFakeGhOnPath(binDir, () => closeDeadAgentPr(repo, 41, { deleteBranch: false }));
+
+    expect(readFileSync(callsFile, "utf8").trim()).toBe("pr close 41 -R acme/widgets");
+  });
+
+  it("closes the PR with --delete-branch when asked (conflict bounce)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "close-pr-bin-"));
+    const { callsFile } = makeFakeGhRecorder(binDir);
+
+    await withFakeGhOnPath(binDir, () => closeDeadAgentPr(repo, 41, { deleteBranch: true }));
+
+    expect(readFileSync(callsFile, "utf8").trim()).toBe(
+      "pr close 41 -R acme/widgets --delete-branch",
+    );
+  });
+
+  it("propagates a real close failure (gh pr close exits non-zero)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "close-pr-bin-"));
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, '#!/bin/sh\necho "pull request already closed" 1>&2\nexit 1\n');
+    chmodSync(ghPath, 0o755);
+
+    await expect(
+      withFakeGhOnPath(binDir, () => closeDeadAgentPr(repo, 41, { deleteBranch: true })),
+    ).rejects.toThrow();
   });
 });
 
