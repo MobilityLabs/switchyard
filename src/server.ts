@@ -75,7 +75,11 @@ export function createApp(db: Db) {
     }
     const { req, res } = toReqRes(c.req.raw);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    const server = buildMcpServer(db, actor);
+    // SYD-210 Layer B: a host worker injects its container's claim lease as this
+    // header (mirrors REST's X-Switchyard-Lease); bake it into the tool closure
+    // so claim-scoped calls carry it without the token entering the transcript.
+    const leaseToken = c.req.header("x-switchyard-lease") ?? undefined;
+    const server = buildMcpServer(db, actor, undefined, leaseToken);
     res.on("close", () => {
       transport.close();
       server.close();

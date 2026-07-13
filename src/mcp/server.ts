@@ -52,6 +52,12 @@ export function buildMcpServer(
   db: Db,
   actor: Actor,
   attachmentsDir: string = defaultAttachmentsDir(),
+  // SYD-210 Layer B: a connection-level lease token, extracted once by the /mcp
+  // endpoint from the X-Switchyard-Lease header (mirrors how the actor is baked
+  // into this closure). The host worker sets it for a container session so its
+  // claim-scoped tool calls carry the lease WITHOUT the token ever appearing in
+  // the LLM transcript. An explicit lease_token tool arg still wins when given.
+  connectionLeaseToken?: string,
 ): McpServer {
   const server = new McpServer({ name: "switchyard", version: "0.1.0" });
 
@@ -272,7 +278,7 @@ export function buildMcpServer(
             workerPreference: a.worker_preference,
             expectedHeadSha: a.expected_head_sha,
           },
-          { presented: a.lease_token, minted },
+          { presented: a.lease_token ?? connectionLeaseToken, minted },
         );
         return minted.token ? { ...issue, lease_token: minted.token } : issue;
       },
@@ -289,7 +295,7 @@ export function buildMcpServer(
       inputSchema: { ref: z.string(), lease_token: z.string().optional() },
     },
     guard(({ ref, lease_token }: { ref: string; lease_token?: string }) => {
-      const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token);
+      const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token ?? connectionLeaseToken);
       return { ok: true, expires_at: expiresAt };
     }),
   );
@@ -335,7 +341,7 @@ export function buildMcpServer(
       inputSchema: { ref: z.string(), question: z.string(), lease_token: z.string().optional() },
     },
     guard(({ ref, question, lease_token }: { ref: string; question: string; lease_token?: string }) =>
-      requestHumanInput(db, actor, ref, question, lease_token),
+      requestHumanInput(db, actor, ref, question, lease_token ?? connectionLeaseToken),
     ),
   );
 

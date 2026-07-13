@@ -8,9 +8,9 @@ import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
 let db: Db, human: Actor, agent: Actor;
-async function connect(actor: Actor) {
+async function connect(actor: Actor, connectionLeaseToken?: string) {
   const [ct, st] = InMemoryTransport.createLinkedPair();
-  await buildMcpServer(db, actor).connect(st);
+  await buildMcpServer(db, actor, undefined, connectionLeaseToken).connect(st);
   const c = new Client({ name: "test", version: "0.0.0" });
   await c.connect(ct);
   return c;
@@ -78,6 +78,26 @@ describe("MCP lease enforcement", () => {
     expect(JSON.parse(text(beat)).ok).toBe(true);
     const noToken = await c.callTool({ name: "heartbeat", arguments: { ref: "AIPI-1" } });
     expect(noToken.isError).toBe(true);
+  });
+
+  it("a host-injected connection lease token satisfies claim-scoped calls with no per-call token", async () => {
+    // The host claims and mints the lease, then injects it as an MCP connection
+    // header — the container session mutates without ever seeing the token in
+    // its transcript (no lease_token tool arg).
+    const claimer = await connect(agent);
+    const claim = JSON.parse(
+      text(await claimer.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } })),
+    );
+    const session = await connect(agent, claim.lease_token); // connection-level injection
+    const r = await session.callTool({
+      name: "update_issue",
+      arguments: { ref: "AIPI-1", status: "in_review" }, // no lease_token arg
+    });
+    expect(r.isError).toBeFalsy();
+    expect(JSON.parse(text(r)).status).toBe("in_review");
+    // heartbeat likewise works off the connection token
+    const beat = await session.callTool({ name: "heartbeat", arguments: { ref: "AIPI-1" } });
+    expect(beat.isError).toBeFalsy();
   });
 
   it("exempt surfaces (comment) work without a lease", async () => {
