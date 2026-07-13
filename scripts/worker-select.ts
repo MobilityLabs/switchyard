@@ -151,6 +151,8 @@ export type WorkerConfig = {
    * SDK (worker-sdk/ must be installed; incompatible with `containerized`).
    */
   runner?: "cli" | "sdk";
+  /** Which agent engine this worker drives: "claude" (default) or "codex". Selected per-worker-process. */
+  engine?: "claude" | "codex";
   /** Delivery gate (SYD-49): worker-side PR publishing + deliver.ts settings. */
   delivery?: DeliveryConfig;
   /** Answerer mode (SYD-56): max answer sessions dispatched per issue ref, ever (default 3). */
@@ -790,6 +792,7 @@ export const PROVIDER_KEY_VARS = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
+  "CODEX_OAUTH_TOKEN",
 ] as const;
 
 /** Bare `-e VAR` docker args for each provider key present (non-empty) in env —
