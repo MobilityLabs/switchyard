@@ -367,9 +367,20 @@ async function claimIssueHost(
       if (!res.ok) throw new HttpStatusError(res.status, await res.text());
       const body = (await res.json()) as { leaseToken?: string };
       // A claim always mints a lease; an absent token is a server/version
-      // mismatch (un-upgraded tracker) — treat as a lost race so we skip
-      // rather than dispatch a session that can't authenticate its writes.
-      return body.leaseToken ?? null;
+      // mismatch (un-upgraded tracker) — skip rather than dispatch a session
+      // that can't authenticate its writes. Log LOUDLY: the claim DID commit
+      // server-side (the issue is now in_progress with an 8h lease held by
+      // nobody), so a silent skip would strand it until the TTL. Not auto-released
+      // here because a bare todo-PATCH can't prove we're the holder without the
+      // very token we didn't get; surfaced for operator attention instead.
+      if (!body.leaseToken) {
+        console.error(
+          `claimed ${ref} but the tracker returned no lease token — it is now claimed with an ` +
+            `unpresentable lease (un-upgraded tracker?); skipping dispatch. It will free on the lease TTL.`,
+        );
+        return null;
+      }
+      return body.leaseToken;
     });
   } catch (err) {
     if (err instanceof HttpStatusError && err.status < 500) {
