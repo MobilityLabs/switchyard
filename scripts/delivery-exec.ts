@@ -28,6 +28,7 @@ import {
   buildSyncLocalMainArgs,
   buildPrViewMergeableArgs,
   buildPrViewFreshnessArgs,
+  buildPrViewLiveStateArgs,
   shouldRetryMergePoll,
   parsePrNumberFromUrl,
   tailOf,
@@ -96,6 +97,28 @@ export async function prFreshness(
     await run("gh", buildPrViewFreshnessArgs(prNumber, ownerRepo), { cwd: GH_CWD }),
   ) as { headRefOid: string; updatedAt: string };
   return { headSha: out.headRefOid, ghUpdatedAt: out.updatedAt };
+}
+
+/** A PR's LIVE GitHub state (SYD-208): used by the delivery worker's crash
+ * resumption and pin verification, which must consult GitHub directly rather
+ * than pr_state or the tracker — only GitHub knows whether a merge actually
+ * landed. `mergeCommit` is the merge SHA when state is MERGED, else null. */
+export type PrLiveState = {
+  state: "OPEN" | "MERGED" | "CLOSED";
+  headRefOid: string;
+  mergeCommit: string | null;
+};
+
+export async function prLiveState(repo: string, prNumber: number): Promise<PrLiveState> {
+  const ownerRepo = await originOwnerRepo(repo);
+  const out = JSON.parse(
+    await run("gh", buildPrViewLiveStateArgs(prNumber, ownerRepo), { cwd: GH_CWD }),
+  ) as { state: string; headRefOid: string; mergeCommit: { oid: string } | null };
+  return {
+    state: out.state as PrLiveState["state"],
+    headRefOid: out.headRefOid,
+    mergeCommit: out.mergeCommit?.oid ?? null,
+  };
 }
 
 /**

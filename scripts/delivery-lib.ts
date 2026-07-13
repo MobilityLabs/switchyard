@@ -1,7 +1,8 @@
-// Pure logic for the delivery gate (SYD-49): selecting human done-stamps off
-// the event feed, building the git/gh argv for publishing and merging
-// agent/<ref> PRs, and formatting the comments deliver.ts posts back. I/O-free
-// so it's trivially unit-testable; the exec side lives in delivery-exec.ts.
+// Pure logic for the delivery gate (SYD-49, SYD-208): shaping the
+// GET /api/delivery-work queue the worker triggers off, building the git/gh
+// argv for publishing and merging agent/<ref> PRs, and formatting the
+// comments deliver.ts posts back. I/O-free so it's trivially unit-testable;
+// the exec side lives in delivery-exec.ts.
 
 import {
   egressDockerArgs,
@@ -11,95 +12,107 @@ import {
   type WorkerProject,
 } from "./worker-select.js";
 
-/** The subset of a GET /api/events row the delivery worker needs. */
-export type DeliveryFeedEvent = {
-  id: number;
-  type: string;
-  issue: string; // "<PROJECT>-<number>"
-  payload: Record<string, unknown>;
-};
-
 export const MAIN_BRANCH = "main";
 
 export function agentBranch(ref: string): string {
   return `agent/${ref}`;
 }
 
+// Delivery-work queue shapes (SYD-208): the JSON GET /api/delivery-work
+// returns. `pending` are human authorizations (a done-stamp or a
+// redeliver_requested) with no attempt row yet; `unfinished` are attempt rows
+// started but never finished — crash evidence, resumed against live GitHub;
+// `deployRetries` are merged_deploy_failed attempts whose backoff has elapsed.
+export type WorkPin = { repo: string; prNumber: number; headSha: string | null };
+
+export type WorkAuthorization = {
+  authorizationId: number;
+  ref: string;
+  kind: "done_stamp" | "redeliver";
+  pin: WorkPin | null;
+};
+
+export type WorkAttempt = {
+  id: number;
+  issueRef: string;
+  prNumber: number | null;
+  headSha: string | null;
+  authorizationId: number;
+  startedAt: number;
+};
+
+export type WorkDeployRetry = {
+  authorizationId: number;
+  ref: string;
+  prNumber: number | null;
+  headSha: string | null;
+  retryNumber: number;
+};
+
+export type DeliveryWork = {
+  pending: WorkAuthorization[];
+  unfinished: WorkAttempt[];
+  deployRetries: WorkDeployRetry[];
+};
+
+/** Worker-writable attempt outcomes (a subset of the server's DeliveryOutcome —
+ * skipped_rollout is backfill-only). The PATCH that finishes an attempt carries
+ * exactly one of these. */
+export type AttemptOutcome =
+  | "merged_deployed"
+  | "merged_deploy_failed"
+  | "verify_failed"
+  | "conflict_bounced"
+  | "merge_failed";
+
 /**
- * Shared cursor logic for scanning the global event feed for refs matching
- * `matches`, newer than `lastEventId` on configured projects. A null cursor
- * initializes to the newest event id without firing on history (same
- * semantics as findResumeRefs), so a fresh deliver.ts never replays old
- * events.
+ * Drops every work row whose ref sits outside the configured projects — a
+ * shared tracker may serve projects this worker host doesn't deliver, so the
+ * worker only ever acts on its own. Pure so the scoping is testable without a
+ * live tracker.
  */
-function findRefsMatching(
-  feed: DeliveryFeedEvent[],
+export function filterWorkToProjects(
+  work: DeliveryWork,
   projectKeys: Iterable<string>,
-  lastEventId: number | null,
-  matches: (e: DeliveryFeedEvent) => boolean,
-): { refs: string[]; lastEventId: number | null } {
-  if (feed.length === 0) return { refs: [], lastEventId };
+): DeliveryWork {
   const keys = new Set(projectKeys);
-  const newestId = Math.max(...feed.map((e) => e.id));
-  if (lastEventId === null) return { refs: [], lastEventId: newestId };
+  const inScope = (ref: string): boolean => keys.has(projectKeyOf(ref));
+  return {
+    pending: work.pending.filter((p) => inScope(p.ref)),
+    unfinished: work.unfinished.filter((a) => inScope(a.issueRef)),
+    deployRetries: work.deployRetries.filter((r) => inScope(r.ref)),
+  };
+}
 
-  const refs = new Set<string>();
-  for (const e of feed) {
-    if (e.id <= lastEventId) continue;
-    if (!matches(e)) continue;
-    if (!keys.has(projectKeyOf(e.issue))) continue;
-    refs.add(e.issue);
-  }
-  return { refs: [...refs], lastEventId: Math.max(newestId, lastEventId) };
+export type ResumeAction = "finish-delivery" | "fail-quiet";
+
+/**
+ * Crash-resumption decision for an unfinished attempt, off the PR's LIVE
+ * GitHub state (never pr_state or the tracker): a MERGED PR means the merge
+ * landed before the crash, so run the deploy tail and finish it; OPEN or
+ * CLOSED means the merge never happened, so fail quiet and let a human
+ * re-authorize. Pure so the branch is testable without shelling out to gh.
+ */
+export function resumeActionFor(liveState: "OPEN" | "MERGED" | "CLOSED"): ResumeAction {
+  return liveState === "MERGED" ? "finish-delivery" : "fail-quiet";
 }
 
 /**
- * Scans for done-stamps (status_changed → done) newer than `lastEventId`.
- * Only human actors can move an issue to done (server-enforced), so every
- * match is a human approval — the delivery gate's trigger.
+ * Posted when an attempt is resumed after a crash but its PR never landed
+ * (live OPEN/CLOSED, or no PR was pinned): the merge never happened, so a
+ * human re-authorizes with a fresh stamp or the Retry button. Distinct from
+ * deliveryFailureComment (a merge-time failure inside a live attempt) — this
+ * one explains the crash gap.
  */
-export function findDeliverableRefs(
-  feed: DeliveryFeedEvent[],
-  projectKeys: Iterable<string>,
-  lastEventId: number | null,
-): { refs: string[]; lastEventId: number | null } {
-  return findRefsMatching(
-    feed,
-    projectKeys,
-    lastEventId,
-    (e) => e.type === "status_changed" && e.payload?.to === "done",
+export function crashedAttemptComment(ref: string, prNumber: number | null): string {
+  const pr =
+    prNumber === null
+      ? "no PR was pinned to the attempt"
+      : `PR #${prNumber} was never merged`;
+  return (
+    `Delivery FAILED for ${ref}: the delivery worker crashed mid-attempt and ${pr}. ` +
+    `No merge landed — re-stamp the issue done or click Retry delivery on the attention banner to re-authorize.`
   );
-}
-
-/**
- * Scans for `redeliver_requested` events newer than `lastEventId` (SYD-102):
- * the explicit "try this delivery again" trigger a human fires from the
- * attention banner's Retry button, distinct from a fresh done-stamp so it
- * works even though the issue is already `done` (a done→done re-stamp emits
- * no event at all — see redeliverIssue in src/services/triage-actions.ts).
- */
-export function findRedeliverRefs(
-  feed: DeliveryFeedEvent[],
-  projectKeys: Iterable<string>,
-  lastEventId: number | null,
-): { refs: string[]; lastEventId: number | null } {
-  return findRefsMatching(feed, projectKeys, lastEventId, (e) => e.type === "redeliver_requested");
-}
-
-/**
- * Detects a gap between the persisted cursor and the oldest event the feed
- * window still contains: events in (lastEventId, oldest) are gone from the
- * window and any done-stamps among them will never fire. Returns the missed
- * id range, or null when the window still overlaps the cursor (or there is
- * nothing to compare).
- */
-export function feedGap(
-  feed: DeliveryFeedEvent[],
-  lastEventId: number | null,
-): { from: number; to: number } | null {
-  if (lastEventId === null || feed.length === 0) return null;
-  const oldest = Math.min(...feed.map((e) => e.id));
-  return oldest > lastEventId + 1 ? { from: lastEventId + 1, to: oldest - 1 } : null;
 }
 
 export function buildPrTitle(ref: string, issueTitle: string): string {
@@ -334,6 +347,22 @@ export function parsePrNumberFromUrl(url: string): number | null {
  * host clock, so clock skew can't out-rank later genuine updates. */
 export function buildPrViewFreshnessArgs(prNumber: number, ownerRepo: string): string[] {
   return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "headRefOid,updatedAt"];
+}
+
+/** Live-state lookup for crash resumption and pin verification (SYD-208): the
+ * PR's current GitHub state, head, and (if merged) merge commit. The delivery
+ * worker consults this LIVE — never pr_state or the tracker — to decide
+ * whether a merge actually landed before acting. */
+export function buildPrViewLiveStateArgs(prNumber: number, ownerRepo: string): string[] {
+  return [
+    "pr",
+    "view",
+    String(prNumber),
+    "-R",
+    ownerRepo,
+    "--json",
+    "state,headRefOid,mergeCommit",
+  ];
 }
 
 /** The subset of a structured delivery event the server records (SYD-54),
@@ -707,12 +736,6 @@ export function conflictResolvedNote(ref: string): string {
     `conflict-resolution worker session, which resolved them, staged only the conflicted files, and passed ` +
     `typecheck + tests before pushing — then merged.`
   );
-}
-
-/** Contents of .superpowers/deliver-cursor — the last processed event id. */
-export function parseCursorText(text: string): number | null {
-  const n = Number(text.trim());
-  return Number.isInteger(n) && n >= 0 && text.trim() !== "" ? n : null;
 }
 
 /**
