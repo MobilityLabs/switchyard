@@ -63,7 +63,12 @@ export type AttemptOutcome =
   | "merged_deploy_failed"
   | "verify_failed"
   | "conflict_bounced"
-  | "merge_failed";
+  | "merge_failed"
+  // SYD-209: CI wait timed out with checks still pending, and the SHA chain
+  // broke (a third-party push after the human stamp) — both record
+  // delivery_failed and go quiet until a human re-authorizes.
+  | "checks_timeout"
+  | "sha_chain_disarmed";
 
 /**
  * Drops every work row whose ref sits outside the configured projects — a
@@ -201,8 +206,20 @@ export function buildPrCreateArgs(
   ];
 }
 
-export function buildPrMergeArgs(prNumber: number, ownerRepo: string): string[] {
-  return ["pr", "merge", String(prNumber), "-R", ownerRepo, "--merge", "--delete-branch"];
+// matchHeadSha (SYD-209) pins the merge to an exact head — `gh pr merge
+// --match-head-commit S1` refuses the merge if GitHub's current head has moved
+// off S1, so a third-party push landing in the green-on-S1 → merge window
+// cannot slot its commit into the merge. The orchestrator always passes S1
+// (the head whose required checks it just verified live); the arg is optional
+// only so the pin can't be forgotten silently by an un-updated caller.
+export function buildPrMergeArgs(
+  prNumber: number,
+  ownerRepo: string,
+  matchHeadSha?: string,
+): string[] {
+  const args = ["pr", "merge", String(prNumber), "-R", ownerRepo, "--merge", "--delete-branch"];
+  if (matchHeadSha) args.push("--match-head-commit", matchHeadSha);
+  return args;
 }
 
 export function buildPrViewMergeShaArgs(prNumber: number, ownerRepo: string): string[] {
@@ -261,6 +278,96 @@ export function shouldRetryMergePoll(
   timeoutMs: number = MERGE_POLL_TIMEOUT_MS,
 ): boolean {
   return state === "UNKNOWN" && elapsedMs < timeoutMs;
+}
+
+// Wait-for-checks gate (SYD-209): CI is now the sole check authority, so the
+// worker no longer re-runs typecheck/build/test in a clean clone. Instead it
+// force-pushes the rebased head S1 and waits for GitHub's own required checks
+// on S1 to conclude, then reads their conclusion LIVE (never pr_state or
+// recorded gh_checks_* events — those are at-least-once webhook replicas; per
+// the rev-3 rule, irreversible decisions read live) before merging.
+
+export type ChecksState = "passing" | "failing" | "pending" | "head-moved";
+
+/** How long the worker waits for CI to go green on S1 before recording
+ * checks_timeout/delivery_failed and going quiet (a GitHub Actions outage must
+ * not stall the sequential per-ref loop forever). */
+export const CHECKS_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
+export const CHECKS_POLL_INTERVAL_MS = 15000;
+
+/** One rollup entry as GitHub returns it under `--json statusCheckRollup`:
+ * either a CheckRun (Actions/apps — status+conclusion) or a StatusContext
+ * (legacy commit statuses — state). Fields are optional/defensive because the
+ * worker must never crash on an unexpected shape (it would strand a delivery). */
+type CheckRollupEntry = {
+  __typename?: string;
+  status?: string;
+  conclusion?: string | null;
+  state?: string;
+  name?: string;
+  context?: string;
+};
+
+type ChecksRollup = { headRefOid?: string; statusCheckRollup?: CheckRollupEntry[] };
+
+/** COMPLETED CheckRun conclusions that do NOT block a merge. */
+const NON_BLOCKING_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
+function checkVerdict(entry: CheckRollupEntry): "pass" | "fail" | "pending" {
+  // StatusContext carries `state`; CheckRun carries `status`/`conclusion`.
+  if (entry.state !== undefined && entry.status === undefined) {
+    if (entry.state === "SUCCESS") return "pass";
+    if (entry.state === "PENDING" || entry.state === "EXPECTED") return "pending";
+    return "fail";
+  }
+  if (entry.status !== "COMPLETED") return "pending";
+  return NON_BLOCKING_CONCLUSIONS.has(entry.conclusion ?? "") ? "pass" : "fail";
+}
+
+/**
+ * Classifies the required-check rollup for the head we intend to merge (S1).
+ * This is the chain's step-3 comparison in one place: *the head GitHub reports
+ * checks for == the head we rebased to == S1*. If GitHub's live head isn't S1,
+ * a push slipped in after our force-push and the rollup describes someone
+ * else's commit → `head-moved` (disarm). Otherwise: any failed check →
+ * `failing`; any still-running → `pending`; all concluded green (and at least
+ * one exists) → `passing`; an empty rollup → `pending` (checks not registered
+ * yet — the timeout, not a premature pass, resolves a stuck one). Pure so the
+ * whole verdict is testable without shelling out to `gh`.
+ */
+export function evaluateChecks(rollup: ChecksRollup, expectedS1: string): ChecksState {
+  if (rollup.headRefOid !== expectedS1) return "head-moved";
+  const entries = rollup.statusCheckRollup ?? [];
+  const verdicts = entries.map(checkVerdict);
+  if (verdicts.includes("fail")) return "failing";
+  if (verdicts.includes("pending")) return "pending";
+  return verdicts.length > 0 ? "passing" : "pending";
+}
+
+/**
+ * Whether the wait-for-checks loop should sleep and poll again: only while the
+ * verdict is still `pending` and the timeout hasn't elapsed. A definitive
+ * `passing`/`failing`/`head-moved` stops the wait immediately. Pure so the
+ * stop condition is testable without a real clock.
+ */
+export function shouldKeepWaitingForChecks(
+  state: ChecksState,
+  elapsedMs: number,
+  timeoutMs: number = CHECKS_WAIT_TIMEOUT_MS,
+): boolean {
+  return state === "pending" && elapsedMs < timeoutMs;
+}
+
+export function buildPrViewChecksArgs(prNumber: number, ownerRepo: string): string[] {
+  return [
+    "pr",
+    "view",
+    String(prNumber),
+    "-R",
+    ownerRepo,
+    "--json",
+    "statusCheckRollup,headRefOid",
+  ];
 }
 
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */

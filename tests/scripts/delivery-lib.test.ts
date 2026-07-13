@@ -24,6 +24,10 @@ import {
   buildPrViewMergeableArgs,
   shouldRetryMergePoll,
   MERGE_POLL_TIMEOUT_MS,
+  buildPrViewChecksArgs,
+  evaluateChecks,
+  shouldKeepWaitingForChecks,
+  CHECKS_WAIT_TIMEOUT_MS,
   deliveryComment,
   deliveryFailureComment,
   verificationFailureComment,
@@ -164,6 +168,32 @@ describe("argv builders", () => {
       "MobilityLabs/switchyard",
       "--merge",
       "--delete-branch",
+    ]);
+  });
+
+  it("buildPrMergeArgs pins the head with --match-head-commit when given S1 (SYD-209)", () => {
+    expect(buildPrMergeArgs(41, "MobilityLabs/switchyard", "s1deadbeef")).toEqual([
+      "pr",
+      "merge",
+      "41",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--merge",
+      "--delete-branch",
+      "--match-head-commit",
+      "s1deadbeef",
+    ]);
+  });
+
+  it("buildPrViewChecksArgs asks for the rollup bound to the current head (SYD-209)", () => {
+    expect(buildPrViewChecksArgs(41, "MobilityLabs/switchyard")).toEqual([
+      "pr",
+      "view",
+      "41",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--json",
+      "statusCheckRollup,headRefOid",
     ]);
   });
 
@@ -332,6 +362,83 @@ describe("shouldRetryMergePoll (SYD-103)", () => {
   it("defaults the timeout to MERGE_POLL_TIMEOUT_MS", () => {
     expect(shouldRetryMergePoll("UNKNOWN", MERGE_POLL_TIMEOUT_MS - 1)).toBe(true);
     expect(shouldRetryMergePoll("UNKNOWN", MERGE_POLL_TIMEOUT_MS)).toBe(false);
+  });
+});
+
+describe("evaluateChecks (SYD-209 wait-for-checks / live check verification)", () => {
+  const S1 = "s1".repeat(20);
+
+  it("is head-moved when the live head is not S1 (a push slipped in)", () => {
+    // The required checks GitHub reports describe whatever head it currently
+    // has; if that isn't the head we rebased to, the chain is broken — disarm.
+    const rollup = { headRefOid: "someoneelse", statusCheckRollup: [] };
+    expect(evaluateChecks(rollup, S1)).toBe("head-moved");
+  });
+
+  it("is passing when every required check on S1 concluded success", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "StatusContext", context: "ci/legacy", state: "SUCCESS" },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("passing");
+  });
+
+  it("is failing when any required check on S1 failed", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE" },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("failing");
+  });
+
+  it("is pending while a check on S1 is still running", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("pending");
+  });
+
+  it("is pending when the rollup on S1 is still empty (checks not registered yet)", () => {
+    expect(evaluateChecks({ headRefOid: S1, statusCheckRollup: [] }, S1)).toBe("pending");
+  });
+
+  it("treats NEUTRAL/SKIPPED CheckRun conclusions as non-blocking passes", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "optional", status: "COMPLETED", conclusion: "SKIPPED" },
+        { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("passing");
+  });
+});
+
+describe("shouldKeepWaitingForChecks (SYD-209)", () => {
+  it("keeps waiting only while pending and under the timeout", () => {
+    expect(shouldKeepWaitingForChecks("pending", 0, 1000)).toBe(true);
+    expect(shouldKeepWaitingForChecks("pending", 999, 1000)).toBe(true);
+    expect(shouldKeepWaitingForChecks("pending", 1000, 1000)).toBe(false);
+  });
+
+  it("stops immediately on a definitive passing / failing / head-moved verdict", () => {
+    expect(shouldKeepWaitingForChecks("passing", 0, 1000)).toBe(false);
+    expect(shouldKeepWaitingForChecks("failing", 0, 1000)).toBe(false);
+    expect(shouldKeepWaitingForChecks("head-moved", 0, 1000)).toBe(false);
+  });
+
+  it("defaults the timeout to CHECKS_WAIT_TIMEOUT_MS", () => {
+    expect(shouldKeepWaitingForChecks("pending", CHECKS_WAIT_TIMEOUT_MS - 1)).toBe(true);
+    expect(shouldKeepWaitingForChecks("pending", CHECKS_WAIT_TIMEOUT_MS)).toBe(false);
   });
 });
 
