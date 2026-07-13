@@ -101,6 +101,7 @@ export const updateIssue = (
     summary: string | null;
     assigneeName: string | null;
     labels: string[];
+    expectedHeadSha: string;
   }>,
 ) => api<Issue>(`/api/issues/${ref}`, { method: "PATCH", body: JSON.stringify(patch) });
 export const createIssue = (input: {
@@ -126,8 +127,11 @@ export const snoozeIssue = (ref: string, until: number) =>
   api<Issue>(`/api/issues/${ref}/snooze`, { method: "POST", body: JSON.stringify({ until }) });
 export const markDuplicate = (ref: string, of: string) =>
   api<Issue>(`/api/issues/${ref}/duplicate`, { method: "POST", body: JSON.stringify({ of }) });
-export const redeliverIssue = (ref: string) =>
-  api<Issue>(`/api/issues/${ref}/redeliver`, { method: "POST" });
+export const redeliverIssue = (ref: string, expectedHeadSha?: string) =>
+  api<Issue>(`/api/issues/${ref}/redeliver`, {
+    method: "POST",
+    body: JSON.stringify({ expectedHeadSha }),
+  });
 export const addDependency = (blockerRef: string, blockedRef: string) =>
   api<{ ok: true }>("/api/dependencies", {
     method: "POST",

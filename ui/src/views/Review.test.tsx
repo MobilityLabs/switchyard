@@ -30,7 +30,7 @@ vi.mock("../api", () => ({
   uploadAttachment: vi.fn(),
 }));
 
-import { listIssues } from "../api";
+import { listIssues, updateIssue } from "../api";
 import Review from "./Review";
 import { navigate, useRoute } from "../router";
 
@@ -61,7 +61,13 @@ function issue(ref: string, title = `Title for ${ref}`): Issue {
 }
 
 function detailOf(i: Issue): IssueDetail {
-  return { ...i, activity: [], dependencies: { blockedBy: [], blocks: [] }, attachments: [] };
+  return {
+    ...i,
+    activity: [],
+    dependencies: { blockedBy: [], blocks: [] },
+    attachments: [],
+    deliveryPin: null,
+  };
 }
 
 // Mirrors how App.tsx wires the route's project/ref into Review, so a
@@ -277,6 +283,51 @@ describe("Review row attention badge (SYD-98)", () => {
     expect(badge?.textContent).not.toContain("merge conflict");
     expect(badge?.textContent).toBe("⛔ delivery failed");
     expect(badge?.getAttribute("title")).toBe("merge conflict");
+  });
+});
+
+// SYD-208: a done-stamp over an open agent PR must carry the head sha the
+// reviewer actually saw rendered on the card — not whatever the server's PR
+// row says by the time the request lands — so the server can refuse a stale
+// approve.
+describe("Review approve sends the rendered PR head sha (SYD-208)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(listIssues).mockReset();
+    vi.mocked(updateIssue).mockClear();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends the openPr headSha as expectedHeadSha on approve", async () => {
+    vi.mocked(listIssues).mockResolvedValue([
+      {
+        ...issue("SYD-1", "First"),
+        openPr: {
+          prNumber: 12,
+          url: "https://github.com/acme/widgets/pull/12",
+          repo: "acme/widgets",
+          headSha: "abc123",
+        },
+      },
+    ]);
+    const container = await mountReviewRoute("/review/SYD-1");
+    await click(findButton(container, "Approve"));
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", {
+      status: "done",
+      expectedHeadSha: "abc123",
+    });
+  });
+
+  it("omits expectedHeadSha on approve when the issue has no open PR", async () => {
+    vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First")]);
+    const container = await mountReviewRoute("/review/SYD-1");
+    await click(findButton(container, "Approve"));
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", {
+      status: "done",
+      expectedHeadSha: undefined,
+    });
   });
 });
 

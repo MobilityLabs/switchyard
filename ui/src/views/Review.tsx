@@ -109,7 +109,10 @@ export default function Review({
   function approve() {
     if (!current) return;
     const nextRef = pickAdjacentRef(queue, currentRef, 1);
-    updateIssue(current.ref, { status: "done" }).then(
+    updateIssue(current.ref, {
+      status: "done",
+      expectedHeadSha: current.openPr?.headSha ?? undefined,
+    }).then(
       () => {
         setActionError(null);
         reload();
