@@ -11,12 +11,17 @@ import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { addDependency, removeDependency } from "../../src/services/dependencies.js";
 import { addComment } from "../../src/services/comments.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
-import { getDeliveryWork } from "../../src/services/delivery-attempts.js";
+import {
+  getDeliveryWork,
+  startDeliveryAttempt,
+  finishDeliveryAttempt,
+} from "../../src/services/delivery-attempts.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { setSetting } from "../../src/services/settings.js";
 import { addWebhook } from "../../src/services/webhooks.js";
 import { snoozeIssue, markDuplicate } from "../../src/services/triage-actions.js";
 import { getIssue } from "../../src/services/issues.js";
+import { listIssueEvents } from "../../src/services/events.js";
 
 // SYD-213: a `service` actor is trusted worker-host infra (poller/deliver). It
 // sits ABOVE agent (may post PR/delivery events) and STRICTLY BELOW human
@@ -52,6 +57,18 @@ describe("service actor — GRANTED (event/queue infra + reads/comments)", () =>
     expect(() => getDeliveryWork(db, service)).not.toThrow();
   });
 
+  it("may start and finish a delivery attempt (same infra gate as the queue)", () => {
+    const issueId = getIssue(db, "AIPI-1").id;
+    // The human todo-move in beforeEach recorded a status_changed event, which
+    // authorizes a delivery attempt (delivery-attempts.ts).
+    const auth = listIssueEvents(db, issueId).find((e) => e.type === "status_changed")!;
+    const attempt = startDeliveryAttempt(db, service, "AIPI-1", { authorizationId: auth.id });
+    expect(attempt.id).toBeGreaterThan(0);
+    expect(() =>
+      finishDeliveryAttempt(db, service, attempt.id, { outcome: "merged_deployed" }),
+    ).not.toThrow();
+  });
+
   it("may add a comment", () => {
     expect(() => addComment(db, service, "AIPI-1", "poller note")).not.toThrow();
   });
@@ -61,10 +78,17 @@ describe("service actor — GRANTED (event/queue infra + reads/comments)", () =>
   });
 });
 
-describe("service actor — DENIED (every human-only capability)", () => {
+// Fail-closed (SYD-213 review): a service token posts events, reads, and
+// comments — it has no issue create/mutate mandate. Rather than convert each
+// `type === "agent"` guard in issues.ts to `!== "human"` one at a time (the
+// leak class the reviewers caught — auto-label, reopen-done, reassign,
+// backlog-bypass, free status machine all fell through), service is denied
+// createIssue/updateIssue wholesale. These cases each exercise a capability a
+// leaked service token could otherwise chain into unattended dispatch.
+describe("service actor — DENIED all issue create/modify (fail-closed)", () => {
   it("cannot stamp an issue done", () => {
     expect(() => updateIssue(db, service, "AIPI-1", { status: "done" })).toThrowError(
-      /only humans/i,
+      /cannot (create or )?modify issues/i,
     );
   });
 
@@ -76,10 +100,43 @@ describe("service actor — DENIED (every human-only capability)", () => {
       provenance: { sourceType: "session", detail: "test" },
     }); // AIPI-3, lands in triage
     expect(() => updateIssue(db, service, "AIPI-3", { status: "todo" })).toThrowError(
-      /triage/i,
+      /cannot (create or )?modify issues/i,
     );
   });
 
+  it("cannot apply the `auto` label (would opt an issue into unattended dispatch)", () => {
+    expect(() => updateIssue(db, service, "AIPI-1", { labels: ["auto"] })).toThrowError(
+      /cannot (create or )?modify issues/i,
+    );
+  });
+
+  it("cannot reopen a done issue", () => {
+    updateIssue(db, human, "AIPI-1", { status: "done" });
+    expect(() => updateIssue(db, service, "AIPI-1", { status: "todo" })).toThrowError(
+      /cannot (create or )?modify issues/i,
+    );
+  });
+
+  it("cannot reassign an issue to another actor", () => {
+    expect(() => updateIssue(db, service, "AIPI-1", { assigneeName: "claude/worker" })).toThrowError(
+      /cannot (create or )?modify issues/i,
+    );
+  });
+
+  it("cannot make an arbitrary status transition (no allow-list)", () => {
+    expect(() => updateIssue(db, service, "AIPI-2", { status: "in_review" })).toThrowError(
+      /cannot (create or )?modify issues/i,
+    );
+  });
+
+  it("cannot create an issue", () => {
+    expect(() =>
+      createIssue(db, service, { projectKey: "AIPI", title: "injected" }),
+    ).toThrowError(/cannot create.*issues/i);
+  });
+});
+
+describe("service actor — DENIED (config / dependencies / tokens)", () => {
   it("cannot remove a dependency", () => {
     addDependency(db, human, "AIPI-1", "AIPI-2");
     expect(() => removeDependency(db, service, "AIPI-1", "AIPI-2")).toThrowError(/only humans/i);

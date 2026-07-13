@@ -107,6 +107,16 @@ export function getIssue(db: DbOrTx, ref: string): IssueView {
 }
 
 export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): IssueView {
+  // SYD-213: a `service` token is trusted worker-host infra whose mandate is
+  // posting PR/delivery events, reading, and commenting — never authoring board
+  // work. Denied wholesale (fail-closed) rather than falling through to the
+  // human backlog path, which would let a leaked token inject un-triaged,
+  // provenance-less issues.
+  if (actor.type === "service") {
+    throw new SwitchyardError(
+      "Service actors post events, read, and comment — they cannot create issues.",
+    );
+  }
   if (actor.type === "agent" && !input.provenance) {
     throw new SwitchyardError(
       "Agent-created issues require provenance — pass sourceType " +
@@ -230,6 +240,17 @@ export function updateIssue(
   checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
     const current = getIssue(tx, ref);
+    // SYD-213: a `service` token posts PR/delivery events, reads, and comments —
+    // it never mutates board state. Denied wholesale (fail-closed) at the top so
+    // no per-field guard below has to remember to exclude it: the leak class the
+    // review caught (auto-label→dispatch, reopen-done, reassign, and the free
+    // status machine that skips AGENT_STATUS_TRANSITIONS) all lived in `type ===
+    // "agent"` branches a service actor silently fell through.
+    if (actor.type === "service") {
+      throw new SwitchyardError(
+        "Service actors post events, read, and comment — they cannot modify issues.",
+      );
+    }
     // SYD-210: an agent mutating an issue it already holds must present the
     // lease minted at claim time — this closes the shared-token double-work
     // hole (a second session of the same worker actor holds the shared bearer
@@ -249,12 +270,12 @@ export function updateIssue(
           `"${patch.status}" is not a status — valid statuses are: ${STATUSES.join(", ")}.`,
         );
       }
-      if (current.status === "triage" && actor.type !== "human") {
+      if (current.status === "triage" && actor.type === "agent") {
         throw new SwitchyardError(
           `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`,
         );
       }
-      if (patch.status === "done" && actor.type !== "human") {
+      if (patch.status === "done" && actor.type === "agent") {
         throw new SwitchyardError(
           "Only humans move issues to done — comment your verification evidence and move it to in_review instead.",
         );
