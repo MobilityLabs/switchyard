@@ -126,4 +126,18 @@ describe("ensureEgressGuard — credential injection + CA (SYD-186)", () => {
     expect(calls.some((c) => c.args[0] === "volume" && c.args[1] === "rm")).toBe(false);
     expect(calls.some((c) => c.args[0] === "rm" && c.args.includes("-v"))).toBe(false);
   });
+
+  it("passes the Codex OAuth token into the sidecar when present", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network" && args[1] === "inspect") return new Error("no such network");
+      if (args[0] === "inspect") return new Error("no such container");
+      return "";
+    });
+    await ensureEgressGuard(config, exec, { CODEX_OAUTH_TOKEN: "cxo-REAL" } as NodeJS.ProcessEnv);
+    const run = calls.find((c) => c.args[0] === "run")!;
+    const passes = run.args.some((a, i) => a === "-e" && run.args[i + 1] === "CODEX_OAUTH_TOKEN");
+    expect(passes).toBe(true);
+    expect(run.args.join(" ")).toContain("INJECT_KEYS=CODEX_OAUTH_TOKEN");
+    expect(run.args.join(" ")).not.toContain("cxo-REAL");
+  });
 });

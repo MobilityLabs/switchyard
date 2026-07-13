@@ -1,0 +1,41 @@
+# Disposable worker image for Switchyard's Codex engine (SYD-187) -- the
+# codex-exec counterpart of Dockerfile.worker (SYD-30). The container clones
+# the target repo inside itself, works on a branch, and pushes the branch
+# back out -- it never mutates the host filesystem directly.
+#
+# No CA-trust tooling is installed here: codex (Rust) honors SSL_CERT_FILE
+# directly, so container-entry.codex.sh points it at the syd-egress CA
+# mounted read-only at /ca/mitmproxy-ca-cert.pem (spike, Task 1) instead of
+# installing the cert into the system trust store.
+FROM node:24-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @openai/codex
+
+COPY scripts/container-entry.codex.sh /entry.sh
+COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
+COPY scripts/npm-ci-guard.mjs /npm-ci-guard.mjs
+RUN chmod +x /entry.sh
+
+# Out-of-band attachment uploader (SYD-182): baked in so any dispatched worker
+# can `switchyard-attach <ISSUE_REF> <FILE>` regardless of the target repo,
+# streaming the bytes to the tracker instead of base64-ing them through an MCP
+# tool arg. Shell wrapper (not a bare rename) so node runs the .mjs as ESM.
+COPY scripts/attach.mjs /opt/switchyard/attach.mjs
+RUN printf '#!/bin/sh\nexec node /opt/switchyard/attach.mjs "$@"\n' > /usr/local/bin/switchyard-attach \
+    && chmod +x /usr/local/bin/switchyard-attach
+
+# Run as the image's built-in non-root `node` user (SYD-117) instead of root
+# -- narrows the blast radius of a compromised session and, combined with
+# --security-opt no-new-privileges (worker-select.ts buildDockerArgs), stops
+# it from regaining privilege inside the container. /work is where
+# container-entry.codex.sh clones the repo, so it needs to be node-writable
+# before we drop root.
+RUN mkdir -p /work && chown node:node /work
+USER node
+WORKDIR /work
+
+ENTRYPOINT ["/bin/sh", "/entry.sh"]

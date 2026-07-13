@@ -15,6 +15,7 @@
     "deploy": "sh scripts/deploy-nas.sh",
     "init-worker": "tsx scripts/init-worker.ts",
     "build:worker-image": "docker build -f Dockerfile.worker -t switchyard-worker . && docker build -f Dockerfile.egress-proxy -t switchyard-egress-proxy .",
+    "build:worker-image-codex": "docker build -f Dockerfile.worker.codex -t switchyard-worker-codex .",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

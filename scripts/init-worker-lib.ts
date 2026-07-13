@@ -64,6 +64,12 @@ export function validateWorkerConfig(raw: unknown): string[] {
       '`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)',
     );
   }
+  if (c.engine !== undefined && c.engine !== "claude" && c.engine !== "codex") {
+    problems.push('`engine` must be "claude" or "codex"');
+  }
+  if (c.engine === "codex" && c.egress === "open") {
+    problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
+  }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
   }

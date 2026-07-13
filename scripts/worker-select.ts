@@ -1,6 +1,8 @@
 // Pure dispatch-selection logic for scripts/agent-worker.ts.
 // Kept separate from the polling/spawning loop so it's trivially unit-testable.
 
+import { DEFAULT_CODEX_IMAGE } from "./engines/codex.js";
+
 /** The subset of an /api/issues row the selector needs. */
 export type WorkerIssue = {
   ref: string; // "<PROJECT>-<number>"
@@ -151,6 +153,8 @@ export type WorkerConfig = {
    * SDK (worker-sdk/ must be installed; incompatible with `containerized`).
    */
   runner?: "cli" | "sdk";
+  /** Which agent engine this worker drives: "claude" (default) or "codex". Selected per-worker-process. */
+  engine?: "claude" | "codex";
   /** Delivery gate (SYD-49): worker-side PR publishing + deliver.ts settings. */
   delivery?: DeliveryConfig;
   /** Answerer mode (SYD-56): max answer sessions dispatched per issue ref, ever (default 3). */
@@ -790,6 +794,7 @@ export const PROVIDER_KEY_VARS = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
+  "CODEX_OAUTH_TOKEN",
 ] as const;
 
 /** Bare `-e VAR` docker args for each provider key present (non-empty) in env —
@@ -953,28 +958,45 @@ export function buildDockerArgs(
   env: NodeJS.ProcessEnv,
   opts: { resumed?: boolean } = {},
 ): string[] {
-  if (!env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY) {
+  const engine = config.engine ?? "claude";
+
+  if (engine === "claude" && !env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY) {
     throw new Error(
-      "containerized dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment",
+      "containerized Claude dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment",
+    );
+  }
+  if (engine === "codex" && !env.CODEX_OAUTH_TOKEN) {
+    throw new Error(
+      "containerized Codex dispatch requires CODEX_OAUTH_TOKEN in the worker's environment (the injector's ChatGPT token)",
     );
   }
 
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   const baseBranch = project.baseBranch ?? DEFAULT_BASE_BRANCH;
   const prompt = buildContainerizedPrompt(issue.ref, { ...opts, baseBranch });
-  const image = config.image ?? DEFAULT_WORKER_IMAGE;
+  const image = config.image ?? (engine === "codex" ? DEFAULT_CODEX_IMAGE : DEFAULT_WORKER_IMAGE);
   const stackChecks = stackChecksEnv(project.stack);
 
-  // Provider-credential handling depends on the egress mode (SYD-186):
+  // Provider-credential handling depends on the egress mode (SYD-186) and,
+  // now, the engine (SYD-187):
   // - proxy (default): the syd-egress sidecar injects the real credential, so
   //   the container holds only a placeholder + the CA public cert (read-only).
   //   The real key never crosses into the agent container.
   // - open: no injecting sidecar, so the real credential must reach the
   //   container — bare `-e VAR` (value from the worker env, never argv).
+  // Codex additionally always gets the non-secret CODEX_ACCOUNT_ID (needed for
+  // the placeholder/real auth.json's chatgpt-account-id) in both modes.
+  const proxy = egressMode(config) === "proxy";
   const credArgs =
-    egressMode(config) === "proxy"
-      ? ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
-      : ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
+    engine === "codex"
+      ? [
+          "-e",
+          "CODEX_ACCOUNT_ID",
+          ...(proxy ? ["-v", `${EGRESS_CA_VOLUME}:/ca:ro`] : ["-e", "CODEX_OAUTH_TOKEN"]),
+        ]
+      : proxy
+        ? ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
+        : ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
 
   return [
     "run",

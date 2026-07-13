@@ -200,6 +200,23 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, runner: "sdk", containerized: true })).toHaveLength(1);
   });
 
+  it("rejects an unknown engine", () => {
+    const problems = validateWorkerConfig({ ...good, engine: "gpt5" });
+    expect(problems.join(" ")).toMatch(/engine/);
+  });
+
+  it("accepts engine: codex", () => {
+    expect(validateWorkerConfig({ ...good, engine: "codex" })).toEqual([]);
+  });
+
+  it("rejects engine: codex with egress: open, and still accepts codex with the default proxy egress", () => {
+    const problems = validateWorkerConfig({ ...good, engine: "codex", egress: "open" });
+    expect(problems.join(" ")).toMatch(/codex/);
+    expect(problems.join(" ")).toMatch(/egress|open|proxy/);
+    expect(validateWorkerConfig({ ...good, engine: "codex", egress: "proxy" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, engine: "codex" })).toEqual([]);
+  });
+
   it("accepts an absent maxAnswersPerIssue and rejects a non-positive-integer one", () => {
     expect(validateWorkerConfig(good)).toEqual([]);
     expect(validateWorkerConfig({ ...good, maxAnswersPerIssue: 5 })).toEqual([]);
