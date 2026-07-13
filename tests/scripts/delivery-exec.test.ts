@@ -19,6 +19,7 @@ import {
   waitForChecks,
   attemptAutoRebase,
   checkBranchProtection,
+  mergeAgentPr,
 } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
@@ -320,6 +321,66 @@ describe("attemptAutoRebase S0 anchor (SYD-209)", () => {
     // main didn't move, so the rebase is a no-op and S1 === the authorized head.
     expect(res.status).toBe("rebased");
     if (res.status === "rebased") expect(res.sha).toBe(head);
+  });
+});
+
+// SYD-209 review finding 1: a merged PR must never be reported as a failed
+// merge just because the follow-up merge-SHA read blipped.
+describe("mergeAgentPr merge/read atomicity", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "merge-repo-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  /** Fake `gh` that exits 0 for `pr merge …` but non-zero for `pr view …`
+   * (the merge landed; reading the merge SHA back then fails). */
+  function makeFakeGhMergeOkViewFails(binDir: string): void {
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      "#!/bin/sh\n" +
+        'for a in "$@"; do if [ "$a" = "merge" ]; then exit 0; fi; done\n' +
+        'echo "API rate limit exceeded" 1>&2\nexit 1\n',
+    );
+    chmodSync(ghPath, 0o755);
+  }
+
+  it("returns the pinned head S1 (never throws) when the merge lands but the SHA read fails", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "merge-bin-"));
+    makeFakeGhMergeOkViewFails(binDir);
+
+    const sha = await withFakeGhOnPath(binDir, () => mergeAgentPr(repo, 42, "s1def"));
+    expect(sha).toBe("s1def");
+  });
+
+  it("propagates a real merge failure (gh pr merge itself exits non-zero)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "merge-bin-"));
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, '#!/bin/sh\necho "not mergeable" 1>&2\nexit 1\n');
+    chmodSync(ghPath, 0o755);
+
+    await expect(withFakeGhOnPath(binDir, () => mergeAgentPr(repo, 42, "s1def"))).rejects.toThrow();
   });
 });
 

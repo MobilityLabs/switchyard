@@ -186,7 +186,21 @@ export async function mergeAgentPr(
 ): Promise<string> {
   const ownerRepo = await originOwnerRepo(repo);
   await run("gh", buildPrMergeArgs(prNumber, ownerRepo, matchHeadSha), { cwd: GH_CWD });
-  return run("gh", buildPrViewMergeShaArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+  // Once `gh pr merge` resolves, the merge HAS landed (a --match-head-commit
+  // mismatch or any merge failure makes gh exit non-zero, which `run` throws —
+  // caught by the caller's retry). Reading back the merge SHA is a separate,
+  // best-effort concern: a transient blip on this view must NOT be able to turn
+  // a merge that already happened into a `merge_failed` outcome that strands a
+  // merged PR (SYD-209 review finding 1). Fall back to the pinned head S1 for
+  // display — the actual merged head — rather than throwing.
+  try {
+    return await run("gh", buildPrViewMergeShaArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+  } catch (err) {
+    console.error(
+      `merged PR #${prNumber} but could not read its merge SHA: ${(err as Error).message}`,
+    );
+    return matchHeadSha ?? "unknown";
+  }
 }
 
 /** GitHub's live required-check rollup for a PR's current head (SYD-209). Read
