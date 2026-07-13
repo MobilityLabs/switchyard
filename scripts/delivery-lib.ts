@@ -398,6 +398,8 @@ export type DeliveryEventInput =
       mergeSha: string;
       deploy: DeliveryResult["deploy"];
       repo?: string;
+      headSha?: string;
+      ghUpdatedAt?: string;
     }
   | { type: "delivery_failed"; message: string; repo?: string };
 

@@ -5,10 +5,35 @@ import { events, actors, issues, projects } from "../db/schema.js";
 export function recordEvent(
   db: DbOrTx,
   e: { issueId: number; actorId: number; type: string; payload?: Record<string, unknown> },
-): void {
-  db.insert(events)
+): number {
+  return db
+    .insert(events)
     .values({ issueId: e.issueId, actorId: e.actorId, type: e.type, payload: e.payload ?? {} })
-    .run();
+    .returning({ id: events.id })
+    .get().id;
+}
+
+/**
+ * The id of an existing event of `type` on this issue whose payload already
+ * carries `value` at `jsonPath`, or null. GitHub redelivers at-least-once and
+ * the poller re-observes on every tick, so writers that must record a
+ * transition exactly once (github-webhook's isDuplicate, upsertPrState's
+ * canonical co-write) key off this.
+ */
+export function findEventIdByPayload(
+  db: DbOrTx,
+  issueId: number,
+  type: string,
+  jsonPath: string,
+  value: string | number | null,
+): number | null {
+  if (value === null) return null;
+  const [row] = db.all<{ id: number }>(sql`
+    SELECT id FROM events
+    WHERE issue_id = ${issueId} AND type = ${type} AND json_extract(payload, ${jsonPath}) = ${value}
+    LIMIT 1
+  `);
+  return row?.id ?? null;
 }
 
 export function listIssueEvents(db: Db, issueId: number) {

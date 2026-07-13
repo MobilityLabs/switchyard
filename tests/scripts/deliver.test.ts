@@ -11,6 +11,7 @@ const findOpenAgentPr = vi.fn();
 const findMergedAgentPr = vi.fn();
 const dispatchConflictResolution = vi.fn();
 const originOwnerRepo = vi.fn();
+const prFreshness = vi.fn();
 
 vi.mock("../../scripts/delivery-exec.js", () => ({
   attemptAutoRebase: (...args: unknown[]) => attemptAutoRebase(...args),
@@ -23,6 +24,7 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   findMergedAgentPr: (...args: unknown[]) => findMergedAgentPr(...args),
   dispatchConflictResolution: (...args: unknown[]) => dispatchConflictResolution(...args),
   originOwnerRepo: (...args: unknown[]) => originOwnerRepo(...args),
+  prFreshness: (...args: unknown[]) => prFreshness(...args),
 }));
 
 const { deliverQueue } = await import("../../scripts/deliver.js");
@@ -50,6 +52,8 @@ describe("deliverQueue (SYD-174)", () => {
     runVerification.mockReset();
     runDeploy.mockReset();
     originOwnerRepo.mockReset();
+    prFreshness.mockReset();
+    prFreshness.mockRejectedValue(new Error("gh unavailable in tests"));
     pollUntilMergeable.mockResolvedValue("MERGEABLE");
   });
 
@@ -127,6 +131,30 @@ describe("deliverQueue (SYD-174)", () => {
     const posted = JSON.parse(eventCalls[0][1].body as string);
     expect(posted).toMatchObject({ type: "delivered", prNumber: 42 });
     expect(posted.repo).toBeUndefined();
+  });
+
+  it("attaches GitHub's own head/timestamp to the delivered event when the lookup succeeds (SYD-206)", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+    mergeAgentPr.mockResolvedValue("merged-sha");
+    originOwnerRepo.mockResolvedValue("acme/widgets");
+    prFreshness.mockResolvedValue({
+      headSha: "f".repeat(40),
+      ghUpdatedAt: "2026-07-12T11:00:00Z",
+    });
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+
+    const eventCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/issues/SYD-174/delivery-events"),
+    );
+    expect(eventCalls).toHaveLength(1);
+    expect(JSON.parse(eventCalls[0][1].body as string)).toMatchObject({
+      type: "delivered",
+      headSha: "f".repeat(40),
+      ghUpdatedAt: "2026-07-12T11:00:00Z",
+    });
   });
 
   it("gives up once the queue-mode retry budget is exhausted", async () => {

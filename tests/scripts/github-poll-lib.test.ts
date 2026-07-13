@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
-  diffRepoState,
+  observeRepoState,
+  selectRefreshCandidates,
   parsePollStateText,
   type GhPr,
   type GhRun,
   type RepoPollState,
 } from "../../scripts/github-poll-lib.js";
+
+const diffRepoState = observeRepoState;
 
 function pr(o: Partial<GhPr>): GhPr {
   return {
@@ -97,10 +100,26 @@ describe("diffRepoState / pull requests", () => {
     ]);
   });
 
-  it("does not emit anything for a PR first observed already closed/merged", () => {
+  it("emits a closed observation even for a PR first observed already merged (upsert-observed-state, SYD-206)", () => {
     const { events, next } = diffRepoState([pr({ state: "MERGED" })], new Map(), {});
-    expect(events).toEqual([]);
+    expect(events).toEqual([
+      {
+        event: "pull_request",
+        payload: expect.objectContaining({
+          action: "closed",
+          pull_request: expect.objectContaining({ merged: true }),
+        }),
+      },
+    ]);
     expect(next[1].state).toBe("MERGED");
+  });
+
+  it("re-emits closed for an already-terminal PR on every tick (the server upsert makes it a no-op)", () => {
+    const prior: RepoPollState = { 1: { state: "CLOSED", lastRunConclusion: null } };
+    const { events } = diffRepoState([pr({ state: "CLOSED" })], new Map(), prior);
+    expect(events).toEqual([
+      { event: "pull_request", payload: expect.objectContaining({ action: "closed" }) },
+    ]);
   });
 
   it("leaves PRs missing from the current list untouched in the returned state", () => {
@@ -181,6 +200,28 @@ describe("diffRepoState / checks", () => {
       1: { state: "OPEN", lastRunConclusion: null },
     });
     expect(events.filter((e) => e.event === "check_suite")).toEqual([]);
+  });
+});
+
+describe("selectRefreshCandidates", () => {
+  const NOW = 1_000_000_000_000;
+  const INTERVAL = 600_000;
+
+  it("picks open pr_state rows absent from the poll window", () => {
+    const picked = selectRefreshCandidates([7, 9], new Set([9, 12]), {}, NOW, INTERVAL);
+    expect(picked).toEqual([7]);
+  });
+
+  it("skips a candidate refreshed more recently than the interval, but retries one past it", () => {
+    const state: RepoPollState = {
+      7: { state: "OPEN", lastRunConclusion: null, lastRefreshAt: NOW - 60_000 },
+      8: { state: "OPEN", lastRunConclusion: null, lastRefreshAt: NOW - INTERVAL - 1 },
+    };
+    expect(selectRefreshCandidates([7, 8], new Set(), state, NOW, INTERVAL)).toEqual([8]);
+  });
+
+  it("treats a row it has never tracked as immediately refreshable", () => {
+    expect(selectRefreshCandidates([42], new Set(), {}, NOW, INTERVAL)).toEqual([42]);
   });
 });
 

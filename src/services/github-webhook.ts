@@ -19,6 +19,7 @@ import { getOrCreateActor } from "./actors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
 import { boundRepoFullNames } from "./github-repos.js";
+import { upsertPrState, attributedRef, type PrObservation } from "./pr-state.js";
 
 const GITHUB_ACTOR_NAME = "github";
 
@@ -175,6 +176,8 @@ function record(
   return { handled: true, ref, type };
 }
 
+const PR_ACTIONS = new Set(["opened", "closed", "reopened", "synchronize"]);
+
 function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): GithubWebhookOutcome {
   const parsed = pullRequestPayloadSchema.safeParse(rawPayload);
   if (!parsed.success) return { handled: false, reason: "malformed pull_request payload" };
@@ -183,36 +186,101 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
   if (!pr) return { handled: false, reason: "pull_request payload missing pull_request object" };
   const ref = resolveRef([pr.head?.ref], [pr.title, pr.body]);
   if (!ref) return { handled: false, reason: "no issue ref found in branch, title, or body" };
+  const action = payload.action ?? "";
+  if (!PR_ACTIONS.has(action)) {
+    return { handled: false, reason: `ignored pull_request action "${action}"` };
+  }
 
   const prNumber = Number(pr.number);
   const url = String(pr.html_url ?? "");
+  const branch = pr.head?.ref ?? null;
   const headSha = pr.head?.sha ?? null;
   const ghUpdatedAt = parseGhTimestamp(pr.updated_at);
 
+  let issue: { id: number; projectId: number };
+  try {
+    issue = getIssue(db, ref);
+  } catch {
+    return { handled: false, reason: `no Switchyard issue matches ref ${ref}` };
+  }
+  const resolvedRepo = resolveRepo(db, issue.projectId, repo);
+  if (resolvedRepo === "ambiguous") return { handled: false, reason: AMBIGUOUS_REPO_REASON };
+
+  // Authoritative path (SYD-206): a strict agent/<ref> branch in the repo
+  // bound to that ref's project routes through upsertPrState, which owns the
+  // state row AND co-writes the canonical transition event — no direct event
+  // write here, so one physical transition never appears twice. Everything
+  // else (free-text matches, cross-repo agent branches) records display/audit
+  // events only and never touches pr_state.
+  const attributed =
+    resolvedRepo !== null && attributedRef(db, resolvedRepo, branch) === ref;
+  if (attributed) {
+    const actor = getOrCreateActor(db, GITHUB_ACTOR_NAME, "agent");
+    const base = {
+      repo: resolvedRepo!,
+      prNumber,
+      url,
+      branch,
+      headSha,
+      ghUpdatedAt,
+    };
+    if (action === "synchronize") {
+      upsertPrState(db, actor, { ...base, status: "open" });
+      return { handled: true, ref, type: "synchronize", recorded: false };
+    }
+    const observation: PrObservation =
+      action === "opened"
+        ? { ...base, status: "open" }
+        : action === "reopened"
+          ? { ...base, status: "open", reopened: true }
+          : pr.merged
+            ? { ...base, status: "merged", mergeSha: pr.merge_commit_sha ?? null }
+            : { ...base, status: "closed" };
+    const type =
+      action === "opened"
+        ? "gh_pr_opened"
+        : action === "reopened"
+          ? "gh_pr_reopened"
+          : pr.merged
+            ? "gh_pr_merged"
+            : "gh_pr_closed";
+    const outcome = upsertPrState(db, actor, observation);
+    return outcome.transition !== null
+      ? { handled: true, ref, type }
+      : { handled: true, ref, type, duplicate: true };
+  }
+
   const byPrNumber = { jsonPath: "$.prNumber", value: prNumber };
-  if (payload.action === "opened") {
+  if (action === "opened") {
     return record(
       db,
       ref,
       "gh_pr_opened",
-      { prNumber, url, branch: pr.head?.ref ?? null, headSha, ghUpdatedAt },
-      repo,
+      { prNumber, url, branch, headSha, ghUpdatedAt },
+      resolvedRepo,
       byPrNumber,
     );
   }
-  if (payload.action === "closed") {
+  if (action === "closed") {
     return pr.merged
       ? record(
           db,
           ref,
           "gh_pr_merged",
           { prNumber, url, mergeSha: pr.merge_commit_sha ?? null, headSha, ghUpdatedAt },
-          repo,
+          resolvedRepo,
           byPrNumber,
         )
-      : record(db, ref, "gh_pr_closed", { prNumber, url, headSha, ghUpdatedAt }, repo, byPrNumber);
+      : record(
+          db,
+          ref,
+          "gh_pr_closed",
+          { prNumber, url, headSha, ghUpdatedAt },
+          resolvedRepo,
+          byPrNumber,
+        );
   }
-  if (payload.action === "reopened") {
+  if (action === "reopened") {
     // A PR can legitimately reopen more than once, so dedupe by GitHub's own
     // timestamp (a redelivery repeats it; a genuine re-reopen carries a newer
     // one) rather than by prNumber.
@@ -220,24 +288,14 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
       db,
       ref,
       "gh_pr_reopened",
-      { prNumber, url, branch: pr.head?.ref ?? null, headSha, ghUpdatedAt },
-      repo,
+      { prNumber, url, branch, headSha, ghUpdatedAt },
+      resolvedRepo,
       { jsonPath: "$.ghUpdatedAt", value: ghUpdatedAt },
     );
   }
-  if (payload.action === "synchronize") {
-    // Groundwork only (SYD-205): parse and acknowledge — synchronize is a
-    // same-status head refresh, not a transition, so no audit event is
-    // recorded. upsertPrState (SYD-206) hooks in here to persist
-    // headSha/ghUpdatedAt.
-    try {
-      getIssue(db, ref);
-    } catch {
-      return { handled: false, reason: `no Switchyard issue matches ref ${ref}` };
-    }
-    return { handled: true, ref, type: "synchronize", recorded: false };
-  }
-  return { handled: false, reason: `ignored pull_request action "${payload.action}"` };
+  // synchronize, display-only: acknowledged, nothing recorded — a head
+  // refresh on an unattributed PR has no state row to keep fresh.
+  return { handled: true, ref, type: "synchronize", recorded: false };
 }
 
 function branchFromGitRef(gitRef: unknown): string | null {

@@ -53,6 +53,7 @@ import {
   type GithubRepo,
 } from "../services/github-repos.js";
 import { handleGithubWebhook } from "../services/github-webhook.js";
+import { listPrState } from "../services/pr-state.js";
 import {
   getAllSettings,
   setSetting,
@@ -430,6 +431,18 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // dispatch worker polls this to retune concurrency and poll intervals
   // without a launchd restart.
   app.get("/dispatch-policy", (c) => c.json(getDispatchPolicy(db)));
+
+  // Read surface for the poller's targeted refresh (SYD-206): which PRs a
+  // repo still has open in pr_state, so rows beyond the poll window get an
+  // individual gh pr view. Consumers proper migrate at SYD-207.
+  app.get("/pr-state", (c) =>
+    c.json(
+      listPrState(db, {
+        repo: c.req.query("repo") || undefined,
+        status: c.req.query("status") || undefined,
+      }),
+    ),
+  );
 
   app.post("/github-events", body(githubEventBody), (c) => {
     if (c.var.actor.type === "agent") {
