@@ -150,7 +150,6 @@ export function validateWorkerConfig(raw: unknown): string[] {
         "deploy",
         "verify",
         "autoRebase",
-        "reconcile",
         "conflictResolution",
       ] as const) {
         if (d[key] !== undefined && typeof d[key] !== "boolean") {

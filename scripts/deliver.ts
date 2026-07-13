@@ -39,8 +39,6 @@ import {
   autoRebasedNote,
   autoRebaseConflictComment,
   autoRebaseVerifyFailedComment,
-  selectReconcilableRefs,
-  reconciledComment,
   shouldDispatchConflictResolution,
   conflictResolutionFailedComment,
   conflictResolvedNote,
@@ -54,7 +52,6 @@ import {
   MAIN_BRANCH,
   type DeliveryEventInput,
   type DeliveryFeedEvent,
-  type AttentionIssueRow,
 } from "./delivery-lib.js";
 import {
   findOpenAgentPr,
@@ -63,7 +60,6 @@ import {
   runVerification,
   runDeploy,
   attemptAutoRebase,
-  findMergedAgentPr,
   dispatchConflictResolution,
   pollUntilMergeable,
   originOwnerRepo,
@@ -344,7 +340,8 @@ export async function deliverQueue(
     // post-merge problem, not a lost merge race — re-rebasing here would only
     // hit "no branch found" against the PR's now-deleted branch. Let it
     // propagate to deliver()'s outer per-ref handler, which logs and moves on;
-    // the reconciliation pass (SYD-94) clears the flag once things settle.
+    // the webhook/poller's merged observation lands in pr_state and clears
+    // the flag once things settle (SYD-207, replacing the SYD-94 reconcile).
     console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (queue mode)`);
     await finishDelivery(
       ref,
@@ -516,64 +513,6 @@ async function deliver(
   }
 }
 
-/** Fetches the issues currently flagged `delivery_failed` (SYD-84's attention
- * derivation), restricted server-side via `?attention=` so this stays cheap
- * in steady state (zero flagged issues ⇒ one small response, no gh calls). */
-async function fetchAttentionFlaggedIssues(
-  config: WorkerConfig,
-  token: string,
-): Promise<AttentionIssueRow[]> {
-  const url = `${config.url.replace(/\/$/, "")}/api/issues?attention=delivery_failed`;
-  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-  if (!res.ok)
-    throw new Error(
-      `GET /api/issues?attention=delivery_failed failed: ${res.status} ${await res.text()}`,
-    );
-  return (await res.json()) as AttentionIssueRow[];
-}
-
-/**
- * Reconciliation pass (SYD-94): a delivery_failed issue's badge stays red
- * forever if a human merges the agent PR by hand instead of re-stamping done
- * (deliver.ts only ever records `delivered` from its own merge). For each
- * flagged ref, ask GitHub whether agent/<ref> was actually merged; if so,
- * record a `delivered` event (deploy never runs here — reconciliation only
- * clears the stale flag, it never ships anything) so the badge clears.
- * Left alone if the PR is still open or was closed unmerged — those are
- * genuinely unresolved.
- */
-async function reconcile(
-  ref: string,
-  config: WorkerConfig,
-  token: string,
-  dryRun: boolean,
-): Promise<void> {
-  const project = config.projects[projectKeyOf(ref)];
-  if (!project) return;
-  try {
-    const merged = await findMergedAgentPr(project.repo, ref);
-    if (!merged) return;
-    if (dryRun) {
-      console.log(
-        `[dry-run] would reconcile ${ref}: PR #${merged.prNumber} merged manually at ${merged.mergeSha}`,
-      );
-      return;
-    }
-    console.log(
-      `${ref}: reconciling — PR #${merged.prNumber} was merged manually at ${merged.mergeSha}`,
-    );
-    await postComment(config, token, ref, reconciledComment(merged.prNumber, merged.mergeSha));
-    await postDeliveryEvent(config, token, ref, {
-      type: "delivered",
-      prNumber: merged.prNumber,
-      mergeSha: merged.mergeSha,
-      deploy: { ran: false },
-    });
-  } catch (err) {
-    console.error(`reconciliation failed for ${ref}: ${(err as Error).message}`);
-  }
-}
-
 async function tick(
   config: WorkerConfig,
   token: string,
@@ -610,14 +549,6 @@ async function tick(
     // Skipped under --dry-run: dry runs must be non-mutating, so a dry run
     // never consumes a real approval out from under the next real tick.
     if (!dryRun && lastEventId !== null && lastEventId !== cursor) writeCursor(lastEventId);
-
-    if (config.delivery?.reconcile !== false) {
-      const flagged = await fetchAttentionFlaggedIssues(config, token);
-      const reconcilable = selectReconcilableRefs(flagged, Object.keys(config.projects));
-      for (const ref of reconcilable) {
-        await reconcile(ref, config, token, dryRun);
-      }
-    }
   });
 }
 
