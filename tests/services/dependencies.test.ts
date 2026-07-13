@@ -36,7 +36,7 @@ describe("dependencies", () => {
     expect(getOpenBlockers(db, 2).map((b) => b.ref)).toEqual(["AIPI-1"]);
     expect(() => claimIssue(db, agent, "AIPI-2")).toThrowError(/blocked by AIPI-1.*next_task/s);
     updateIssue(db, human, "AIPI-1", { status: "done" });
-    expect(claimIssue(db, agent, "AIPI-2").status).toBe("in_progress");
+    expect(claimIssue(db, agent, "AIPI-2").issue.status).toBe("in_progress");
   });
 
   it("nextTask returns highest-priority unblocked todo, or null", () => {
@@ -117,7 +117,7 @@ describe("dependencies", () => {
     const types = listIssueEvents(db, 2).map((e) => e.type);
     expect(types.filter((t) => t === "blocked_by_removed")).toHaveLength(1);
     // The issue is claimable again.
-    expect(claimIssue(db, agent, "AIPI-2").status).toBe("in_progress");
+    expect(claimIssue(db, agent, "AIPI-2").issue.status).toBe("in_progress");
   });
 
   it("removing a dependency that does not exist is a no-op with no event", () => {

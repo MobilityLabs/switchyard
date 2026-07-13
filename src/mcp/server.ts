@@ -200,10 +200,16 @@ export function buildMcpServer(
       description:
         "Assign yourself to an issue and move it to in_progress. Fails with guidance if the issue " +
         "is blocked, already claimed by someone else, or already has an open PR from a prior claim. " +
-        "Prefer next_task to pick what to claim.",
-      inputSchema: { ref: z.string() },
+        "Prefer next_task to pick what to claim. Returns a lease_token — present it as lease_token on " +
+        "every later claim-scoped call (update_issue, request_human_input) on this issue. " +
+        "If you already hold an active lease (e.g. a prior session), the bare claim fails — pass " +
+        "takeover: true to seize it, invalidating that session's lease.",
+      inputSchema: { ref: z.string(), takeover: z.boolean().optional() },
     },
-    guard(({ ref }: { ref: string }) => claimIssue(db, actor, ref)),
+    guard(({ ref, takeover }: { ref: string; takeover?: boolean }) => {
+      const { issue, leaseToken } = claimIssue(db, actor, ref, { takeover });
+      return { ...issue, lease_token: leaseToken };
+    }),
   );
 
   server.registerTool(
@@ -218,7 +224,9 @@ export function buildMcpServer(
         "an assignee is human-only (enforced by the server). " +
         "Stamping status: done over an issue with an open agent PR authorizes delivery, so the " +
         "server requires expected_head_sha (the head SHA you reviewed) — it 400s naming the current " +
-        "head if the PR moved since you looked.",
+        "head if the PR moved since you looked. " +
+        "If you claimed this issue, pass lease_token (returned by claim_issue) — the server rejects a " +
+        "claim-scoped change without your session's lease.",
       inputSchema: {
         ref: z.string(),
         status: z.enum(STATUSES).optional(),
@@ -230,6 +238,7 @@ export function buildMcpServer(
         labels: z.array(z.string()).optional(),
         worker_preference: z.string().nullable().optional(),
         expected_head_sha: z.string().optional(),
+        lease_token: z.string().optional(),
       },
     },
     guard(
@@ -244,18 +253,28 @@ export function buildMcpServer(
         labels?: string[];
         worker_preference?: string | null;
         expected_head_sha?: string;
-      }) =>
-        updateIssue(db, actor, a.ref, {
-          status: a.status,
-          priority: a.priority,
-          title: a.title,
-          summary: a.summary,
-          description: a.description,
-          assigneeName: a.assignee,
-          labels: a.labels,
-          workerPreference: a.worker_preference,
-          expectedHeadSha: a.expected_head_sha,
-        }),
+        lease_token?: string;
+      }) => {
+        const minted: { token: string | null } = { token: null };
+        const issue = updateIssue(
+          db,
+          actor,
+          a.ref,
+          {
+            status: a.status,
+            priority: a.priority,
+            title: a.title,
+            summary: a.summary,
+            description: a.description,
+            assigneeName: a.assignee,
+            labels: a.labels,
+            workerPreference: a.worker_preference,
+            expectedHeadSha: a.expected_head_sha,
+          },
+          { presented: a.lease_token, minted },
+        );
+        return minted.token ? { ...issue, lease_token: minted.token } : issue;
+      },
     ),
   );
 
@@ -295,11 +314,12 @@ export function buildMcpServer(
       description:
         "Escalate a question on an issue you are working: sets the needs-input flag and posts your " +
         "question as a comment so humans see it in their inbox. Use this instead of guessing when " +
-        "blocked on a decision only a human can make. The flag clears when a human replies or changes status.",
-      inputSchema: { ref: z.string(), question: z.string() },
+        "blocked on a decision only a human can make. The flag clears when a human replies or changes status. " +
+        "Pass lease_token (returned by claim_issue) — escalating is a claim-scoped action.",
+      inputSchema: { ref: z.string(), question: z.string(), lease_token: z.string().optional() },
     },
-    guard(({ ref, question }: { ref: string; question: string }) =>
-      requestHumanInput(db, actor, ref, question),
+    guard(({ ref, question, lease_token }: { ref: string; question: string; lease_token?: string }) =>
+      requestHumanInput(db, actor, ref, question, lease_token),
     ),
   );
 

@@ -16,6 +16,8 @@ import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { getOpenBlockers } from "./dependencies.js";
 import { getOpenPr } from "./pr-status.js";
+import { getSetting } from "./settings.js";
+import { mintLease, validateLease, invalidateLease, getActiveLease } from "./leases.js";
 
 export type Provenance = {
   sourceType: "session" | "todo" | "ci" | "manual";
@@ -209,10 +211,34 @@ function assertAssignee(db: DbOrTx, actor: Actor, current: IssueView, toStatus: 
   );
 }
 
-export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssueInput): IssueView {
+/**
+ * How a caller passes the lease token in and receives a freshly minted one out
+ * (SYD-210). `presented` is the token the holder supplies for validation;
+ * `minted` is an out-container the function fills when this call establishes a
+ * new claim — kept off the returned IssueView so the token is never serialized.
+ */
+export type LeaseChannel = { presented?: string; minted?: { token: string | null } };
+
+export function updateIssue(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  patch: UpdateIssueInput,
+  lease: LeaseChannel = {},
+): IssueView {
   checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
     const current = getIssue(tx, ref);
+    // SYD-210: an agent mutating an issue it already holds must present the
+    // lease minted at claim time — this closes the shared-token double-work
+    // hole (a second session of the same worker actor holds the shared bearer
+    // token but not this lease). Humans are individuated by actor and are never
+    // lease-gated. A fresh claim (assigneeId === null -> assigned, below) mints
+    // instead of validating, so the two are disjoint.
+    const isHolderMutation = actor.type === "agent" && current.assigneeId === actor.id;
+    if (isHolderMutation) {
+      validateLease(tx, current.id, actor.id, lease.presented);
+    }
     const changes: SQLiteUpdateSetSource<typeof issues> = {};
     const toRecord: { type: string; payload: Record<string, unknown> }[] = [];
 
@@ -310,6 +336,9 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       ) {
         changes.assigneeId = null;
         toRecord.push({ type: "claim_released", payload: { reason: "moved_to_todo" } });
+        // SYD-210: self-release ends the claim, so its lease is invalidated
+        // (the holder already validated above).
+        invalidateLease(tx, current.id);
       }
     }
 
@@ -424,6 +453,24 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
       toRecord.push({ type: "needs_input_cleared", payload: {} });
     }
 
+    // Mint a lease when this update establishes a fresh claim: an unassigned
+    // issue becoming assigned to the actor and in_progress (the claimIssue
+    // self-assign path AND the SYD-111 bare-PATCH auto-claim path both land
+    // here). Disjoint from the holder-validation above (assigneeId was null).
+    if (
+      lease.minted &&
+      changes.assigneeId === actor.id &&
+      current.assigneeId === null &&
+      (changes.status === "in_progress" || current.status === "in_progress")
+    ) {
+      lease.minted.token = mintLease(
+        tx,
+        current.id,
+        actor.id,
+        getSetting(db, "claims.lease_ttl_seconds"),
+      );
+    }
+
     if (Object.keys(changes).length === 0) return current;
     changes.updatedAt = sql`(unixepoch())`;
     const row = tx.update(issues).set(changes).where(eq(issues.id, current.id)).returning().get();
@@ -434,7 +481,18 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
   });
 }
 
-export function claimIssue(db: Db, actor: Actor, ref: string): IssueView {
+/**
+ * The result of a claim: the updated issue plus the plaintext lease token,
+ * handed to the claiming session ONCE (never stored, never re-returned).
+ */
+export type ClaimResult = { issue: IssueView; leaseToken: string };
+
+export function claimIssue(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  opts: { takeover?: boolean } = {},
+): ClaimResult {
   const current = getIssue(db, ref);
   const blockers = getOpenBlockers(db, current.id);
   if (blockers.length > 0) {
@@ -442,6 +500,50 @@ export function claimIssue(db: Db, actor: Actor, ref: string): IssueView {
       `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`,
     );
   }
+
+  // Same-actor re-claim of an issue that already has an active lease: fail
+  // loudly unless takeover is opted in (this project's workflow tells every
+  // session to claim before touching code, and interactive + dispatched
+  // sessions share the worker actor — a default takeover would silently kill a
+  // healthy running container). Takeover only reaches here for the same actor;
+  // a different actor's claim is refused by assertClaimable below.
+  if (current.assigneeId === actor.id) {
+    const active = getActiveLease(db, current.id);
+    if (active && !opts.takeover) {
+      throw new SwitchyardError(
+        `${ref} already has an active lease held by this actor — another session may be working it. ` +
+          `Pass takeover: true to seize the claim (invalidating that session's lease), or call next_task for another issue.`,
+      );
+    }
+    // Re-claim (takeover, or a lease-less holder e.g. after expiry): swap the
+    // lease in one transaction. The issue is already in_progress + assigned, so
+    // no status change is needed.
+    const leaseToken = db.transaction((tx) => {
+      if (active) {
+        invalidateLease(tx, current.id);
+        recordEvent(tx, {
+          issueId: current.id,
+          actorId: actor.id,
+          type: "lease_taken_over",
+          payload: {},
+        });
+      }
+      return mintLease(tx, current.id, actor.id, getSetting(db, "claims.lease_ttl_seconds"));
+    });
+    return { issue: getIssue(db, ref), leaseToken };
+  }
+
+  // Fresh claim of an unassigned (or blocked/PR-guarded) issue: assertClaimable
+  // is re-checked inside updateIssue's in_progress gate; the mint happens there
+  // via the out-channel.
   assertClaimable(db, actor, current);
-  return updateIssue(db, actor, ref, { status: "in_progress", assigneeName: actor.name });
+  const minted: { token: string | null } = { token: null };
+  const issue = updateIssue(db, actor, ref, { status: "in_progress", assigneeName: actor.name }, { minted });
+  if (minted.token === null) {
+    // Defensive: the auto-claim mint condition should always fire on a fresh
+    // claim. If it didn't, the claim state is inconsistent — fail rather than
+    // hand back an empty token.
+    throw new SwitchyardError(`Failed to mint a lease while claiming ${ref} — retry the claim.`);
+  }
+  return { issue, leaseToken: minted.token };
 }

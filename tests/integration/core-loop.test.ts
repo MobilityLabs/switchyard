@@ -85,14 +85,16 @@ describe("core loop over HTTP", () => {
     const next = JSON.parse(text(await agent.callTool({ name: "next_task", arguments: {} })));
     expect(next.ref).toBe(filed.ref);
 
-    await agent.callTool({ name: "claim_issue", arguments: { ref: filed.ref } });
+    const claim = JSON.parse(
+      text(await agent.callTool({ name: "claim_issue", arguments: { ref: filed.ref } })),
+    );
     await agent.callTool({
       name: "comment",
       arguments: { ref: filed.ref, body: "Fixed the retry logic; vitest 14/14 green." },
     });
     await agent.callTool({
       name: "update_issue",
-      arguments: { ref: filed.ref, status: "in_review" },
+      arguments: { ref: filed.ref, status: "in_review", lease_token: claim.lease_token },
     });
 
     const final = getIssue(db, filed.ref);

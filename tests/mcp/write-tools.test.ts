@@ -141,7 +141,7 @@ describe("MCP write tools", () => {
       text(
         await client.callTool({
           name: "update_issue",
-          arguments: { ref: "AIPI-1", status: "in_review" },
+          arguments: { ref: "AIPI-1", status: "in_review", lease_token: claimed.lease_token },
         }),
       ),
     );
@@ -158,10 +158,12 @@ describe("MCP write tools", () => {
       name: "update_issue",
       arguments: { ref: "AIPI-1", status: "todo" },
     });
-    await client.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } });
+    const claim = JSON.parse(
+      text(await client.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } })),
+    );
     await client.callTool({
       name: "update_issue",
-      arguments: { ref: "AIPI-1", status: "in_review" },
+      arguments: { ref: "AIPI-1", status: "in_review", lease_token: claim.lease_token },
     });
 
     // Seed an open agent PR the same way the real delivery worker does.

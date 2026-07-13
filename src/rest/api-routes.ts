@@ -103,7 +103,7 @@ import {
   deliveryAttemptDerivedHeadBody,
 } from "./schemas.js";
 
-type Env = { Variables: { actor: Actor } };
+type Env = { Variables: { actor: Actor; leaseToken?: string } };
 
 function requireHumanCaller(actor: Actor, action: string): void {
   if (actor.type === "agent") {
@@ -129,6 +129,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       );
     }
     c.set("actor", actor);
+    // SYD-210: the session's claim lease travels in a header (never a body/log),
+    // extracted once here — mirrors Authorization -> c.var.actor — so every
+    // route reads it uniformly via c.var.leaseToken.
+    const lease = c.req.header("x-switchyard-lease");
+    if (lease) c.set("leaseToken", lease);
     await next();
   });
 
@@ -230,11 +235,19 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     });
   });
 
-  app.patch("/issues/:ref", body(issueUpdateBody), (c) =>
-    c.json(updateIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
-  );
+  app.patch("/issues/:ref", body(issueUpdateBody), (c) => {
+    const minted: { token: string | null } = { token: null };
+    const issue = updateIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), {
+      presented: c.var.leaseToken,
+      minted,
+    });
+    return c.json(minted.token ? { ...issue, leaseToken: minted.token } : issue);
+  });
 
-  app.post("/issues/:ref/claim", (c) => c.json(claimIssue(db, c.var.actor, c.req.param("ref"))));
+  app.post("/issues/:ref/claim", (c) => {
+    const { issue, leaseToken } = claimIssue(db, c.var.actor, c.req.param("ref"));
+    return c.json({ ...issue, leaseToken });
+  });
 
   app.post("/issues/:ref/comments", body(commentBody), (c) => {
     addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);
@@ -337,7 +350,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.post("/issues/:ref/request-input", body(requestInputBody), (c) =>
-    c.json(requestHumanInput(db, c.var.actor, c.req.param("ref"), c.req.valid("json").question)),
+    c.json(
+      requestHumanInput(
+        db,
+        c.var.actor,
+        c.req.param("ref"),
+        c.req.valid("json").question,
+        c.var.leaseToken,
+      ),
+    ),
   );
 
   app.post("/issues/:ref/snooze", body(snoozeBody), (c) =>

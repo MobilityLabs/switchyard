@@ -5,6 +5,7 @@ import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { listIssueEvents, recordEvent } from "./events.js";
+import { invalidateLease } from "./leases.js";
 
 /** Convention (SYD-56): a human comment addressed to agents leads with `@agent`. */
 const AGENT_QUESTION_RE = /^@agent\b/i;
@@ -48,6 +49,11 @@ export function addComment(db: Db, actor: Actor, ref: string, body: string): voi
           type: "claim_released",
           payload: { reason: "needs_input_cleared" },
         });
+        // SYD-210: the answering human never held the session's lease (this
+        // path is lease-exempt), but releasing the claim ends it — invalidate
+        // the active lease. Only on the in_progress release, preserving today's
+        // status condition (a non-in_progress answer just clears the flag).
+        invalidateLease(tx, issue.id);
       }
     }
   });

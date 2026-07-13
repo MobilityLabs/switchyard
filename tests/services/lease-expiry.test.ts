@@ -5,7 +5,7 @@ import { claimLeases, issues, events } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
-import { expireLeases, invalidateLease, getActiveLease, mintLease } from "../../src/services/leases.js";
+import { expireLeases, invalidateLease, getActiveLease } from "../../src/services/leases.js";
 import { releaseStaleClaims } from "../../src/services/stale-claims.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
@@ -17,16 +17,12 @@ beforeEach(() => {
   createProject(db, human, { key: "AIPI", name: "aipi" });
 });
 
-/**
- * Claim AIPI-1, mint a lease against it (stand-in until claimIssue mints in
- * Task 5), then force that lease to already be expired.
- */
+/** Claim AIPI-1 (claimIssue mints its lease), then force that lease expired. */
 function claimThenExpireLease(): number {
   createIssue(db, human, { projectKey: "AIPI", title: "t" });
   updateIssue(db, human, "AIPI-1", { status: "todo" });
   claimIssue(db, agent, "AIPI-1");
   const id = getIssue(db, "AIPI-1").id;
-  mintLease(db, id, agent.id, 3600);
   db.update(claimLeases).set({ expiresAt: 1 }).where(eq(claimLeases.issueId, id)).run();
   return id;
 }
@@ -50,7 +46,6 @@ describe("expireLeases", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     claimIssue(db, agent, "AIPI-1");
     const id = getIssue(db, "AIPI-1").id;
-    mintLease(db, id, agent.id, 3600);
     expect(expireLeases(db)).toBe(0);
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
   });
@@ -69,7 +64,6 @@ describe("expireLeases", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     claimIssue(db, agent, "AIPI-1");
     const id = getIssue(db, "AIPI-1").id;
-    mintLease(db, id, agent.id, 3600);
     invalidateLease(db, id);
     expect(getActiveLease(db, id)).toBeNull();
     expect(() => invalidateLease(db, id)).not.toThrow();
@@ -80,7 +74,6 @@ describe("expireLeases", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     claimIssue(db, agent, "AIPI-1");
     const id = getIssue(db, "AIPI-1").id;
-    mintLease(db, id, agent.id, 3600); // valid lease
     // age all events past the 4h idle window, but the lease is still valid
     db.update(events)
       .set({ createdAt: Math.floor(Date.now() / 1000) - 5 * 3600 })

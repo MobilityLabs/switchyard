@@ -75,7 +75,7 @@ describe("search-vs-claim-gate agreement (SYD-207)", () => {
     // Every issue search flags must be refused by the claim gate for the
     // open-PR reason; every issue it clears must be claimable.
     expect(() => claimIssue(db, agent, "SYD-1")).toThrowError(/open PR \(#41/);
-    expect(claimIssue(db, agent, "SYD-2").status).toBe("in_progress");
+    expect(claimIssue(db, agent, "SYD-2").issue.status).toBe("in_progress");
 
     // Once the PR merges, both flip together.
     handleGithubWebhook(
@@ -91,7 +91,7 @@ describe("search-vs-claim-gate agreement (SYD-207)", () => {
       REPO,
     );
     expect(searchIssues(db, { openPr: true })).toEqual([]);
-    expect(claimIssue(db, agent, "SYD-1").status).toBe("in_progress");
+    expect(claimIssue(db, agent, "SYD-1").issue.status).toBe("in_progress");
   });
 });
 
@@ -117,7 +117,7 @@ describe("backfill refuses out-of-project agent PRs (SYD-207)", () => {
     expect(row?.issueRef ?? null).toBeNull(); // no attributed row
     expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toBeNull();
     expect(searchIssues(db, { openPr: true })).toEqual([]);
-    expect(claimIssue(db, agent, "SYD-1").status).toBe("in_progress");
+    expect(claimIssue(db, agent, "SYD-1").issue.status).toBe("in_progress");
   });
 });
 
