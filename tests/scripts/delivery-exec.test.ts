@@ -17,6 +17,8 @@ import {
   runGit,
   pollUntilMergeable,
   runVerification,
+  readChecks,
+  waitForChecks,
 } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
@@ -237,4 +239,116 @@ describe("pollUntilMergeable", () => {
     expect(state).toBe("MERGEABLE");
     expect(readFileSync(callsFile, "utf8").trim()).toBe("2");
   }, 15000);
+});
+
+// SYD-209: CI is the check authority — the worker reads GitHub's required-check
+// conclusion for the rebased head (S1) live instead of re-running the suite.
+describe("readChecks / waitForChecks", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  /** Fake `gh` that emits the Nth line of `rollupsJson` (one JSON blob per
+   * invocation) for `pr view --json statusCheckRollup,headRefOid`. */
+  function makeFakeGhChecks(binDir: string, rollupsJson: string[]): void {
+    const callsFile = path.join(binDir, "n");
+    writeFileSync(callsFile, "0");
+    const dataFile = path.join(binDir, "rollups.json");
+    writeFileSync(dataFile, JSON.stringify(rollupsJson));
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      "#!/bin/sh\n" +
+        `idx=$(cat "${callsFile}")\n` +
+        `echo "$((idx + 1))" > "${callsFile}"\n` +
+        `IDX=$idx node -e 'const d=require("${dataFile}"); const i=Math.min(Number(process.env.IDX), d.length-1); process.stdout.write(d[i]);'\n`,
+    );
+    chmodSync(ghPath, 0o755);
+  }
+
+  const S1 = "1".repeat(40);
+
+  it("readChecks returns the parsed rollup bound to the current head", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+    ]);
+
+    const rollup = await withFakeGhOnPath(binDir, () => readChecks(repo, 42));
+    expect(rollup.headRefOid).toBe(S1);
+    expect(rollup.statusCheckRollup).toHaveLength(1);
+  });
+
+  it("waitForChecks polls past pending until CI concludes passing on S1", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }],
+      }),
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 5000 }),
+    );
+    expect(state).toBe("passing");
+  });
+
+  it("waitForChecks reports head-moved when the live head left S1 (SHA chain broken)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({ headRefOid: "someoneelsepushed", statusCheckRollup: [] }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 5000 }),
+    );
+    expect(state).toBe("head-moved");
+  });
+
+  it("waitForChecks times out to pending if checks never conclude", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }],
+      }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 20 }),
+    );
+    expect(state).toBe("pending");
+  });
 });

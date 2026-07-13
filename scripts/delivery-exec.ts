@@ -29,15 +29,22 @@ import {
   buildPrViewMergeableArgs,
   buildPrViewFreshnessArgs,
   buildPrViewLiveStateArgs,
+  buildPrViewChecksArgs,
+  evaluateChecks,
+  shouldKeepWaitingForChecks,
   shouldRetryMergePoll,
   parsePrNumberFromUrl,
   tailOf,
   MAIN_BRANCH,
   MERGE_POLL_INTERVAL_MS,
+  CHECKS_WAIT_TIMEOUT_MS,
+  CHECKS_POLL_INTERVAL_MS,
   type PublishOutcome,
   type RebaseOutcome,
   type ConflictResolutionOutcome,
   type MergeableState,
+  type ChecksRollup,
+  type ChecksState,
 } from "./delivery-lib.js";
 import type { WorkerConfig, WorkerProject } from "./worker-select.js";
 
@@ -168,11 +175,60 @@ export async function findOpenAgentPr(repo: string, ref: string): Promise<number
   return open.length > 0 ? open[0].number : null;
 }
 
-/** Merges the PR (merge commit, deletes the remote branch) and returns the merge SHA. */
-export async function mergeAgentPr(repo: string, prNumber: number): Promise<string> {
+/**
+ * Merges the PR (merge commit, deletes the remote branch) and returns the
+ * merge SHA. `matchHeadSha` (SYD-209) pins the merge to the exact head the
+ * worker verified green — `gh pr merge --match-head-commit S1` — so a push
+ * landing between the live green-on-S1 read and this call cannot be merged in
+ * its place; GitHub refuses the merge and the attempt disarms.
+ */
+export async function mergeAgentPr(
+  repo: string,
+  prNumber: number,
+  matchHeadSha?: string,
+): Promise<string> {
   const ownerRepo = await originOwnerRepo(repo);
-  await run("gh", buildPrMergeArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+  await run("gh", buildPrMergeArgs(prNumber, ownerRepo, matchHeadSha), { cwd: GH_CWD });
   return run("gh", buildPrViewMergeShaArgs(prNumber, ownerRepo), { cwd: GH_CWD });
+}
+
+/** GitHub's live required-check rollup for a PR's current head (SYD-209). Read
+ * live at wait/merge time — never pr_state or recorded gh_checks_* events,
+ * which are at-least-once webhook replicas; an irreversible merge decision
+ * reads the source of truth. */
+export async function readChecks(repo: string, prNumber: number): Promise<ChecksRollup> {
+  const ownerRepo = await originOwnerRepo(repo);
+  return JSON.parse(
+    await run("gh", buildPrViewChecksArgs(prNumber, ownerRepo), { cwd: GH_CWD }),
+  ) as ChecksRollup;
+}
+
+/**
+ * Waits for GitHub's required checks to conclude on the rebased head S1, then
+ * returns the final live verdict (SYD-209). This replaces the worker's own
+ * clean-clone verify (runVerification) as the pre-merge gate: CI is the sole
+ * check authority, so the worker force-pushes S1 and reads CI's conclusion for
+ * S1 rather than recomputing it. Bounded — on timeout it returns the last
+ * `pending`, which the caller records as checks_timeout/delivery_failed so a
+ * GitHub Actions outage can't stall the sequential per-ref loop forever. The
+ * returned verdict IS the chain's step-3 live read: `passing` only when the
+ * head GitHub reports checks for is still S1 and every one concluded green.
+ */
+export async function waitForChecks(
+  repo: string,
+  prNumber: number,
+  expectedS1: string,
+  opts: { pollIntervalMs?: number; timeoutMs?: number } = {},
+): Promise<ChecksState> {
+  const pollIntervalMs = opts.pollIntervalMs ?? CHECKS_POLL_INTERVAL_MS;
+  const timeoutMs = opts.timeoutMs ?? CHECKS_WAIT_TIMEOUT_MS;
+  const start = Date.now();
+  let state = evaluateChecks(await readChecks(repo, prNumber), expectedS1);
+  while (shouldKeepWaitingForChecks(state, Date.now() - start, timeoutMs)) {
+    await sleep(pollIntervalMs);
+    state = evaluateChecks(await readChecks(repo, prNumber), expectedS1);
+  }
+  return state;
 }
 
 function sleep(ms: number): Promise<void> {

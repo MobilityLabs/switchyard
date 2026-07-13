@@ -308,7 +308,7 @@ type CheckRollupEntry = {
   context?: string;
 };
 
-type ChecksRollup = { headRefOid?: string; statusCheckRollup?: CheckRollupEntry[] };
+export type ChecksRollup = { headRefOid?: string; statusCheckRollup?: CheckRollupEntry[] };
 
 /** COMPLETED CheckRun conclusions that do NOT block a merge. */
 const NON_BLOCKING_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
