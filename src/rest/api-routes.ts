@@ -17,7 +17,7 @@ import { createLoginLink, getSessionActor } from "../services/auth.js";
 import { createProject, listProjects, updateProject } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
-import { createIssue, getIssue, updateIssue, claimIssue } from "../services/issues.js";
+import { createIssue, getIssue, updateIssue, claimIssue, heartbeatClaim } from "../services/issues.js";
 import {
   addDependency,
   listBlockedIssueIds,
@@ -248,6 +248,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     const { issue, leaseToken } = claimIssue(db, c.var.actor, c.req.param("ref"));
     return c.json({ ...issue, leaseToken });
   });
+
+  app.post("/issues/:ref/heartbeat", (c) =>
+    c.json({ ok: true, ...heartbeatClaim(db, c.var.actor, c.req.param("ref"), c.var.leaseToken) }),
+  );
 
   app.post("/issues/:ref/comments", body(commentBody), (c) => {
     addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);

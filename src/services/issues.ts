@@ -17,7 +17,7 @@ import { recordEvent } from "./events.js";
 import { getOpenBlockers } from "./dependencies.js";
 import { getOpenPr } from "./pr-status.js";
 import { getSetting } from "./settings.js";
-import { mintLease, validateLease, invalidateLease, getActiveLease } from "./leases.js";
+import { mintLease, validateLease, invalidateLease, getActiveLease, heartbeatLease } from "./leases.js";
 
 export type Provenance = {
   sourceType: "session" | "todo" | "ci" | "manual";
@@ -486,6 +486,22 @@ export function updateIssue(
  * handed to the claiming session ONCE (never stored, never re-returned).
  */
 export type ClaimResult = { issue: IssueView; leaseToken: string };
+
+/**
+ * SYD-210 Layer B: renew the caller's claim lease on `ref` (resolves the ref,
+ * then heartbeatLease gates on the holder's token). Thin adapter-facing wrapper
+ * so the ref→issue lookup stays out of leases.ts (which must not import issues).
+ */
+export function heartbeatClaim(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  leaseToken?: string,
+): { expiresAt: number } {
+  const issue = getIssue(db, ref);
+  const lease = heartbeatLease(db, issue.id, actor.id, leaseToken);
+  return { expiresAt: lease.expiresAt };
+}
 
 export function claimIssue(
   db: Db,

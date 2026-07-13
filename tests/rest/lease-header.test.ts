@@ -48,4 +48,18 @@ describe("REST X-Switchyard-Lease", () => {
     expect(withHeader.status).toBe(200);
     expect((await withHeader.json()).status).toBe("in_review");
   });
+
+  it("POST /heartbeat renews with the lease header and rejects without it", async () => {
+    const claim = await (
+      await app.request("/issues/AIPI-1/claim", { method: "POST", headers: auth() })
+    ).json();
+    const beat = await app.request("/issues/AIPI-1/heartbeat", {
+      method: "POST",
+      headers: auth({ "X-Switchyard-Lease": claim.leaseToken }),
+    });
+    expect(beat.status).toBe(200);
+    expect((await beat.json()).ok).toBe(true);
+    const noHeader = await app.request("/issues/AIPI-1/heartbeat", { method: "POST", headers: auth() });
+    expect(noHeader.status).toBe(400);
+  });
 });

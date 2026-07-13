@@ -10,6 +10,7 @@ import {
   getIssue,
   updateIssue,
   claimIssue,
+  heartbeatClaim,
   SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
 import { nextTask, addDependency } from "../services/dependencies.js";
@@ -276,6 +277,21 @@ export function buildMcpServer(
         return minted.token ? { ...issue, lease_token: minted.token } : issue;
       },
     ),
+  );
+
+  server.registerTool(
+    "heartbeat",
+    {
+      description:
+        "Keep your claim's lease alive by renewing it. The supervising host worker calls this on a " +
+        "timer for container sessions — you normally do NOT need to call it yourself. Pass the " +
+        "lease_token returned by claim_issue.",
+      inputSchema: { ref: z.string(), lease_token: z.string().optional() },
+    },
+    guard(({ ref, lease_token }: { ref: string; lease_token?: string }) => {
+      const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token);
+      return { ok: true, expires_at: expiresAt };
+    }),
   );
 
   server.registerTool(

@@ -67,6 +67,19 @@ describe("MCP lease enforcement", () => {
     expect(seized.lease_token).toMatch(/^lease_/);
   });
 
+  it("heartbeat by the holder renews the lease; a no-token call is rejected", async () => {
+    const c = await connect(agent);
+    const claim = JSON.parse(text(await c.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } })));
+    const beat = await c.callTool({
+      name: "heartbeat",
+      arguments: { ref: "AIPI-1", lease_token: claim.lease_token },
+    });
+    expect(beat.isError).toBeFalsy();
+    expect(JSON.parse(text(beat)).ok).toBe(true);
+    const noToken = await c.callTool({ name: "heartbeat", arguments: { ref: "AIPI-1" } });
+    expect(noToken.isError).toBe(true);
+  });
+
   it("exempt surfaces (comment) work without a lease", async () => {
     const a = await connect(agent);
     await a.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } });
