@@ -54,8 +54,8 @@ describe("needsInput clearing", () => {
 
   it("a human answer on an in_progress issue releases the claim so the worker can re-dispatch", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    requestHumanInput(db, agent, "AIPI-1", "Which env?");
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    requestHumanInput(db, agent, "AIPI-1", "Which env?", leaseToken);
 
     addComment(db, human, "AIPI-1", "Use staging.");
     const after = getIssue(db, "AIPI-1");

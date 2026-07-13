@@ -3,6 +3,7 @@ import { asc, eq, gt } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, events, issues, projects, webhooks, webhookCursor } from "../db/schema.js";
 import { releaseStaleClaims } from "./stale-claims.js";
+import { expireLeases } from "./leases.js";
 import { sweepOrphanedAgentSessions } from "./agent-sessions.js";
 import { getSetting } from "./settings.js";
 import { emitProcessDeviations } from "./deviation.js";
@@ -92,6 +93,11 @@ export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
       releaseStaleClaims(db);
     } catch (err) {
       console.error("stale claim release:", err);
+    }
+    try {
+      expireLeases(db);
+    } catch (err) {
+      console.error("lease expiry sweep:", err);
     }
     try {
       sweepOrphanedAgentSessions(db);

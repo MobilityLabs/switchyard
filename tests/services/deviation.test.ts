@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
-import { events } from "../../src/db/schema.js";
+import { claimLeases, events } from "../../src/db/schema.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
@@ -152,8 +152,8 @@ describe("getDeviation — stale_claim", () => {
     const { db, human, agent } = setup();
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
     updateIssue(db, human, "SYD-1", { status: "todo" });
-    claimIssue(db, agent, "SYD-1");
-    requestHumanInput(db, agent, "SYD-1", "which db?");
+    const { leaseToken } = claimIssue(db, agent, "SYD-1");
+    requestHumanInput(db, agent, "SYD-1", "which db?", leaseToken);
     ageAllEvents(db, getIssue(db, "SYD-1").id, 2 * 3600);
     expect(getDeviation(db, getIssue(db, "SYD-1").id)).toBeNull();
   });
@@ -308,6 +308,9 @@ describe("process_deviation does not reset the idle clock (SYD-188 seam)", () =>
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
     updateIssue(db, human, "SYD-1", { status: "todo" });
     claimIssue(db, agent, "SYD-1");
+    // SYD-210: releaseStaleClaims only handles lease-less claims now; strip the
+    // lease so this exercises the legacy idle-release path.
+    db.delete(claimLeases).where(eq(claimLeases.issueId, getIssue(db, "SYD-1").id)).run();
     ageAllEvents(db, getIssue(db, "SYD-1").id, 5 * 3600); // past both 1h deviation + 4h stale
     expect(emitProcessDeviations(db)).toBe(1); // records a process_deviation at ~now
     // without the fix, that event resets MAX(createdAt) and blocks release:

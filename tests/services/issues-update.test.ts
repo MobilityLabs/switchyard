@@ -44,11 +44,11 @@ describe("updateIssue", () => {
 
   it("releases the claim when an issue moves (back) to todo (symmetric with the in_progress auto-claim)", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
     expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
 
-    const released = updateIssue(db, agent, "AIPI-1", { status: "todo" });
+    const released = updateIssue(db, agent, "AIPI-1", { status: "todo" }, { presented: leaseToken });
     expect(released.status).toBe("todo");
     expect(released.assigneeId).toBe(null);
     expect(listIssueEvents(db, released.id).map((e) => e.type)).toContain("claim_released");
@@ -135,9 +135,9 @@ describe("updateIssue", () => {
 
   it("agents cannot move issues to done; humans can", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
-    expect(() => updateIssue(db, agent, "AIPI-1", { status: "done" })).toThrowError(
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
+    expect(() => updateIssue(db, agent, "AIPI-1", { status: "done" }, { presented: leaseToken })).toThrowError(
       /only humans move issues to done/i,
     );
     expect(getIssue(db, "AIPI-1").status).toBe("in_review");
@@ -189,32 +189,36 @@ describe("updateIssue", () => {
     expect(getIssue(db, "AIPI-1").status).toBe("todo");
 
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
-    claimIssue(db, agent, "AIPI-1");
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
     expect(() => updateIssue(db, other, "AIPI-1", { status: "in_review" })).toThrowError(
       /assigned to claude\/worker.*only the assignee/i,
     );
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
 
     // the actual assignee can move it
-    expect(updateIssue(db, agent, "AIPI-1", { status: "in_review" }).status).toBe("in_review");
+    expect(
+      updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken }).status,
+    ).toBe("in_review");
   });
 
   it("agents cannot reopen a done issue; humans can", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
     updateIssue(db, human, "AIPI-1", { status: "done" });
 
-    expect(() => updateIssue(db, agent, "AIPI-1", { status: "backlog" })).toThrowError(
-      /is done — only humans reopen/i,
-    );
+    // The agent still holds a valid lease (done doesn't invalidate it), so the
+    // categorical human-only check — not the lease gate — is what rejects this.
+    expect(() =>
+      updateIssue(db, agent, "AIPI-1", { status: "backlog" }, { presented: leaseToken }),
+    ).toThrowError(/is done — only humans reopen/i);
     expect(getIssue(db, "AIPI-1").status).toBe("done");
     expect(updateIssue(db, human, "AIPI-1", { status: "backlog" }).status).toBe("backlog");
   });
 
   it("assignee-only transitions: only the assignee can release a claim or reopen for more work", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    const claim1 = claimIssue(db, agent, "AIPI-1");
     const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
 
     // a different agent can't release someone else's claim
@@ -222,15 +226,20 @@ describe("updateIssue", () => {
       /assigned to claude\/worker.*only the assignee/i,
     );
     // the assignee can release their own claim
-    expect(updateIssue(db, agent, "AIPI-1", { status: "todo" }).status).toBe("todo");
+    expect(
+      updateIssue(db, agent, "AIPI-1", { status: "todo" }, { presented: claim1.leaseToken }).status,
+    ).toBe("todo");
 
     // reclaim and move to in_review, then only the assignee may reopen it
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const claim2 = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: claim2.leaseToken });
     expect(() => updateIssue(db, other, "AIPI-1", { status: "in_progress" })).toThrowError(
       /assigned to claude\/worker.*only the assignee/i,
     );
-    expect(updateIssue(db, agent, "AIPI-1", { status: "in_progress" }).status).toBe("in_progress");
+    expect(
+      updateIssue(db, agent, "AIPI-1", { status: "in_progress" }, { presented: claim2.leaseToken })
+        .status,
+    ).toBe("in_progress");
   });
 
   it("agents are limited to an allow-list of transitions — arbitrary jumps are human-only", () => {
@@ -293,8 +302,8 @@ describe("updateIssue", () => {
 describe("done-stamp SHA pin (SYD-208)", () => {
   it("stamps done with no open PR without any pin", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
     const updated = updateIssue(db, human, "AIPI-1", { status: "done" });
     expect(updated.status).toBe("done");
     const done = listIssueEvents(db, updated.id)
@@ -305,8 +314,8 @@ describe("done-stamp SHA pin (SYD-208)", () => {
 
   it("refuses stamping done over an open agent PR without expectedHeadSha", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
     recordDeliveryEvent(db, human, "AIPI-1", {
       type: "pr_opened",
       prNumber: 7,
@@ -321,8 +330,8 @@ describe("done-stamp SHA pin (SYD-208)", () => {
 
   it("refuses when expectedHeadSha does not match pr_state's current head, naming both SHAs", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
     recordDeliveryEvent(db, human, "AIPI-1", {
       type: "pr_opened",
       prNumber: 7,
@@ -340,8 +349,8 @@ describe("done-stamp SHA pin (SYD-208)", () => {
 
   it("records the pin on the status_changed payload when the SHA matches", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
     recordDeliveryEvent(db, human, "AIPI-1", {
       type: "pr_opened",
       prNumber: 7,
@@ -365,8 +374,8 @@ describe("done-stamp SHA pin (SYD-208)", () => {
 
   it("fails closed when the open PR row has no headSha", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
     recordDeliveryEvent(db, human, "AIPI-1", {
       type: "pr_opened",
       prNumber: 7,
@@ -450,16 +459,16 @@ describe("agent assignee changes (SYD-191)", () => {
     expect(getIssue(db, "AIPI-1").assigneeId).toBeNull();
   });
 
-  it("a no-op assignee patch by an agent (already the assignee) still succeeds", () => {
+  it("a no-op assignee patch by an agent (already the assignee) still succeeds with the lease", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    const r = updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/worker" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    const r = updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/worker" }, { presented: leaseToken });
     expect(r.assigneeId).toBe(agent.id);
   });
 
   it("claim_issue still works end-to-end for agents (self-assign via updateIssue)", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    const claimed = claimIssue(db, agent, "AIPI-1");
+    const claimed = claimIssue(db, agent, "AIPI-1").issue;
     expect(claimed.assigneeId).toBe(agent.id);
     expect(claimed.status).toBe("in_progress");
   });
@@ -478,8 +487,8 @@ describe("audit log stays consistent with column state", () => {
       priority: "high",
       title: "Ship v1 (renamed)",
     });
-    claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review", priority: "urgent" });
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, agent, "AIPI-1", { status: "in_review", priority: "urgent" }, { presented: leaseToken });
 
     const current = getIssue(db, "AIPI-1");
     const events = listIssueEvents(db, current.id);
@@ -496,16 +505,22 @@ describe("audit log stays consistent with column state", () => {
 describe("claimIssue", () => {
   it("assigns the caller and moves to in_progress", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    const claimed = claimIssue(db, agent, "AIPI-1");
+    const claimed = claimIssue(db, agent, "AIPI-1").issue;
     expect(claimed.assigneeId).toBe(agent.id);
     expect(claimed.status).toBe("in_progress");
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
   });
 
-  it("re-claiming your own issue is a no-op success, not a collision", () => {
+  // SYD-210: under session-scoped leases a bare same-actor re-claim of an
+  // actively-leased issue is no longer a silent no-op — it fails loudly so a
+  // second session can't quietly co-own the claim. takeover: true seizes it.
+  it("re-claiming your own actively-leased issue fails loudly; takeover seizes it", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     claimIssue(db, agent, "AIPI-1");
-    expect(claimIssue(db, agent, "AIPI-1").assigneeId).toBe(agent.id);
+    expect(() => claimIssue(db, agent, "AIPI-1")).toThrowError(/takeover/i);
+    const seized = claimIssue(db, agent, "AIPI-1", { takeover: true });
+    expect(seized.issue.assigneeId).toBe(agent.id);
+    expect(seized.leaseToken).toMatch(/^lease_/);
   });
 
   // SYD-99: SYD-93 got fixed twice in parallel (worker PR #41 vs a
@@ -578,10 +593,17 @@ describe("claimIssue", () => {
     expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
   });
 
-  it("re-PATCHing to in_progress by the same agent that already owns it is a no-op success", () => {
+  it("re-PATCHing to in_progress by the same agent that already owns it succeeds with its lease", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    updateIssue(db, agent, "AIPI-1", { status: "in_progress" });
-    const again = updateIssue(db, agent, "AIPI-1", { status: "in_progress" });
+    const minted = { token: null as string | null };
+    updateIssue(db, agent, "AIPI-1", { status: "in_progress" }, { minted });
+    const again = updateIssue(
+      db,
+      agent,
+      "AIPI-1",
+      { status: "in_progress" },
+      { presented: minted.token! },
+    );
     expect(again.status).toBe("in_progress");
     expect(again.assigneeId).toBe(agent.id);
   });

@@ -136,6 +136,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(
       `delivery rollout backfill: ${rollout.backfilled} authorization(s) marked skipped_rollout`,
     );
+  const { ensureClaimLeaseCutover } = await import("./services/lease-cutover.js");
+  const cutover = ensureClaimLeaseCutover(db);
+  if (!cutover.alreadyDone)
+    console.log(`claim-lease cutover: released ${cutover.released} in-flight claim(s)`);
   startServer(db, Number(process.env.PORT ?? 3300));
   const { startWebhookDispatcher } = await import("./services/webhook-dispatcher.js");
   startWebhookDispatcher(db);

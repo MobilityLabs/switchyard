@@ -1,13 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
-import { events, issues } from "../../src/db/schema.js";
+import { claimLeases, events, issues } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { releaseStaleClaims } from "../../src/services/stale-claims.js";
-import { requestHumanInput } from "../../src/services/needs-input.js";
 import { setSetting } from "../../src/services/settings.js";
 
 let db: Db, human: Actor, agent: Actor;
@@ -23,11 +22,28 @@ function ageAllEvents(db: Db, issueId: number, secondsAgo: number) {
   db.update(events).set({ createdAt: old }).where(eq(events.issueId, issueId)).run();
 }
 
+// SYD-210: releaseStaleClaims is now the LEGACY idle-release path for
+// lease-LESS claims only (leased claims are governed by expireLeases). These
+// tests exercise that legacy path, so they claim then strip the lease to model
+// a pre-cutover / lease-less in_progress claim.
+function claimLeaseless(ref: string) {
+  const { issue } = claimIssue(db, agent, ref);
+  db.delete(claimLeases).where(eq(claimLeases.issueId, issue.id)).run();
+  return issue;
+}
+
+// Set the needs-input flag directly (bypassing requestHumanInput, which
+// requires a live lease token) — these tests only need the flag as a
+// precondition; the escalation path itself is covered in needs-input.test.ts.
+function flagNeedsInput(issueId: number) {
+  db.update(issues).set({ needsInput: true }).where(eq(issues.id, issueId)).run();
+}
+
 describe("releaseStaleClaims", () => {
   it("releases an in_progress issue whose newest event is older than the idle window", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    claimLeaseless("AIPI-1");
     const issue = getIssue(db, "AIPI-1");
     ageAllEvents(db, issue.id, 5 * 3600); // 5h old, past the 4h default
 
@@ -51,7 +67,7 @@ describe("releaseStaleClaims", () => {
   it("leaves a fresh in_progress issue untouched", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    claimLeaseless("AIPI-1");
     // events are fresh (just created), well within the default 4h window
 
     const released = releaseStaleClaims(db);
@@ -76,7 +92,7 @@ describe("releaseStaleClaims", () => {
   it("attributes claim_released to the creator when unassigned somehow", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    claimLeaseless("AIPI-1");
     const issue = getIssue(db, "AIPI-1");
     // manually clear assignee while keeping status in_progress, to exercise the creator fallback
     updateIssue(db, human, "AIPI-1", { assigneeName: null });
@@ -91,10 +107,10 @@ describe("releaseStaleClaims", () => {
   it("leaves a stale in_progress issue untouched when needsInput is set", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
-    requestHumanInput(db, agent, "AIPI-1", "Which approach do you want here?");
+    claimLeaseless("AIPI-1");
     const issue = getIssue(db, "AIPI-1");
-    expect(issue.needsInput).toBe(true);
+    flagNeedsInput(issue.id);
+    expect(getIssue(db, "AIPI-1").needsInput).toBe(true);
     ageAllEvents(db, issue.id, 5 * 3600); // 5h old, past the 4h default
 
     const released = releaseStaleClaims(db);
@@ -109,7 +125,7 @@ describe("releaseStaleClaims", () => {
   it("does not release an issue that escalated (needsInput) between the outer read and the update transaction", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    claimLeaseless("AIPI-1");
     const issue = getIssue(db, "AIPI-1");
     ageAllEvents(db, issue.id, 5 * 3600);
 
@@ -120,7 +136,7 @@ describe("releaseStaleClaims", () => {
     const spy = vi
       .spyOn(db, "transaction")
       .mockImplementationOnce((cb: Parameters<typeof db.transaction>[0]) => {
-        requestHumanInput(db, agent, "AIPI-1", "actually blocked on a decision");
+        flagNeedsInput(issue.id);
         return originalTransaction(cb);
       });
 
@@ -139,7 +155,7 @@ describe("releaseStaleClaims", () => {
   it("does not release an issue whose status changed between the outer read and the update transaction", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    claimLeaseless("AIPI-1");
     const issue = getIssue(db, "AIPI-1");
     ageAllEvents(db, issue.id, 5 * 3600);
 
@@ -167,7 +183,7 @@ describe("releaseStaleClaims", () => {
   it("respects a lowered claims.stale_seconds setting (knob bite)", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    claimLeaseless("AIPI-1");
     const issue = getIssue(db, "AIPI-1");
     ageAllEvents(db, issue.id, 30); // fresh under the 4h default
 
@@ -179,7 +195,7 @@ describe("releaseStaleClaims", () => {
   it("respects a custom maxIdleSeconds", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });
-    claimIssue(db, agent, "AIPI-1");
+    claimLeaseless("AIPI-1");
     const issue = getIssue(db, "AIPI-1");
     ageAllEvents(db, issue.id, 30);
 

@@ -101,10 +101,12 @@ describe("escalation, snooze, and duplicate routes", () => {
       headers: humanH,
       body: JSON.stringify({ status: "todo", labels: ["auto"] }),
     });
-    await app.request(`/issues/${filed.ref}/claim`, { method: "POST", headers: agentH });
+    const claimed = await body<{ leaseToken: string }>(
+      await app.request(`/issues/${filed.ref}/claim`, { method: "POST", headers: agentH }),
+    );
     await app.request(`/issues/${filed.ref}/request-input`, {
       method: "POST",
-      headers: agentH,
+      headers: { ...agentH, "X-Switchyard-Lease": claimed.leaseToken },
       body: JSON.stringify({ question: "Ship behind a flag?" }),
     });
 

@@ -283,3 +283,39 @@ export const agentSessions = sqliteTable(
   },
   (t) => [index("agent_sessions_issue_id_idx").on(t.issueId)],
 );
+
+// Session-scoped claim leases (SYD-210): a claim's credential layer on top of
+// issues.assigneeId/status. At most one ACTIVE lease per issue —
+// invalidated_at IS NULL AND expires_at > now — enforced by construction (a
+// claim is 1:1 with an issue); invalidated/expired rows are retained for
+// audit. Clones the sessions/loginLinks precedent (hashed token + actorId +
+// expiresAt). token_hash is sha256 hex; the plaintext is returned once at
+// claim time and never stored.
+export const claimLeases = sqliteTable(
+  "claim_leases",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueId: integer("issue_id")
+      .notNull()
+      .references(() => issues.id),
+    actorId: integer("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    tokenHash: text("token_hash").notNull().unique(),
+    expiresAt: integer("expires_at").notNull(),
+    // Heartbeat renewal (Layer B); = created_at at mint.
+    lastBeatAt: integer("last_beat_at").notNull(),
+    // Set by takeover / self-release / human-answer release / expiry sweep.
+    invalidatedAt: integer("invalidated_at"),
+    createdAt: integer("created_at").notNull().default(now()),
+  },
+  (t) => [index("claim_leases_issue_id_idx").on(t.issueId)],
+);
+
+// One-row marker: the SYD-210 hard-cutover backfill (release every pre-existing
+// lease-less in_progress claim) ran. A marker, not an empty-table check, so it
+// is once-only across restarts.
+export const claimLeaseCutover = sqliteTable("claim_lease_cutover", {
+  id: integer("id").primaryKey(),
+  completedAt: integer("completed_at").notNull().default(now()),
+});
