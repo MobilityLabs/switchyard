@@ -713,7 +713,19 @@ export function dispatch(
 ): void {
   const project = config.projects[projectKeyOf(issue.ref)];
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
-  mkdirSync(logDir, { recursive: true });
+  // SYD-210 review (codex): setup runs AFTER the host claimed, so any failure
+  // before a heartbeat can start must release the lease or the issue strands
+  // until the TTL. mkdirSync/openSync are the pre-`try` failure points.
+  const releaseOnSetupFailure = (err: unknown, what: string): void => {
+    console.error(`failed to ${what} for ${issue.ref}: ${(err as Error).message}`);
+    if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
+  };
+  try {
+    mkdirSync(logDir, { recursive: true });
+  } catch (err) {
+    releaseOnSetupFailure(err, "prepare the log dir");
+    return;
+  }
   const logPath = path.join(logDir, `${issue.ref}.log`);
 
   if ((config.runner ?? "cli") === "sdk") {
@@ -729,7 +741,13 @@ export function dispatch(
     }
   };
 
-  const fd = openSync(logPath, "a");
+  let fd: number;
+  try {
+    fd = openSync(logPath, "a");
+  } catch (err) {
+    releaseOnSetupFailure(err, "open the session log");
+    return;
+  }
 
   // SYD-210 Layer B: the bare-CLI runner's per-dispatch MCP-config temp dir
   // carrying the lease header (removed wholesale on exit). null for
@@ -876,6 +894,12 @@ export function dispatch(
     void reportSessionEnd(config, token, sessionId, null, (message) =>
       logLine(`[worker] ${message}\n`),
     );
+    // SYD-210 review (codex): spawn usually reports failure (ENOENT for a
+    // missing `claude`/`docker`, exec errors) ASYNCHRONOUSLY here, not by
+    // throwing into the catch — so release the just-claimed lease here too, or
+    // the issue strands until the TTL. (Harmless if the immediate heartbeat
+    // already collapsed the window; a release is still the honest outcome.)
+    if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
     console.error(`failed to spawn claude for ${issue.ref}: ${err.message}`);
   });
 }
@@ -966,6 +990,10 @@ function dispatchSdk(
         void reportSessionEnd(config, token, sessionId, null, (message) =>
           safeAppend(`[worker] ${message}\n`),
         );
+        // SYD-210 review (codex): an SDK import/startup rejection means the
+        // session never ran — release the just-claimed lease rather than let it
+        // strand (stopHeartbeat in .finally already halts the immediate beat).
+        if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
       },
     )
     .catch((err: Error) =>

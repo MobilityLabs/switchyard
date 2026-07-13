@@ -272,7 +272,12 @@ export function applyDispatchPolicy(config: WorkerConfig, policy: DispatchPolicy
 export function heartbeatMissLimit(config: WorkerConfig): number {
   const windowSeconds = config.heartbeatWindowSeconds ?? DEFAULT_HEARTBEAT_WINDOW_SECONDS;
   const cycleMs = HEARTBEAT_INTERVAL_MS + HEARTBEAT_FETCH_TIMEOUT_MS;
-  return Math.max(1, Math.floor((windowSeconds * 1000) / cycleMs));
+  // Largest N with N·cycle STRICTLY < window. `ceil(x)-1` is `floor(x)` for a
+  // non-integer ratio and `x-1` when window divides evenly by the cycle — so an
+  // operator retuning to a multiple (e.g. 140s → 1 miss @ 70s, not 2 @ 140s =
+  // expiry) still cancels before the server can release (SYD-210 review, codex).
+  // Floored at 1: a sub-cycle window is an operator misconfig, not defensible.
+  return Math.max(1, Math.ceil((windowSeconds * 1000) / cycleMs) - 1);
 }
 
 export function projectKeyOf(ref: string): string {

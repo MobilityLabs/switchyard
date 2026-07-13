@@ -4,7 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, updateIssue } from "../../src/services/issues.js";
+import { createIssue, updateIssue, getIssue } from "../../src/services/issues.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
 let db: Db, human: Actor, agent: Actor;
@@ -133,6 +133,16 @@ describe("MCP lease enforcement", () => {
     });
     expect(foreign.isError).toBe(true);
     expect(text(foreign)).not.toMatch(/lease_[0-9a-f]/);
+
+    // Variant A': the same foreign auto-claim via the explicit assignee arg
+    // (which skips the assigneeName===undefined auto-claim leg) is also refused.
+    const foreignAssign = await session.callTool({
+      name: "update_issue",
+      arguments: { ref: "AIPI-2", status: "in_progress", assignee: "claude/worker" },
+    });
+    expect(foreignAssign.isError).toBe(true);
+    expect(text(foreignAssign)).not.toMatch(/lease_[0-9a-f]/);
+    expect(getIssue(db, "AIPI-2").assigneeId).toBeNull(); // no grief-claim landed
 
     // Variant B: own-issue todo -> in_progress re-claim loop. The re-claim leg
     // is refused and never mints/echoes a fresh token.

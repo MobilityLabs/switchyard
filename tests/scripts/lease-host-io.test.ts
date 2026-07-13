@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, readFileSync, statSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -41,7 +41,6 @@ describe("persistLeaseToken / readPersistedLeaseToken", () => {
 
   it("round-trips a lease token through a 0600 file the restart reconciler can read back", () => {
     // mkdir the worker-logs dir the helper writes into (dispatch does this).
-    const { mkdirSync } = require("node:fs");
     mkdirSync(path.join(repo, ".superpowers", "worker-logs"), { recursive: true });
     expect(readPersistedLeaseToken(repo, "SYD-1")).toBeNull(); // none yet
     persistLeaseToken(repo, "SYD-1", "lease-abc");

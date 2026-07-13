@@ -75,9 +75,12 @@ describe("heartbeatMissLimit (host cadence derived from server window, with canc
     expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 30 }))).toBe(1); // floored at 1
   });
 
-  it("the effective window (misses × cycle) stays strictly under the server window", () => {
-    for (const w of [600, 300, 140, 70]) {
-      expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: w })) * 70).toBeLessThanOrEqual(w);
+  it("the effective window (misses × 70s cycle) is STRICTLY under the server window, incl. evenly-divisible retunes", () => {
+    for (const w of [600, 300, 210, 140]) {
+      expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: w })) * 70).toBeLessThan(w);
     }
+    // 140 divides evenly by the 70s cycle: ceil-1 gives 1 miss (70s < 140s), not
+    // 2 (140s = expiry) — the regression codex flagged.
+    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 140 }))).toBe(1);
   });
 });

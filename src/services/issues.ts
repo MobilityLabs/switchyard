@@ -441,6 +441,20 @@ export function updateIssue(
                 : `Agents can't assign ${ref} to "${patch.assigneeName}" — agents may only self-assign (use claim_issue); reassigning is human-only.`,
             );
           }
+          // SYD-210 review (codex/pentester): same refusal as the auto-claim leg,
+          // for the explicit `assignee: <self>` shape — a token-presenting
+          // (connection-lease) session must not establish a NEW claim on an
+          // unassigned issue (it's scoped to its one pre-claimed issue). Closes
+          // the assignee-arg bypass of the auto-claim guard above.
+          if (
+            lease.presented !== undefined &&
+            lease.minted === undefined &&
+            current.assigneeId === null
+          ) {
+            throw new SwitchyardError(
+              `${ref} is not the issue claimed for your session — a supervised session can only work its own claimed issue, not claim another.`,
+            );
+          }
           assertClaimable(tx, actor, current);
         }
         changes.assigneeId = assigneeId;
