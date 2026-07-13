@@ -12,6 +12,18 @@ export function agentBranch(ref: string): string {
   return `agent/${ref}`;
 }
 
+/**
+ * The bearer token a trusted-infra worker (deliver.ts / github-poll.ts) posts
+ * with. Prefers the dedicated, least-privilege `service` actor token
+ * (`SWITCHYARD_SERVICE_TOKEN`, SYD-213) and falls back to `SWITCHYARD_TOKEN`
+ * for back-compat / single-token setups. Kept pure (takes an env bag) so the
+ * precedence is unit-testable. `||` (not `??`) so an empty/blank service var
+ * falls through to the general token instead of authenticating as "".
+ */
+export function resolveInfraToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.SWITCHYARD_SERVICE_TOKEN || env.SWITCHYARD_TOKEN;
+}
+
 // Delivery-work queue shapes (SYD-208): the JSON GET /api/delivery-work
 // returns. `pending` are human authorizations (a done-stamp or a
 // redeliver_requested) with no attempt row yet; `unfinished` are attempt rows

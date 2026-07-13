@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   agentBranch,
+  resolveInfraToken,
   filterWorkToProjects,
   resumeActionFor,
   crashedAttemptComment,
@@ -44,6 +45,23 @@ import {
   evaluateBranchProtection,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
+
+describe("resolveInfraToken (SYD-213)", () => {
+  it("prefers the dedicated service token over the general token", () => {
+    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "svc", SWITCHYARD_TOKEN: "gen" })).toBe(
+      "svc",
+    );
+  });
+  it("falls back to SWITCHYARD_TOKEN when no service token is set", () => {
+    expect(resolveInfraToken({ SWITCHYARD_TOKEN: "gen" })).toBe("gen");
+  });
+  it("falls through a blank service token to the general token (|| not ??)", () => {
+    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe("gen");
+  });
+  it("is undefined when neither is set", () => {
+    expect(resolveInfraToken({})).toBeUndefined();
+  });
+});
 
 describe("filterWorkToProjects", () => {
   const work: DeliveryWork = {

@@ -49,6 +49,7 @@ import {
   filterWorkToProjects,
   resumeActionFor,
   agentBranch,
+  resolveInfraToken,
   type DeliveryEventInput,
   type DeliveryWork,
   type WorkAuthorization,
@@ -882,9 +883,11 @@ async function main(): Promise<void> {
   const dryRun = args.includes("--dry-run");
 
   loadDotEnv();
-  const token = process.env.SWITCHYARD_TOKEN;
+  const token = resolveInfraToken();
   if (!token) {
-    console.error("SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)");
+    console.error(
+      "SWITCHYARD_SERVICE_TOKEN (preferred) or SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)",
+    );
     process.exit(1);
   }
   const config = loadConfig();
