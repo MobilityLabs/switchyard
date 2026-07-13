@@ -27,7 +27,7 @@ const now = () => sql`(unixepoch())`;
 export const actors = sqliteTable("actors", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull().unique(),
-  type: text("type", { enum: ["human", "agent"] }).notNull(),
+  type: text("type", { enum: ["human", "agent", "service"] }).notNull(),
   tokenHash: text("token_hash"),
   createdAt: integer("created_at").notNull().default(now()),
 });

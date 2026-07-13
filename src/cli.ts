@@ -13,7 +13,7 @@ const cliActor: Actor = { id: 0, name: "cli", type: "human" };
 
 const [dbPath, cmd, ...args] = process.argv.slice(2);
 if (!dbPath || !cmd) {
-  console.log("usage: tsx src/cli.ts <db-path> add-actor <name> <human|agent>");
+  console.log("usage: tsx src/cli.ts <db-path> add-actor <name> <human|agent|service>");
   console.log("       tsx src/cli.ts <db-path> add-project <KEY> <name...>");
   console.log("       tsx src/cli.ts <db-path> mint-login <name>");
   console.log("       tsx src/cli.ts <db-path> add-webhook <url> [PROJECT_KEY] [secret]");
@@ -31,8 +31,8 @@ const db = openDb(dbPath);
 try {
   if (cmd === "add-actor") {
     const [name, type] = args;
-    if (!name || (type !== "human" && type !== "agent")) {
-      console.error("add-actor needs: <name> <human|agent>");
+    if (!name || (type !== "human" && type !== "agent" && type !== "service")) {
+      console.error("add-actor needs: <name> <human|agent|service>");
       process.exit(1);
     }
     const { actor, token } = createActor(db, { name, type });

@@ -8,7 +8,7 @@ import { getProjectByKey } from "./projects.js";
 export type Webhook = typeof webhooks.$inferSelect;
 
 function requireHuman(actor: Actor): void {
-  if (actor.type === "agent") {
+  if (actor.type !== "human") {
     throw new SwitchyardError(
       "Only humans manage webhooks — ask a human to add or remove webhook endpoints.",
     );

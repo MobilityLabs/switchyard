@@ -249,12 +249,12 @@ export function updateIssue(
           `"${patch.status}" is not a status — valid statuses are: ${STATUSES.join(", ")}.`,
         );
       }
-      if (current.status === "triage" && actor.type === "agent") {
+      if (current.status === "triage" && actor.type !== "human") {
         throw new SwitchyardError(
           `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`,
         );
       }
-      if (patch.status === "done" && actor.type === "agent") {
+      if (patch.status === "done" && actor.type !== "human") {
         throw new SwitchyardError(
           "Only humans move issues to done — comment your verification evidence and move it to in_review instead.",
         );
