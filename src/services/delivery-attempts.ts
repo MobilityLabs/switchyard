@@ -239,6 +239,43 @@ export function finishDeliveryAttempt(
 }
 
 /**
+ * Persists the post-rebase head (S1) onto an OPEN attempt WITHOUT finishing
+ * it (SYD-209 SHA chain, step 2). The worker calls this immediately after it
+ * rebases/force-pushes agent/<ref>, so a crash between the rebase and the
+ * merge re-anchors on S1: crash resumption that finds the branch live at the
+ * persisted derivedHeadSha knows it's looking at the worker's own rebase, not
+ * a third-party push, instead of disarming after every mid-attempt crash.
+ * Same human-token gate as start/finish; refuses a finished attempt (S1 is
+ * only meaningful mid-flight) so it can never rewrite a settled row.
+ */
+export function recordDerivedHead(
+  db: Db,
+  actor: Actor,
+  attemptId: number,
+  derivedHeadSha: string,
+): DeliveryAttemptRow {
+  requireDeliveryInfra(actor, "record a derived head on a delivery attempt");
+  return db.transaction((tx): DeliveryAttemptRow => {
+    const existing = tx
+      .select()
+      .from(deliveryAttempts)
+      .where(eq(deliveryAttempts.id, attemptId))
+      .get();
+    if (!existing || existing.finishedAt !== null) {
+      throw new SwitchyardError(
+        `Delivery attempt ${attemptId} does not exist or has already been finished.`,
+      );
+    }
+    return tx
+      .update(deliveryAttempts)
+      .set({ derivedHeadSha })
+      .where(eq(deliveryAttempts.id, attemptId))
+      .returning()
+      .get();
+  });
+}
+
+/**
  * The delivery worker's poll surface (Task-6 contract): everything it needs
  * to decide what to do next in one round-trip — pending authorizations to
  * start, attempts it opened but never finished (e.g. a crash mid-delivery),

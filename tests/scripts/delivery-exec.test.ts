@@ -12,11 +12,14 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  installDeps,
   run,
   runGit,
   pollUntilMergeable,
-  runVerification,
+  readChecks,
+  waitForChecks,
+  attemptAutoRebase,
+  checkBranchProtection,
+  mergeAgentPr,
 } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
@@ -69,87 +72,6 @@ describe("runGit", () => {
     await run("git", ["-C", repo, "push", remote, "HEAD:refs/heads/agent/TEST-1"]);
 
     expect(existsSync(marker)).toBe(true);
-  });
-});
-
-// SYD-101: the persistent deliver clone kept native modules (e.g.
-// better-sqlite3) compiled for a node version the gate no longer runs,
-// because `npm install` (the prior behavior) leaves already-installed
-// packages alone and `git clean -fd` doesn't touch the gitignored
-// node_modules dir. `npm ci` fixes this by deleting node_modules wholesale
-// before installing -- this reproduces that exact scenario.
-describe("installDeps", () => {
-  it("wipes a stale node_modules before installing", async () => {
-    const workspace = mkdtempSync(path.join(tmpdir(), "delivery-exec-test-"));
-    writeFileSync(
-      path.join(workspace, "package.json"),
-      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
-    );
-    writeFileSync(
-      path.join(workspace, "package-lock.json"),
-      JSON.stringify({
-        name: "tmp-x",
-        version: "1.0.0",
-        lockfileVersion: 3,
-        requires: true,
-        packages: { "": { name: "tmp-x", version: "1.0.0" } },
-      }),
-    );
-    const staleModule = path.join(workspace, "node_modules", "stale-native-module");
-    mkdirSync(staleModule, { recursive: true });
-    writeFileSync(
-      path.join(staleModule, "binding.node"),
-      "stale binary compiled for the wrong node ABI",
-    );
-
-    await installDeps(workspace);
-
-    expect(existsSync(staleModule)).toBe(false);
-  });
-});
-
-// SYD-168: runVerification ran typecheck + vitest but never build:ui, so
-// tests/integration/spa-fallback.test.ts (which needs dist/ui) failed on
-// every clean clone regardless of branch content. Fakes npm/npx on PATH to
-// assert the exact command sequence and env, without a real npm ci/build.
-describe("runVerification", () => {
-  /** Fake `npm`/`npx` that record `<argv> NO_COLOR=<val>` per invocation and exit 0. */
-  function makeFakeNpmAndNpx(binDir: string): { callsFile: string } {
-    const callsFile = path.join(binDir, "calls");
-    writeFileSync(callsFile, "");
-    for (const name of ["npm", "npx"]) {
-      const binPath = path.join(binDir, name);
-      writeFileSync(
-        binPath,
-        `#!/bin/sh\necho "${name} $* NO_COLOR=$NO_COLOR" >> "${callsFile}"\nexit 0\n`,
-      );
-      chmodSync(binPath, 0o755);
-    }
-    return { callsFile };
-  }
-
-  it("runs build:ui between typecheck and vitest, with NO_COLOR set on each verify step", async () => {
-    const cloneDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-verify-test-"));
-    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-verify-bin-"));
-    const { callsFile } = makeFakeNpmAndNpx(binDir);
-
-    const origPath = process.env.PATH;
-    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
-    let result: { ok: boolean; tail: string };
-    try {
-      result = await runVerification(cloneDir);
-    } finally {
-      process.env.PATH = origPath;
-    }
-
-    expect(result.ok).toBe(true);
-    const calls = readFileSync(callsFile, "utf8").trim().split("\n");
-    expect(calls).toEqual([
-      "npm ci NO_COLOR=1",
-      "npm run typecheck NO_COLOR=1",
-      "npm run build:ui NO_COLOR=1",
-      "npx vitest run NO_COLOR=1",
-    ]);
   });
 });
 
@@ -237,4 +159,285 @@ describe("pollUntilMergeable", () => {
     expect(state).toBe("MERGEABLE");
     expect(readFileSync(callsFile, "utf8").trim()).toBe("2");
   }, 15000);
+});
+
+// SYD-209: CI is the check authority — the worker reads GitHub's required-check
+// conclusion for the rebased head (S1) live instead of re-running the suite.
+describe("readChecks / waitForChecks", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  /** Fake `gh` that emits the Nth line of `rollupsJson` (one JSON blob per
+   * invocation) for `pr view --json statusCheckRollup,headRefOid`. */
+  function makeFakeGhChecks(binDir: string, rollupsJson: string[]): void {
+    const callsFile = path.join(binDir, "n");
+    writeFileSync(callsFile, "0");
+    const dataFile = path.join(binDir, "rollups.json");
+    writeFileSync(dataFile, JSON.stringify(rollupsJson));
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      "#!/bin/sh\n" +
+        `idx=$(cat "${callsFile}")\n` +
+        `echo "$((idx + 1))" > "${callsFile}"\n` +
+        `IDX=$idx node -e 'const d=require("${dataFile}"); const i=Math.min(Number(process.env.IDX), d.length-1); process.stdout.write(d[i]);'\n`,
+    );
+    chmodSync(ghPath, 0o755);
+  }
+
+  const S1 = "1".repeat(40);
+
+  it("readChecks returns the parsed rollup bound to the current head", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+    ]);
+
+    const rollup = await withFakeGhOnPath(binDir, () => readChecks(repo, 42));
+    expect(rollup.headRefOid).toBe(S1);
+    expect(rollup.statusCheckRollup).toHaveLength(1);
+  });
+
+  it("waitForChecks polls past pending until CI concludes passing on S1", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }],
+      }),
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 5000 }),
+    );
+    expect(state).toBe("passing");
+  });
+
+  it("waitForChecks reports head-moved when the live head left S1 (SHA chain broken)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({ headRefOid: "someoneelsepushed", statusCheckRollup: [] }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 5000 }),
+    );
+    expect(state).toBe("head-moved");
+  });
+
+  it("waitForChecks times out to pending if checks never conclude", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }],
+      }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 20 }),
+    );
+    expect(state).toBe("pending");
+  });
+});
+
+// SYD-209: the pre-rebase fetched-head assertion is the SHA chain's live
+// anchor — a real git fixture proves it against actual `git fetch`/`rev-parse`,
+// not a mock. A branch head that isn't an authorized SHA (S0, or a prior S1) is
+// a third-party push and must NOT be laundered into "a rebase the worker did".
+describe("attemptAutoRebase S0 anchor (SYD-209)", () => {
+  async function g(cwd: string, ...args: string[]): Promise<void> {
+    await execFileP("git", ["-C", cwd, ...args]);
+  }
+
+  async function setupRemoteAndAgentBranch(): Promise<{ repo: string; head: string }> {
+    const remote = mkdtempSync(path.join(tmpdir(), "anchor-remote-"));
+    await execFileP("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    const repo = mkdtempSync(path.join(tmpdir(), "anchor-repo-"));
+    await execFileP("git", ["init", "-q", "-b", "main", repo]);
+    await g(repo, "config", "user.email", "t@example.com");
+    await g(repo, "config", "user.name", "t");
+    await g(repo, "remote", "add", "origin", remote);
+    writeFileSync(path.join(repo, "base.txt"), "base");
+    await g(repo, "add", ".");
+    await g(repo, "commit", "-qm", "base");
+    await g(repo, "push", "-q", "origin", "main");
+    await g(repo, "checkout", "-qb", "agent/TEST-1");
+    writeFileSync(path.join(repo, "feat.txt"), "feature");
+    await g(repo, "add", ".");
+    await g(repo, "commit", "-qm", "feat");
+    await g(repo, "push", "-q", "origin", "agent/TEST-1");
+    const head = (await execFileP("git", ["-C", repo, "rev-parse", "HEAD"])).stdout.trim();
+    return { repo, head };
+  }
+
+  it("returns head-moved (never rebasing/pushing) when the live head is not an authorized SHA", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "anchor-clone-"));
+
+    const res = await attemptAutoRebase(repo, cloneDir, "TEST-1", ["a-head-we-never-authorized"]);
+
+    expect(res).toEqual({ status: "head-moved", observed: head });
+  });
+
+  it("rebases and force-pushes when the fetched head is the authorized S0", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "anchor-clone-"));
+
+    const res = await attemptAutoRebase(repo, cloneDir, "TEST-1", [head]);
+
+    // main didn't move, so the rebase is a no-op and S1 === the authorized head.
+    expect(res.status).toBe("rebased");
+    if (res.status === "rebased") expect(res.sha).toBe(head);
+  });
+});
+
+// SYD-209 review finding 1: a merged PR must never be reported as a failed
+// merge just because the follow-up merge-SHA read blipped.
+describe("mergeAgentPr merge/read atomicity", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "merge-repo-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  /** Fake `gh` that exits 0 for `pr merge …` but non-zero for `pr view …`
+   * (the merge landed; reading the merge SHA back then fails). */
+  function makeFakeGhMergeOkViewFails(binDir: string): void {
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(
+      ghPath,
+      "#!/bin/sh\n" +
+        'for a in "$@"; do if [ "$a" = "merge" ]; then exit 0; fi; done\n' +
+        'echo "API rate limit exceeded" 1>&2\nexit 1\n',
+    );
+    chmodSync(ghPath, 0o755);
+  }
+
+  it("returns the pinned head S1 (never throws) when the merge lands but the SHA read fails", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "merge-bin-"));
+    makeFakeGhMergeOkViewFails(binDir);
+
+    const sha = await withFakeGhOnPath(binDir, () => mergeAgentPr(repo, 42, "s1def"));
+    expect(sha).toBe("s1def");
+  });
+
+  it("propagates a real merge failure (gh pr merge itself exits non-zero)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "merge-bin-"));
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, '#!/bin/sh\necho "not mergeable" 1>&2\nexit 1\n');
+    chmodSync(ghPath, 0o755);
+
+    await expect(withFakeGhOnPath(binDir, () => mergeAgentPr(repo, 42, "s1def"))).rejects.toThrow();
+  });
+});
+
+// SYD-209 branch-protection health check against a fake `gh api`.
+describe("checkBranchProtection", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "bp-repo-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  function makeFakeGh(binDir: string, body: string, exit = 0): void {
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, `#!/bin/sh\ncat <<'JSON'\n${body}\nJSON\nexit ${exit}\n`);
+    chmodSync(ghPath, 0o755);
+  }
+
+  it("is ok when main requires checks and enforces admins", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "bp-bin-"));
+    makeFakeGh(
+      binDir,
+      JSON.stringify({
+        required_status_checks: { strict: true, contexts: ["test"] },
+        enforce_admins: { enabled: true },
+      }),
+    );
+
+    const res = await withFakeGhOnPath(binDir, () => checkBranchProtection(repo));
+    expect(res.ok).toBe(true);
+  });
+
+  it("treats a gh api failure (404 / unprotected branch) as no protection — fail safe", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "bp-bin-"));
+    makeFakeGh(binDir, "Not Found", 1);
+
+    const res = await withFakeGhOnPath(binDir, () => checkBranchProtection(repo));
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/no branch protection/i);
+  });
 });

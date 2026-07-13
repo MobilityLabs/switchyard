@@ -39,6 +39,7 @@ import {
   getDeliveryWork,
   startDeliveryAttempt,
   finishDeliveryAttempt,
+  recordDerivedHead,
 } from "../services/delivery-attempts.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
@@ -99,6 +100,7 @@ import {
   redeliverBody,
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
+  deliveryAttemptDerivedHeadBody,
 } from "./schemas.js";
 
 type Env = { Variables: { actor: Actor } };
@@ -389,6 +391,22 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
         c.req.valid("json"),
       ),
     ),
+  );
+
+  // SYD-209: persist the post-rebase head (S1) on an open attempt without
+  // finishing it, so a crash between rebase and merge re-anchors on S1.
+  app.patch(
+    "/delivery-attempts/:id/derived-head",
+    body(deliveryAttemptDerivedHeadBody),
+    (c) =>
+      c.json(
+        recordDerivedHead(
+          db,
+          c.var.actor,
+          parseAttemptId(c.req.param("id")),
+          c.req.valid("json").derivedHeadSha,
+        ),
+      ),
   );
 
   app.get("/next-task", (c) =>

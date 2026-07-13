@@ -6,11 +6,10 @@ import type { DeliveryWork } from "../../scripts/delivery-lib.js";
 const attemptAutoRebase = vi.fn();
 const mergeAgentPr = vi.fn();
 const pollUntilMergeable = vi.fn();
+const waitForChecks = vi.fn();
 const ensureCleanClone = vi.fn();
-const runVerification = vi.fn();
 const runDeploy = vi.fn();
 const findOpenAgentPr = vi.fn();
-const dispatchConflictResolution = vi.fn();
 const originOwnerRepo = vi.fn();
 const prFreshness = vi.fn();
 const prLiveState = vi.fn();
@@ -19,11 +18,10 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   attemptAutoRebase: (...args: unknown[]) => attemptAutoRebase(...args),
   mergeAgentPr: (...args: unknown[]) => mergeAgentPr(...args),
   pollUntilMergeable: (...args: unknown[]) => pollUntilMergeable(...args),
+  waitForChecks: (...args: unknown[]) => waitForChecks(...args),
   ensureCleanClone: (...args: unknown[]) => ensureCleanClone(...args),
-  runVerification: (...args: unknown[]) => runVerification(...args),
   runDeploy: (...args: unknown[]) => runDeploy(...args),
   findOpenAgentPr: (...args: unknown[]) => findOpenAgentPr(...args),
-  dispatchConflictResolution: (...args: unknown[]) => dispatchConflictResolution(...args),
   originOwnerRepo: (...args: unknown[]) => originOwnerRepo(...args),
   prFreshness: (...args: unknown[]) => prFreshness(...args),
   prLiveState: (...args: unknown[]) => prLiveState(...args),
@@ -36,7 +34,7 @@ const project: WorkerProject = { repo: "/repo/syd" };
 
 // A fetch mock that answers GET /api/delivery-work with `work`, returns a
 // fresh attempt id for each POST .../delivery-attempts, and 200s everything
-// else (comments, delivery-events, PATCH finishes).
+// else (comments, delivery-events, PATCH finishes, derived-head PATCH).
 function installFetch(work: DeliveryWork): ReturnType<typeof vi.fn> {
   let nextAttemptId = 100;
   const mock = vi.fn(async (url: unknown, init?: RequestInit) => {
@@ -70,10 +68,20 @@ function startCalls(ref: string): unknown[][] {
   );
 }
 
+/** Terminal finishes: PATCH /api/delivery-attempts/:id (never the /derived-head sub-path). */
 function patchCalls(): unknown[][] {
   return fetchMock().mock.calls.filter(
     ([u, init]) =>
-      String(u).includes("/api/delivery-attempts/") &&
+      /\/api\/delivery-attempts\/\d+$/.test(String(u)) &&
+      (init as RequestInit | undefined)?.method === "PATCH",
+  );
+}
+
+/** Interim S1 persists: PATCH /api/delivery-attempts/:id/derived-head. */
+function derivedHeadCalls(): unknown[][] {
+  return fetchMock().mock.calls.filter(
+    ([u, init]) =>
+      String(u).includes("/derived-head") &&
       (init as RequestInit | undefined)?.method === "PATCH",
   );
 }
@@ -89,8 +97,8 @@ function resetExecMocks(): void {
     attemptAutoRebase,
     mergeAgentPr,
     pollUntilMergeable,
+    waitForChecks,
     ensureCleanClone,
-    runVerification,
     runDeploy,
     originOwnerRepo,
     prFreshness,
@@ -99,14 +107,14 @@ function resetExecMocks(): void {
     m.mockReset();
   }
   pollUntilMergeable.mockResolvedValue("MERGEABLE");
+  waitForChecks.mockResolvedValue("passing");
   ensureCleanClone.mockResolvedValue(undefined);
-  runVerification.mockResolvedValue({ ok: true, tail: "" });
   runDeploy.mockResolvedValue({ ran: true, ok: true, tail: "" });
   originOwnerRepo.mockResolvedValue("acme/widgets");
   prFreshness.mockRejectedValue(new Error("gh unavailable in tests"));
 }
 
-describe("delivery worker trigger (SYD-208)", () => {
+describe("delivery worker trigger (SYD-208/209)", () => {
   const config: WorkerConfig = {
     url: "http://localhost:3300",
     label: "auto",
@@ -126,28 +134,84 @@ describe("delivery worker trigger (SYD-208)", () => {
     deployRetries: [],
   });
 
-  it("a pending OPEN pin starts an attempt, merges via the existing flow, and finishes merged_deployed", async () => {
-    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "abc123" }));
-    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "abc123", mergeCommit: null });
+  it("an OPEN pin rebases, persists S1, waits for green, merges with the head pinned, finishes merged_deployed", async () => {
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "s0abc", mergeCommit: null });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
     mergeAgentPr.mockResolvedValue("merged-sha");
 
     await tick(config, token, newTickGate(), false);
 
-    const started = startCalls("SYD-9");
-    expect(started).toHaveLength(1);
-    expect(bodyOf(started[0])).toEqual({ authorizationId: 5, prNumber: 42, headSha: "abc123" });
-
-    expect(mergeAgentPr).toHaveBeenCalledTimes(1);
+    // Anchored on S0 (the pinned head).
+    expect(attemptAutoRebase).toHaveBeenCalledWith("/repo/syd", expect.any(String), "SYD-9", ["s0abc"]);
+    // S1 persisted mid-attempt before the merge.
+    const dh = derivedHeadCalls();
+    expect(dh).toHaveLength(1);
+    expect(bodyOf(dh[0])).toEqual({ derivedHeadSha: "s1def" });
+    // Waited for checks on S1, then merged with S1 pinned.
+    expect(waitForChecks).toHaveBeenCalledWith("/repo/syd", 42, "s1def");
+    expect(mergeAgentPr).toHaveBeenCalledWith("/repo/syd", 42, "s1def");
 
     const patches = patchCalls();
     expect(patches).toHaveLength(1);
-    expect(String(patches[0][0])).toContain("/api/delivery-attempts/100");
-    expect(bodyOf(patches[0])).toMatchObject({ outcome: "merged_deployed" });
+    expect(bodyOf(patches[0])).toMatchObject({ outcome: "merged_deployed", derivedHeadSha: "s1def" });
+  });
+
+  it("a third-party push after the stamp (S0 anchor fails) disarms — sha_chain_disarmed, never merges", async () => {
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "s0abc", mergeCommit: null });
+    attemptAutoRebase.mockResolvedValue({ status: "head-moved", observed: "intruder-sha" });
+
+    await tick(config, token, newTickGate(), false);
+
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "sha_chain_disarmed" });
+    const events = deliveryEventCalls("SYD-9");
+    expect(events).toHaveLength(1);
+    expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
+  });
+
+  it("a pin with no headSha (no S0 to anchor) disarms without touching the branch", async () => {
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: null }));
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "whatever", mergeCommit: null });
+
+    await tick(config, token, newTickGate(), false);
+
+    expect(attemptAutoRebase).not.toHaveBeenCalled();
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "sha_chain_disarmed" });
+  });
+
+  it("a red required check on S1 finishes verify_failed with a delivery_failed event (Retry keeps working)", async () => {
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "s0abc", mergeCommit: null });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("failing");
+
+    await tick(config, token, newTickGate(), false);
+
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "verify_failed", derivedHeadSha: "s1def" });
+    expect(bodyOf(deliveryEventCalls("SYD-9")[0])).toMatchObject({ type: "delivery_failed" });
+  });
+
+  it("a checks wait that never concludes finishes checks_timeout, never merging", async () => {
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "s0abc", mergeCommit: null });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("pending"); // wait budget elapsed while pending
+
+    await tick(config, token, newTickGate(), false);
+
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "checks_timeout", derivedHeadSha: "s1def" });
+    expect(bodyOf(deliveryEventCalls("SYD-9")[0])).toMatchObject({ type: "delivery_failed" });
   });
 
   it("a pending PR already MERGED live never re-merges — deploy tail only, outcome merged_deployed", async () => {
-    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "abc123" }));
-    prLiveState.mockResolvedValue({ state: "MERGED", headRefOid: "abc123", mergeCommit: "m-sha" });
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
+    prLiveState.mockResolvedValue({ state: "MERGED", headRefOid: "s0abc", mergeCommit: "m-sha" });
 
     await tick(deployConfig, token, newTickGate(), false);
 
@@ -155,23 +219,18 @@ describe("delivery worker trigger (SYD-208)", () => {
     expect(attemptAutoRebase).not.toHaveBeenCalled();
     expect(ensureCleanClone).toHaveBeenCalledTimes(1); // deploy tail ran
     expect(runDeploy).toHaveBeenCalledTimes(1);
-
-    const patches = patchCalls();
-    expect(patches).toHaveLength(1);
-    expect(bodyOf(patches[0])).toMatchObject({ outcome: "merged_deployed" });
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merged_deployed" });
   });
 
   it("a pending CLOSED-unmerged pin finishes merge_failed with a delivery_failed event, never merging", async () => {
-    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "abc123" }));
-    prLiveState.mockResolvedValue({ state: "CLOSED", headRefOid: "abc123", mergeCommit: null });
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
+    prLiveState.mockResolvedValue({ state: "CLOSED", headRefOid: "s0abc", mergeCommit: null });
 
     await tick(config, token, newTickGate(), false);
 
     expect(mergeAgentPr).not.toHaveBeenCalled();
     expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merge_failed" });
-    const events = deliveryEventCalls("SYD-9");
-    expect(events).toHaveLength(1);
-    expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
+    expect(bodyOf(deliveryEventCalls("SYD-9")[0])).toMatchObject({ type: "delivery_failed" });
   });
 
   it("a pending authorization with no pin is a quiet no-op skip (interactive work, defensive only)", async () => {
@@ -179,13 +238,6 @@ describe("delivery worker trigger (SYD-208)", () => {
 
     await tick(config, token, newTickGate(), false);
 
-    // The server predicate (SYD-208 final review) never emits a pin-less
-    // done_stamp authorization any more — pin-less done-stamps are
-    // interactive work, not delivery authorizations. This branch is
-    // unreachable in production; it stays only as belt-and-braces. It must
-    // never start an attempt, PATCH one, post a delivery_failed event, or
-    // comment on the issue — a false "Delivery FAILED" on an ordinary
-    // interactive issue is exactly the bug this fixes.
     expect(prLiveState).not.toHaveBeenCalled();
     expect(mergeAgentPr).not.toHaveBeenCalled();
     expect(startCalls("SYD-9")).toHaveLength(0);
@@ -193,20 +245,6 @@ describe("delivery worker trigger (SYD-208)", () => {
     expect(deliveryEventCalls("SYD-9")).toHaveLength(0);
     const comments = fetchMock().mock.calls.filter(([u]) => String(u).endsWith("/comments"));
     expect(comments).toHaveLength(0);
-  });
-
-  it("a failed post-rebase verify finishes verify_failed and posts a delivery_failed event (Retry keeps working)", async () => {
-    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "abc123" }));
-    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "abc123", mergeCommit: null });
-    mergeAgentPr.mockRejectedValue(new Error("not mergeable"));
-    attemptAutoRebase.mockResolvedValue({ status: "verify-failed", tail: "TypeError: boom" });
-
-    await tick(config, token, newTickGate(), false);
-
-    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "verify_failed" });
-    const events = deliveryEventCalls("SYD-9");
-    expect(events).toHaveLength(1);
-    expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
   });
 
   it("resumes a crashed attempt whose PR is now MERGED — deploy tail, finished merged_deployed, never re-merged", async () => {
@@ -217,7 +255,8 @@ describe("delivery worker trigger (SYD-208)", () => {
           id: 200,
           issueRef: "SYD-9",
           prNumber: 42,
-          headSha: "abc123",
+          headSha: "s0abc",
+          derivedHeadSha: "s1def",
           authorizationId: 5,
           startedAt: 0,
         },
@@ -225,7 +264,7 @@ describe("delivery worker trigger (SYD-208)", () => {
       deployRetries: [],
     };
     installFetch(work);
-    prLiveState.mockResolvedValue({ state: "MERGED", headRefOid: "abc123", mergeCommit: "m-sha" });
+    prLiveState.mockResolvedValue({ state: "MERGED", headRefOid: "s1def", mergeCommit: "m-sha" });
 
     await tick(deployConfig, token, newTickGate(), false);
 
@@ -235,11 +274,10 @@ describe("delivery worker trigger (SYD-208)", () => {
     expect(patches).toHaveLength(1);
     expect(String(patches[0][0])).toContain("/api/delivery-attempts/200");
     expect(bodyOf(patches[0])).toMatchObject({ outcome: "merged_deployed" });
-    // A crash resumption never opens a new attempt row — it finishes the old one.
     expect(startCalls("SYD-9")).toHaveLength(0);
   });
 
-  it("resumes a crashed attempt whose PR is still OPEN — finishes merge_failed with a delivery_failed event, never merging", async () => {
+  it("resumes a crashed OPEN attempt — re-anchors on S0 and the persisted S1 and re-drives to merge", async () => {
     const work: DeliveryWork = {
       pending: [],
       unfinished: [
@@ -247,7 +285,8 @@ describe("delivery worker trigger (SYD-208)", () => {
           id: 200,
           issueRef: "SYD-9",
           prNumber: 42,
-          headSha: "abc123",
+          headSha: "s0abc",
+          derivedHeadSha: "s1def",
           authorizationId: 5,
           startedAt: 0,
         },
@@ -255,15 +294,50 @@ describe("delivery worker trigger (SYD-208)", () => {
       deployRetries: [],
     };
     installFetch(work);
-    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "abc123", mergeCommit: null });
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "s1def", mergeCommit: null });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1new" });
+    waitForChecks.mockResolvedValue("passing");
+    mergeAgentPr.mockResolvedValue("merged-sha");
+
+    await tick(deployConfig, token, newTickGate(), false);
+
+    // Re-anchor accepts BOTH the stamped S0 and the persisted S1.
+    expect(attemptAutoRebase).toHaveBeenCalledWith("/repo/syd", expect.any(String), "SYD-9", [
+      "s0abc",
+      "s1def",
+    ]);
+    expect(mergeAgentPr).toHaveBeenCalledWith("/repo/syd", 42, "s1new");
+    const patches = patchCalls();
+    expect(String(patches.at(-1)![0])).toContain("/api/delivery-attempts/200");
+    expect(bodyOf(patches.at(-1)!)).toMatchObject({ outcome: "merged_deployed" });
+    // Never opened a NEW attempt row — finished the crashed one.
+    expect(startCalls("SYD-9")).toHaveLength(0);
+  });
+
+  it("resumes a crashed OPEN attempt with no authorized head recorded — finishes merge_failed", async () => {
+    const work: DeliveryWork = {
+      pending: [],
+      unfinished: [
+        {
+          id: 200,
+          issueRef: "SYD-9",
+          prNumber: 42,
+          headSha: null,
+          derivedHeadSha: null,
+          authorizationId: 5,
+          startedAt: 0,
+        },
+      ],
+      deployRetries: [],
+    };
+    installFetch(work);
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "x", mergeCommit: null });
 
     await tick(config, token, newTickGate(), false);
 
+    expect(attemptAutoRebase).not.toHaveBeenCalled();
     expect(mergeAgentPr).not.toHaveBeenCalled();
     expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merge_failed" });
-    const events = deliveryEventCalls("SYD-9");
-    expect(events).toHaveLength(1);
-    expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
   });
 
   it("a deploy retry runs the deploy tail only — never rebase/merge — and starts with deployRetry:true", async () => {
@@ -271,11 +345,11 @@ describe("delivery worker trigger (SYD-208)", () => {
       pending: [],
       unfinished: [],
       deployRetries: [
-        { authorizationId: 5, ref: "SYD-9", prNumber: 42, headSha: "abc123", retryNumber: 1 },
+        { authorizationId: 5, ref: "SYD-9", prNumber: 42, headSha: "s0abc", retryNumber: 1 },
       ],
     };
     installFetch(work);
-    prLiveState.mockResolvedValue({ state: "MERGED", headRefOid: "abc123", mergeCommit: "m-sha" });
+    prLiveState.mockResolvedValue({ state: "MERGED", headRefOid: "s0abc", mergeCommit: "m-sha" });
 
     await tick(deployConfig, token, newTickGate(), false);
 
@@ -283,7 +357,6 @@ describe("delivery worker trigger (SYD-208)", () => {
     expect(mergeAgentPr).not.toHaveBeenCalled();
     expect(ensureCleanClone).toHaveBeenCalledTimes(1);
     expect(runDeploy).toHaveBeenCalledTimes(1);
-
     const started = startCalls("SYD-9");
     expect(started).toHaveLength(1);
     expect(bodyOf(started[0])).toMatchObject({ authorizationId: 5, deployRetry: true });
@@ -292,9 +365,24 @@ describe("delivery worker trigger (SYD-208)", () => {
 
   it("--dry-run performs zero POST/PATCH mutations", async () => {
     const work: DeliveryWork = {
-      pending: [{ authorizationId: 5, ref: "SYD-9", kind: "done_stamp", pin: { repo: "acme/widgets", prNumber: 42, headSha: "abc123" } }],
+      pending: [
+        {
+          authorizationId: 5,
+          ref: "SYD-9",
+          kind: "done_stamp",
+          pin: { repo: "acme/widgets", prNumber: 42, headSha: "s0abc" },
+        },
+      ],
       unfinished: [
-        { id: 200, issueRef: "SYD-9", prNumber: 42, headSha: "abc123", authorizationId: 4, startedAt: 0 },
+        {
+          id: 200,
+          issueRef: "SYD-9",
+          prNumber: 42,
+          headSha: "s0abc",
+          derivedHeadSha: null,
+          authorizationId: 4,
+          startedAt: 0,
+        },
       ],
       deployRetries: [
         { authorizationId: 6, ref: "SYD-9", prNumber: 43, headSha: "def456", retryNumber: 1 },
@@ -315,8 +403,12 @@ describe("delivery worker trigger (SYD-208)", () => {
 
   it("skips refs outside the configured projects", async () => {
     const work: DeliveryWork = {
-      pending: [{ authorizationId: 5, ref: "OTHER-1", kind: "done_stamp", pin: { repo: "x/y", prNumber: 1, headSha: null } }],
-      unfinished: [{ id: 9, issueRef: "OTHER-2", prNumber: 2, headSha: null, authorizationId: 6, startedAt: 0 }],
+      pending: [
+        { authorizationId: 5, ref: "OTHER-1", kind: "done_stamp", pin: { repo: "x/y", prNumber: 1, headSha: null } },
+      ],
+      unfinished: [
+        { id: 9, issueRef: "OTHER-2", prNumber: 2, headSha: null, derivedHeadSha: null, authorizationId: 6, startedAt: 0 },
+      ],
       deployRetries: [{ authorizationId: 7, ref: "OTHER-3", prNumber: 3, headSha: null, retryNumber: 1 }],
     };
     installFetch(work);
@@ -329,74 +421,154 @@ describe("delivery worker trigger (SYD-208)", () => {
   });
 });
 
-describe("deliverQueue (SYD-174)", () => {
+describe("deliverQueue orchestrator (SYD-209)", () => {
   const config: WorkerConfig = {
     url: "http://localhost:3300",
     label: "auto",
     intervalSeconds: 300,
     maxConcurrent: 1,
     projects: { SYD: { repo: "/repo/syd" } },
-    // Skip deploy/verify so finishDelivery goes straight to the comment/event
-    // POSTs that actually threw in the outage this issue describes.
-    delivery: { mode: "queue", deploy: false },
+    // Skip deploy so finishDelivery goes straight to the comment/event POSTs.
+    delivery: { deploy: false },
   };
+  const ATTEMPT_ID = 100;
 
   beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
     resetExecMocks();
   });
-
   afterEach(() => vi.unstubAllGlobals());
 
-  it("maps a post-merge finishDelivery failure to merged_deploy_failed without re-rebasing (SYD-208)", async () => {
-    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+  function call(): Promise<{ outcome: string; derivedHeadSha?: string }> {
+    return deliverQueue("SYD-174", project, config, token, "/clone/syd", 42, ["s0abc"], ATTEMPT_ID);
+  }
+
+  it("rebases, persists S1, waits for green, merges with S1 pinned", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
     mergeAgentPr.mockResolvedValue("merged-sha");
-    // Non-TypeError so worker-select's isRetryableError treats it as
-    // non-retryable and postWithRetry throws immediately instead of running
-    // the real ~45s backoff schedule.
+
+    const result = await call();
+
+    expect(result.outcome).toBe("merged_deployed");
+    expect(result.derivedHeadSha).toBe("s1def");
+    expect(mergeAgentPr).toHaveBeenCalledWith("/repo/syd", 42, "s1def");
+    const dh = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([u]) =>
+      String(u).endsWith(`/api/delivery-attempts/${ATTEMPT_ID}/derived-head`),
+    );
+    expect(dh).toHaveLength(1);
+  });
+
+  it("a broken SHA chain (attemptAutoRebase head-moved) bounces sha_chain_disarmed, never merging", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "head-moved", observed: "intruder" });
+
+    const result = await call();
+
+    expect(result.outcome).toBe("sha_chain_disarmed");
+    expect(waitForChecks).not.toHaveBeenCalled();
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+  });
+
+  it("a rebase conflict bounces conflict_bounced, never merging", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "conflict", files: ["src/a.ts"] });
+
+    const result = await call();
+
+    expect(result.outcome).toBe("conflict_bounced");
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+  });
+
+  it("a red check bounces verify_failed with S1 recorded", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("failing");
+
+    const result = await call();
+
+    expect(result.outcome).toBe("verify_failed");
+    expect(result.derivedHeadSha).toBe("s1def");
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+  });
+
+  it("a checks timeout (still pending) bounces checks_timeout with S1 recorded", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("pending");
+
+    const result = await call();
+
+    expect(result.outcome).toBe("checks_timeout");
+    expect(result.derivedHeadSha).toBe("s1def");
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+  });
+
+  it("a push during the green→merge window (waitForChecks head-moved) disarms", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("head-moved");
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "intruder", mergeCommit: null });
+
+    const result = await call();
+
+    expect(result.outcome).toBe("sha_chain_disarmed");
+    expect(result.derivedHeadSha).toBe("s1def");
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+  });
+
+  it("maps a post-merge finishDelivery failure to merged_deploy_failed without re-rebasing (SYD-208)", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
+    mergeAgentPr.mockResolvedValue("merged-sha");
+    // The merge landed (mergeAgentPr resolved); the tracker then goes down for
+    // the post-merge tail. A non-TypeError is treated as non-retryable so
+    // postWithRetry throws immediately (no real backoff). The S1-persist PATCH
+    // rejecting is .catch-swallowed; the post-merge comment POST throwing is
+    // what runDeliveryTail maps to merged_deploy_failed (never a re-rebase).
     (fetch as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("tracker down"));
 
-    const result = await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+    const result = await call();
 
-    // The merge succeeded — main already has the commit — so the failure is a
-    // post-merge deploy problem (deploy-retry owns it), never a lost merge that
-    // re-rebases or gets stamped merge_failed.
     expect(result.outcome).toBe("merged_deploy_failed");
     expect(attemptAutoRebase).toHaveBeenCalledTimes(1);
     expect(mergeAgentPr).toHaveBeenCalledTimes(1);
   });
 
-  it("still retries the rebase when the merge itself fails (main moved again)", async () => {
-    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+  it("retries the whole cycle when the merge itself fails (main moved again)", async () => {
+    attemptAutoRebase
+      .mockResolvedValueOnce({ status: "rebased", sha: "s1a" })
+      .mockResolvedValueOnce({ status: "rebased", sha: "s1b" });
+    waitForChecks.mockResolvedValue("passing");
     mergeAgentPr
       .mockRejectedValueOnce(new Error("not mergeable"))
       .mockResolvedValueOnce("merged-sha");
-    (fetch as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
-      new Response(null, { status: 200 }),
-    );
 
-    const result = await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+    const result = await call();
 
     expect(result.outcome).toBe("merged_deployed");
-    expect(result.derivedHeadSha).toBe("rebased-sha");
+    expect(result.derivedHeadSha).toBe("s1b");
     expect(attemptAutoRebase).toHaveBeenCalledTimes(2);
     expect(mergeAgentPr).toHaveBeenCalledTimes(2);
   });
 
+  it("gives up once the merge-retry budget is exhausted", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
+    mergeAgentPr.mockRejectedValue(new Error("not mergeable"));
+
+    await expect(call()).rejects.toThrow("not mergeable");
+    expect(mergeAgentPr).toHaveBeenCalledTimes(3); // MAX_QUEUE_MERGE_ATTEMPTS
+  });
+
   it("names the origin repo on the delivered event (SYD-205)", async () => {
-    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
     mergeAgentPr.mockResolvedValue("merged-sha");
     originOwnerRepo.mockResolvedValue("acme/widgets");
-    const fetchM = fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchM.mockResolvedValue(new Response(null, { status: 200 }));
 
-    await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+    await call();
 
-    const eventCalls = fetchM.mock.calls.filter(([url]) =>
+    const eventCalls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
       String(url).endsWith("/api/issues/SYD-174/delivery-events"),
     );
     expect(eventCalls).toHaveLength(1);
-    expect(JSON.parse(eventCalls[0][1].body as string)).toMatchObject({
+    expect(JSON.parse((eventCalls[0][1] as RequestInit).body as string)).toMatchObject({
       type: "delivered",
       prNumber: 42,
       mergeSha: "merged-sha",
@@ -405,55 +577,39 @@ describe("deliverQueue (SYD-174)", () => {
   });
 
   it("posts the delivery event without a repo when the origin lookup fails (never drops the event)", async () => {
-    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
     mergeAgentPr.mockResolvedValue("merged-sha");
     originOwnerRepo.mockRejectedValue(new Error("no origin remote"));
-    const fetchM = fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchM.mockResolvedValue(new Response(null, { status: 200 }));
 
-    await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+    await call();
 
-    const eventCalls = fetchM.mock.calls.filter(([url]) =>
+    const eventCalls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
       String(url).endsWith("/api/issues/SYD-174/delivery-events"),
     );
     expect(eventCalls).toHaveLength(1);
-    const posted = JSON.parse(eventCalls[0][1].body as string);
+    const posted = JSON.parse((eventCalls[0][1] as RequestInit).body as string);
     expect(posted).toMatchObject({ type: "delivered", prNumber: 42 });
     expect(posted.repo).toBeUndefined();
   });
 
   it("attaches GitHub's own head/timestamp to the delivered event when the lookup succeeds (SYD-206)", async () => {
-    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
     mergeAgentPr.mockResolvedValue("merged-sha");
     originOwnerRepo.mockResolvedValue("acme/widgets");
-    prFreshness.mockResolvedValue({
-      headSha: "f".repeat(40),
-      ghUpdatedAt: "2026-07-12T11:00:00Z",
-    });
-    const fetchM = fetch as unknown as ReturnType<typeof vi.fn>;
-    fetchM.mockResolvedValue(new Response(null, { status: 200 }));
+    prFreshness.mockResolvedValue({ headSha: "f".repeat(40), ghUpdatedAt: "2026-07-12T11:00:00Z" });
 
-    await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+    await call();
 
-    const eventCalls = fetchM.mock.calls.filter(([url]) =>
+    const eventCalls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) =>
       String(url).endsWith("/api/issues/SYD-174/delivery-events"),
     );
     expect(eventCalls).toHaveLength(1);
-    expect(JSON.parse(eventCalls[0][1].body as string)).toMatchObject({
+    expect(JSON.parse((eventCalls[0][1] as RequestInit).body as string)).toMatchObject({
       type: "delivered",
       headSha: "f".repeat(40),
       ghUpdatedAt: "2026-07-12T11:00:00Z",
     });
-  });
-
-  it("gives up once the queue-mode retry budget is exhausted", async () => {
-    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
-    mergeAgentPr.mockRejectedValue(new Error("not mergeable"));
-
-    await expect(deliverQueue("SYD-174", project, config, token, "/clone/syd", 42)).rejects.toThrow(
-      "not mergeable",
-    );
-
-    expect(mergeAgentPr).toHaveBeenCalledTimes(3); // MAX_QUEUE_MERGE_ATTEMPTS
   });
 });

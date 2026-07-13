@@ -24,32 +24,26 @@ import {
   buildPrViewMergeableArgs,
   shouldRetryMergePoll,
   MERGE_POLL_TIMEOUT_MS,
+  buildPrViewChecksArgs,
+  evaluateChecks,
+  shouldKeepWaitingForChecks,
+  CHECKS_WAIT_TIMEOUT_MS,
   deliveryComment,
   deliveryFailureComment,
-  verificationFailureComment,
-  autoRebasedNote,
-  autoRebaseConflictComment,
-  autoRebaseVerifyFailedComment,
-  shouldDispatchConflictResolution,
-  buildConflictResolutionPrompt,
-  buildConflictResolutionDockerArgs,
-  buildDetachOntoMainArgs,
-  buildSyncLocalMainArgs,
-  conflictResolutionFailedComment,
-  conflictResolvedNote,
-  CONFLICT_RESOLUTION_ALLOWED_TOOLS,
+  checksFailedComment,
+  checksTimeoutComment,
+  shaChainDisarmedComment,
   formatPublishOutcome,
   parsePrNumberFromUrl,
   tailOf,
-  isQueueMode,
   shouldRetryQueueRebase,
   MAX_QUEUE_MERGE_ATTEMPTS,
   queueRebaseConflictComment,
-  queueVerifyFailedComment,
   queueDeliveredNote,
+  buildBranchProtectionArgs,
+  evaluateBranchProtection,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
-import type { WorkerConfig, WorkerProject } from "../../scripts/worker-select.js";
 
 describe("filterWorkToProjects", () => {
   const work: DeliveryWork = {
@@ -63,6 +57,7 @@ describe("filterWorkToProjects", () => {
         issueRef: "SYD-8",
         prNumber: 42,
         headSha: null,
+        derivedHeadSha: null,
         authorizationId: 3,
         startedAt: 0,
       },
@@ -71,6 +66,7 @@ describe("filterWorkToProjects", () => {
         issueRef: "OTHER-2",
         prNumber: 7,
         headSha: null,
+        derivedHeadSha: null,
         authorizationId: 4,
         startedAt: 0,
       },
@@ -164,6 +160,32 @@ describe("argv builders", () => {
       "MobilityLabs/switchyard",
       "--merge",
       "--delete-branch",
+    ]);
+  });
+
+  it("buildPrMergeArgs pins the head with --match-head-commit when given S1 (SYD-209)", () => {
+    expect(buildPrMergeArgs(41, "MobilityLabs/switchyard", "s1deadbeef")).toEqual([
+      "pr",
+      "merge",
+      "41",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--merge",
+      "--delete-branch",
+      "--match-head-commit",
+      "s1deadbeef",
+    ]);
+  });
+
+  it("buildPrViewChecksArgs asks for the rollup bound to the current head (SYD-209)", () => {
+    expect(buildPrViewChecksArgs(41, "MobilityLabs/switchyard")).toEqual([
+      "pr",
+      "view",
+      "41",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--json",
+      "statusCheckRollup,headRefOid",
     ]);
   });
 
@@ -335,251 +357,80 @@ describe("shouldRetryMergePoll (SYD-103)", () => {
   });
 });
 
-describe("auto-rebase comment bodies (SYD-85)", () => {
-  it("autoRebasedNote names the branch and main", () => {
-    const note = autoRebasedNote("SYD-9");
-    expect(note).toContain("agent/SYD-9");
-    expect(note).toContain("main");
+describe("evaluateChecks (SYD-209 wait-for-checks / live check verification)", () => {
+  const S1 = "s1".repeat(20);
+
+  it("is head-moved when the live head is not S1 (a push slipped in)", () => {
+    // The required checks GitHub reports describe whatever head it currently
+    // has; if that isn't the head we rebased to, the chain is broken — disarm.
+    const rollup = { headRefOid: "someoneelse", statusCheckRollup: [] };
+    expect(evaluateChecks(rollup, S1)).toBe("head-moved");
   });
 
-  it("autoRebaseConflictComment lists conflicted files and the original failure", () => {
-    const body = autoRebaseConflictComment("SYD-9", "gh: not mergeable", ["src/a.ts", "src/b.ts"]);
-    expect(body).toContain("SYD-9");
-    expect(body).toContain("not mergeable");
-    expect(body).toContain("agent/SYD-9");
-    expect(body).toContain("- src/a.ts");
-    expect(body).toContain("- src/b.ts");
-    expect(body).toContain("resolve the conflicts");
+  it("is passing when every required check on S1 concluded success", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "StatusContext", context: "ci/legacy", state: "SUCCESS" },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("passing");
   });
 
-  it("autoRebaseConflictComment handles an empty file list", () => {
-    const body = autoRebaseConflictComment("SYD-9", "gh: not mergeable", []);
-    expect(body).toContain("no conflicted files reported");
+  it("is failing when any required check on S1 failed", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "FAILURE" },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("failing");
   });
 
-  it("autoRebaseVerifyFailedComment includes the output tail and says NOT pushed/merged", () => {
-    const body = autoRebaseVerifyFailedComment("SYD-9", "TypeError: boom");
-    expect(body).toContain("SYD-9");
-    expect(body).toContain("agent/SYD-9");
-    expect(body).toContain("TypeError: boom");
-    expect(body).toContain("NOT pushed, NOT merged");
+  it("is pending while a check on S1 is still running", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "test", status: "IN_PROGRESS", conclusion: null },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("pending");
+  });
+
+  it("is pending when the rollup on S1 is still empty (checks not registered yet)", () => {
+    expect(evaluateChecks({ headRefOid: S1, statusCheckRollup: [] }, S1)).toBe("pending");
+  });
+
+  it("treats NEUTRAL/SKIPPED CheckRun conclusions as non-blocking passes", () => {
+    const rollup = {
+      headRefOid: S1,
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "optional", status: "COMPLETED", conclusion: "SKIPPED" },
+        { __typename: "CheckRun", name: "test", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+    };
+    expect(evaluateChecks(rollup, S1)).toBe("passing");
   });
 });
 
-describe("conflict-resolution dispatch (SYD-100)", () => {
-  const baseConfig: WorkerConfig = {
-    url: "http://localhost:3300",
-    label: "auto",
-    intervalSeconds: 300,
-    maxConcurrent: 1,
-    projects: { SYD: { repo: "/repo/syd" } },
-  };
-  const project: WorkerProject = { repo: "/repo/syd" };
-  const oauthEnv = { CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret" };
-
-  describe("shouldDispatchConflictResolution", () => {
-    it("is false when not containerized, regardless of the conflictResolution flag", () => {
-      expect(shouldDispatchConflictResolution(baseConfig)).toBe(false);
-      expect(
-        shouldDispatchConflictResolution({ ...baseConfig, delivery: { conflictResolution: true } }),
-      ).toBe(false);
-    });
-
-    it("defaults to true when containerized", () => {
-      expect(shouldDispatchConflictResolution({ ...baseConfig, containerized: true })).toBe(true);
-    });
-
-    it("respects an explicit opt-out", () => {
-      expect(
-        shouldDispatchConflictResolution({
-          ...baseConfig,
-          containerized: true,
-          delivery: { conflictResolution: false },
-        }),
-      ).toBe(false);
-    });
+describe("shouldKeepWaitingForChecks (SYD-209)", () => {
+  it("keeps waiting only while pending and under the timeout", () => {
+    expect(shouldKeepWaitingForChecks("pending", 0, 1000)).toBe(true);
+    expect(shouldKeepWaitingForChecks("pending", 999, 1000)).toBe(true);
+    expect(shouldKeepWaitingForChecks("pending", 1000, 1000)).toBe(false);
   });
 
-  describe("buildConflictResolutionPrompt", () => {
-    it("names the branch, main, and the listed conflict files", () => {
-      const prompt = buildConflictResolutionPrompt("SYD-9", ["src/a.ts", "src/b.ts"]);
-      expect(prompt).toContain("agent/SYD-9");
-      expect(prompt).toContain("main");
-      expect(prompt).toContain("- src/a.ts");
-      expect(prompt).toContain("- src/b.ts");
-    });
-
-    it("instructs never git add -A, run typecheck+tests, and push with lease", () => {
-      const prompt = buildConflictResolutionPrompt("SYD-9", ["src/a.ts"]);
-      expect(prompt).toContain("never");
-      expect(prompt).toContain("git add -A");
-      expect(prompt).toContain("npm run typecheck");
-      expect(prompt).toContain("npx vitest run");
-      expect(prompt).toContain("--force-with-lease");
-    });
-
-    it("scopes the session to conflict resolution only — never merge or change status", () => {
-      const prompt = buildConflictResolutionPrompt("SYD-9", ["src/a.ts"]);
-      expect(prompt).toContain("never merge");
-      expect(prompt).toMatch(/never change the issue's status/);
-    });
-
-    it("handles an empty file list", () => {
-      const prompt = buildConflictResolutionPrompt("SYD-9", []);
-      expect(prompt).toContain("no conflicted files reported");
-    });
+  it("stops immediately on a definitive passing / failing / head-moved verdict", () => {
+    expect(shouldKeepWaitingForChecks("passing", 0, 1000)).toBe(false);
+    expect(shouldKeepWaitingForChecks("failing", 0, 1000)).toBe(false);
+    expect(shouldKeepWaitingForChecks("head-moved", 0, 1000)).toBe(false);
   });
 
-  describe("buildConflictResolutionDockerArgs", () => {
-    it("joins the internal egress network and routes the session through the proxy (SYD-110)", () => {
-      const args = buildConflictResolutionDockerArgs(
-        "SYD-9",
-        ["src/a.ts"],
-        "/tmp/clones/SYD",
-        project,
-        baseConfig,
-        oauthEnv,
-      );
-      const netIndex = args.indexOf("--network");
-      expect(args[netIndex + 1]).toBe("syd-workers");
-      for (const v of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
-        expect(args).toContain(`${v}=http://syd-egress:8888`);
-      }
-    });
-
-    it("omits the egress network and proxy env when egress is open (SYD-110)", () => {
-      const args = buildConflictResolutionDockerArgs(
-        "SYD-9",
-        ["src/a.ts"],
-        "/tmp/clones/SYD",
-        project,
-        { ...baseConfig, egress: "open" },
-        oauthEnv,
-      );
-      expect(args).not.toContain("--network");
-      expect(args.some((a) => a.includes("_PROXY") || a.includes("_proxy"))).toBe(false);
-    });
-
-    it("mounts the scratch clone (not the human's live checkout)", () => {
-      const args = buildConflictResolutionDockerArgs(
-        "SYD-9",
-        ["src/a.ts"],
-        "/tmp/clones/SYD",
-        project,
-        baseConfig,
-        oauthEnv,
-      );
-      const vIndex = args.indexOf("-v");
-      expect(args[vIndex + 1]).toBe("/tmp/clones/SYD:/origin");
-    });
-
-    it("sets MODE=resolve-conflict and AGENT_BRANCH", () => {
-      const args = buildConflictResolutionDockerArgs(
-        "SYD-9",
-        ["src/a.ts"],
-        "/tmp/clones/SYD",
-        project,
-        baseConfig,
-        oauthEnv,
-      );
-      expect(args).toContain("MODE=resolve-conflict");
-      expect(args).toContain("AGENT_BRANCH=agent/SYD-9");
-    });
-
-    it("scopes ALLOWED_TOOLS to the conflict-resolution allowlist, not the full work allowlist", () => {
-      const args = buildConflictResolutionDockerArgs(
-        "SYD-9",
-        ["src/a.ts"],
-        "/tmp/clones/SYD",
-        project,
-        baseConfig,
-        oauthEnv,
-      );
-      const allowedToolsArg = args.find((a) => a.startsWith("ALLOWED_TOOLS="));
-      expect(allowedToolsArg).toBe(`ALLOWED_TOOLS=${CONFLICT_RESOLUTION_ALLOWED_TOOLS.join(",")}`);
-      expect(CONFLICT_RESOLUTION_ALLOWED_TOOLS).not.toContain("mcp__switchyard__claim_issue");
-      expect(CONFLICT_RESOLUTION_ALLOWED_TOOLS).not.toContain("mcp__switchyard__update_issue");
-    });
-
-    it("passes secret vars using the bare -e form, never embedding their values", () => {
-      const args = buildConflictResolutionDockerArgs(
-        "SYD-9",
-        ["src/a.ts"],
-        "/tmp/clones/SYD",
-        project,
-        baseConfig,
-        oauthEnv,
-      );
-      for (const secretVar of [
-        "SWITCHYARD_TOKEN",
-        "CLAUDE_CODE_OAUTH_TOKEN",
-        "ANTHROPIC_API_KEY",
-      ]) {
-        expect(args).toContain(secretVar);
-        expect(args.some((a) => a.startsWith(`${secretVar}=`))).toBe(false);
-      }
-      expect(args.join(" ")).not.toContain("oauth-secret");
-    });
-
-    it("throws without an auth env var, the same as buildDockerArgs", () => {
-      expect(() =>
-        buildConflictResolutionDockerArgs(
-          "SYD-9",
-          ["src/a.ts"],
-          "/tmp/clones/SYD",
-          project,
-          baseConfig,
-          {},
-        ),
-      ).toThrow(/CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY/);
-    });
-
-    it("respects a custom image", () => {
-      const args = buildConflictResolutionDockerArgs(
-        "SYD-9",
-        ["src/a.ts"],
-        "/tmp/clones/SYD",
-        project,
-        { ...baseConfig, image: "custom/worker-image" },
-        oauthEnv,
-      );
-      expect(args[args.length - 1]).toBe("custom/worker-image");
-    });
-  });
-
-  it("buildDetachOntoMainArgs detaches HEAD onto origin/main", () => {
-    expect(buildDetachOntoMainArgs()).toEqual(["checkout", "--detach", "origin/main"]);
-  });
-
-  it("buildSyncLocalMainArgs force-updates local main to origin/main without requiring a checkout", () => {
-    expect(buildSyncLocalMainArgs()).toEqual(["branch", "-f", "main", "origin/main"]);
-  });
-
-  it("conflictResolutionFailedComment lists conflicted files, the original failure, and the session's output tail", () => {
-    const body = conflictResolutionFailedComment(
-      "SYD-9",
-      "gh: not mergeable",
-      ["src/a.ts"],
-      "TypeError: boom",
-    );
-    expect(body).toContain("SYD-9");
-    expect(body).toContain("not mergeable");
-    expect(body).toContain("agent/SYD-9");
-    expect(body).toContain("- src/a.ts");
-    expect(body).toContain("TypeError: boom");
-    expect(body).toContain("conflict-resolution worker session");
-  });
-
-  it("conflictResolutionFailedComment handles an empty file list", () => {
-    const body = conflictResolutionFailedComment("SYD-9", "gh: not mergeable", [], "boom");
-    expect(body).toContain("no conflicted files reported");
-  });
-
-  it("conflictResolvedNote names the branch and main and says it resolved real conflicts", () => {
-    const note = conflictResolvedNote("SYD-9");
-    expect(note).toContain("agent/SYD-9");
-    expect(note).toContain("main");
-    expect(note).toContain("conflicts");
+  it("defaults the timeout to CHECKS_WAIT_TIMEOUT_MS", () => {
+    expect(shouldKeepWaitingForChecks("pending", CHECKS_WAIT_TIMEOUT_MS - 1)).toBe(true);
+    expect(shouldKeepWaitingForChecks("pending", CHECKS_WAIT_TIMEOUT_MS)).toBe(false);
   });
 });
 
@@ -675,41 +526,92 @@ describe("comment bodies", () => {
     expect(body).toContain("SYD-9");
     expect(body).toContain("merge conflict");
   });
+});
 
-  it("verification failure comment names the merged PR/SHA, says deploy was skipped, and includes the tail (SYD-78)", () => {
-    const body = verificationFailureComment(41, "abc123", "Shell.test.tsx(15,19): error TS2352");
-    expect(body).toContain("PR #41");
-    expect(body).toContain("abc123");
-    expect(body).toContain("deploy skipped");
-    expect(body).toContain("main is red");
-    expect(body).toContain("Shell.test.tsx(15,19): error TS2352");
+describe("branch-protection health check (SYD-209)", () => {
+  it("buildBranchProtectionArgs targets the repo's main protection API", () => {
+    expect(buildBranchProtectionArgs("MobilityLabs/switchyard")).toEqual([
+      "api",
+      "repos/MobilityLabs/switchyard/branches/main/protection",
+    ]);
+  });
+
+  it("is ok when main requires at least one status check", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, contexts: ["test"] },
+      enforce_admins: { enabled: true },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.problems).toEqual([]);
+  });
+
+  it("reads the newer checks[] shape too", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, checks: [{ context: "test" }] },
+      enforce_admins: { enabled: true },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("alarms when the branch has no protection at all (null / 404)", () => {
+    const res = evaluateBranchProtection(null);
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/no branch protection/i);
+  });
+
+  it("alarms when required status checks are absent", () => {
+    const res = evaluateBranchProtection({ enforce_admins: { enabled: true } });
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/required status check/i);
+  });
+
+  it("alarms when the required-checks list is empty (protection present but toothless)", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, contexts: [] },
+      enforce_admins: { enabled: true },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/no required status check/i);
+  });
+
+  it("flags admin bypass (enforce_admins disabled) as a problem so a privileged worker cred is caught", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, contexts: ["test"] },
+      enforce_admins: { enabled: false },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/admin/i);
   });
 });
 
-describe("queue mode (SYD-164)", () => {
-  const baseConfig: WorkerConfig = {
-    url: "http://localhost:3300",
-    label: "auto",
-    intervalSeconds: 300,
-    maxConcurrent: 1,
-    projects: { SYD: { repo: "/repo/syd" } },
-  };
-
-  describe("isQueueMode", () => {
-    it("defaults to false (legacy flow) when delivery.mode is unset", () => {
-      expect(isQueueMode(baseConfig)).toBe(false);
-      expect(isQueueMode({ ...baseConfig, delivery: {} })).toBe(false);
-    });
-
-    it("is false under explicit legacy mode", () => {
-      expect(isQueueMode({ ...baseConfig, delivery: { mode: "legacy" } })).toBe(false);
-    });
-
-    it("is true under queue mode", () => {
-      expect(isQueueMode({ ...baseConfig, delivery: { mode: "queue" } })).toBe(true);
-    });
+describe("SHA-chain failure comments (SYD-209)", () => {
+  it("checksFailedComment says CI failed on the rebased head and main stays green", () => {
+    const body = checksFailedComment("SYD-9");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("agent/SYD-9");
+    expect(body).toContain("checks");
+    expect(body).toContain("stays green");
+    expect(body).toContain("Retry delivery");
   });
 
+  it("checksTimeoutComment says checks didn't conclude and Retry re-checks", () => {
+    const body = checksTimeoutComment("SYD-9");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("did not conclude");
+    expect(body).toContain("Retry delivery");
+  });
+
+  it("shaChainDisarmedComment surfaces the authorized→current head delta", () => {
+    const body = shaChainDisarmedComment("SYD-9", "s0aaa", "s1bbb");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("DISARMED");
+    expect(body).toContain("s0aaa");
+    expect(body).toContain("s1bbb");
+    expect(body).toContain("re-authorize");
+  });
+});
+
+describe("merge orchestrator (SYD-209, formerly queue mode SYD-164)", () => {
   describe("shouldRetryQueueRebase", () => {
     it("retries while under the max attempts", () => {
       expect(shouldRetryQueueRebase(1, 3)).toBe(true);
@@ -748,23 +650,13 @@ describe("queue mode (SYD-164)", () => {
     });
   });
 
-  describe("queueVerifyFailedComment", () => {
-    it("includes the output tail and says NOT merged / main stays green", () => {
-      const body = queueVerifyFailedComment("SYD-9", "TypeError: boom");
-      expect(body).toContain("SYD-9");
-      expect(body).toContain("agent/SYD-9");
-      expect(body).toContain("TypeError: boom");
-      expect(body).toContain("NOT merged");
-      expect(body).toContain("stays green");
-    });
-  });
-
   describe("queueDeliveredNote", () => {
-    it("names the branch and main, and says verification happened before merging", () => {
+    it("names the branch, the CI wait on the rebased head, and the pinned merge", () => {
       const note = queueDeliveredNote("SYD-9");
       expect(note).toContain("agent/SYD-9");
       expect(note).toContain("main");
-      expect(note).toContain("before merging");
+      expect(note).toContain("checks");
+      expect(note).toContain("match-head-commit");
     });
   });
 });

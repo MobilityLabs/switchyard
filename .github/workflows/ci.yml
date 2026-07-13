@@ -5,16 +5,37 @@ on:
   push:
     branches: [main]
 
+# SYD-209: CI is now the SOLE check authority (the delivery worker no longer
+# re-runs typecheck/build/test in a clean clone), so this workflow is a trust
+# boundary and gets a least-privilege token. Default workflow permissions are
+# read-write; a PR from an agent branch already executes repository code here,
+# so we drop the token to the minimum this job needs.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        # Don't leave the ambient GITHUB_TOKEN in .git/config where later steps
+        # (which run untrusted PR code) could reach it. Nothing in this job
+        # pushes, so it never needs credentials persisted.
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
+      # --ignore-scripts blocks EVERY dependency's install/postinstall script
+      # (agent-authored deps land in these PR builds), then we explicitly
+      # rebuild only better-sqlite3 — the one native module the app needs — so
+      # its prebuilt binary is present for the test run. This is the
+      # single-package allowlist the SYD-209 spec calls for.
+      - run: npm ci --ignore-scripts
+      - run: npm rebuild better-sqlite3
       - run: npm run typecheck
       - run: npm run build:ui
       - run: npm test
+# No deploy/provider secrets are referenced in this PR-triggered workflow, by
+# design (SYD-209): a PR build must never have access to deployment credentials.

@@ -4,13 +4,7 @@
 // comments deliver.ts posts back. I/O-free so it's trivially unit-testable;
 // the exec side lives in delivery-exec.ts.
 
-import {
-  egressDockerArgs,
-  projectKeyOf,
-  stackChecksEnv,
-  type WorkerConfig,
-  type WorkerProject,
-} from "./worker-select.js";
+import { projectKeyOf } from "./worker-select.js";
 
 export const MAIN_BRANCH = "main";
 
@@ -37,6 +31,10 @@ export type WorkAttempt = {
   issueRef: string;
   prNumber: number | null;
   headSha: string | null;
+  // SYD-209: the post-rebase head S1 persisted mid-attempt, so crash
+  // resumption can re-anchor on the worker's own rebase. null if the crash
+  // happened before the first force-push.
+  derivedHeadSha: string | null;
   authorizationId: number;
   startedAt: number;
 };
@@ -63,7 +61,12 @@ export type AttemptOutcome =
   | "merged_deploy_failed"
   | "verify_failed"
   | "conflict_bounced"
-  | "merge_failed";
+  | "merge_failed"
+  // SYD-209: CI wait timed out with checks still pending, and the SHA chain
+  // broke (a third-party push after the human stamp) — both record
+  // delivery_failed and go quiet until a human re-authorizes.
+  | "checks_timeout"
+  | "sha_chain_disarmed";
 
 /**
  * Drops every work row whose ref sits outside the configured projects — a
@@ -201,8 +204,20 @@ export function buildPrCreateArgs(
   ];
 }
 
-export function buildPrMergeArgs(prNumber: number, ownerRepo: string): string[] {
-  return ["pr", "merge", String(prNumber), "-R", ownerRepo, "--merge", "--delete-branch"];
+// matchHeadSha (SYD-209) pins the merge to an exact head — `gh pr merge
+// --match-head-commit S1` refuses the merge if GitHub's current head has moved
+// off S1, so a third-party push landing in the green-on-S1 → merge window
+// cannot slot its commit into the merge. The orchestrator always passes S1
+// (the head whose required checks it just verified live); the arg is optional
+// only so the pin can't be forgotten silently by an un-updated caller.
+export function buildPrMergeArgs(
+  prNumber: number,
+  ownerRepo: string,
+  matchHeadSha?: string,
+): string[] {
+  const args = ["pr", "merge", String(prNumber), "-R", ownerRepo, "--merge", "--delete-branch"];
+  if (matchHeadSha) args.push("--match-head-commit", matchHeadSha);
+  return args;
 }
 
 export function buildPrViewMergeShaArgs(prNumber: number, ownerRepo: string): string[] {
@@ -263,6 +278,149 @@ export function shouldRetryMergePoll(
   return state === "UNKNOWN" && elapsedMs < timeoutMs;
 }
 
+// Wait-for-checks gate (SYD-209): CI is now the sole check authority, so the
+// worker no longer re-runs typecheck/build/test in a clean clone. Instead it
+// force-pushes the rebased head S1 and waits for GitHub's own required checks
+// on S1 to conclude, then reads their conclusion LIVE (never pr_state or
+// recorded gh_checks_* events — those are at-least-once webhook replicas; per
+// the rev-3 rule, irreversible decisions read live) before merging.
+
+export type ChecksState = "passing" | "failing" | "pending" | "head-moved";
+
+/** How long the worker waits for CI to go green on S1 before recording
+ * checks_timeout/delivery_failed and going quiet (a GitHub Actions outage must
+ * not stall the sequential per-ref loop forever). */
+export const CHECKS_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
+export const CHECKS_POLL_INTERVAL_MS = 15000;
+
+/** One rollup entry as GitHub returns it under `--json statusCheckRollup`:
+ * either a CheckRun (Actions/apps — status+conclusion) or a StatusContext
+ * (legacy commit statuses — state). Fields are optional/defensive because the
+ * worker must never crash on an unexpected shape (it would strand a delivery). */
+type CheckRollupEntry = {
+  __typename?: string;
+  status?: string;
+  conclusion?: string | null;
+  state?: string;
+  name?: string;
+  context?: string;
+};
+
+export type ChecksRollup = { headRefOid?: string; statusCheckRollup?: CheckRollupEntry[] };
+
+/** COMPLETED CheckRun conclusions that do NOT block a merge. */
+const NON_BLOCKING_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
+function checkVerdict(entry: CheckRollupEntry): "pass" | "fail" | "pending" {
+  // StatusContext carries `state`; CheckRun carries `status`/`conclusion`.
+  if (entry.state !== undefined && entry.status === undefined) {
+    if (entry.state === "SUCCESS") return "pass";
+    if (entry.state === "PENDING" || entry.state === "EXPECTED") return "pending";
+    return "fail";
+  }
+  if (entry.status !== "COMPLETED") return "pending";
+  return NON_BLOCKING_CONCLUSIONS.has(entry.conclusion ?? "") ? "pass" : "fail";
+}
+
+/**
+ * Classifies the required-check rollup for the head we intend to merge (S1).
+ * This is the chain's step-3 comparison in one place: *the head GitHub reports
+ * checks for == the head we rebased to == S1*. If GitHub's live head isn't S1,
+ * a push slipped in after our force-push and the rollup describes someone
+ * else's commit → `head-moved` (disarm). Otherwise: any failed check →
+ * `failing`; any still-running → `pending`; all concluded green (and at least
+ * one exists) → `passing`; an empty rollup → `pending` (checks not registered
+ * yet — the timeout, not a premature pass, resolves a stuck one). Pure so the
+ * whole verdict is testable without shelling out to `gh`.
+ */
+export function evaluateChecks(rollup: ChecksRollup, expectedS1: string): ChecksState {
+  if (rollup.headRefOid !== expectedS1) return "head-moved";
+  const entries = rollup.statusCheckRollup ?? [];
+  const verdicts = entries.map(checkVerdict);
+  if (verdicts.includes("fail")) return "failing";
+  if (verdicts.includes("pending")) return "pending";
+  return verdicts.length > 0 ? "passing" : "pending";
+}
+
+/**
+ * Whether the wait-for-checks loop should sleep and poll again: only while the
+ * verdict is still `pending` and the timeout hasn't elapsed. A definitive
+ * `passing`/`failing`/`head-moved` stops the wait immediately. Pure so the
+ * stop condition is testable without a real clock.
+ */
+export function shouldKeepWaitingForChecks(
+  state: ChecksState,
+  elapsedMs: number,
+  timeoutMs: number = CHECKS_WAIT_TIMEOUT_MS,
+): boolean {
+  return state === "pending" && elapsedMs < timeoutMs;
+}
+
+export function buildPrViewChecksArgs(prNumber: number, ownerRepo: string): string[] {
+  return [
+    "pr",
+    "view",
+    String(prNumber),
+    "-R",
+    ownerRepo,
+    "--json",
+    "statusCheckRollup,headRefOid",
+  ];
+}
+
+// Branch-protection health check (SYD-209): CI is the sole check authority, so
+// the merge's safety rests on GitHub actually *requiring* those checks on main
+// (a rogue/compromised worker is bounded by branch protection + a
+// least-privilege credential, not by the SHA chain). A startup/periodic check
+// reads the linked repo's protection and alarms loudly if it's relaxed, rather
+// than silently trusting an off-box config.
+
+export function buildBranchProtectionArgs(ownerRepo: string, branch = MAIN_BRANCH): string[] {
+  return ["api", `repos/${ownerRepo}/branches/${branch}/protection`];
+}
+
+type BranchProtection = {
+  required_status_checks?: {
+    strict?: boolean;
+    contexts?: string[];
+    checks?: { context: string }[];
+  } | null;
+  enforce_admins?: { enabled?: boolean } | boolean | null;
+};
+
+/**
+ * Pure verdict on a branch's protection: `ok` only when main requires at least
+ * one status check AND admins can't bypass it. Returns every problem found (not
+ * just the first) so the operator alarm names all of them at once. `null`
+ * models the API's 404 for an unprotected branch.
+ */
+export function evaluateBranchProtection(
+  protection: BranchProtection | null,
+): { ok: boolean; problems: string[] } {
+  const problems: string[] = [];
+  if (!protection) {
+    return { ok: false, problems: ["no branch protection on main"] };
+  }
+  const rsc = protection.required_status_checks;
+  if (!rsc) {
+    problems.push("main has no required status checks (CI is not enforced)");
+  } else {
+    const count = (rsc.contexts?.length ?? 0) + (rsc.checks?.length ?? 0);
+    if (count === 0) {
+      problems.push("main's required-status-checks list is empty (no required status check)");
+    }
+  }
+  // enforce_admins is `{enabled}` from the REST API; tolerate a bare boolean.
+  const adminsEnforced =
+    typeof protection.enforce_admins === "boolean"
+      ? protection.enforce_admins
+      : (protection.enforce_admins?.enabled ?? false);
+  if (!adminsEnforced) {
+    problems.push("enforce_admins is off — an admin credential can bypass required checks / push main");
+  }
+  return { ok: problems.length === 0, problems };
+}
+
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */
 export function parseOwnerRepo(remoteUrl: string): string {
   const trimmed = remoteUrl.trim().replace(/\.git$/, "");
@@ -311,7 +469,9 @@ export function buildForcePushWithLeaseArgs(ref: string): string[] {
 export type RebaseOutcome =
   | { status: "no-branch" }
   | { status: "conflict"; files: string[] }
-  | { status: "verify-failed"; tail: string }
+  // SYD-209: the fetched remote head wasn't one the worker authorized (S0 or a
+  // prior S1) — a third-party push landed on the branch. The caller disarms.
+  | { status: "head-moved"; observed: string }
   | { status: "rebased"; sha: string };
 
 /** Outcome of a publishAgentBranch call (delivery-exec.ts) — pure so the log-line
@@ -407,24 +567,6 @@ export function deliveryComment(r: DeliveryResult): string {
   return lines.join("\n");
 }
 
-/** Posted when the post-merge verification gate (SYD-78) fails: the PR merged
- * cleanly but merged main no longer typechecks/passes tests, so deploy was
- * skipped. Distinct from deliveryFailureComment, which covers merge-time
- * failures (the PR never landed) — here the merge already happened. */
-export function verificationFailureComment(
-  prNumber: number,
-  mergeSha: string,
-  tail: string,
-): string {
-  return [
-    `Merged PR #${prNumber} at \`${mergeSha}\`, but post-merge verification FAILED — deploy skipped.`,
-    "main is red; do not build on it until this is fixed. Output tail:",
-    "```",
-    tail,
-    "```",
-  ].join("\n");
-}
-
 export function deliveryFailureComment(ref: string, message: string): string {
   return (
     `Delivery FAILED for ${ref}: ${message}\n` +
@@ -433,246 +575,21 @@ export function deliveryFailureComment(ref: string, message: string): string {
   );
 }
 
-/** Prepended to deliveryComment's output when the merge only succeeded after
- * an automatic rebase (SYD-85), so "Delivered" doesn't read as a clean
- * first-try merge. */
-export function autoRebasedNote(ref: string): string {
-  return (
-    `Auto-rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} after the initial merge failed ` +
-    `(no conflicts; typecheck + tests passed post-rebase) — then merged.`
-  );
-}
+// SYD-209 merge orchestrator (formerly "queue mode", SYD-164): rebase
+// agent/<ref> onto current main, force-push, wait for GitHub's required checks
+// to go green on the rebased head (CI is the sole check authority — no
+// client-side verify), then merge with the head pinned. A rebase conflict, a
+// broken SHA chain, a red or timed-out check bounces the ref (comment +
+// delivery_failed, main untouched) rather than landing anything unverified.
+// The legacy merge-first flow and its SYD-100 conflict-resolution dispatch are
+// gone (SYD-209 retired them): a real conflict always bounces for a human /
+// re-dispatch.
 
-/** gh pr merge failed and the automatic rebase hit real conflict hunks
- * (SYD-85) — never resolved automatically, always escalated with the
- * conflicted file list so the human/coordinator starts with the diagnosis. */
-export function autoRebaseConflictComment(
-  ref: string,
-  mergeFailureMessage: string,
-  conflictFiles: string[],
-): string {
-  const fileList =
-    conflictFiles.length > 0
-      ? conflictFiles.map((f) => `- ${f}`).join("\n")
-      : "(no conflicted files reported)";
-  return (
-    `Delivery FAILED for ${ref}: merge failed (${mergeFailureMessage})\n` +
-    `Attempted an automatic rebase of ${agentBranch(ref)} onto ${MAIN_BRANCH}, but it hit real conflicts:\n` +
-    `${fileList}\n` +
-    `The agent PR was not delivered — resolve the conflicts, push, and click Retry delivery on the attention banner (or merge manually).`
-  );
-}
-
-/** gh pr merge failed, the rebase applied cleanly, but the post-rebase verify
- * gate (typecheck + tests) failed — the merged result was never tested, so
- * the rebase is deliberately NOT pushed or retried (SYD-85). */
-export function autoRebaseVerifyFailedComment(ref: string, tail: string): string {
-  return (
-    `Delivery FAILED for ${ref}: auto-rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} with no conflicts, ` +
-    `but the post-rebase verify gate (typecheck + tests) failed — NOT pushed, NOT merged.\n` +
-    `Output tail:\n\`\`\`\n${tail}\n\`\`\`\n` +
-    `The agent PR was not delivered — fix the failure, push, and click Retry delivery on the attention banner (or merge manually).`
-  );
-}
-
-// Conflict-resolution dispatch (SYD-100): when attemptAutoRebase hits real
-// conflict hunks, deliver.ts can dispatch a one-shot worker session — the
-// same container image/sandbox as ordinary code dispatch — to resolve them
-// inside the pipeline instead of escalating straight to freelance human
-// resolution. The resolver session never merges; deliver.ts re-verifies and
-// merges through its normal path once the session pushes a rebased branch.
-
-const DEFAULT_RESOLVE_IMAGE = "switchyard-worker";
-
-/** Read-only-ish allowlist for a conflict-resolution session: enough to
- * rebase/resolve/verify/push and comment its diagnosis, but no
- * claim/status-change powers — the resolver session is scoped to conflict
- * resolution only, never to driving the issue itself. */
-export const CONFLICT_RESOLUTION_ALLOWED_TOOLS = [
-  "Bash",
-  "Read",
-  "Edit",
-  "Grep",
-  "Glob",
-  "mcp__switchyard__comment",
-  "mcp__switchyard__get_issue",
-];
-
-/** Whether deliver.ts should dispatch a conflict-resolution session on a real
- * rebase conflict, rather than escalating straight to a human. Requires
- * `containerized` — resolution needs the same clone-in/branch-out sandbox as
- * ordinary code dispatch — and defaults to on unless a human opts out via
- * `delivery.conflictResolution: false`. */
-export function shouldDispatchConflictResolution(config: WorkerConfig): boolean {
-  return config.containerized === true && config.delivery?.conflictResolution !== false;
-}
-
-/** Prompt for a one-shot conflict-resolution session (SYD-100): scoped to
- * rebasing the already-checked-out agent branch onto origin/main, resolving
- * ONLY the listed conflict hunks, staging exactly those files (never `git add
- * -A`), verifying, and pushing with lease — mirrors the design sketch in
- * SYD-100 almost verbatim so the session's contract is explicit rather than
- * implied. */
-export function buildConflictResolutionPrompt(ref: string, conflictFiles: string[]): string {
-  const branch = agentBranch(ref);
-  const fileList =
-    conflictFiles.length > 0
-      ? conflictFiles.map((f) => `- ${f}`).join("\n")
-      : "(no conflicted files reported)";
-  return (
-    `Switchyard issue ${ref}'s agent branch (${branch}) failed to merge: rebasing it onto ${MAIN_BRANCH} hits real ` +
-    `conflicts in:\n${fileList}\n\n` +
-    `You are already on ${branch} in a disposable clone. Run \`git fetch origin ${MAIN_BRANCH}\` then ` +
-    `\`git rebase origin/${MAIN_BRANCH}\`. Resolve ONLY the conflict hunks in the files listed above, preserving ` +
-    `both sides' intent — do not touch any other file. Stage exactly the conflicted files you resolved (never ` +
-    `\`git add -A\` or \`git add .\`), then run \`git rebase --continue\`. Once the rebase completes, run ` +
-    `\`npm run typecheck\` and \`npx vitest run\`; if either fails, fix your conflict resolution (not unrelated ` +
-    `code) and re-run until both pass. Then push with \`git push --force-with-lease origin ${branch}\`. Post a ` +
-    `comment on ${ref} using the switchyard MCP comment tool describing exactly what you changed to resolve the ` +
-    `conflict. You are scoped to conflict resolution only: never merge the branch, never change the issue's ` +
-    `status, and never touch files outside the listed conflicts. If the rebase turns out not to conflict, or you ` +
-    `cannot resolve it safely, leave the branch as-is, comment why, and stop.`
-  );
-}
-
-/** Outcome of a dispatchConflictResolution call (delivery-exec.ts) — pure so
- * deliver.ts's branch on it (retry the merge vs. escalate) is testable
- * without shelling out to docker. */
-export type ConflictResolutionOutcome =
-  { status: "resolved"; sha: string } | { status: "failed"; tail: string };
-
-/**
- * Builds the `docker run` argv for a conflict-resolution dispatch — same
- * secret-passing convention as buildDockerArgs (worker-select.ts): bare `-e
- * VAR` for secrets so they flow from the caller's env at `docker run` time
- * rather than sitting in argv. Mounts `cloneDir` (deliver.ts's own scratch
- * clone, not a human's checkout) as /origin: the container pushes its
- * resolved branch there, and the host pushes it on to GitHub afterward with
- * its own credentials — the container never sees GitHub auth. Throws under
- * the same condition as buildDockerArgs, for the same reason.
- */
-export function buildConflictResolutionDockerArgs(
-  ref: string,
-  conflictFiles: string[],
-  cloneDir: string,
-  project: WorkerProject,
-  config: WorkerConfig,
-  env: NodeJS.ProcessEnv,
-): string[] {
-  if (!env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY) {
-    throw new Error(
-      "conflict-resolution dispatch requires CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY in the worker's environment",
-    );
-  }
-  const prompt = buildConflictResolutionPrompt(ref, conflictFiles);
-  const image = config.image ?? DEFAULT_RESOLVE_IMAGE;
-  const stackChecks = stackChecksEnv(project.stack);
-
-  return [
-    "run",
-    "--rm",
-    "--name",
-    `syd-resolve-${ref}`,
-    ...egressDockerArgs(config),
-    "-v",
-    `${cloneDir}:/origin`,
-    "-e",
-    `ISSUE_REF=${ref}`,
-    "-e",
-    "MODE=resolve-conflict",
-    "-e",
-    `AGENT_BRANCH=${agentBranch(ref)}`,
-    "-e",
-    `SWITCHYARD_URL=${config.url}`,
-    "-e",
-    "SWITCHYARD_TOKEN",
-    "-e",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "-e",
-    "ANTHROPIC_API_KEY",
-    "-e",
-    `WORKER_PROMPT=${prompt}`,
-    "-e",
-    `ALLOWED_TOOLS=${CONFLICT_RESOLUTION_ALLOWED_TOOLS.join(",")}`,
-    ...(stackChecks ? ["-e", `STACK_CHECKS=${stackChecks}`] : []),
-    "-e",
-    `BASE_BRANCH=${MAIN_BRANCH}`,
-    image,
-  ];
-}
-
-/** Detaches HEAD onto origin/main, off whatever branch is currently checked
- * out — used before mounting a scratch clone into the resolver container:
- * git refuses to push into a non-bare repo's checked-out branch, and the
- * clone is left checked out on agent/<ref> (the branch the container needs
- * to push) right after attemptAutoRebase aborts its own rebase attempt. */
-export function buildDetachOntoMainArgs(): string[] {
-  return ["checkout", "--detach", `origin/${MAIN_BRANCH}`];
-}
-
-/**
- * Force-updates the scratch clone's own LOCAL main branch to match its
- * origin/main. Required before mounting the clone into the resolver
- * container: the container's own "origin" remote is this clone (see
- * buildConflictResolutionDockerArgs), so `git fetch origin main` inside the
- * container reads this clone's *local* refs/heads/main — which is only ever
- * moved by a `reset --hard` while it happens to be the checked-out branch,
- * i.e. frozen at whatever commit it had the first time this clone was ever
- * created. Without this, every resolution after the clone's first use
- * silently rebases the session onto a stale main. Doesn't require checking
- * the branch out, so it's safe to run regardless of what's currently
- * checked out.
- */
-export function buildSyncLocalMainArgs(): string[] {
-  return ["branch", "-f", MAIN_BRANCH, `origin/${MAIN_BRANCH}`];
-}
-
-/** Escalation comment for SYD-100: the mechanical rebase hit real conflicts
- * AND the dispatched conflict-resolution session failed to produce a
- * mergeable branch (session error, or its own verify gate never passed).
- * Distinct from autoRebaseConflictComment, which fires when no resolution
- * session was even attempted (not containerized, or opted out). */
-export function conflictResolutionFailedComment(
-  ref: string,
-  mergeFailureMessage: string,
-  conflictFiles: string[],
-  tail: string,
-): string {
-  const fileList =
-    conflictFiles.length > 0
-      ? conflictFiles.map((f) => `- ${f}`).join("\n")
-      : "(no conflicted files reported)";
-  return (
-    `Delivery FAILED for ${ref}: merge failed (${mergeFailureMessage})\n` +
-    `Attempted an automatic rebase of ${agentBranch(ref)} onto ${MAIN_BRANCH}, which hit real conflicts in:\n${fileList}\n` +
-    `Dispatched a conflict-resolution worker session to resolve them, but it did not produce a mergeable branch. ` +
-    `Output tail:\n\`\`\`\n${tail}\n\`\`\`\n` +
-    `The agent PR was not delivered — check the session's own comment on this issue for its diagnosis, resolve ` +
-    `the conflicts, push, and click Retry delivery on the attention banner (or merge manually).`
-  );
-}
-
-// Queue mode (SYD-164): rebase agent/<ref> onto current main and verify the
-// REBASED tree before ever attempting the merge, instead of merging first and
-// only rebasing as a post-failure fallback (the legacy flow above). A rebase
-// conflict or a failing post-rebase verify bounces the ref — comment +
-// delivery_failed, main untouched — rather than landing and being caught by
-// the post-merge verify gate after the fact. No conflict-resolution session
-// is dispatched here: a real conflict always bounces for re-dispatch.
-
-/** Whether `config.delivery.mode` selects the queue flow. Defaults to the
- * legacy (merge-first) flow when unset. */
-export function isQueueMode(config: WorkerConfig): boolean {
-  return config.delivery?.mode === "queue";
-}
-
-/** Bounded retries for the rare race where origin/main moves again between a
- * queue-mode rebase's force-push and the merge attempt that follows it (e.g.
- * a human merges something else by hand in that window) — each retry redoes
- * the full rebase→verify→force-push cycle against the newer main rather than
- * retrying the merge against a tree that was only verified against the old
- * one. Bounded so a persistently contested ref bounces instead of looping
- * forever. */
+/** Bounded retries for the rare race where origin/main moves again between the
+ * orchestrator's force-push and the merge attempt that follows it (e.g. a
+ * human merges something else by hand in that window) — each retry redoes the
+ * full rebase→wait-for-green→merge cycle against the newer main. Bounded so a
+ * persistently contested ref bounces instead of looping forever. */
 export const MAX_QUEUE_MERGE_ATTEMPTS = 3;
 
 /** Pure stop condition for the queue-mode rebase/merge retry loop — mirrors
@@ -701,40 +618,55 @@ export function queueRebaseConflictComment(ref: string, conflictFiles: string[])
   );
 }
 
-/** Queue-mode rebase applied with no conflicts, but typecheck/tests failed on
- * the REBASED tree — a semantic conflict with other work already on main,
- * caught before the merge instead of after it (contrast
- * verificationFailureComment, which fires post-merge). */
-export function queueVerifyFailedComment(ref: string, tail: string): string {
+/** SYD-209: CI (the sole check authority) reported a FAILED required check on
+ * the rebased head S1 — a real test/typecheck/build failure, or a semantic
+ * conflict with other work already on main, caught by GitHub before the merge.
+ * main is never touched. */
+export function checksFailedComment(ref: string): string {
   return (
-    `Delivery FAILED for ${ref}: rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} (queue mode) with no conflicts, but ` +
-    `the post-rebase verify gate (typecheck + tests) failed on the rebased tree — a semantic conflict with other ` +
-    `work already on ${MAIN_BRANCH}. NOT merged; ${MAIN_BRANCH} stays green.\n` +
-    `Output tail:\n\`\`\`\n${tail}\n\`\`\`\n` +
-    `Fix the failure on ${agentBranch(ref)}, push, and click Retry delivery on the attention banner.`
+    `Delivery FAILED for ${ref}: rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} cleanly, but its required GitHub ` +
+    `checks (CI) did not pass on the rebased head — NOT merged; ${MAIN_BRANCH} stays green.\n` +
+    `Open the PR's Checks tab for the failing job, fix it on ${agentBranch(ref)}, push, and click Retry delivery on ` +
+    `the attention banner.`
   );
 }
 
-/** Prepended to deliveryComment's output for a queue-mode delivery, so it
- * reads distinctly from a legacy merge-first "Delivered" (contrast
- * autoRebasedNote/conflictResolvedNote, which mark a legacy-flow fallback). */
+/** SYD-209: CI never concluded within the wait budget (a GitHub Actions
+ * backlog/outage), so the attempt goes quiet instead of stalling the
+ * sequential per-ref loop. The branch is rebased and pushed; a Retry re-checks. */
+export function checksTimeoutComment(ref: string): string {
+  return (
+    `Delivery FAILED for ${ref}: rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} and pushed, but its required GitHub ` +
+    `checks did not conclude within the wait window (likely a CI backlog/outage) — NOT merged.\n` +
+    `Once CI is green on the PR, click Retry delivery on the attention banner.`
+  );
+}
+
+/** SYD-209: the SHA chain broke — the branch head GitHub holds (`observed`)
+ * isn't a head the worker authorized (S0, or the S1 it force-pushed): a
+ * third-party push landed on the branch after the human stamp. The attempt
+ * disarms and surfaces the old→new delta so a reflexive Retry doesn't re-pin
+ * the very push the disarm just refused. */
+export function shaChainDisarmedComment(
+  ref: string,
+  expected: string,
+  observed: string,
+): string {
+  return (
+    `Delivery DISARMED for ${ref}: a commit landed on ${agentBranch(ref)} after this delivery was authorized, so ` +
+    `the merge was NOT performed — ${MAIN_BRANCH} is untouched.\n` +
+    `Authorized head: \`${expected}\`\nCurrent head: \`${observed}\`\n` +
+    `Review the new commit, then re-authorize (re-stamp done or click Retry delivery) to deliver the current head.`
+  );
+}
+
+/** Prepended to deliveryComment's output for a delivered PR, so "Delivered"
+ * names how the head was reached (rebased onto main, CI green on that head,
+ * then merged with the head pinned). */
 export function queueDeliveredNote(ref: string): string {
   return (
-    `Queue mode: rebased ${agentBranch(ref)} onto ${MAIN_BRANCH} and verified the rebased tree (typecheck + tests) ` +
-    `before merging — a pre-merge gate, not a post-merge check.`
-  );
-}
-
-/** Prepended to deliveryComment's output when the merge only succeeded after
- * a dispatched conflict-resolution session (SYD-100) — distinct from
- * autoRebasedNote, which covers a clean (no-conflict) auto-rebase, so a
- * "Delivered" comment doesn't understate that real conflicting intent had to
- * be reconciled first. */
-export function conflictResolvedNote(ref: string): string {
-  return (
-    `Merge failed and rebasing ${agentBranch(ref)} onto ${MAIN_BRANCH} hit real conflicts — dispatched a ` +
-    `conflict-resolution worker session, which resolved them, staged only the conflicted files, and passed ` +
-    `typecheck + tests before pushing — then merged.`
+    `Rebased ${agentBranch(ref)} onto ${MAIN_BRANCH}, waited for its required GitHub checks to pass on the rebased ` +
+    `head, then merged with that head pinned (--match-head-commit).`
   );
 }
 
