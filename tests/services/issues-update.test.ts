@@ -36,6 +36,27 @@ describe("updateIssue", () => {
     expect(types).toEqual(["created", "status_changed", "priority_changed", "assigned"]);
   });
 
+  it("releases the claim when an issue moves (back) to todo (symmetric with the in_progress auto-claim)", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
+    expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
+
+    const released = updateIssue(db, agent, "AIPI-1", { status: "todo" });
+    expect(released.status).toBe("todo");
+    expect(released.assigneeId).toBe(null);
+    expect(listIssueEvents(db, released.id).map((e) => e.type)).toContain("claim_released");
+  });
+
+  it("keeps an explicit assignee when the same todo patch also sets one", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    // Explicit reassignment in the same patch wins over the auto-release.
+    const r = updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: "claude/worker" });
+    expect(r.status).toBe("todo");
+    expect(r.assigneeId).toBe(agent.id);
+  });
+
   it("rejects unknown statuses and assignees legibly", () => {
     expect(() => updateIssue(db, human, "AIPI-1", { status: "doing" as never })).toThrowError(
       /valid statuses/i,

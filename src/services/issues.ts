@@ -259,6 +259,22 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
         changes.assigneeId = actor.id;
         toRecord.push({ type: "assigned", payload: { to: actor.name } });
       }
+      // Symmetric to the auto-claim above: `todo` means "available for
+      // dispatch", so moving (back) to todo releases any claim. Without this a
+      // `todo` issue can keep an assignee and selectDispatchable skips it
+      // forever (the "todo + assigned" stuck state, e.g. after a killed
+      // container). The dedicated release paths (stale-claims, needs_input
+      // answers) already pair todo with assignee=null; this makes a plain
+      // status->todo do the same. Skipped when the same patch sets an explicit
+      // assignee.
+      if (
+        patch.status === "todo" &&
+        current.assigneeId !== null &&
+        patch.assigneeName === undefined
+      ) {
+        changes.assigneeId = null;
+        toRecord.push({ type: "claim_released", payload: { reason: "moved_to_todo" } });
+      }
     }
 
     if (patch.status === "in_progress" && actor.type === "agent") {
