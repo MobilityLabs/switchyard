@@ -21,6 +21,7 @@ vi.mock("node:fs", async (importOriginal) => {
     // config; keep these off the real fs (the test's repo paths are fictional).
     writeFileSync: vi.fn(),
     rmSync: vi.fn(),
+    mkdtempSync: vi.fn(() => "/tmp/syd-fake"),
   };
 });
 

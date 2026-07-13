@@ -51,10 +51,12 @@ import {
   writeFileSync,
   rmSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   closeSync,
   appendFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
@@ -460,7 +462,7 @@ async function releaseClaimHost(
  * Cancels FAST on a definitive 4xx (lease revoked → the session is doing
  * double-work), and only after the full transient miss window on network/5xx.
  */
-function startLeaseHeartbeat(
+export function startLeaseHeartbeat(
   config: WorkerConfig,
   token: string,
   leaseToken: string,
@@ -513,14 +515,14 @@ function startLeaseHeartbeat(
 function leaseFilePath(repo: string, ref: string): string {
   return path.join(repo, ".superpowers", "worker-logs", `${ref}.lease`);
 }
-function persistLeaseToken(repo: string, ref: string, leaseToken: string): void {
+export function persistLeaseToken(repo: string, ref: string, leaseToken: string): void {
   try {
     writeFileSync(leaseFilePath(repo, ref), leaseToken, { mode: 0o600 });
   } catch (err) {
     console.error(`could not persist lease for ${ref}: ${(err as Error).message}`);
   }
 }
-function readPersistedLeaseToken(repo: string, ref: string): string | null {
+export function readPersistedLeaseToken(repo: string, ref: string): string | null {
   try {
     return readFileSync(leaseFilePath(repo, ref), "utf8").trim() || null;
   } catch {
@@ -540,8 +542,21 @@ function clearPersistedLeaseToken(repo: string, ref: string): void {
 // (sdk-runner header) paths do. Write a per-dispatch MCP config carrying both
 // the bearer and the X-Switchyard-Lease header (0600, value in the file not
 // argv — same discipline as container-entry.sh), passed via `--mcp-config`.
-function writeCliMcpConfig(repo: string, ref: string, url: string, token: string, leaseToken: string): string {
-  const p = path.join(repo, ".superpowers", "worker-logs", `${ref}.mcp.json`);
+//
+// Written into a FRESH mkdtemp dir under the OS temp dir (SYD-210 review):
+// - out of the repo working tree, so a prompt-injected session can't `Glob` the
+//   worker bearer token out of its own cwd (pentester MINOR); and
+// - a unique never-before-existing path, so a local writer can't pre-place a
+//   symlink at a predictable name to redirect the 0600 write (codex MEDIUM).
+// Returns the tmp dir so the caller can remove it wholesale on exit.
+export function writeCliMcpConfig(
+  ref: string,
+  url: string,
+  token: string,
+  leaseToken: string,
+): { configPath: string; tmpDir: string } {
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), `syd-${ref}-`));
+  const configPath = path.join(tmpDir, "switchyard-mcp.json");
   const cfg = {
     mcpServers: {
       switchyard: {
@@ -551,8 +566,8 @@ function writeCliMcpConfig(repo: string, ref: string, url: string, token: string
       },
     },
   };
-  writeFileSync(p, JSON.stringify(cfg), { mode: 0o600 });
-  return p;
+  writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+  return { configPath, tmpDir };
 }
 
 export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
@@ -716,9 +731,10 @@ export function dispatch(
 
   const fd = openSync(logPath, "a");
 
-  // SYD-210 Layer B: the bare-CLI runner's per-dispatch MCP config carrying the
-  // lease header (cleaned up on exit). null for container/no-lease dispatch.
-  let cliMcpConfigPath: string | null = null;
+  // SYD-210 Layer B: the bare-CLI runner's per-dispatch MCP-config temp dir
+  // carrying the lease header (removed wholesale on exit). null for
+  // container/no-lease dispatch.
+  let cliMcpTmpDir: string | null = null;
 
   let child: ChildProcess;
   try {
@@ -763,14 +779,14 @@ export function dispatch(
       // container/SDK paths). Without this, the no-reclaim prompt would leave the
       // session unable to authorize its claim-scoped writes.
       if (opts.leaseToken) {
-        cliMcpConfigPath = writeCliMcpConfig(
-          project.repo,
+        const { configPath, tmpDir } = writeCliMcpConfig(
           issue.ref,
           config.url,
           token,
           opts.leaseToken,
         );
-        cliArgs.push("--mcp-config", cliMcpConfigPath);
+        cliMcpTmpDir = tmpDir;
+        cliArgs.push("--mcp-config", configPath);
       }
       child = spawn("claude", cliArgs, {
         cwd: project.repo,
@@ -782,7 +798,7 @@ export function dispatch(
     console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
     // The host already claimed this issue; setup failed before any heartbeat
     // could start, so release the lease-held claim rather than strand it.
-    if (cliMcpConfigPath) rmSync(cliMcpConfigPath, { force: true });
+    if (cliMcpTmpDir) rmSync(cliMcpTmpDir, { recursive: true, force: true });
     if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
     return;
   } finally {
@@ -801,7 +817,7 @@ export function dispatch(
   }
   const cleanupLeaseArtifacts = () => {
     if (config.containerized) clearPersistedLeaseToken(project.repo, issue.ref);
-    if (cliMcpConfigPath) rmSync(cliMcpConfigPath, { force: true });
+    if (cliMcpTmpDir) rmSync(cliMcpTmpDir, { recursive: true, force: true });
   };
 
   // SYD-210 Layer B: heartbeat the lease while the session runs; after N missed
