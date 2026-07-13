@@ -213,7 +213,9 @@ export function buildMcpServer(
         "Update an issue's fields. Conventions: before moving an issue to in_review, post a comment " +
         "saying what was done and how it was verified. NEVER move an issue you worked on to done — " +
         "a human or a review step does that. " +
-        "Issues in triage can only be moved out by humans (enforced by the server).",
+        "Issues in triage can only be moved out by humans (enforced by the server). " +
+        "Agents may only self-assign (prefer claim_issue) — assigning someone else or clearing " +
+        "an assignee is human-only (enforced by the server).",
       inputSchema: {
         ref: z.string(),
         status: z.enum(STATUSES).optional(),

@@ -356,6 +356,20 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
         assigneeId = a.id;
       }
       if (assigneeId !== current.assigneeId) {
+        // SYD-191: agents may only self-assign (the claimIssue flow), and only
+        // subject to the same claim gates — reassigning to another actor or
+        // clearing an existing assignee would disrupt dispatch coordination
+        // and bypass claim-before-work, so those are human-only.
+        if (actor.type === "agent") {
+          if (assigneeId !== actor.id) {
+            throw new SwitchyardError(
+              patch.assigneeName === null
+                ? `Agents can't unassign ${ref} — clearing an assignee is human-only. If it's your own claim, move the issue back to "todo" to release it.`
+                : `Agents can't assign ${ref} to "${patch.assigneeName}" — agents may only self-assign (use claim_issue); reassigning is human-only.`,
+            );
+          }
+          assertClaimable(tx, actor, current);
+        }
         changes.assigneeId = assigneeId;
         toRecord.push({ type: "assigned", payload: { to: patch.assigneeName } });
       }
