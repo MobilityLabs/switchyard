@@ -9,6 +9,7 @@ import {
   buildPrCreateArgs,
   buildPrMergeArgs,
   buildPrViewUrlArgs,
+  buildPrViewFreshnessArgs,
   buildPrViewMergeShaArgs,
   buildMergedPrForBranchArgs,
   parseOwnerRepo,
@@ -247,6 +248,18 @@ describe("argv builders", () => {
       ".url",
       "-R",
       "acme/widgets",
+    ]);
+  });
+
+  it("buildPrViewFreshnessArgs", () => {
+    expect(buildPrViewFreshnessArgs(41, "acme/widgets")).toEqual([
+      "pr",
+      "view",
+      "41",
+      "-R",
+      "acme/widgets",
+      "--json",
+      "headRefOid,updatedAt",
     ]);
   });
 

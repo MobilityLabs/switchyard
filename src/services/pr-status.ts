@@ -29,7 +29,7 @@ function openPrRows(db: Db, issueId?: number): Row[] {
              json_extract(payload, '$.prNumber') AS prNumber,
              MAX(id) AS eventId
       FROM events
-      WHERE type IN ('pr_opened', 'gh_pr_opened')
+      WHERE type IN ('pr_opened', 'gh_pr_opened', 'gh_pr_reopened')
       ${issueId !== undefined ? sql`AND issue_id = ${issueId}` : sql``}
       GROUP BY issue_id, json_extract(payload, '$.prNumber')
     ) latest

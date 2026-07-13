@@ -45,7 +45,40 @@ describe("POST /issues/:ref/delivery-events", () => {
       await app.request("/issues/SYD-1", { headers: workerH }),
     );
     const ev = issue.activity.find((a) => a.type === "pr_opened");
-    expect(ev?.payload).toEqual({ prNumber: 7, url: "https://github.com/acme/widgets/pull/7" });
+    expect(ev?.payload).toEqual({
+      prNumber: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      repo: null,
+      headSha: null,
+      ghUpdatedAt: null,
+    });
+  });
+
+  it("accepts and records the SYD-205 freshness fields on pr_opened", async () => {
+    const res = await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST",
+      headers: workerH,
+      body: JSON.stringify({
+        type: "pr_opened",
+        prNumber: 7,
+        url: "https://github.com/acme/widgets/pull/7",
+        repo: "acme/widgets",
+        headSha: "c".repeat(40),
+        ghUpdatedAt: "2026-07-12T10:00:00Z",
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const issue = await body<{ activity: { type: string; payload: Record<string, unknown> }[] }>(
+      await app.request("/issues/SYD-1", { headers: workerH }),
+    );
+    expect(issue.activity.find((a) => a.type === "pr_opened")?.payload).toEqual({
+      prNumber: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      repo: "acme/widgets",
+      headSha: "c".repeat(40),
+      ghUpdatedAt: "2026-07-12T10:00:00Z",
+    });
   });
 
   it("records a delivered event with deploy result", async () => {
@@ -69,6 +102,7 @@ describe("POST /issues/:ref/delivery-events", () => {
       prNumber: 7,
       mergeSha: "deadbeef",
       deploy: { ran: true, ok: false, tail: "npm ERR!" },
+      repo: null,
     });
   });
 

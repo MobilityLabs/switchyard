@@ -8,7 +8,7 @@ import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/servic
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 import { getDeviation, listDeviationByIssueId } from "../../src/services/deviation.js";
-import { listIssueEvents } from "../../src/services/events.js";
+import { listIssueEvents, recordEvent } from "../../src/services/events.js";
 import { emitProcessDeviations } from "../../src/services/deviation.js";
 import { releaseStaleClaims } from "../../src/services/stale-claims.js";
 
@@ -23,6 +23,16 @@ function setup() {
 function ageAllEvents(db: Db, issueId: number, secondsAgo: number) {
   const old = Math.floor(Date.now() / 1000) - secondsAgo;
   db.update(events).set({ createdAt: old }).where(eq(events.issueId, issueId)).run();
+}
+
+function recordRawEvent(
+  db: Db,
+  issueId: number,
+  actorId: number,
+  type: string,
+  payload: Record<string, unknown>,
+) {
+  recordEvent(db, { issueId, actorId, type, payload });
 }
 
 describe("getDeviation — open_pr_not_in_review", () => {
@@ -238,6 +248,22 @@ describe("emitProcessDeviations", () => {
       url: "https://github.com/acme/widgets/pull/42",
     });
     expect(emitProcessDeviations(db)).toBe(1); // new episode -> re-armed
+    expect(deviationEvents(db, "SYD-1")).toHaveLength(2);
+  });
+
+  it("re-arms when the same PR reopens after a close (gh_pr_reopened starts a new episode, SYD-205)", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    const issueId = getIssue(db, "SYD-1").id;
+    const pr = { prNumber: 41, url: "https://github.com/acme/widgets/pull/41" };
+    recordRawEvent(db, issueId, agent.id, "gh_pr_opened", { ...pr, branch: "agent/SYD-1" });
+    expect(emitProcessDeviations(db)).toBe(1);
+    recordRawEvent(db, issueId, agent.id, "gh_pr_closed", pr);
+    expect(emitProcessDeviations(db)).toBe(0); // no open PR
+    recordRawEvent(db, issueId, agent.id, "gh_pr_reopened", { ...pr, branch: "agent/SYD-1" });
+    expect(emitProcessDeviations(db)).toBe(1); // reopen = new episode -> re-armed
     expect(deviationEvents(db, "SYD-1")).toHaveLength(2);
   });
 

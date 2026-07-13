@@ -48,6 +48,39 @@ describe("POST /github-events", () => {
     expect(ev.actorName).toBe("github");
   });
 
+  it("threads a top-level repo into the recorded payload (SYD-205)", async () => {
+    const { db, app, humanToken } = setup();
+    const res = await app.request("/github-events", {
+      method: "POST",
+      headers: { authorization: `Bearer ${humanToken}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        event: "pull_request",
+        repo: "acme/widgets",
+        payload: {
+          action: "opened",
+          pull_request: {
+            number: 5,
+            html_url: "https://github.com/acme/widgets/pull/5",
+            head: { ref: "agent/SYD-1", sha: "d".repeat(40) },
+            updated_at: "2026-07-12T10:00:00Z",
+            title: "unrelated",
+            body: null,
+          },
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
+    expect(ev.payload).toEqual({
+      prNumber: 5,
+      url: "https://github.com/acme/widgets/pull/5",
+      branch: "agent/SYD-1",
+      repo: "acme/widgets",
+      headSha: "d".repeat(40),
+      ghUpdatedAt: "2026-07-12T10:00:00Z",
+    });
+  });
+
   it("records a gh_checks_failed event for a check_suite payload", async () => {
     const { app, humanToken } = setup();
     const res = await app.request("/github-events", {

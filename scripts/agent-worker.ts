@@ -92,7 +92,7 @@ import {
   type RunningContainerSessionRow,
 } from "./worker-select.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
-import { publishAgentBranch } from "./delivery-exec.js";
+import { publishAgentBranch, prFreshness, originOwnerRepo } from "./delivery-exec.js";
 import { agentBranch, formatPublishOutcome, type DeliveryEventInput } from "./delivery-lib.js";
 
 type ApiIssue = WorkerIssue & { title: string };
@@ -437,7 +437,7 @@ function finishSessionExit(
   // through to mark the PR body when it isn't a clean exit.
   if (config.containerized && config.delivery && config.delivery.openPrs !== false) {
     publishAgentBranch(project.repo, ref, issueTitle, config.url, exitCode)
-      .then((outcome) => {
+      .then(async (outcome) => {
         const line = formatPublishOutcome(agentBranch(ref), outcome);
         console.log(`${ref}: ${line}`);
         logLine(`[worker] ${line}\n`);
@@ -445,11 +445,30 @@ function finishSessionExit(
           (outcome.status === "opened" || outcome.status === "already-open") &&
           outcome.prNumber !== null
         ) {
-          postDeliveryEvent(config, token, ref, {
+          // SYD-205: name the repo and GitHub's own head SHA/updated_at on
+          // the publish so pr_state has a producer at open time. Best-effort:
+          // a failed lookup must never drop the pr_opened publish itself —
+          // this event is what closes the claim gate.
+          const event: Extract<DeliveryEventInput, { type: "pr_opened" }> = {
             type: "pr_opened",
             prNumber: outcome.prNumber,
             url: outcome.url,
-          }).catch((err: Error) => {
+          };
+          try {
+            event.repo = await originOwnerRepo(project.repo);
+          } catch (err) {
+            console.error(`could not resolve origin repo for ${ref}: ${(err as Error).message}`);
+          }
+          try {
+            const fresh = await prFreshness(project.repo, outcome.prNumber);
+            event.headSha = fresh.headSha;
+            event.ghUpdatedAt = fresh.ghUpdatedAt;
+          } catch (err) {
+            console.error(
+              `could not fetch PR freshness for ${ref} #${outcome.prNumber}: ${(err as Error).message}`,
+            );
+          }
+          postDeliveryEvent(config, token, ref, event).catch((err: Error) => {
             console.error(`could not record pr_opened event for ${ref}: ${err.message}`);
             logLine(`[worker] could not record pr_opened event: ${err.message}\n`);
           });

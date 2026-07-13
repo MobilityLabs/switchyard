@@ -98,11 +98,14 @@ async function postGithubEvent(
   url: string,
   token: string,
   ev: PollEvent,
+  repo: string,
 ): Promise<GithubEventOutcome> {
   const res = await fetch(`${url.replace(/\/$/, "")}/api/github-events`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify(ev),
+    // repo rides top-level (SYD-205): the derived payloads have no
+    // repository.full_name, and the server should never have to infer.
+    body: JSON.stringify({ ...ev, repo }),
   });
   if (!res.ok) throw new Error(`POST /api/github-events failed: ${res.status} ${await res.text()}`);
   return (await res.json().catch(() => ({}))) as GithubEventOutcome;
@@ -132,7 +135,7 @@ export async function pollRepo(
       console.log(`[dry-run] ${fullName}: would POST ${ev.event} — ${JSON.stringify(ev.payload)}`);
       continue;
     }
-    const outcome = await postGithubEvent(config.url, token, ev);
+    const outcome = await postGithubEvent(config.url, token, ev, fullName);
     // Steady-state "opened" reconciliation (SYD-177) is deduped server-side
     // every tick; only log events the server actually recorded.
     if (!outcome.duplicate) console.log(`${fullName}: posted ${ev.event}`);

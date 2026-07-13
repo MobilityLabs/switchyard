@@ -4,6 +4,7 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 import {
   handleGithubWebhook,
   refFromBranch,
@@ -11,11 +12,14 @@ import {
   repositoryFullName,
 } from "../../src/services/github-webhook.js";
 
-function setup() {
+function setup(boundRepos: string[] = []) {
   const db = openDb(":memory:");
   const human = createActor(db, { name: "sean", type: "human" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+  for (const fullName of boundRepos) {
+    addGithubRepo(db, human, { fullName, projectKey: "SYD" });
+  }
   return db;
 }
 
@@ -56,6 +60,9 @@ describe("handleGithubWebhook / pull_request", () => {
       prNumber: 12,
       url: "https://github.com/acme/widgets/pull/12",
       branch: "agent/SYD-1",
+      repo: null,
+      headSha: null,
+      ghUpdatedAt: null,
     });
     expect(ev.actorName).toBe("github");
   });
@@ -93,6 +100,9 @@ describe("handleGithubWebhook / pull_request", () => {
       prNumber: 12,
       url: "https://github.com/acme/widgets/pull/12",
       mergeSha: "abc123",
+      repo: null,
+      headSha: null,
+      ghUpdatedAt: null,
     });
   });
 
@@ -110,15 +120,15 @@ describe("handleGithubWebhook / pull_request", () => {
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_closed" });
   });
 
-  it("ignores actions it doesn't model, like synchronize", () => {
+  it("ignores actions it doesn't model, like assigned", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "pull_request", {
-      action: "synchronize",
+      action: "assigned",
       pull_request: { number: 12, head: { ref: "agent/SYD-1" } },
     });
     expect(outcome).toEqual({
       handled: false,
-      reason: 'ignored pull_request action "synchronize"',
+      reason: 'ignored pull_request action "assigned"',
     });
   });
 
@@ -153,7 +163,7 @@ describe("handleGithubWebhook / check_suite", () => {
     });
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_checks_passed" });
     const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_checks_passed")!;
-    expect(ev.payload).toEqual({ conclusion: "success", headSha: "deadbeef" });
+    expect(ev.payload).toEqual({ conclusion: "success", headSha: "deadbeef", repo: null });
   });
 
   it("records gh_checks_failed on a failing conclusion", () => {
@@ -204,6 +214,7 @@ describe("handleGithubWebhook / push", () => {
       headSha: "deadbeefcafe",
       branch: "agent/SYD-1",
       url: "https://github.com/acme/widgets/compare/abc...deadbeefcafe",
+      repo: null,
     });
     expect(ev.actorName).toBe("github");
   });
@@ -352,6 +363,145 @@ describe("handleGithubWebhook / idempotency (SYD-125)", () => {
       check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion: "success" },
     });
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_checks_passed" });
+  });
+});
+
+describe("handleGithubWebhook / ingestion groundwork (SYD-205)", () => {
+  const opened = (extra: Record<string, unknown> = {}, pr: Record<string, unknown> = {}) => ({
+    action: "opened",
+    pull_request: {
+      number: 12,
+      html_url: "https://github.com/acme/widgets/pull/12",
+      head: { ref: "agent/SYD-1", sha: "a".repeat(40) },
+      updated_at: "2026-07-12T10:00:00Z",
+      title: null,
+      body: null,
+      ...pr,
+    },
+    ...extra,
+  });
+
+  it("records repo, headSha, and ghUpdatedAt from a full webhook payload", () => {
+    const db = setup();
+    handleGithubWebhook(
+      db,
+      "pull_request",
+      opened({ repository: { full_name: "acme/widgets" } }),
+    );
+    const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
+    expect(ev.payload).toEqual({
+      prNumber: 12,
+      url: "https://github.com/acme/widgets/pull/12",
+      branch: "agent/SYD-1",
+      repo: "acme/widgets",
+      headSha: "a".repeat(40),
+      ghUpdatedAt: "2026-07-12T10:00:00Z",
+    });
+  });
+
+  it("prefers an explicitly passed repo (the /github-events top-level field) over inference", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(db, "pull_request", opened(), "acme/explicit");
+    const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
+    expect(ev.payload).toMatchObject({ repo: "acme/explicit" });
+  });
+
+  it("infers repo from the issue's project's sole bound repo when the payload has none", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(db, "pull_request", opened());
+    const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
+    expect(ev.payload).toMatchObject({ repo: "acme/bound" });
+  });
+
+  it("rejects instead of guessing when the project has several bound repos and no repo is named", () => {
+    const db = setup(["acme/one", "acme/two"]);
+    const outcome = handleGithubWebhook(db, "pull_request", opened());
+    expect(outcome).toEqual({
+      handled: false,
+      reason:
+        "repo is ambiguous — the issue's project has multiple bound repos and the delivery does not name one",
+    });
+    expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
+  });
+
+  it("parses a malformed updated_at fail-closed to null", () => {
+    const db = setup();
+    handleGithubWebhook(db, "pull_request", opened({}, { updated_at: "not-a-timestamp" }));
+    const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
+    expect(ev.payload).toMatchObject({ ghUpdatedAt: null });
+  });
+
+  it("acknowledges synchronize without recording an event (upsertPrState hooks in at SYD-206)", () => {
+    const db = setup();
+    const outcome = handleGithubWebhook(db, "pull_request", {
+      ...opened(),
+      action: "synchronize",
+    });
+    expect(outcome).toEqual({
+      handled: true,
+      ref: "SYD-1",
+      type: "synchronize",
+      recorded: false,
+    });
+    expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
+  });
+
+  it("records gh_pr_reopened with repo/headSha/ghUpdatedAt on a reopened action", () => {
+    const db = setup(["acme/bound"]);
+    const outcome = handleGithubWebhook(db, "pull_request", {
+      ...opened(),
+      action: "reopened",
+    });
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_reopened" });
+    const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_reopened")!;
+    expect(ev.payload).toEqual({
+      prNumber: 12,
+      url: "https://github.com/acme/widgets/pull/12",
+      branch: "agent/SYD-1",
+      repo: "acme/bound",
+      headSha: "a".repeat(40),
+      ghUpdatedAt: "2026-07-12T10:00:00Z",
+    });
+  });
+
+  it("dedupes a redelivered reopened by its GitHub timestamp, but records a genuinely newer reopen", () => {
+    const db = setup();
+    const payload = { ...opened(), action: "reopened" };
+    handleGithubWebhook(db, "pull_request", payload);
+    const redelivery = handleGithubWebhook(db, "pull_request", payload);
+    expect(redelivery).toMatchObject({ handled: true, duplicate: true });
+    const later = handleGithubWebhook(db, "pull_request", {
+      ...opened({}, { updated_at: "2026-07-12T11:30:00Z" }),
+      action: "reopened",
+    });
+    expect(later).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_reopened" });
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_reopened")).toHaveLength(2);
+  });
+
+  it("threads repo into check_suite and push payloads too", () => {
+    const db = setup();
+    handleGithubWebhook(
+      db,
+      "check_suite",
+      {
+        action: "completed",
+        check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion: "success" },
+      },
+      "acme/widgets",
+    );
+    handleGithubWebhook(
+      db,
+      "push",
+      { ref: "refs/heads/agent/SYD-1", after: "cafe1234", commits: [{ message: "wip" }] },
+      "acme/widgets",
+    );
+    const activity = getActivity(db, "SYD-1");
+    expect(activity.find((a) => a.type === "gh_checks_passed")!.payload).toMatchObject({
+      repo: "acme/widgets",
+    });
+    expect(activity.find((a) => a.type === "gh_pushed")!.payload).toMatchObject({
+      repo: "acme/widgets",
+    });
   });
 });
 

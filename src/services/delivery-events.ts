@@ -9,13 +9,25 @@ import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
+import { boundRepoFullNames } from "./github-repos.js";
+import { parseGhTimestamp } from "./github-webhook.js";
 
 export type DeployResult = { ran: false } | { ran: true; ok: boolean; tail: string };
 
+// `repo` (and pr_opened's headSha/ghUpdatedAt, sourced by the worker from
+// `gh pr view --json headRefOid,updatedAt`) are optional until the worker
+// host go-live — the SYD-205 deploy-skew rule.
 export type DeliveryEventInput =
-  | { type: "pr_opened"; prNumber: number; url: string }
-  | { type: "delivered"; prNumber: number; mergeSha: string; deploy: DeployResult }
-  | { type: "delivery_failed"; message: string };
+  | {
+      type: "pr_opened";
+      prNumber: number;
+      url: string;
+      repo?: string;
+      headSha?: string;
+      ghUpdatedAt?: string;
+    }
+  | { type: "delivered"; prNumber: number; mergeSha: string; deploy: DeployResult; repo?: string }
+  | { type: "delivery_failed"; message: string; repo?: string };
 
 export function recordDeliveryEvent(
   db: Db,
@@ -36,6 +48,22 @@ export function recordDeliveryEvent(
     );
   }
   const issue = getIssue(db, ref);
-  const { type, ...payload } = input;
+  const { type, ...rest } = input;
+  let repo = input.repo ?? null;
+  if (repo === null) {
+    // SYD-205 deploy-skew rule: infer only when it's unambiguous.
+    const bound = boundRepoFullNames(db, issue.projectId);
+    if (bound.length === 1) repo = bound[0];
+    else if (bound.length > 1) {
+      throw new SwitchyardError(
+        "repo is ambiguous — the issue's project has multiple bound repos, so this delivery event must name its repo.",
+      );
+    }
+  }
+  const payload: Record<string, unknown> = { ...rest, repo };
+  if (input.type === "pr_opened") {
+    payload.headSha = input.headSha ?? null;
+    payload.ghUpdatedAt = parseGhTimestamp(input.ghUpdatedAt);
+  }
   recordEvent(db, { issueId: issue.id, actorId: actor.id, type, payload });
 }

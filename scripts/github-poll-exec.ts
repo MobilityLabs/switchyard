@@ -16,7 +16,7 @@ async function run(args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-const PR_FIELDS = "number,headRefName,title,body,url,state,mergeCommit";
+const PR_FIELDS = "number,headRefName,headRefOid,updatedAt,title,body,url,state,mergeCommit";
 
 /** Most-recently-updated PRs (any state), bounded so a busy repo doesn't
  * burn the whole poll tick's API budget on ancient history. */
