@@ -1,11 +1,15 @@
 // Attention flag (SYD-84): a red error signal for issues that need a human
-// to look, derived from the event log the same way listUnansweredQuestions
-// derives its "waiting on humans" flag — no stored column, so it can never
-// drift from what actually happened. It aggregates two sources, in priority
-// order: an unresolved delivery_failed (SYD-54's structured delivery events —
-// the latest one on an issue counts only if no later delivered/gh_pr_merged
-// event cleared it) and, if none, a process deviation (SYD-188) derived from
-// issue status + the event log by ./deviation.js.
+// to look. It aggregates two sources, in priority order: an unresolved
+// delivery_failed (SYD-54's structured delivery events — the latest one on an
+// issue counts only if nothing later resolved it) and, if none, a process
+// deviation (SYD-188) from ./deviation.js.
+//
+// What resolves a failure (SYD-207): a later `delivered` event (the
+// delivery-attempt vocabulary stays event-written by the delivery worker), or
+// the issue's PR reaching `merged` in pr_state with a co-written transition
+// event newer than the failure — which is how a manual merge observed by the
+// webhook/poller clears the flag, replacing the deleted SYD-94 reconcile
+// pass. Raw gh_pr_merged events are audit history and no longer consulted.
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { getDeviation, listDeviationByIssueId, type DeviationFlag } from "./deviation.js";
@@ -28,8 +32,16 @@ function unresolvedDeliveryFailures(db: Db, issueId?: number): Row[] {
     WHERE NOT EXISTS (
       SELECT 1 FROM events e2
       WHERE e2.issue_id = latest.issue_id
-        AND e2.type IN ('delivered', 'gh_pr_merged')
+        AND e2.type = 'delivered'
         AND e2.id > latest.eventId
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM pr_state ps, issues i, projects p
+      WHERE i.id = latest.issue_id
+        AND i.project_id = p.id
+        AND ps.issue_ref = p.key || '-' || i.number
+        AND ps.status = 'merged'
+        AND ps.last_transition_event_id > latest.eventId
     )
   `);
 }

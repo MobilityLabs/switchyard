@@ -12,6 +12,7 @@ import {
 import { listIssueEvents } from "../../src/services/events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -19,6 +20,9 @@ beforeEach(() => {
   human = createActor(db, { name: "sean", type: "human" }).actor;
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
+  // Bound repo so recordDeliveryEvent's publish writes pr_state — post-SYD-207
+  // the claim gate reads pr_state, not events.
+  addGithubRepo(db, human, { fullName: "acme/widgets", projectKey: "AIPI" });
   createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 });
 

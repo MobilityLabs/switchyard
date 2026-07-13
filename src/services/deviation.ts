@@ -1,12 +1,21 @@
-// Process-deviation signal (SYD-188): derived, like attention.ts / pr-status.ts,
-// purely from issue status + the event log — no stored column. Flags issues that
-// have drifted out of the board process (claim -> in_progress -> PR -> in_review
-// -> human stamps done). NEVER mutates the issues table; it only reads (and, via
+// Process-deviation signal (SYD-188): derived from issue status + pr_state +
+// the event log — no stored column. Flags issues that have drifted out of the
+// board process (claim -> in_progress -> PR -> in_review -> human stamps
+// done). NEVER mutates the issues table; it only reads (and, via
 // emitProcessDeviations in webhook-dispatcher, records notification events).
+// Since SYD-207 the PR facts come from pr_state, and episode dedup keys off
+// pr_state.lastTransitionEventId — the canonical transition event
+// upsertPrState co-writes — instead of raw event scans.
 import { and, eq, inArray, max, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { events, issues } from "../db/schema.js";
-import { getOpenPr, listOpenPrByIssueId, getMergedPrEvent, type OpenPr } from "./pr-status.js";
+import {
+  getOpenPr,
+  listOpenPrByIssueId,
+  getMergedPr,
+  prTransitionEventId,
+  type OpenPr,
+} from "./pr-status.js";
 import { getSetting } from "./settings.js";
 import { recordEvent } from "./events.js";
 
@@ -37,16 +46,6 @@ function newestEventAt(db: Db, issue: IssueRow): number {
   return row?.createdAt ?? issue.createdAt;
 }
 
-function openingEventId(db: Db, issueId: number, prNumber: number): number {
-  const row = db.all<{ eventId: number | null }>(sql`
-    SELECT MAX(id) AS eventId FROM events
-    WHERE issue_id = ${issueId}
-      AND type IN ('pr_opened', 'gh_pr_opened', 'gh_pr_reopened')
-      AND json_extract(payload, '$.prNumber') = ${prNumber}
-  `)[0];
-  return row?.eventId ?? 0;
-}
-
 function claimStartEventId(db: Db, issueId: number): number {
   const row = db.all<{ eventId: number | null }>(sql`
     SELECT MAX(id) AS eventId FROM events
@@ -66,7 +65,7 @@ export function computeDeviation(
   thresholdSeconds: number,
 ): DeviationComputation | null {
   if (issue.status === "in_review" && openPr === null) {
-    const merged = getMergedPrEvent(db, issue.id);
+    const merged = getMergedPr(db, issue.id);
     if (merged) {
       return {
         reason: "merged_pr_not_done",
@@ -80,7 +79,7 @@ export function computeDeviation(
     return {
       reason: "open_pr_not_in_review",
       message: `PR #${openPr.prNumber} is open but issue is ${issue.status} — move it to in_review`,
-      episodeStartId: openingEventId(db, issue.id, openPr.prNumber),
+      episodeStartId: prTransitionEventId(db, issue.id, openPr.prNumber),
       prNumber: openPr.prNumber,
     };
   }

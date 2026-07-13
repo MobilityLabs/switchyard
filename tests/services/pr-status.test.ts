@@ -3,9 +3,13 @@ import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue } from "../../src/services/issues.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { recordEvent } from "../../src/services/events.js";
-import { getOpenPr, listOpenPrByIssueId, getMergedPrEvent } from "../../src/services/pr-status.js";
+import { upsertPrState } from "../../src/services/pr-state.js";
+import { getOpenPr, listOpenPrByIssueId, getMergedPr } from "../../src/services/pr-status.js";
+
+const REPO = "acme/widgets";
 
 function setup() {
   const db = openDb(":memory:");
@@ -13,220 +17,187 @@ function setup() {
   const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+  addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
   return { db, human, agent };
 }
 
-describe("getOpenPr", () => {
-  it("returns null for an issue with no PR events", () => {
+/** An attributed observation for agent/<ref> — the shape every pr_state
+ * writer (webhook, poller, publish, delivery, backfill) converges on. */
+function observe(
+  ref: string,
+  prNumber: number,
+  status: "open" | "merged" | "closed",
+  ghUpdatedAt: string,
+  extra: { reopened?: boolean } = {},
+) {
+  return {
+    repo: REPO,
+    prNumber,
+    status,
+    branch: `agent/${ref}`,
+    url: `https://github.com/${REPO}/pull/${prNumber}`,
+    ghUpdatedAt,
+    ...extra,
+  };
+}
+
+describe("getOpenPr (pr_state-derived, SYD-207)", () => {
+  it("returns null for an issue with no pr_state rows", () => {
     const { db } = setup();
     expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toBeNull();
   });
 
-  it("flags an issue whose latest event is pr_opened", () => {
-    const { db, human, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, human, "SYD-1", {
-      type: "pr_opened",
+  it("flags an issue with an open attributed row", () => {
+    const { db, human } = setup();
+    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toEqual({
       prNumber: 41,
-      url: "https://github.com/acme/widgets/pull/41",
-    });
-    expect(getOpenPr(db, issue.id)).toEqual({
-      prNumber: 41,
-      url: "https://github.com/acme/widgets/pull/41",
+      url: `https://github.com/${REPO}/pull/41`,
     });
   });
 
-  it("flags an issue whose latest event is gh_pr_opened (webhook path)", () => {
-    const { db, human, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_opened",
-      payload: {
-        prNumber: 41,
-        url: "https://github.com/acme/widgets/pull/41",
-        branch: "agent/SYD-1",
-      },
-    });
-    expect(getOpenPr(db, issue.id)).toEqual({
-      prNumber: 41,
-      url: "https://github.com/acme/widgets/pull/41",
-    });
+  it("clears when the row goes merged or closed", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(db, human, observe("SYD-1", 41, "merged", "2026-07-13T11:00:00Z"));
+    expect(getOpenPr(db, issueId)).toBeNull();
   });
 
-  it("flags an issue open again after gh_pr_reopened follows a close (SYD-205)", () => {
+  it("flags again after a genuine reopen", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(db, human, observe("SYD-1", 41, "closed", "2026-07-13T11:00:00Z"));
+    expect(getOpenPr(db, issueId)).toBeNull();
+    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T12:00:00Z", { reopened: true }));
+    expect(getOpenPr(db, issueId)?.prNumber).toBe(41);
+  });
+
+  it("ignores legacy event-log-only PRs with no pr_state row (SYD-178 free-text class)", () => {
     const { db, agent } = setup();
     const issue = getIssue(db, "SYD-1");
-    const pr = { prNumber: 41, url: "https://github.com/acme/widgets/pull/41" };
+    // Pre-cutover, the old direct-write path recorded gh_pr_opened straight to
+    // the event log (including free-text title matches). Post-cutover these
+    // are audit history, never claim-gating state.
     recordEvent(db, {
       issueId: issue.id,
       actorId: agent.id,
       type: "gh_pr_opened",
-      payload: { ...pr, branch: "agent/SYD-1" },
+      payload: { prNumber: 90, url: `https://github.com/${REPO}/pull/90` },
     });
-    recordEvent(db, { issueId: issue.id, actorId: agent.id, type: "gh_pr_closed", payload: pr });
     expect(getOpenPr(db, issue.id)).toBeNull();
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_reopened",
-      payload: { ...pr, branch: "agent/SYD-1" },
-    });
-    expect(getOpenPr(db, issue.id)).toEqual(pr);
+    expect(listOpenPrByIssueId(db).has(issue.id)).toBe(false);
   });
 
-  it("clears once delivered", () => {
-    const { db, human, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
+  it("never flags from a display-only row (non-agent branch)", () => {
+    const { db, human } = setup();
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 90,
+      status: "open",
+      branch: "fix/syd-1-something",
+      url: `https://github.com/${REPO}/pull/90`,
+      ghUpdatedAt: "2026-07-13T10:00:00Z",
+    });
+    expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+
+  it("a belated close for an old PR can't hide a newer still-open PR (SYD-125 shape)", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, observe("SYD-1", 1, "open", "2026-07-13T09:00:00Z"));
+    upsertPrState(db, human, observe("SYD-1", 2, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(db, human, observe("SYD-1", 1, "closed", "2026-07-13T11:00:00Z"));
+    expect(getOpenPr(db, issueId)).toEqual({
+      prNumber: 2,
+      url: `https://github.com/${REPO}/pull/2`,
+    });
+  });
+
+  it("the worker publish path (recordDeliveryEvent) still closes the claim gate", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
     recordDeliveryEvent(db, human, "SYD-1", {
       type: "pr_opened",
       prNumber: 41,
-      url: "https://x/41",
+      url: `https://github.com/${REPO}/pull/41`,
+      headSha: "abc",
+      ghUpdatedAt: "2026-07-13T10:00:00Z",
     });
+    expect(getOpenPr(db, issueId)?.prNumber).toBe(41);
     recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 41,
-      mergeSha: "abc123",
+      mergeSha: "def",
       deploy: { ran: false },
+      ghUpdatedAt: "2026-07-13T11:00:00Z",
     });
-    expect(getOpenPr(db, issue.id)).toBeNull();
-  });
-
-  it("clears once gh_pr_merged or gh_pr_closed fires", () => {
-    const { db, human, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_opened",
-      payload: { prNumber: 41, url: "https://x/41" },
-    });
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_closed",
-      payload: { prNumber: 41, url: "https://x/41" },
-    });
-    expect(getOpenPr(db, issue.id)).toBeNull();
-  });
-
-  it("doesn't let a belated close for an old PR report a newer still-open PR as closed (SYD-125)", () => {
-    const { db, human, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_opened",
-      payload: { prNumber: 1, url: "https://x/1" },
-    });
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_opened",
-      payload: { prNumber: 2, url: "https://x/2" },
-    });
-    // A belated close for PR#1 arrives after PR#2 already opened.
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_closed",
-      payload: { prNumber: 1, url: "https://x/1" },
-    });
-    expect(getOpenPr(db, issue.id)).toEqual({ prNumber: 2, url: "https://x/2" });
-  });
-
-  it("re-flags if a new PR opens after the previous one closed", () => {
-    const { db, human, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, human, "SYD-1", {
-      type: "pr_opened",
-      prNumber: 41,
-      url: "https://x/41",
-    });
-    recordDeliveryEvent(db, human, "SYD-1", {
-      type: "delivered",
-      prNumber: 41,
-      mergeSha: "abc123",
-      deploy: { ran: false },
-    });
-    recordDeliveryEvent(db, human, "SYD-1", {
-      type: "pr_opened",
-      prNumber: 55,
-      url: "https://x/55",
-    });
-    expect(getOpenPr(db, issue.id)).toEqual({ prNumber: 55, url: "https://x/55" });
+    expect(getOpenPr(db, issueId)).toBeNull();
   });
 });
 
-describe("listOpenPrByIssueId", () => {
-  it("only includes issues with an unresolved open PR", () => {
-    const { db, human, agent } = setup();
+describe("listOpenPrByIssueId (pr_state-derived, SYD-207)", () => {
+  it("only includes issues with an open attributed row", () => {
+    const { db, human } = setup();
     createIssue(db, human, { projectKey: "SYD", title: "Also shipping" }); // SYD-2
-    recordDeliveryEvent(db, human, "SYD-1", {
-      type: "pr_opened",
-      prNumber: 41,
-      url: "https://x/41",
-    });
+    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
 
     const open = getIssue(db, "SYD-1");
     const clean = getIssue(db, "SYD-2");
     const flags = listOpenPrByIssueId(db);
-    expect(flags.get(open.id)).toEqual({ prNumber: 41, url: "https://x/41" });
+    expect(flags.get(open.id)).toEqual({
+      prNumber: 41,
+      url: `https://github.com/${REPO}/pull/41`,
+    });
     expect(flags.has(clean.id)).toBe(false);
+  });
+
+  it("keeps the newest PR when an issue somehow has two open rows", () => {
+    const { db, human } = setup();
+    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(db, human, observe("SYD-1", 55, "open", "2026-07-13T09:00:00Z"));
+    expect(listOpenPrByIssueId(db).get(getIssue(db, "SYD-1").id)?.prNumber).toBe(55);
   });
 });
 
-describe("getMergedPrEvent", () => {
-  it("returns null when the issue has no merge event", () => {
+describe("getMergedPr (pr_state-derived, SYD-207)", () => {
+  it("returns null when the issue has no merged row", () => {
     const { db } = setup();
-    expect(getMergedPrEvent(db, getIssue(db, "SYD-1").id)).toBeNull();
+    expect(getMergedPr(db, getIssue(db, "SYD-1").id)).toBeNull();
   });
 
-  it("returns the prNumber + event id of a delivered event", () => {
+  it("returns prNumber + the co-written transition event id", () => {
     const { db, human } = setup();
-    const issue = getIssue(db, "SYD-1");
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(db, human, {
+      ...observe("SYD-1", 41, "merged", "2026-07-13T11:00:00Z"),
+      mergeSha: "abc123",
+    });
+    const merged = getMergedPr(db, issueId);
+    expect(merged?.prNumber).toBe(41);
+    expect(merged?.eventId).toBeGreaterThan(0);
+  });
+
+  it("returns the most recently merged PR when several exist", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
+    upsertPrState(db, human, observe("SYD-1", 41, "merged", "2026-07-13T10:00:00Z"));
+    upsertPrState(db, human, observe("SYD-1", 42, "merged", "2026-07-13T12:00:00Z"));
+    expect(getMergedPr(db, issueId)?.prNumber).toBe(42);
+  });
+
+  it("the delivery worker's merge (recordDeliveryEvent delivered) is visible", () => {
+    const { db, human } = setup();
+    const issueId = getIssue(db, "SYD-1").id;
     recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 41,
       mergeSha: "abc123",
       deploy: { ran: false },
+      ghUpdatedAt: "2026-07-13T11:00:00Z",
     });
-    const merged = getMergedPrEvent(db, issue.id);
-    expect(merged?.prNumber).toBe(41);
-    expect(merged?.eventId).toBeGreaterThan(0);
-  });
-
-  it("returns the prNumber of a gh_pr_merged event (webhook path)", () => {
-    const { db, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_merged",
-      payload: { prNumber: 41, url: "https://github.com/acme/widgets/pull/41", mergeSha: "abc" },
-    });
-    expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(41);
-  });
-
-  it("returns the most recent merge event when several exist", () => {
-    const { db, human } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 41, mergeSha: "a", deploy: { ran: false } });
-    recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 42, mergeSha: "b", deploy: { ran: false } });
-    expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(42);
-  });
-
-  it("returns the most recent merge event across delivered and gh_pr_merged types", () => {
-    const { db, human, agent } = setup();
-    const issue = getIssue(db, "SYD-1");
-    recordDeliveryEvent(db, human, "SYD-1", { type: "delivered", prNumber: 41, mergeSha: "a", deploy: { ran: false } });
-    recordEvent(db, {
-      issueId: issue.id,
-      actorId: agent.id,
-      type: "gh_pr_merged",
-      payload: { prNumber: 42, url: "https://github.com/acme/widgets/pull/42", mergeSha: "b" },
-    });
-    expect(getMergedPrEvent(db, issue.id)?.prNumber).toBe(42);
+    expect(getMergedPr(db, issueId)?.prNumber).toBe(41);
   });
 });
