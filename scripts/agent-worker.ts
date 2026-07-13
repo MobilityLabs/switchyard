@@ -93,7 +93,7 @@ import {
   heartbeatTick,
   heartbeatMissLimit,
   HEARTBEAT_INTERVAL_MS,
-  HEARTBEAT_MISS_LIMIT,
+  HEARTBEAT_FETCH_TIMEOUT_MS,
   HEARTBEAT_INVALID_LIMIT,
   type HeartbeatOutcome,
   type WorkerConfig,
@@ -392,8 +392,6 @@ async function claimIssueHost(
   }
 }
 
-const HEARTBEAT_FETCH_TIMEOUT_MS = 10_000;
-
 /**
  * SYD-210 Layer B: renew a dispatched session's lease on the tracker, returning
  * a classified outcome. A 2xx is `ok`; a 4xx is `invalid` (the lease is gone —
@@ -422,6 +420,37 @@ async function postHeartbeat(
 }
 
 /**
+ * SYD-210 Layer B: compensating release. Dispatch setup failed AFTER the host
+ * claimed host-side, so the issue is now claimed with a lease no session will
+ * ever present — it would sit stranded in_progress until the lease TTL. Release
+ * it back to todo, presenting our own lease header (the host is the holder), so
+ * it's immediately re-dispatchable. Best-effort (SYD-210 review, codex HIGH).
+ */
+async function releaseClaimHost(
+  config: WorkerConfig,
+  token: string,
+  leaseToken: string,
+  ref: string,
+): Promise<void> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}`;
+  try {
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "X-Switchyard-Lease": leaseToken,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ status: "todo" }),
+      signal: AbortSignal.timeout(HEARTBEAT_FETCH_TIMEOUT_MS),
+    });
+    if (!res.ok) console.error(`could not release ${ref} after a dispatch failure: HTTP ${res.status}`);
+  } catch (err) {
+    console.error(`could not release ${ref} after a dispatch failure: ${(err as Error).message}`);
+  }
+}
+
+/**
  * Starts the host-side heartbeat loop for a running session and returns a stop
  * function. Fires an immediate first beat (so a session that dies before the
  * first interval still collapses its 8h mint TTL to the heartbeat window right
@@ -442,7 +471,6 @@ function startLeaseHeartbeat(
   let state = { misses: 0, invalids: 0 };
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
-  const missLimit = heartbeatMissLimit(config); // derived from the server window
   const stop = () => {
     stopped = true;
     if (timer) clearTimeout(timer);
@@ -451,12 +479,16 @@ function startLeaseHeartbeat(
     if (stopped) return;
     const outcome = await postHeartbeat(config, token, leaseToken, ref);
     if (stopped) return;
+    // Re-derive the limit each beat so a mid-session dispatch-policy retune of
+    // the heartbeat window takes effect on a live loop (SYD-210 review, codex
+    // HIGH), not just at the next dispatch.
+    const missLimit = heartbeatMissLimit(config);
     const r = heartbeatTick(state, outcome, missLimit);
     state = { misses: r.misses, invalids: r.invalids };
     if (outcome !== "ok") {
       log(
         `[worker] ${ref}: lease heartbeat ${outcome} ` +
-          `(4xx ${state.invalids}/${HEARTBEAT_INVALID_LIMIT}, transient ${state.misses}/${HEARTBEAT_MISS_LIMIT})\n`,
+          `(4xx ${state.invalids}/${HEARTBEAT_INVALID_LIMIT}, transient ${state.misses}/${missLimit})\n`,
       );
     }
     if (r.cancel) {
@@ -748,6 +780,10 @@ export function dispatch(
     }
   } catch (err) {
     console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
+    // The host already claimed this issue; setup failed before any heartbeat
+    // could start, so release the lease-held claim rather than strand it.
+    if (cliMcpConfigPath) rmSync(cliMcpConfigPath, { force: true });
+    if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
     return;
   } finally {
     closeSync(fd);
@@ -1135,6 +1171,17 @@ export async function runTick(
             const resumed = resumeRefs.delete(issue.ref);
             console.log(
               `[dry-run] would dispatch ${issue.ref}${resumed ? " (resumed)" : ""}: ${issue.title}`,
+            );
+            continue;
+          }
+          // SYD-210 review (codex): leased dispatch requires the session to
+          // present its lease as an MCP header. The codex container can't yet
+          // (SYD-220), so a codex worker would claim host-side and then dispatch
+          // a session whose every claim-scoped write is rejected — stranding the
+          // issue in_progress. Skip BEFORE claiming so nothing is stranded.
+          if ((config.engine ?? "claude") === "codex") {
+            console.log(
+              `skipping ${issue.ref}: codex leased dispatch not yet supported — see SYD-220`,
             );
             continue;
           }

@@ -256,17 +256,23 @@ export function applyDispatchPolicy(config: WorkerConfig, policy: DispatchPolicy
 }
 
 /**
- * SYD-210 Layer B: the host's consecutive-miss cancel limit, derived from the
- * server's heartbeat window (if the tracker advertised one via dispatch-policy)
- * so the host cancels a session on the SAME timeline the server expires its
- * lease — an operator lowering claims.heartbeat_window_seconds can't leave the
- * host cancelling later than the server releases (double-work), nor higher
- * (premature kill). Falls back to the compile-time default for an un-upgraded
- * tracker. At least 1 (the interval is the floor).
+ * SYD-210 Layer B: the host's consecutive-transient-miss cancel limit, derived
+ * from the server's heartbeat window so the host cancels a session BEFORE the
+ * server can expire its lease (the double-work direction), never after.
+ *
+ * The server expires a lease `window` seconds after the last successful beat.
+ * A worst-case miss cycle is up to `interval + fetchTimeout` (a black-holing
+ * tracker holds each beat open the full timeout, then the loop waits `interval`
+ * before the next), so N misses take up to N·(interval+timeout). Solving
+ * N·(interval+timeout) < window with `floor` guarantees the Nth miss lands
+ * strictly inside the window — leaving margin for the 2s sweep. (SYD-210 review,
+ * codex HIGH: the old `round(window/interval)` put the last miss AT/after
+ * expiry.) Falls back to the default window for an un-upgraded tracker; ≥1.
  */
 export function heartbeatMissLimit(config: WorkerConfig): number {
-  if (config.heartbeatWindowSeconds === undefined) return HEARTBEAT_MISS_LIMIT;
-  return Math.max(1, Math.round((config.heartbeatWindowSeconds * 1000) / HEARTBEAT_INTERVAL_MS));
+  const windowSeconds = config.heartbeatWindowSeconds ?? DEFAULT_HEARTBEAT_WINDOW_SECONDS;
+  const cycleMs = HEARTBEAT_INTERVAL_MS + HEARTBEAT_FETCH_TIMEOUT_MS;
+  return Math.max(1, Math.floor((windowSeconds * 1000) / cycleMs));
 }
 
 export function projectKeyOf(ref: string): string {
@@ -1161,6 +1167,14 @@ export function partitionContainerSessions(
 // redeploy can't mass-expire live leases regardless.
 export const HEARTBEAT_INTERVAL_MS = 60_000;
 export const HEARTBEAT_MISS_LIMIT = 10;
+// Per-beat fetch timeout (agent-worker postHeartbeat). A worst-case miss cycle
+// is up to interval + this (a black-holing tracker holds each beat open the
+// full timeout), so the host's effective cancel deadline must budget for it —
+// see heartbeatMissLimit.
+export const HEARTBEAT_FETCH_TIMEOUT_MS = 10_000;
+// Default lease window when the tracker hasn't advertised one (matches the
+// server's claims.heartbeat_window_seconds default).
+export const DEFAULT_HEARTBEAT_WINDOW_SECONDS = 600;
 // A definitive 4xx means the lease is GONE server-side (takeover / expiry) —
 // unrecoverable, and the session is now doing sanctioned double-work on exactly
 // the SYD-93 failure mode. Cancel fast (a couple of confirming beats) rather

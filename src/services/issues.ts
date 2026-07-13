@@ -318,6 +318,17 @@ export function updateIssue(
         current.assigneeId === null &&
         patch.assigneeName === undefined
       ) {
+        // SYD-210 review (pentester): a host-supervised session presents a lease
+        // token but is handed no mint container (see the MCP update_issue guard).
+        // Such a session is scoped to its ONE pre-claimed issue and must never
+        // establish a NEW claim — otherwise update_issue's auto-claim would mint
+        // a fresh lease into its tool result (the transcript-mint the claim_issue
+        // refusal closes, re-opened via a sibling tool). Refuse loudly.
+        if (lease.presented !== undefined && lease.minted === undefined) {
+          throw new SwitchyardError(
+            `${ref} is not the issue claimed for your session — a supervised session can only work its own claimed issue, not claim another. Call get_issue on your assigned issue.`,
+          );
+        }
         changes.assigneeId = actor.id;
         toRecord.push({ type: "assigned", payload: { to: actor.name } });
       }

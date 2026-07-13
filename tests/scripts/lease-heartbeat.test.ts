@@ -61,14 +61,23 @@ describe("heartbeatTick (SYD-210 Layer B, tri-state)", () => {
   });
 });
 
-describe("heartbeatMissLimit (host cadence derived from server window)", () => {
-  it("falls back to the default when the tracker advertised no window", () => {
-    expect(heartbeatMissLimit(cfg())).toBe(HEARTBEAT_MISS_LIMIT);
+describe("heartbeatMissLimit (host cadence derived from server window, with cancel margin)", () => {
+  // Worst-case miss cycle = interval (60s) + fetch timeout (10s) = 70s, so the
+  // limit is floor(window / 70) — the host cancels strictly before the server
+  // expires the lease at `window` (SYD-210 review, codex HIGH).
+  it("falls back to the default 600s window when the tracker advertised none", () => {
+    expect(heartbeatMissLimit(cfg())).toBe(8); // floor(600 / 70)
   });
 
-  it("derives misses = window / interval so host and server can't diverge", () => {
-    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 600 }))).toBe(10); // 600 / 60
-    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 300 }))).toBe(5); // operator lowered it
-    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 30 }))).toBe(1); // floored at 1 interval
+  it("derives misses with margin so the host cancels before the server expires", () => {
+    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 600 }))).toBe(8); // floor(600/70)
+    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 300 }))).toBe(4); // floor(300/70)
+    expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: 30 }))).toBe(1); // floored at 1
+  });
+
+  it("the effective window (misses × cycle) stays strictly under the server window", () => {
+    for (const w of [600, 300, 140, 70]) {
+      expect(heartbeatMissLimit(cfg({ heartbeatWindowSeconds: w })) * 70).toBeLessThanOrEqual(w);
+    }
   });
 });

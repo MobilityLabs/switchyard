@@ -273,7 +273,13 @@ export function buildMcpServer(
         expected_head_sha?: string;
         lease_token?: string;
       }) => {
-        const minted: { token: string | null } = { token: null };
+        // SYD-210 review (pentester): a host-supervised session (connection lease)
+        // gets NO mint container — so update_issue can never mint a fresh lease
+        // into its tool result, and updateIssue's auto-claim is refused for it
+        // (it's scoped to its one pre-claimed issue). Only ordinary sessions
+        // (interactive / bare-CLI without a connection lease) may auto-claim and
+        // receive the once-only token.
+        const minted = connectionLeaseToken ? undefined : { token: null as string | null };
         const issue = updateIssue(
           db,
           actor,
@@ -291,7 +297,7 @@ export function buildMcpServer(
           },
           { presented: a.lease_token ?? connectionLeaseToken, minted },
         );
-        return minted.token ? { ...issue, lease_token: minted.token } : issue;
+        return minted?.token ? { ...issue, lease_token: minted.token } : issue;
       },
     ),
   );
