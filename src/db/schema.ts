@@ -64,6 +64,11 @@ export const issues = sqliteTable(
     sourceUrl: text("source_url"),
     needsInput: integer("needs_input", { mode: "boolean" }).notNull().default(false),
     snoozedUntil: integer("snoozed_until"),
+    // Soft dispatch routing (SYD-201): a hint naming the preferred worker
+    // classification (its engine, e.g. "codex"). selectDispatchable sorts
+    // matching issues ahead of neutral ones for that worker; null = no
+    // preference. Never restricts — an idle worker still falls back to it.
+    workerPreference: text("worker_preference"),
     createdAt: integer("created_at").notNull().default(now()),
     updatedAt: integer("updated_at").notNull().default(now()),
   },

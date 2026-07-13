@@ -57,6 +57,26 @@ describe("updateIssue", () => {
     expect(r.assigneeId).toBe(agent.id);
   });
 
+  it("stores workerPreference on create and records an event only when it changes (SYD-201)", () => {
+    const created = createIssue(db, human, {
+      projectKey: "AIPI",
+      title: "codex task",
+      workerPreference: "codex",
+    });
+    expect(created.workerPreference).toBe("codex");
+
+    const updated = updateIssue(db, human, created.ref, { workerPreference: "claude" });
+    expect(updated.workerPreference).toBe("claude");
+    expect(listIssueEvents(db, updated.id).map((e) => e.type)).toContain("worker_preference_changed");
+
+    // Re-setting the same value is a no-op (no second event).
+    updateIssue(db, human, created.ref, { workerPreference: "claude" });
+    const changes = listIssueEvents(db, created.id).filter(
+      (e) => e.type === "worker_preference_changed",
+    );
+    expect(changes).toHaveLength(1);
+  });
+
   it("rejects unknown statuses and assignees legibly", () => {
     expect(() => updateIssue(db, human, "AIPI-1", { status: "doing" as never })).toThrowError(
       /valid statuses/i,

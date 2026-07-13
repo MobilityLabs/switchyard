@@ -62,6 +62,7 @@ export type CreateIssueInput = {
   labels?: string[];
   parentRef?: string;
   provenance?: Provenance;
+  workerPreference?: string | null;
 };
 
 export type IssueView = typeof issues.$inferSelect & { ref: string };
@@ -138,6 +139,7 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
         sourceType: input.provenance?.sourceType ?? null,
         sourceDetail: input.provenance?.detail ?? null,
         sourceUrl: input.provenance?.url ?? null,
+        workerPreference: input.workerPreference ?? null,
       })
       .returning()
       .get();
@@ -154,6 +156,7 @@ export type UpdateIssueInput = {
   summary?: string | null;
   assigneeName?: string | null;
   labels?: string[];
+  workerPreference?: string | null;
 };
 
 /**
@@ -356,6 +359,17 @@ export function updateIssue(db: Db, actor: Actor, ref: string, patch: UpdateIssu
         changes.assigneeId = assigneeId;
         toRecord.push({ type: "assigned", payload: { to: patch.assigneeName } });
       }
+    }
+
+    if (
+      patch.workerPreference !== undefined &&
+      patch.workerPreference !== current.workerPreference
+    ) {
+      changes.workerPreference = patch.workerPreference;
+      toRecord.push({
+        type: "worker_preference_changed",
+        payload: { from: current.workerPreference, to: patch.workerPreference },
+      });
     }
 
     if (patch.status !== undefined && actor.type === "human" && current.needsInput) {

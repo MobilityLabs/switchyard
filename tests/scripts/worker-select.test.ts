@@ -1010,6 +1010,55 @@ describe("dispatchPolicy all-todo", () => {
   });
 });
 
+describe("selectDispatchable worker preference (SYD-201)", () => {
+  const base = {
+    url: "http://x",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 5,
+    projects: { SYD: { repo: "/tmp/syd" } },
+    dispatchPolicy: "all-todo" as const,
+  };
+  const codexCfg = { ...base, engine: "codex" as const };
+  const claudeCfg = { ...base, engine: "claude" as const };
+  const iss = (ref: string, workerPreference: string | null, priority?: string) =>
+    ({ ref, labels: [], assigneeId: null, needsInput: false, updatedAt: 1, workerPreference, priority }) as never;
+  const refs = (out: unknown[]) => (out as { ref: string }[]).map((i) => i.ref);
+
+  it("a codex worker orders match > neutral > foreign", () => {
+    const out = selectDispatchable(
+      [iss("SYD-1", null), iss("SYD-2", "codex"), iss("SYD-3", "claude")],
+      codexCfg,
+      [].values(),
+    );
+    expect(refs(out)).toEqual(["SYD-2", "SYD-1", "SYD-3"]);
+  });
+
+  it("a claude worker sorts codex-preferred issues last", () => {
+    const out = selectDispatchable([iss("SYD-2", "codex"), iss("SYD-1", null)], claudeCfg, [].values());
+    expect(refs(out)).toEqual(["SYD-1", "SYD-2"]);
+  });
+
+  it("affinity outranks priority — a matching low-priority beats a foreign urgent", () => {
+    const out = selectDispatchable(
+      [iss("SYD-3", "claude", "urgent"), iss("SYD-2", "codex", "low")],
+      codexCfg,
+      [].values(),
+    );
+    expect(refs(out)).toEqual(["SYD-2", "SYD-3"]);
+  });
+
+  it("still falls back to a foreign-preferred issue when it is the only work (no starvation)", () => {
+    const out = selectDispatchable([iss("SYD-2", "codex")], claudeCfg, [].values());
+    expect(refs(out)).toEqual(["SYD-2"]);
+  });
+
+  it("no engine set (default claude) treats codex-preferred as foreign, neutral unchanged", () => {
+    const out = selectDispatchable([iss("SYD-2", "codex"), iss("SYD-1", null)], base, [].values());
+    expect(refs(out)).toEqual(["SYD-1", "SYD-2"]);
+  });
+});
+
 describe("buildContainerizedPrompt", () => {
   it("builds the standard containerized prompt", () => {
     const prompt = buildContainerizedPrompt("SYD-7");
