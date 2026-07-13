@@ -29,10 +29,12 @@ from collections.abc import Mapping
 # Fixed injection table — never caller-controlled, so the proxy can't be turned
 # into an open credential relay. Keep in sync with the design spec §B and
 # EGRESS_BASELINE in scripts/worker-select.ts.
+CODEX_HOST = "chatgpt.com"
 PROVIDER_HOSTS = {
     "api.anthropic.com",
     "api.openai.com",
     "generativelanguage.googleapis.com",
+    CODEX_HOST,
 }
 
 # Header names that may carry a caller-supplied credential; stripped before we
@@ -58,6 +60,10 @@ def injection_for(host: str, env: Mapping) -> list | None:
         return [("authorization", f"Bearer {env.get('OPENAI_API_KEY', '')}")]
     if h == "generativelanguage.googleapis.com":
         return [("x-goog-api-key", env.get("GEMINI_API_KEY", ""))]
+    if h == CODEX_HOST:
+        # ChatGPT subscription-login OAuth: inject the real access token the
+        # proxy holds (extracted from `codex login`'s auth.json on the host).
+        return [("authorization", f"Bearer {env.get('CODEX_OAUTH_TOKEN', '')}")]
     return None
 
 
@@ -148,6 +154,9 @@ def _selftest() -> None:
         ("authorization", "Bearer sk-oai")], "openai"
     assert injection_for("generativelanguage.googleapis.com", {"GEMINI_API_KEY": "g"}) == [
         ("x-goog-api-key", "g")], "gemini"
+    assert injection_for("chatgpt.com", {"CODEX_OAUTH_TOKEN": "cxo-TOK"}) == [
+        ("authorization", "Bearer cxo-TOK")], "codex"
+    assert connect_decision("chatgpt.com", set()) == "mitm"  # provider host, always intercepted
     # Non-provider host has no injection rule.
     assert injection_for("evil.example.com", {}) is None
     assert injection_for("registry.npmjs.org", {}) is None
