@@ -15,6 +15,7 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "../db/index.js";
+import type { EventKind } from "../db/schema.js";
 import { getOrCreateActor } from "./actors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
@@ -125,7 +126,7 @@ export function parseGhTimestamp(value: unknown): string | null {
 function isDuplicate(
   db: Db,
   issueId: number,
-  type: string,
+  type: EventKind,
   jsonPath: string,
   value: string | number | null,
 ): boolean {
@@ -155,7 +156,7 @@ function resolveRepo(db: Db, projectId: number, repo: string | null): string | n
 function record(
   db: Db,
   ref: string,
-  type: string,
+  type: EventKind,
   payload: Record<string, unknown>,
   repo: string | null,
   dedupe?: { jsonPath: string; value: string | number | null },

@@ -72,7 +72,7 @@ describe("delivery_attempts schema", () => {
     recordEvent(db, {
       issueId: 1,
       actorId: human.id,
-      type: "done",
+      type: "status_changed",
       payload: { reason: "test authorization" },
     });
 

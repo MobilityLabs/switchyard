@@ -92,6 +92,60 @@ export const dependencies = sqliteTable(
   (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] })],
 );
 
+/**
+ * Every event `type` the append-only audit log records (SYD-211). A closed const
+ * union so producers and consumers can't drift on free-text strings — the log is
+ * a co-written audit trail (see src/services/issues.ts), and integrity there is
+ * the whole point. `recordEvent` (src/services/events.ts) is the single write
+ * path and types its `type` param to `EventKind`, so a new kind must be added
+ * here first. No orchestration control flow branches on this — the derived
+ * signals (attention/open-PR/unanswered-questions) query specific types, they
+ * don't switch over the whole set.
+ */
+export const EVENT_KINDS = [
+  // Issue lifecycle
+  "created",
+  "status_changed",
+  "assigned",
+  "priority_changed",
+  "title_changed",
+  "description_changed",
+  "summary_changed",
+  "labels_changed",
+  "worker_preference_changed",
+  "snoozed",
+  "marked_duplicate",
+  "redeliver_requested",
+  // Comments, human input, agent notes
+  "comment",
+  "needs_input_set",
+  "needs_input_cleared",
+  "agent_question",
+  "progress_note",
+  "process_deviation",
+  // Dependencies
+  "blocked_by_added",
+  "blocked_by_removed",
+  // Attachments
+  "attachment_added",
+  // Claims and session leases
+  "claim_released",
+  "lease_taken_over",
+  // Delivery (deliver.ts / agent-worker.ts via recordDeliveryEvent)
+  "pr_opened",
+  "delivered",
+  "delivery_failed",
+  // GitHub ingestion (webhook + poller)
+  "gh_pr_opened",
+  "gh_pr_reopened",
+  "gh_pr_merged",
+  "gh_pr_closed",
+  "gh_pushed",
+  "gh_checks_passed",
+  "gh_checks_failed",
+] as const;
+export type EventKind = (typeof EVENT_KINDS)[number];
+
 export const events = sqliteTable(
   "events",
   {
@@ -102,7 +156,7 @@ export const events = sqliteTable(
     actorId: integer("actor_id")
       .notNull()
       .references(() => actors.id),
-    type: text("type").notNull(),
+    type: text("type").$type<EventKind>().notNull(),
     payload: text("payload", { mode: "json" })
       .$type<Record<string, unknown>>()
       .notNull()
