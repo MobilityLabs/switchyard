@@ -1,15 +1,20 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
-import { createActor } from "../../src/services/actors.js";
+import { createActor, type Actor } from "../../src/services/actors.js";
 import { createLoginLink, redeemLoginLink } from "../../src/services/auth.js";
+import { setSetting } from "../../src/services/settings.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
-let db: Db, app: ReturnType<typeof buildApiRoutes>, bearer: string, cookie: string;
+let db: Db,
+  app: ReturnType<typeof buildApiRoutes>,
+  bearer: string,
+  cookie: string,
+  sean: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");
   bearer = createActor(db, { name: "claude/dev", type: "agent" }).token;
-  createActor(db, { name: "sean", type: "human" });
+  sean = createActor(db, { name: "sean", type: "human" }).actor;
   const { token } = createLoginLink(db, "sean");
   cookie = `switchyard_session=${redeemLoginLink(db, token).sessionToken}`;
   app = buildApiRoutes(db);
@@ -172,5 +177,17 @@ describe("actor routes", () => {
     expect(((await agentTarget.json()) as { error: string }).error).toMatch(
       /agents authenticate with their bearer token/i,
     );
+  });
+
+  it("POST /actors/:id/login-link honors the instance.base_url setting when set", async () => {
+    setSetting(db, sean, "instance.base_url", "https://tracker.example.com");
+
+    const res = await app.request(`/actors/${sean.id}/login-link`, {
+      method: "POST",
+      headers: { cookie },
+    });
+    expect(res.status).toBe(200);
+    const { url } = (await res.json()) as { url: string };
+    expect(url).toMatch(/^https:\/\/tracker\.example\.com\/auth\/login\?token=/);
   });
 });

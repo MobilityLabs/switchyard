@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import {
@@ -6,6 +6,7 @@ import {
   getAllSettings,
   setSetting,
   resetSetting,
+  resolveBaseUrl,
   getDispatchPolicy,
   REGISTRY,
 } from "../../src/services/settings.js";
@@ -101,6 +102,41 @@ describe("settings", () => {
       maxAnswerConcurrent: REGISTRY["dispatch.max_answer_concurrent"].default,
       intervalSeconds: REGISTRY["dispatch.poll_seconds"].default,
       eventPollSeconds: REGISTRY["dispatch.event_poll_seconds"].default,
+    });
+  });
+
+  describe("resolveBaseUrl", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("an instance.base_url override wins over SWITCHYARD_URL", () => {
+      const db = openDb(":memory:");
+      const human = createActor(db, { name: "sean", type: "human" }).actor;
+      setSetting(db, human, "instance.base_url", "https://tracker.example.com");
+      vi.stubEnv("SWITCHYARD_URL", "http://env.example:9999");
+      expect(resolveBaseUrl(db)).toBe("https://tracker.example.com");
+    });
+
+    it("falls back to SWITCHYARD_URL when the setting is unset", () => {
+      const db = openDb(":memory:");
+      vi.stubEnv("SWITCHYARD_URL", "http://env.example:9999");
+      expect(resolveBaseUrl(db)).toBe("http://env.example:9999");
+    });
+
+    it("falls back to the registry default when neither is set", () => {
+      const db = openDb(":memory:");
+      vi.stubEnv("SWITCHYARD_URL", undefined);
+      expect(resolveBaseUrl(db)).toBe(REGISTRY["instance.base_url"].default);
+    });
+
+    it("resetSetting restores env/default resolution", () => {
+      const db = openDb(":memory:");
+      const human = createActor(db, { name: "sean", type: "human" }).actor;
+      setSetting(db, human, "instance.base_url", "https://tracker.example.com");
+      resetSetting(db, human, "instance.base_url");
+      vi.stubEnv("SWITCHYARD_URL", "http://env.example:9999");
+      expect(resolveBaseUrl(db)).toBe("http://env.example:9999");
     });
   });
 

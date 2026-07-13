@@ -96,6 +96,17 @@ export function getSetting<K extends SettingKey>(db: Db, key: K): SettingValue<K
   return (row ? row.value : REGISTRY[key].default) as SettingValue<K>;
 }
 
+// Base URL for links we hand to humans (login links) and outbound payloads.
+// Precedence: an explicit instance.base_url override in the DB wins, then the
+// SWITCHYARD_URL env var as a deployment-level fallback, then the registry
+// default. getSetting can't express this because an unset key already resolves
+// to the default, which would shadow the env var.
+export function resolveBaseUrl(db: Db): string {
+  const row = db.select().from(settings).where(eq(settings.key, "instance.base_url")).get();
+  if (row) return row.value as string;
+  return process.env.SWITCHYARD_URL ?? REGISTRY["instance.base_url"].default;
+}
+
 export function getAllSettings(db: Db): SettingView[] {
   const overrides = new Map(
     db

@@ -2,6 +2,7 @@ import { openDb } from "./db/index.js";
 import { createActor, type Actor } from "./services/actors.js";
 import { createProject } from "./services/projects.js";
 import { createLoginLink } from "./services/auth.js";
+import { resolveBaseUrl } from "./services/settings.js";
 import { addWebhook, listWebhooks, removeWebhook } from "./services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo } from "./services/github-repos.js";
 import { SwitchyardError } from "./services/errors.js";
@@ -52,9 +53,8 @@ try {
       process.exit(1);
     }
     const { path } = createLoginLink(db, name);
-    const base = process.env.SWITCHYARD_URL ?? "http://localhost:3300";
     console.log(`login link (valid 15 minutes, single use):`);
-    console.log(base + path);
+    console.log(resolveBaseUrl(db) + path);
   } else if (cmd === "add-webhook") {
     const [url, projectKey, secret] = args;
     if (!url) {

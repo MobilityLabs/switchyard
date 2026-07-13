@@ -58,6 +58,7 @@ import {
   getAllSettings,
   setSetting,
   resetSetting,
+  resolveBaseUrl,
   getDispatchPolicy,
 } from "../services/settings.js";
 import {
@@ -166,8 +167,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     requireHumanCaller(c.var.actor, "mint a login link");
     const target = getActorById(db, parseActorId(c.req.param("id")));
     const { path } = createLoginLink(db, target.name);
-    const base = process.env.SWITCHYARD_URL ?? "http://localhost:3300";
-    return c.json({ url: base + path });
+    return c.json({ url: resolveBaseUrl(db) + path });
   });
 
   app.get("/me", (c) => c.json(c.var.actor));
