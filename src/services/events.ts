@@ -1,10 +1,10 @@
 import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
-import { events, actors, issues, projects } from "../db/schema.js";
+import { events, actors, issues, projects, type EventKind } from "../db/schema.js";
 
 export function recordEvent(
   db: DbOrTx,
-  e: { issueId: number; actorId: number; type: string; payload?: Record<string, unknown> },
+  e: { issueId: number; actorId: number; type: EventKind; payload?: Record<string, unknown> },
 ): number {
   return db
     .insert(events)
@@ -23,7 +23,7 @@ export function recordEvent(
 export function findEventIdByPayload(
   db: DbOrTx,
   issueId: number,
-  type: string,
+  type: EventKind,
   jsonPath: string,
   value: string | number | null,
 ): number | null {

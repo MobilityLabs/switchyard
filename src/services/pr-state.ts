@@ -34,7 +34,7 @@
 
 import { and, eq } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
-import { prState, githubRepos } from "../db/schema.js";
+import { prState, githubRepos, type EventKind } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
@@ -131,7 +131,7 @@ export function attributedRef(
   return ref;
 }
 
-const EVENT_KIND: Record<PrTransition, string> = {
+const EVENT_KIND: Record<PrTransition, EventKind> = {
   opened: "gh_pr_opened",
   merged: "gh_pr_merged",
   closed: "gh_pr_closed",

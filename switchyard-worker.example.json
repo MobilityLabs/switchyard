@@ -22,10 +22,7 @@
   "delivery": {
     "openPrs": true,
     "pollSeconds": 30,
-    "deploy": true,
-    "verify": true,
-    "autoRebase": true,
-    "conflictResolution": true
+    "deploy": true
   },
   "githubPoll": {
     "pollSeconds": 120

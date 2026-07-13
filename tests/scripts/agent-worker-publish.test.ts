@@ -63,7 +63,7 @@ const config: WorkerConfig = {
   maxConcurrent: 1,
   projects: { SYD: { repo: "/repo/syd" } },
   containerized: true,
-  delivery: { mode: "queue" },
+  delivery: { openPrs: true },
 };
 
 const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => ({

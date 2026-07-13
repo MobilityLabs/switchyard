@@ -9,6 +9,7 @@ import {
   PRIORITIES,
   type Status,
   type Priority,
+  type EventKind,
 } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
@@ -240,7 +241,7 @@ export function updateIssue(
       validateLease(tx, current.id, actor.id, lease.presented);
     }
     const changes: SQLiteUpdateSetSource<typeof issues> = {};
-    const toRecord: { type: string; payload: Record<string, unknown> }[] = [];
+    const toRecord: { type: EventKind; payload: Record<string, unknown> }[] = [];
 
     if (patch.status !== undefined && patch.status !== current.status) {
       if (!STATUSES.includes(patch.status)) {

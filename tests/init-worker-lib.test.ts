@@ -265,22 +265,9 @@ describe("validateWorkerConfig", () => {
             pollSeconds: 30,
             cloneDir: "/tmp/clones",
             deploy: false,
-            verify: false,
-            autoRebase: true,
-            conflictResolution: true,
           },
         }),
       ).toEqual([]);
-    });
-
-    it("accepts delivery.mode 'legacy' or 'queue' (SYD-164)", () => {
-      expect(validateWorkerConfig({ ...base, delivery: { mode: "legacy" } })).toEqual([]);
-      expect(validateWorkerConfig({ ...base, delivery: { mode: "queue" } })).toEqual([]);
-    });
-
-    it("rejects an unknown delivery.mode", () => {
-      const problems = validateWorkerConfig({ ...base, delivery: { mode: "yolo" } });
-      expect(problems.some((p) => p.includes("delivery.mode"))).toBe(true);
     });
 
     it("accepts an absent delivery block", () => {
@@ -299,18 +286,12 @@ describe("validateWorkerConfig", () => {
           pollSeconds: -5,
           cloneDir: "",
           deploy: 1,
-          verify: "yes",
-          autoRebase: "nope",
-          conflictResolution: "nope",
         },
       });
       expect(problems.some((p) => p.includes("delivery.openPrs"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.pollSeconds"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.cloneDir"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.deploy"))).toBe(true);
-      expect(problems.some((p) => p.includes("delivery.verify"))).toBe(true);
-      expect(problems.some((p) => p.includes("delivery.autoRebase"))).toBe(true);
-      expect(problems.some((p) => p.includes("delivery.conflictResolution"))).toBe(true);
     });
   });
 
