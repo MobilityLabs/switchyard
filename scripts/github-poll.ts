@@ -11,11 +11,12 @@
 //   SWITCHYARD_TOKEN=... npx tsx scripts/github-poll.ts --once     # single scan
 //   SWITCHYARD_TOKEN=... npx tsx scripts/github-poll.ts --dry-run  # print, don't POST
 //
-// SWITCHYARD_TOKEN must belong to a human-type actor (SYD-107): POST
-// /api/github-events rejects agent actors, since any dispatched agent
-// holding a bearer token could otherwise forge pull_request/check_suite
-// events. `add-actor <name> human` + `mint-login <name>` to provision a
-// dedicated poller identity rather than reusing a person's own login.
+// The token (SWITCHYARD_SERVICE_TOKEN, else SWITCHYARD_TOKEN) must belong to a
+// `service` or `human` actor, NOT an agent (SYD-107/213): POST
+// /api/github-events rejects agent actors, since any dispatched agent holding a
+// bearer token could otherwise forge pull_request/check_suite events. Provision
+// a least-privilege identity with `add-actor <name> service` rather than a
+// human login — a service token can post events but nothing human-only.
 //
 // Config: the `githubPoll` block of switchyard-worker.json (pollSeconds,
 // default 120s — kept well above deliver.ts's 30s since this burns GitHub
@@ -48,6 +49,7 @@ import {
   resolveConfiguredRepos,
 } from "./github-poll-exec.js";
 import { acquirePidLock } from "./pidfile.js";
+import { resolveInfraToken } from "./delivery-lib.js";
 
 const DEFAULT_POLL_SECONDS = 120;
 
@@ -274,9 +276,11 @@ async function main(): Promise<void> {
   const dryRun = args.includes("--dry-run");
 
   loadDotEnv();
-  const token = process.env.SWITCHYARD_TOKEN;
+  const token = resolveInfraToken();
   if (!token) {
-    console.error("SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)");
+    console.error(
+      "SWITCHYARD_SERVICE_TOKEN (preferred) or SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)",
+    );
     process.exit(1);
   }
   const config = loadConfig();
