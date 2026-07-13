@@ -155,6 +155,13 @@ export type WorkerConfig = {
   runner?: "cli" | "sdk";
   /** Which agent engine this worker drives: "claude" (default) or "codex". Selected per-worker-process. */
   engine?: "claude" | "codex";
+  /**
+   * NAME of the env var holding this worker's switchyard bearer token (default
+   * "SWITCHYARD_TOKEN"). Lets a second worker process (e.g. a codex worker via
+   * `--config`) use its own minted token (`SWITCHYARD_CODEX_TOKEN`) from .env —
+   * the value stays in .env, never in the plist or argv.
+   */
+  token?: string;
   /** Delivery gate (SYD-49): worker-side PR publishing + deliver.ts settings. */
   delivery?: DeliveryConfig;
   /** Answerer mode (SYD-56): max answer sessions dispatched per issue ref, ever (default 3). */
@@ -263,6 +270,19 @@ export function parseRole(args: string[]): WorkerRole {
     throw new Error(`--role must be "code", "answer", or "all" (got ${value ?? "<missing>"})`);
   }
   return value;
+}
+
+/**
+ * Parses `--config <path>` from argv, defaulting to `defaultPath` when absent.
+ * Lets a second worker process (e.g. a codex worker) load its own config file
+ * (`switchyard-worker.codex.json`) alongside the default one. A relative path is
+ * resolved against `repoRoot` so a launchd job can name it repo-relative.
+ */
+export function configPathFromArgs(args: string[], defaultPath: string, repoRoot: string): string {
+  const idx = args.indexOf("--config");
+  const value = idx === -1 ? undefined : args[idx + 1];
+  if (!value) return defaultPath;
+  return value.startsWith("/") ? value : `${repoRoot}/${value}`;
 }
 
 /** Pidfile basename for a role's single-instance lock — kept distinct so "code" and "answer" can run side by side. */

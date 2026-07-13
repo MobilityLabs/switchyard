@@ -70,6 +70,9 @@ export function validateWorkerConfig(raw: unknown): string[] {
   if (c.engine === "codex" && c.egress === "open") {
     problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
   }
+  if (c.token !== undefined && (typeof c.token !== "string" || c.token.length === 0)) {
+    problems.push("`token` must be a non-empty string (the NAME of the env var holding this worker's token)");
+  }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
   }

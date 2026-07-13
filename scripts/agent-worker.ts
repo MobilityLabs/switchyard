@@ -66,6 +66,7 @@ import {
   answerKey,
   selectAnswerable,
   parseRole,
+  configPathFromArgs,
   roleRunsCode,
   roleRunsAnswer,
   checkRoleLockConflict,
@@ -1199,13 +1200,17 @@ async function main(): Promise<void> {
   const role = parseRole(args);
 
   loadDotEnv();
-  const token = process.env.SWITCHYARD_TOKEN;
+
+  // Load config first so a second worker process (`--config
+  // switchyard-worker.codex.json`) can name its own token env var (`token:
+  // "SWITCHYARD_CODEX_TOKEN"`) — the secret stays in .env, never in the plist.
+  const config = loadConfig(configPathFromArgs(args, defaultConfigPath(), repoRoot()));
+  const tokenVar = config.token ?? "SWITCHYARD_TOKEN";
+  const token = process.env[tokenVar];
   if (!token) {
-    console.error("SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)");
+    console.error(`${tokenVar} is required (set it in the environment or the repo .env)`);
     process.exit(1);
   }
-
-  const config = loadConfig(defaultConfigPath());
   await refreshDispatchPolicy(config, token);
 
   // SYD-110: containerized sessions only run behind the egress allowlist.
