@@ -284,6 +284,92 @@ describe("updateIssue", () => {
   });
 });
 
+// SYD-191: update_issue exposed assigneeName to agent tokens with no actor
+// check — an agent could reassign work to another actor or clear an existing
+// assignee without claiming the issue, disrupting dispatch coordination and
+// bypassing claim-before-work. Agents may only self-assign (the claimIssue
+// flow), gated by the same claim rules; any other assignee change is human-only.
+describe("agent assignee changes (SYD-191)", () => {
+  it("an agent cannot reassign an issue assigned to someone else", () => {
+    createActor(db, { name: "claude/other", type: "agent" });
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: "sean" });
+    expect(() => updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/other" })).toThrowError(
+      /agents.*self-assign|human-only/i,
+    );
+    expect(getIssue(db, "AIPI-1").assigneeId).toBe(human.id);
+  });
+
+  it("an agent cannot assign an unassigned issue to a different actor", () => {
+    createActor(db, { name: "claude/other", type: "agent" });
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    expect(() => updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/other" })).toThrowError(
+      /agents.*self-assign|human-only/i,
+    );
+    expect(getIssue(db, "AIPI-1").assigneeId).toBeNull();
+  });
+
+  it("an agent cannot clear an existing assignee", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: "sean" });
+    expect(() => updateIssue(db, agent, "AIPI-1", { assigneeName: null })).toThrowError(
+      /human-only/i,
+    );
+    expect(getIssue(db, "AIPI-1").assigneeId).toBe(human.id);
+  });
+
+  it("a human can still reassign and clear assignees", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: "claude/worker" });
+    expect(updateIssue(db, human, "AIPI-1", { assigneeName: "sean" }).assigneeId).toBe(human.id);
+    expect(updateIssue(db, human, "AIPI-1", { assigneeName: null }).assigneeId).toBeNull();
+  });
+
+  it("an agent may self-assign an unassigned issue (the claim_issue flow)", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    const r = updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/worker" });
+    expect(r.assigneeId).toBe(agent.id);
+  });
+
+  it("an agent cannot steal a claim by self-assigning an issue claimed by someone else", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    claimIssue(db, other, "AIPI-1");
+    expect(() => updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/worker" })).toThrowError(
+      /already claimed by claude\/other/i,
+    );
+    expect(getIssue(db, "AIPI-1").assigneeId).toBe(other.id);
+  });
+
+  it("an agent cannot self-assign an issue with an open PR from a prior claim", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+    });
+    // Stale-claim release: back to todo, assignee cleared, PR still open.
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: null });
+    const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    expect(() => updateIssue(db, other, "AIPI-1", { assigneeName: "claude/other" })).toThrowError(
+      /open PR \(#7/i,
+    );
+    expect(getIssue(db, "AIPI-1").assigneeId).toBeNull();
+  });
+
+  it("a no-op assignee patch by an agent (already the assignee) still succeeds", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimIssue(db, agent, "AIPI-1");
+    const r = updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/worker" });
+    expect(r.assigneeId).toBe(agent.id);
+  });
+
+  it("claim_issue still works end-to-end for agents (self-assign via updateIssue)", () => {
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    const claimed = claimIssue(db, agent, "AIPI-1");
+    expect(claimed.assigneeId).toBe(agent.id);
+    expect(claimed.status).toBe("in_progress");
+  });
+});
+
 describe("audit log stays consistent with column state", () => {
   // SYD-127: events is a co-written audit log, not a fold/replay source —
   // nothing enforces agreement between it and the mutable issues columns
