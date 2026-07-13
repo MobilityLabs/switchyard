@@ -40,6 +40,8 @@ import {
   MAX_QUEUE_MERGE_ATTEMPTS,
   queueRebaseConflictComment,
   queueDeliveredNote,
+  buildBranchProtectionArgs,
+  evaluateBranchProtection,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
 
@@ -523,6 +525,62 @@ describe("comment bodies", () => {
     const body = deliveryFailureComment("SYD-9", "merge conflict");
     expect(body).toContain("SYD-9");
     expect(body).toContain("merge conflict");
+  });
+});
+
+describe("branch-protection health check (SYD-209)", () => {
+  it("buildBranchProtectionArgs targets the repo's main protection API", () => {
+    expect(buildBranchProtectionArgs("MobilityLabs/switchyard")).toEqual([
+      "api",
+      "repos/MobilityLabs/switchyard/branches/main/protection",
+    ]);
+  });
+
+  it("is ok when main requires at least one status check", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, contexts: ["test"] },
+      enforce_admins: { enabled: true },
+    });
+    expect(res.ok).toBe(true);
+    expect(res.problems).toEqual([]);
+  });
+
+  it("reads the newer checks[] shape too", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, checks: [{ context: "test" }] },
+      enforce_admins: { enabled: true },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("alarms when the branch has no protection at all (null / 404)", () => {
+    const res = evaluateBranchProtection(null);
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/no branch protection/i);
+  });
+
+  it("alarms when required status checks are absent", () => {
+    const res = evaluateBranchProtection({ enforce_admins: { enabled: true } });
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/required status check/i);
+  });
+
+  it("alarms when the required-checks list is empty (protection present but toothless)", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, contexts: [] },
+      enforce_admins: { enabled: true },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/no required status check/i);
+  });
+
+  it("flags admin bypass (enforce_admins disabled) as a problem so a privileged worker cred is caught", () => {
+    const res = evaluateBranchProtection({
+      required_status_checks: { strict: true, contexts: ["test"] },
+      enforce_admins: { enabled: false },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/admin/i);
   });
 });
 

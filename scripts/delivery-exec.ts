@@ -27,7 +27,9 @@ import {
   buildPrViewFreshnessArgs,
   buildPrViewLiveStateArgs,
   buildPrViewChecksArgs,
+  buildBranchProtectionArgs,
   evaluateChecks,
+  evaluateBranchProtection,
   shouldKeepWaitingForChecks,
   shouldRetryMergePoll,
   parsePrNumberFromUrl,
@@ -258,6 +260,32 @@ export async function pollUntilMergeable(repo: string, prNumber: number): Promis
     state = await readMergeableState(prNumber, ownerRepo);
   }
   return state;
+}
+
+/**
+ * Reads a linked repo's `main` branch protection LIVE and returns the health
+ * verdict (SYD-209). A `gh api ... /protection` 404 (branch unprotected, or
+ * the credential can't read protection) is treated as "no protection" — the
+ * loud, fail-safe reading — rather than silently passing. The caller warns on
+ * `!ok`; it never blocks delivery by itself (an operator alarm, not a gate).
+ */
+export async function checkBranchProtection(
+  repo: string,
+): Promise<{ ok: boolean; problems: string[] }> {
+  const ownerRepo = await originOwnerRepo(repo);
+  let raw: string;
+  try {
+    raw = await run("gh", buildBranchProtectionArgs(ownerRepo), { cwd: GH_CWD });
+  } catch {
+    return evaluateBranchProtection(null);
+  }
+  let protection: unknown = null;
+  try {
+    protection = JSON.parse(raw);
+  } catch {
+    protection = null;
+  }
+  return evaluateBranchProtection(protection as Parameters<typeof evaluateBranchProtection>[0]);
 }
 
 /**

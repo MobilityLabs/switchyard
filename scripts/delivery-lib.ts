@@ -368,6 +368,59 @@ export function buildPrViewChecksArgs(prNumber: number, ownerRepo: string): stri
   ];
 }
 
+// Branch-protection health check (SYD-209): CI is the sole check authority, so
+// the merge's safety rests on GitHub actually *requiring* those checks on main
+// (a rogue/compromised worker is bounded by branch protection + a
+// least-privilege credential, not by the SHA chain). A startup/periodic check
+// reads the linked repo's protection and alarms loudly if it's relaxed, rather
+// than silently trusting an off-box config.
+
+export function buildBranchProtectionArgs(ownerRepo: string, branch = MAIN_BRANCH): string[] {
+  return ["api", `repos/${ownerRepo}/branches/${branch}/protection`];
+}
+
+type BranchProtection = {
+  required_status_checks?: {
+    strict?: boolean;
+    contexts?: string[];
+    checks?: { context: string }[];
+  } | null;
+  enforce_admins?: { enabled?: boolean } | boolean | null;
+};
+
+/**
+ * Pure verdict on a branch's protection: `ok` only when main requires at least
+ * one status check AND admins can't bypass it. Returns every problem found (not
+ * just the first) so the operator alarm names all of them at once. `null`
+ * models the API's 404 for an unprotected branch.
+ */
+export function evaluateBranchProtection(
+  protection: BranchProtection | null,
+): { ok: boolean; problems: string[] } {
+  const problems: string[] = [];
+  if (!protection) {
+    return { ok: false, problems: ["no branch protection on main"] };
+  }
+  const rsc = protection.required_status_checks;
+  if (!rsc) {
+    problems.push("main has no required status checks (CI is not enforced)");
+  } else {
+    const count = (rsc.contexts?.length ?? 0) + (rsc.checks?.length ?? 0);
+    if (count === 0) {
+      problems.push("main's required-status-checks list is empty (no required status check)");
+    }
+  }
+  // enforce_admins is `{enabled}` from the REST API; tolerate a bare boolean.
+  const adminsEnforced =
+    typeof protection.enforce_admins === "boolean"
+      ? protection.enforce_admins
+      : (protection.enforce_admins?.enabled ?? false);
+  if (!adminsEnforced) {
+    problems.push("enforce_admins is off — an admin credential can bypass required checks / push main");
+  }
+  return { ok: problems.length === 0, problems };
+}
+
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */
 export function parseOwnerRepo(remoteUrl: string): string {
   const trimmed = remoteUrl.trim().replace(/\.git$/, "");

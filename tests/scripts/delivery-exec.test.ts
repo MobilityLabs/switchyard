@@ -17,6 +17,8 @@ import {
   pollUntilMergeable,
   readChecks,
   waitForChecks,
+  attemptAutoRebase,
+  checkBranchProtection,
 } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
@@ -267,5 +269,114 @@ describe("readChecks / waitForChecks", () => {
       waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 20 }),
     );
     expect(state).toBe("pending");
+  });
+});
+
+// SYD-209: the pre-rebase fetched-head assertion is the SHA chain's live
+// anchor — a real git fixture proves it against actual `git fetch`/`rev-parse`,
+// not a mock. A branch head that isn't an authorized SHA (S0, or a prior S1) is
+// a third-party push and must NOT be laundered into "a rebase the worker did".
+describe("attemptAutoRebase S0 anchor (SYD-209)", () => {
+  async function g(cwd: string, ...args: string[]): Promise<void> {
+    await execFileP("git", ["-C", cwd, ...args]);
+  }
+
+  async function setupRemoteAndAgentBranch(): Promise<{ repo: string; head: string }> {
+    const remote = mkdtempSync(path.join(tmpdir(), "anchor-remote-"));
+    await execFileP("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    const repo = mkdtempSync(path.join(tmpdir(), "anchor-repo-"));
+    await execFileP("git", ["init", "-q", "-b", "main", repo]);
+    await g(repo, "config", "user.email", "t@example.com");
+    await g(repo, "config", "user.name", "t");
+    await g(repo, "remote", "add", "origin", remote);
+    writeFileSync(path.join(repo, "base.txt"), "base");
+    await g(repo, "add", ".");
+    await g(repo, "commit", "-qm", "base");
+    await g(repo, "push", "-q", "origin", "main");
+    await g(repo, "checkout", "-qb", "agent/TEST-1");
+    writeFileSync(path.join(repo, "feat.txt"), "feature");
+    await g(repo, "add", ".");
+    await g(repo, "commit", "-qm", "feat");
+    await g(repo, "push", "-q", "origin", "agent/TEST-1");
+    const head = (await execFileP("git", ["-C", repo, "rev-parse", "HEAD"])).stdout.trim();
+    return { repo, head };
+  }
+
+  it("returns head-moved (never rebasing/pushing) when the live head is not an authorized SHA", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "anchor-clone-"));
+
+    const res = await attemptAutoRebase(repo, cloneDir, "TEST-1", ["a-head-we-never-authorized"]);
+
+    expect(res).toEqual({ status: "head-moved", observed: head });
+  });
+
+  it("rebases and force-pushes when the fetched head is the authorized S0", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "anchor-clone-"));
+
+    const res = await attemptAutoRebase(repo, cloneDir, "TEST-1", [head]);
+
+    // main didn't move, so the rebase is a no-op and S1 === the authorized head.
+    expect(res.status).toBe("rebased");
+    if (res.status === "rebased") expect(res.sha).toBe(head);
+  });
+});
+
+// SYD-209 branch-protection health check against a fake `gh api`.
+describe("checkBranchProtection", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "bp-repo-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  function makeFakeGh(binDir: string, body: string, exit = 0): void {
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, `#!/bin/sh\ncat <<'JSON'\n${body}\nJSON\nexit ${exit}\n`);
+    chmodSync(ghPath, 0o755);
+  }
+
+  it("is ok when main requires checks and enforces admins", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "bp-bin-"));
+    makeFakeGh(
+      binDir,
+      JSON.stringify({
+        required_status_checks: { strict: true, contexts: ["test"] },
+        enforce_admins: { enabled: true },
+      }),
+    );
+
+    const res = await withFakeGhOnPath(binDir, () => checkBranchProtection(repo));
+    expect(res.ok).toBe(true);
+  });
+
+  it("treats a gh api failure (404 / unprotected branch) as no protection — fail safe", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "bp-bin-"));
+    makeFakeGh(binDir, "Not Found", 1);
+
+    const res = await withFakeGhOnPath(binDir, () => checkBranchProtection(repo));
+    expect(res.ok).toBe(false);
+    expect(res.problems.join(" ")).toMatch(/no branch protection/i);
   });
 });

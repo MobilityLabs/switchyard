@@ -32,8 +32,6 @@ import {
   runGated,
   withRetry,
   HttpStatusError,
-  egressMode,
-  ensureEgressGuard,
   type WorkerConfig,
   type WorkerProject,
 } from "./worker-select.js";
@@ -65,15 +63,12 @@ import {
   attemptAutoRebase,
   pollUntilMergeable,
   waitForChecks,
+  checkBranchProtection,
   originOwnerRepo,
   prFreshness,
   prLiveState,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileP = promisify(execFile);
 
 const DEFAULT_POLL_SECONDS = 30;
 
@@ -856,6 +851,31 @@ async function tick(
   });
 }
 
+/**
+ * Startup/periodic health check (SYD-209): reads each linked repo's `main`
+ * branch protection live and logs a loud warning if it's relaxed (no required
+ * checks, an empty required-checks list, or admins allowed to bypass). CI is
+ * the sole check authority, so an unprotected main would let the delivery
+ * worker merge unverified code — this surfaces that off-box misconfiguration
+ * instead of trusting it. Read-only and best-effort: it never blocks delivery.
+ */
+export async function warnOnRelaxedBranchProtection(config: WorkerConfig): Promise<void> {
+  for (const [key, proj] of Object.entries(config.projects)) {
+    try {
+      const health = await checkBranchProtection(proj.repo);
+      if (!health.ok) {
+        console.error(
+          `WARNING: ${key}'s repo has relaxed branch protection on main — CI is the sole check ` +
+            `authority (SYD-209), so delivery merges are unguarded until this is fixed:\n  - ` +
+            health.problems.join("\n  - "),
+        );
+      }
+    } catch (err) {
+      console.error(`could not check branch protection for ${key}: ${(err as Error).message}`);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const once = args.includes("--once");
@@ -870,21 +890,12 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const gate = newTickGate();
 
-  // SYD-110: conflict-resolution dispatches are containers too — make sure
-  // the egress guard exists before any might launch. Best-effort here (unlike
-  // agent-worker's hard fail): merges/deploys must keep working even if
-  // docker or the proxy image is unavailable; a conflict dispatch would then
-  // fail visibly through the SYD-100 escalation path.
-  if (egressMode(config) === "proxy" && !dryRun) {
-    await ensureEgressGuard(config, async (cmd, cmdArgs) => execFileP(cmd, cmdArgs), process.env).catch(
-      (err: Error) =>
-        console.error(
-          `WARNING: egress guard setup failed (SYD-110): ${err.message} — ` +
-            "conflict-resolution dispatches will fail until `npm run build:worker-image` " +
-            'has built the proxy image (or egress: "open" explicitly opts out)',
-        ),
-    );
-  }
+  // SYD-209 branch-protection health check: CI is now the sole check authority,
+  // so the merge's safety rests on GitHub actually requiring those checks on
+  // main. Warn loudly at startup if any linked repo's protection is relaxed —
+  // an operator alarm, never a silent downgrade. Best-effort and read-only, so
+  // it runs in dry-run too and never blocks the tick loop.
+  await warnOnRelaxedBranchProtection(config);
 
   // Dry runs are non-mutating (never start/finish an attempt, merge, deploy,
   // or comment), so they're safe to overlap with a live worker or each other —
