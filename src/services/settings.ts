@@ -32,6 +32,7 @@ export const REGISTRY = {
   "sessions.stale_seconds": { type: "number", default: 12 * 3600 },
   "claims.stale_seconds": { type: "number", default: 4 * 3600 },
   "claims.deviation_seconds": { type: "number", default: 3600 },
+  "claims.lease_ttl_seconds": { type: "number", default: 8 * 3600 },
   "auth.login_link_ttl_seconds": { type: "number", default: 15 * 60 },
   "webhooks.suppressed_events": { type: "string[]", default: ["progress_note"] },
   "dispatch.max_concurrent": { type: "number", default: 1 },
