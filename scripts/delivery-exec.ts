@@ -23,9 +23,6 @@ import {
   buildRebaseAbortArgs,
   buildConflictFilesArgs,
   buildForcePushWithLeaseArgs,
-  buildConflictResolutionDockerArgs,
-  buildDetachOntoMainArgs,
-  buildSyncLocalMainArgs,
   buildPrViewMergeableArgs,
   buildPrViewFreshnessArgs,
   buildPrViewLiveStateArgs,
@@ -41,12 +38,10 @@ import {
   CHECKS_POLL_INTERVAL_MS,
   type PublishOutcome,
   type RebaseOutcome,
-  type ConflictResolutionOutcome,
   type MergeableState,
   type ChecksRollup,
   type ChecksState,
 } from "./delivery-lib.js";
-import type { WorkerConfig, WorkerProject } from "./worker-select.js";
 
 const execFileP = promisify(execFile);
 
@@ -281,75 +276,40 @@ export async function ensureCleanClone(sourceRepo: string, cloneDir: string): Pr
 }
 
 /**
- * Installs dependencies in the clean clone via `npm ci`. `npm ci` deletes
- * node_modules wholesale before installing from the lockfile, unlike `npm
- * install` (which leaves already-installed packages alone) -- needed
- * because ensureCleanClone's `git clean -fd` does NOT remove node_modules
- * (it's gitignored; -fd only clears untracked files git isn't told to
- * ignore), so a persistent clone can carry native modules (e.g.
- * better-sqlite3) compiled for a node version the gate no longer runs
- * (SYD-101).
- */
-export async function installDeps(cloneDir: string, env?: NodeJS.ProcessEnv): Promise<string> {
-  return run("npm", ["ci"], { cwd: cloneDir, env });
-}
-
-/**
- * Post-merge verification gate (SYD-78): a PR is reviewed and green in
- * isolation, but nothing previously confirmed that main *after* the merge
- * (i.e. this branch plus everything else landed since its clone) still
- * typechecks and passes its tests — semantic conflicts between concurrently
- * merged branches land silently. Runs in the clean clone, never the deploy
- * caller's working tree.
+ * Rebases agent/<ref> onto origin/main in the scratch clone and force-pushes
+ * the result so CI re-runs on the rebased head (SYD-209 SHA chain, steps 1-2).
+ * No verification runs here any more — CI is the sole check authority
+ * (runVerification is gone), so the worker only *serializes* rebase→push and
+ * lets GitHub's own checks gate the merge.
  *
- * Mirrors the commit gate's `typecheck` -> `build:ui` -> `test` order
- * (.github/workflows/ci.yml): the server 404s SPA routes until `dist/ui`
- * exists (CLAUDE.md), and tests/integration/spa-fallback.test.ts depends on
- * it, so skipping build:ui here fails that test on every clean clone
- * regardless of the branch's content (SYD-168). NO_COLOR=1 makes verify
- * tails born plain instead of relying on tailOf's ANSI strip (SYD-161) — and
- * is passed to installDeps too, not just the steps below, so npm ci's
- * behavior doesn't depend on whether the calling process happens to have
- * NO_COLOR set (SYD-170: it's set here in every real run, so a test
- * asserting it unset for npm ci passes locally but fails under this very
- * gate).
- */
-export async function runVerification(cloneDir: string): Promise<{ ok: boolean; tail: string }> {
-  const env = { NO_COLOR: "1" };
-  try {
-    await installDeps(cloneDir, env);
-    const typecheck = await run("npm", ["run", "typecheck"], { cwd: cloneDir, env });
-    const buildUi = await run("npm", ["run", "build:ui"], { cwd: cloneDir, env });
-    const tests = await run("npx", ["vitest", "run"], { cwd: cloneDir, env });
-    return { ok: true, tail: tailOf(`${typecheck}\n${buildUi}\n${tests}`) };
-  } catch (err) {
-    const e = err as Error & { stdout?: string; stderr?: string };
-    return { ok: false, tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
-  }
-}
-
-/**
- * Mechanical recovery for a `gh pr merge` failure (SYD-85): rebases the agent
- * branch onto origin/main in the scratch clone (reusing ensureCleanClone, the
- * same machinery the deploy step uses). A clean rebase is verified (typecheck
- * + tests — the merged combination was never tested) and force-pushed
- * with-lease so the caller can retry the merge; a conflicted rebase is
- * aborted and reported, never resolved automatically — that needs intent a
- * script doesn't have. Force-push only ever targets `agent/<ref>` branches.
- * Callers are expected to invoke this at most once per merge failure (a
- * failed retry falls through to the normal failure path) so a stuck PR can't
- * loop rebase attempts forever.
+ * `acceptedHeads` is the SHA-chain anchor: the fetched remote head of
+ * agent/<ref> must be one the worker authorized — S0 (the human-stamped head)
+ * on the first pass, or the S1 it force-pushed on a previous pass (crash
+ * resumption / main-moved retry re-anchor on their own rebase). If the live
+ * remote head is none of those, a third-party commit landed on the branch
+ * after the stamp; we return `head-moved` (never laundering it into "a rebase
+ * the worker performed") and the caller disarms. A conflicted rebase is
+ * aborted and reported (the orchestrator bounces it — never resolves in
+ * place). Force-push only ever targets `agent/<ref>`.
  */
 export async function attemptAutoRebase(
   repo: string,
   cloneDir: string,
   ref: string,
+  acceptedHeads: string[],
 ): Promise<RebaseOutcome> {
   await ensureCleanClone(repo, cloneDir);
   try {
     await runGit(["-C", cloneDir, ...buildFetchAgentBranchArgs(ref)]);
   } catch {
     return { status: "no-branch" };
+  }
+  // The live anchor: compare the head GitHub actually has for the branch
+  // against the heads the worker authorized. FETCH_HEAD is the just-fetched
+  // remote tip.
+  const fetchedHead = await runGit(["-C", cloneDir, "rev-parse", "FETCH_HEAD"]);
+  if (!acceptedHeads.includes(fetchedHead)) {
+    return { status: "head-moved", observed: fetchedHead };
   }
   await runGit(["-C", cloneDir, ...buildCheckoutRebaseBranchArgs(ref)]);
   try {
@@ -363,84 +323,9 @@ export async function attemptAutoRebase(
     await runGit(["-C", cloneDir, ...buildRebaseAbortArgs()]).catch(() => {});
     return { status: "conflict", files };
   }
-  const verify = await runVerification(cloneDir);
-  if (!verify.ok) return { status: "verify-failed", tail: verify.tail };
   await runGit(["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
   const sha = await runGit(["-C", cloneDir, "rev-parse", "HEAD"]);
   return { status: "rebased", sha };
-}
-
-/**
- * Dispatches a one-shot conflict-resolution worker session (SYD-100) against
- * `cloneDir` — the same scratch clone attemptAutoRebase just left checked out
- * on agent/<ref> at its pre-rebase commit, having aborted its own mechanical
- * rebase on hitting real conflicts. Syncs the clone's own local main branch
- * to its origin/main (the container's "origin" is this clone, so its local
- * main is otherwise frozen at whatever commit it had the first time the
- * clone was ever created — see buildSyncLocalMainArgs), then detaches HEAD
- * onto it (git refuses to push into a checked-out branch) so the container's
- * own `git push` into the /origin bind mount can update agent/<ref>.
- *
- * A session is free to decline resolving (see buildConflictResolutionPrompt)
- * without the container itself failing, so success is judged by whether
- * agent/<ref> actually moved, not by the container's exit code alone: once
- * the container exits cleanly, this pushes the resolved branch on to GitHub
- * with the host's own credentials (the container never sees them) and
- * returns the merge-ready sha — unless the branch is unchanged, which is
- * reported as a failure so the caller escalates instead of retrying a merge
- * that will just hit the same conflict again. The resolver session never
- * merges; the caller (deliver.ts) re-verifies and retries the merge through
- * its normal path.
- */
-export async function dispatchConflictResolution(
-  cloneDir: string,
-  ref: string,
-  conflictFiles: string[],
-  project: WorkerProject,
-  config: WorkerConfig,
-): Promise<ConflictResolutionOutcome> {
-  const originalSha = await runGit(["-C", cloneDir, "rev-parse", agentBranch(ref)]);
-
-  await runGit(["-C", cloneDir, ...buildSyncLocalMainArgs()]);
-  await runGit(["-C", cloneDir, ...buildDetachOntoMainArgs()]);
-
-  const dockerArgs = buildConflictResolutionDockerArgs(
-    ref,
-    conflictFiles,
-    cloneDir,
-    project,
-    config,
-    process.env,
-  );
-  let dockerOutput: string;
-  try {
-    dockerOutput = await run("docker", dockerArgs);
-  } catch (err) {
-    const e = err as Error & { stdout?: string; stderr?: string };
-    return { status: "failed", tail: tailOf(`${e.stdout ?? ""}\n${e.stderr ?? e.message}`) };
-  }
-
-  const resolvedSha = await runGit(["-C", cloneDir, "rev-parse", agentBranch(ref)]);
-  if (resolvedSha === originalSha) {
-    return {
-      status: "failed",
-      tail: tailOf(
-        `${dockerOutput}\nthe session left ${agentBranch(ref)} unchanged — see its own comment on the issue for why`,
-      ),
-    };
-  }
-
-  try {
-    await runGit(["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);
-  } catch (err) {
-    return {
-      status: "failed",
-      tail: tailOf(
-        `${dockerOutput}\ncould not push the resolved branch to GitHub: ${(err as Error).message}`,
-      ),
-    };
-  }
-  return { status: "resolved", sha: resolvedSha };
 }
 
 /** Runs the project's `npm run deploy` from the clean clone, if it has one. */

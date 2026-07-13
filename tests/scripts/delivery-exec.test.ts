@@ -12,11 +12,9 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
-  installDeps,
   run,
   runGit,
   pollUntilMergeable,
-  runVerification,
   readChecks,
   waitForChecks,
 } from "../../scripts/delivery-exec.js";
@@ -71,87 +69,6 @@ describe("runGit", () => {
     await run("git", ["-C", repo, "push", remote, "HEAD:refs/heads/agent/TEST-1"]);
 
     expect(existsSync(marker)).toBe(true);
-  });
-});
-
-// SYD-101: the persistent deliver clone kept native modules (e.g.
-// better-sqlite3) compiled for a node version the gate no longer runs,
-// because `npm install` (the prior behavior) leaves already-installed
-// packages alone and `git clean -fd` doesn't touch the gitignored
-// node_modules dir. `npm ci` fixes this by deleting node_modules wholesale
-// before installing -- this reproduces that exact scenario.
-describe("installDeps", () => {
-  it("wipes a stale node_modules before installing", async () => {
-    const workspace = mkdtempSync(path.join(tmpdir(), "delivery-exec-test-"));
-    writeFileSync(
-      path.join(workspace, "package.json"),
-      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
-    );
-    writeFileSync(
-      path.join(workspace, "package-lock.json"),
-      JSON.stringify({
-        name: "tmp-x",
-        version: "1.0.0",
-        lockfileVersion: 3,
-        requires: true,
-        packages: { "": { name: "tmp-x", version: "1.0.0" } },
-      }),
-    );
-    const staleModule = path.join(workspace, "node_modules", "stale-native-module");
-    mkdirSync(staleModule, { recursive: true });
-    writeFileSync(
-      path.join(staleModule, "binding.node"),
-      "stale binary compiled for the wrong node ABI",
-    );
-
-    await installDeps(workspace);
-
-    expect(existsSync(staleModule)).toBe(false);
-  });
-});
-
-// SYD-168: runVerification ran typecheck + vitest but never build:ui, so
-// tests/integration/spa-fallback.test.ts (which needs dist/ui) failed on
-// every clean clone regardless of branch content. Fakes npm/npx on PATH to
-// assert the exact command sequence and env, without a real npm ci/build.
-describe("runVerification", () => {
-  /** Fake `npm`/`npx` that record `<argv> NO_COLOR=<val>` per invocation and exit 0. */
-  function makeFakeNpmAndNpx(binDir: string): { callsFile: string } {
-    const callsFile = path.join(binDir, "calls");
-    writeFileSync(callsFile, "");
-    for (const name of ["npm", "npx"]) {
-      const binPath = path.join(binDir, name);
-      writeFileSync(
-        binPath,
-        `#!/bin/sh\necho "${name} $* NO_COLOR=$NO_COLOR" >> "${callsFile}"\nexit 0\n`,
-      );
-      chmodSync(binPath, 0o755);
-    }
-    return { callsFile };
-  }
-
-  it("runs build:ui between typecheck and vitest, with NO_COLOR set on each verify step", async () => {
-    const cloneDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-verify-test-"));
-    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-verify-bin-"));
-    const { callsFile } = makeFakeNpmAndNpx(binDir);
-
-    const origPath = process.env.PATH;
-    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
-    let result: { ok: boolean; tail: string };
-    try {
-      result = await runVerification(cloneDir);
-    } finally {
-      process.env.PATH = origPath;
-    }
-
-    expect(result.ok).toBe(true);
-    const calls = readFileSync(callsFile, "utf8").trim().split("\n");
-    expect(calls).toEqual([
-      "npm ci NO_COLOR=1",
-      "npm run typecheck NO_COLOR=1",
-      "npm run build:ui NO_COLOR=1",
-      "npx vitest run NO_COLOR=1",
-    ]);
   });
 });
 

@@ -40,24 +40,17 @@ import {
 import {
   deliveryComment,
   deliveryFailureComment,
-  verificationFailureComment,
   crashedAttemptComment,
-  autoRebasedNote,
-  autoRebaseConflictComment,
-  autoRebaseVerifyFailedComment,
-  shouldDispatchConflictResolution,
-  conflictResolutionFailedComment,
-  conflictResolvedNote,
-  isQueueMode,
   shouldRetryQueueRebase,
   MAX_QUEUE_MERGE_ATTEMPTS,
   queueRebaseConflictComment,
-  queueVerifyFailedComment,
   queueDeliveredNote,
+  checksFailedComment,
+  checksTimeoutComment,
+  shaChainDisarmedComment,
   filterWorkToProjects,
   resumeActionFor,
   agentBranch,
-  MAIN_BRANCH,
   type DeliveryEventInput,
   type DeliveryWork,
   type WorkAuthorization,
@@ -68,11 +61,10 @@ import {
 import {
   mergeAgentPr,
   ensureCleanClone,
-  runVerification,
   runDeploy,
   attemptAutoRebase,
-  dispatchConflictResolution,
   pollUntilMergeable,
+  waitForChecks,
   originOwnerRepo,
   prFreshness,
   prLiveState,
@@ -251,18 +243,33 @@ async function finishAttempt(
   await sendWithRetry(url, token, "PATCH", `PATCH delivery-attempt ${attemptId}`, body);
 }
 
+/** Persists the post-rebase head S1 onto the OPEN attempt right after the
+ * force-push (SYD-209), so a crash before the merge re-anchors on S1 instead
+ * of disarming. Does not finish the attempt. */
+async function recordDerivedHead(
+  config: WorkerConfig,
+  token: string,
+  attemptId: number,
+  derivedHeadSha: string,
+): Promise<void> {
+  const url = `${apiBase(config)}/api/delivery-attempts/${attemptId}/derived-head`;
+  await sendWithRetry(url, token, "PATCH", `PATCH derived-head ${attemptId}`, { derivedHeadSha });
+}
+
 /**
- * Shared delivery tail (SYD-164): deploys from a clean clone (post-merge
- * verify as a backstop — redundant under queue mode's pre-merge gate, but
- * kept as defense in depth), then comments and records the `delivered`
- * event. Used by the legacy merge-first flow, the queue flow, crash
+ * Shared delivery tail (SYD-164): deploys from a clean clone, then comments
+ * and records the `delivered` event. Used by the merge orchestrator, crash
  * resumption, and deploy retries once each has a merge SHA in hand, so the
- * deploy/verify/comment behavior can't drift between them. `note`, if given,
- * is prepended to the delivered comment to say how the merge was reached.
+ * deploy/comment behavior can't drift between them. `note`, if given, is
+ * prepended to the delivered comment to say how the merge was reached.
  *
- * Returns `"merged_deploy_failed"` when the post-merge verify gate fails or
- * the deploy step fails (the merge already landed either way — the deploy-
- * retry query owns it), else `"merged_deployed"`.
+ * The old post-merge verify backstop (a second clean-clone typecheck/build/
+ * test after the merge) is gone under SYD-209: CI is the sole check authority
+ * and already gated the merge on green checks for the exact merged head, so
+ * re-running the suite here is pure duplication.
+ *
+ * Returns `"merged_deploy_failed"` when the deploy step fails (the merge
+ * already landed — the deploy-retry query owns it), else `"merged_deployed"`.
  */
 async function finishDelivery(
   ref: string,
@@ -277,27 +284,6 @@ async function finishDelivery(
   let deploy: Awaited<ReturnType<typeof runDeploy>> = { ran: false };
   if (config.delivery?.deploy !== false) {
     await ensureCleanClone(project.repo, cloneDir);
-
-    if (config.delivery?.verify !== false) {
-      const verify = await runVerification(cloneDir);
-      if (!verify.ok) {
-        console.error(`${ref}: post-merge verification FAILED — main is red, deploy skipped`);
-        await postComment(
-          config,
-          token,
-          ref,
-          verificationFailureComment(prNumber, mergeSha, verify.tail),
-        );
-        await postDeliveryEvent(config, token, ref, {
-          type: "delivery_failed",
-          message: `post-merge verification failed after merging PR #${prNumber} at ${mergeSha} — deploy skipped:\n${verify.tail}`,
-        }).catch((e: Error) =>
-          console.error(`could not record delivery_failed event for ${ref}: ${e.message}`),
-        );
-        return "merged_deploy_failed";
-      }
-    }
-
     deploy = await runDeploy(cloneDir);
     console.log(`${ref}: deploy ${deploy.ran ? (deploy.ok ? "succeeded" : "FAILED") : "skipped"}`);
   }
@@ -356,14 +342,25 @@ async function runDeliveryTail(
 }
 
 /**
- * Queue-mode per-ref flow (SYD-164): rebase agent/<ref> onto current
- * origin/main and verify the REBASED tree (typecheck + tests) *before* ever
- * attempting the merge. A conflict or a failing verify bounces the ref
- * (comment + delivery_failed) instead of repairing in place: main is never
- * touched. attemptAutoRebase already implements the rebase+verify+force-push
- * steps; this loop only adds the merge attempt and a bounded retry for the
- * rare case where main moves again between the force-push and the merge.
- * Returns the attempt outcome (and the rebased head S1 on success).
+ * SYD-209 merge orchestrator (the sole OPEN-PR delivery path; the legacy
+ * merge-first flow + SYD-100 conflict-resolution dispatch were retired). For
+ * one open agent PR:
+ *   1. Rebase agent/<ref> onto origin/main and force-push → S1, after
+ *      asserting the fetched remote head is one the worker authorized (S0, the
+ *      human-stamped head, on the first pass; a prior S1 on a retry or crash
+ *      resume). A third-party push breaks the chain → disarm.
+ *   2. Persist S1 on the attempt row (so a crash before the merge re-anchors).
+ *   3. Wait for GitHub's required checks to conclude on S1 and read the verdict
+ *      LIVE — CI is the sole check authority; there is no client-side verify.
+ *   4. Merge with the head pinned (gh pr merge --match-head-commit S1).
+ * A rebase conflict, a broken chain, a red check, or a check timeout bounces
+ * the ref (comment + delivery_failed, main untouched). The bounded main-moved
+ * retry re-runs the whole cycle against the newer main.
+ *
+ * `acceptedHeads` seeds the SHA-chain anchor: [S0] for a fresh delivery,
+ * [S0, S1] on crash resumption so the worker recognizes its own prior rebase.
+ * Returns the attempt outcome (and the rebased head S1 whenever one was
+ * produced, so the caller records derivedHeadSha even on a bounce).
  */
 export async function deliverQueue(
   ref: string,
@@ -372,64 +369,116 @@ export async function deliverQueue(
   token: string,
   cloneDir: string,
   prNumber: number,
+  acceptedHeads: string[],
+  attemptId: number,
 ): Promise<DeliverOutcome> {
+  let accepted = acceptedHeads;
   for (let attempt = 1; ; attempt++) {
-    const rebase = await attemptAutoRebase(project.repo, cloneDir, ref);
+    const rebase = await attemptAutoRebase(project.repo, cloneDir, ref, accepted);
     if (rebase.status === "no-branch") {
-      throw new Error(
-        `queue mode: no ${agentBranch(ref)} branch found to rebase for PR #${prNumber}`,
+      throw new Error(`no ${agentBranch(ref)} branch found to rebase for PR #${prNumber}`);
+    }
+    if (rebase.status === "head-moved") {
+      console.log(
+        `${ref}: SHA chain broken — branch head ${rebase.observed} is not an authorized head`,
       );
+      await postComment(config, token, ref, shaChainDisarmedComment(ref, accepted[0], rebase.observed));
+      await postDeliveryEvent(config, token, ref, {
+        type: "delivery_failed",
+        message: `a commit landed on ${agentBranch(ref)} after the delivery was authorized — disarmed`,
+      }).catch((e: Error) =>
+        console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      return { outcome: "sha_chain_disarmed" };
     }
     if (rebase.status === "conflict") {
-      console.log(
-        `${ref}: queue-mode rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`,
-      );
+      console.log(`${ref}: rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`);
       await postComment(config, token, ref, queueRebaseConflictComment(ref, rebase.files));
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
-        message: `queue-mode rebase onto ${MAIN_BRANCH} hit real conflicts`,
+        message: `rebase onto main hit real conflicts`,
       }).catch((e: Error) =>
         console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
       );
       return { outcome: "conflict_bounced" };
     }
-    if (rebase.status === "verify-failed") {
-      console.log(
-        `${ref}: queue-mode rebase applied cleanly but the post-rebase verify gate failed`,
+
+    // Rebased cleanly → S1. Persist it before the wait so a crash re-anchors
+    // on our own rebase instead of disarming, and accept it as our own head on
+    // any subsequent retry.
+    const s1 = rebase.sha;
+    accepted = [s1];
+    console.log(
+      `${ref}: rebased onto main at ${s1} (attempt ${attempt}/${MAX_QUEUE_MERGE_ATTEMPTS})`,
+    );
+    await recordDerivedHead(config, token, attemptId, s1).catch((e: Error) =>
+      console.error(`could not persist derived head for ${ref}: ${e.message}`),
+    );
+
+    // CI is the check authority: wait for the required checks to conclude on
+    // S1, read the verdict live.
+    const checks = await waitForChecks(project.repo, prNumber, s1);
+    console.log(`${ref}: required checks on ${s1} → ${checks}`);
+    if (checks === "head-moved") {
+      const live = await prLiveState(project.repo, prNumber).catch(() => null);
+      await postComment(
+        config,
+        token,
+        ref,
+        shaChainDisarmedComment(ref, s1, live?.headRefOid ?? "unknown"),
       );
-      await postComment(config, token, ref, queueVerifyFailedComment(ref, rebase.tail));
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
-        message: "queue-mode rebase applied cleanly but the post-rebase verify gate failed",
+        message: `a commit landed on ${agentBranch(ref)} after its checks started — disarmed`,
       }).catch((e: Error) =>
         console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
       );
-      return { outcome: "verify_failed" };
+      return { outcome: "sha_chain_disarmed", derivedHeadSha: s1 };
+    }
+    if (checks === "failing") {
+      await postComment(config, token, ref, checksFailedComment(ref));
+      await postDeliveryEvent(config, token, ref, {
+        type: "delivery_failed",
+        message: `required GitHub checks failed on the rebased head ${s1}`,
+      }).catch((e: Error) =>
+        console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      return { outcome: "verify_failed", derivedHeadSha: s1 };
+    }
+    if (checks === "pending") {
+      // shouldKeepWaitingForChecks returned false while still pending → the
+      // wait budget elapsed.
+      await postComment(config, token, ref, checksTimeoutComment(ref));
+      await postDeliveryEvent(config, token, ref, {
+        type: "delivery_failed",
+        message: `required GitHub checks did not conclude within the wait window on ${s1}`,
+      }).catch((e: Error) =>
+        console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      return { outcome: "checks_timeout", derivedHeadSha: s1 };
     }
 
-    console.log(
-      `${ref}: queue-mode rebased onto ${MAIN_BRANCH} at ${rebase.sha} (attempt ${attempt}/${MAX_QUEUE_MERGE_ATTEMPTS})`,
-    );
+    // checks === "passing": CI is green live on S1. Merge with the head pinned
+    // so a push in this window can't slot in (gh refuses; the merge throws and
+    // the retry re-anchors).
     const mergeable = await pollUntilMergeable(project.repo, prNumber);
-    console.log(`${ref}: post-rebase mergeability=${mergeable}`);
+    console.log(`${ref}: pre-merge mergeability=${mergeable}`);
     let mergeSha: string;
     try {
-      mergeSha = await mergeAgentPr(project.repo, prNumber);
+      mergeSha = await mergeAgentPr(project.repo, prNumber, s1);
     } catch (mergeErr) {
       if (!shouldRetryQueueRebase(attempt)) throw mergeErr;
       console.log(
-        `${ref}: queue-mode merge failed after rebase (${(mergeErr as Error).message}) — ` +
-          `${MAIN_BRANCH} moved again, re-rebasing`,
+        `${ref}: merge failed after green-on-${s1} (${(mergeErr as Error).message}) — main moved, re-rebasing`,
       );
       continue;
     }
     // Outside the retry catch (SYD-174): main already has the commit, so a
     // finishDelivery failure is a post-merge problem, not a lost merge — never
-    // re-rebase it (that would hit "no branch found" against the now-deleted
-    // branch) and never call it merge_failed. runDeliveryTail maps any
+    // re-rebase it and never call it merge_failed. runDeliveryTail maps any
     // post-merge failure to merged_deploy_failed, which the deploy-retry query
-    // owns (SYD-208, replacing the propagate-to-outer-handler of SYD-174).
-    console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (queue mode)`);
+    // owns.
+    console.log(`${ref}: merged PR #${prNumber} at ${mergeSha}`);
     const outcome = await runDeliveryTail(
       ref,
       project,
@@ -440,125 +489,8 @@ export async function deliverQueue(
       mergeSha,
       queueDeliveredNote(ref),
     );
-    return { outcome, derivedHeadSha: rebase.sha };
+    return { outcome, derivedHeadSha: s1 };
   }
-}
-
-/**
- * Legacy merge-first flow: try the merge, and only on failure attempt one
- * mechanical rebase (SYD-85) and, if that conflicts and the config allows, one
- * dispatched conflict-resolution session (SYD-100). Returns the attempt
- * outcome (and the derived head S1 when the merge only landed after a
- * rebase/resolution).
- */
-async function deliverLegacy(
-  ref: string,
-  project: WorkerProject,
-  config: WorkerConfig,
-  token: string,
-  cloneDir: string,
-  prNumber: number,
-): Promise<DeliverOutcome> {
-  let mergeSha: string;
-  let derivedHeadSha: string | undefined;
-  let rebased = false;
-  let resolvedConflict = false;
-  try {
-    // Poll before the very first merge attempt too (SYD-152): a PR pushed or
-    // force-pushed moments earlier can still read mergeable=UNKNOWN here, and
-    // `gh pr merge` against UNKNOWN fails with a false "not mergeable".
-    const mergeable = await pollUntilMergeable(project.repo, prNumber);
-    console.log(`${ref}: PR #${prNumber} mergeability=${mergeable}`);
-    mergeSha = await mergeAgentPr(project.repo, prNumber);
-  } catch (mergeErr) {
-    if (config.delivery?.autoRebase === false) throw mergeErr;
-    const originalMessage = (mergeErr as Error).message;
-    console.log(`${ref}: merge failed (${originalMessage}); attempting auto-rebase onto main`);
-    const rebase = await attemptAutoRebase(project.repo, cloneDir, ref);
-    if (rebase.status === "no-branch") throw mergeErr;
-    if (rebase.status === "conflict") {
-      console.log(
-        `${ref}: auto-rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`,
-      );
-      if (!shouldDispatchConflictResolution(config)) {
-        await postComment(
-          config,
-          token,
-          ref,
-          autoRebaseConflictComment(ref, originalMessage, rebase.files),
-        );
-        await postDeliveryEvent(config, token, ref, {
-          type: "delivery_failed",
-          message: originalMessage,
-        }).catch((e: Error) =>
-          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
-        );
-        return { outcome: "conflict_bounced" };
-      }
-      console.log(`${ref}: dispatching a conflict-resolution worker session`);
-      const resolution = await dispatchConflictResolution(
-        cloneDir,
-        ref,
-        rebase.files,
-        project,
-        config,
-      );
-      if (resolution.status !== "resolved") {
-        console.log(`${ref}: conflict-resolution session did not produce a mergeable branch`);
-        await postComment(
-          config,
-          token,
-          ref,
-          conflictResolutionFailedComment(ref, originalMessage, rebase.files, resolution.tail),
-        );
-        await postDeliveryEvent(config, token, ref, {
-          type: "delivery_failed",
-          message: originalMessage,
-        }).catch((e: Error) =>
-          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
-        );
-        return { outcome: "conflict_bounced" };
-      }
-      console.log(
-        `${ref}: conflict-resolution session resolved and pushed at ${resolution.sha}, retrying merge`,
-      );
-      const mergeable = await pollUntilMergeable(project.repo, prNumber);
-      console.log(`${ref}: post-force-push mergeability=${mergeable}`);
-      mergeSha = await mergeAgentPr(project.repo, prNumber);
-      resolvedConflict = true;
-      derivedHeadSha = resolution.sha;
-      console.log(`${ref}: merged PR #${prNumber} at ${mergeSha} (after conflict resolution)`);
-    } else if (rebase.status === "verify-failed") {
-      console.log(`${ref}: auto-rebase applied cleanly but the post-rebase verify gate failed`);
-      await postComment(config, token, ref, autoRebaseVerifyFailedComment(ref, rebase.tail));
-      await postDeliveryEvent(config, token, ref, {
-        type: "delivery_failed",
-        message: "auto-rebase applied cleanly but the post-rebase verify gate failed",
-      }).catch((e: Error) =>
-        console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
-      );
-      return { outcome: "verify_failed" };
-    } else {
-      console.log(`${ref}: auto-rebased onto main at ${rebase.sha}, retrying merge`);
-      const mergeable = await pollUntilMergeable(project.repo, prNumber);
-      console.log(`${ref}: post-force-push mergeability=${mergeable}`);
-      mergeSha = await mergeAgentPr(project.repo, prNumber);
-      rebased = true;
-      derivedHeadSha = rebase.sha;
-    }
-  }
-  if (!resolvedConflict) {
-    console.log(
-      `${ref}: merged PR #${prNumber} at ${mergeSha}${rebased ? " (after auto-rebase)" : ""}`,
-    );
-  }
-  const note = resolvedConflict
-    ? conflictResolvedNote(ref)
-    : rebased
-      ? autoRebasedNote(ref)
-      : null;
-  const outcome = await runDeliveryTail(ref, project, config, token, cloneDir, prNumber, mergeSha, note);
-  return { outcome, derivedHeadSha };
 }
 
 /**
@@ -649,10 +581,40 @@ async function deliverPending(
       return;
     }
 
-    // OPEN → the existing merge flow, against the pinned PR number.
-    const result = isQueueMode(config)
-      ? await deliverQueue(ref, project, config, token, cloneDir, auth.pin.prNumber)
-      : await deliverLegacy(ref, project, config, token, cloneDir, auth.pin.prNumber);
+    // OPEN → the SHA-chain merge orchestrator. S0 (the head the human
+    // authorized at stamp time) anchors the chain; without it we can't tell
+    // whether the branch was pushed after the stamp, so we disarm rather than
+    // merge an unanchored head.
+    if (!auth.pin.headSha) {
+      const id = attemptId;
+      attemptId = null;
+      await finishAttempt(config, token, id, { outcome: "sha_chain_disarmed" });
+      const message = `no authorized head was pinned for PR #${auth.pin.prNumber} — cannot anchor the SHA chain`;
+      await postComment(
+        config,
+        token,
+        ref,
+        shaChainDisarmedComment(ref, "(none recorded)", live.headRefOid),
+      ).catch((e: Error) => console.error(`could not comment the disarm on ${ref}: ${e.message}`));
+      await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
+        (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      return;
+    }
+
+    // Keep attemptId live across the orchestrator so a thrown pre-merge failure
+    // (no branch, merge-retry exhausted) is still stamped merge_failed by the
+    // outer catch; the orchestrator persists S1 to this same attempt id.
+    const result = await deliverQueue(
+      ref,
+      project,
+      config,
+      token,
+      cloneDir,
+      auth.pin.prNumber,
+      [auth.pin.headSha],
+      attemptId,
+    );
     const id = attemptId;
     attemptId = null;
     await finishAttempt(config, token, id, {
@@ -677,11 +639,18 @@ async function deliverPending(
 }
 
 /**
- * Resumes an attempt a prior crash left unfinished (SYD-208). Consults the
+ * Resumes an attempt a prior crash left unfinished (SYD-208/209). Consults the
  * PR's LIVE GitHub state — never pr_state or the tracker — because only GitHub
- * knows whether the merge landed. MERGED → run the deploy tail and finish it;
- * OPEN/CLOSED (or no PR pinned) → the merge never landed, so finish
- * merge_failed and post the crash comment/event for a human to re-authorize.
+ * knows whether the merge landed:
+ *   - MERGED → run the deploy tail and finish it (never re-merge).
+ *   - OPEN → re-anchor on the heads the worker authorized (S0, and the S1 it
+ *     may have force-pushed before crashing) and re-drive the orchestrator,
+ *     rather than disarming after every mid-attempt crash. A third-party push
+ *     while the worker was down fails the anchor inside the orchestrator →
+ *     sha_chain_disarmed. With no authorized head to re-anchor on, it fails
+ *     merge_failed for a human to re-authorize.
+ *   - CLOSED / no PR pinned → the merge never landed and won't; merge_failed +
+ *     crash comment/event.
  */
 async function resumeAttempt(
   attempt: WorkAttempt,
@@ -728,7 +697,59 @@ async function resumeAttempt(
         null,
       );
       await finishAttempt(config, token, attempt.id, { outcome });
+    } else if (live.state === "OPEN") {
+      // Re-anchor on our own authorized heads (S0 = the stamped head, S1 = a
+      // rebase we force-pushed before crashing) and re-drive the orchestrator.
+      const accepted = [attempt.headSha, attempt.derivedHeadSha].filter(
+        (h): h is string => typeof h === "string" && h.length > 0,
+      );
+      if (accepted.length === 0) {
+        await finishAttempt(config, token, attempt.id, { outcome: "merge_failed" });
+        await postComment(config, token, ref, crashedAttemptComment(ref, attempt.prNumber)).catch(
+          (e: Error) => console.error(`could not comment the crash on ${ref}: ${e.message}`),
+        );
+        await postDeliveryEvent(config, token, ref, {
+          type: "delivery_failed",
+          message: `crashed mid-attempt; PR #${attempt.prNumber} is OPEN but no authorized head was recorded to re-anchor on`,
+        }).catch((e: Error) =>
+          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+        );
+        return;
+      }
+      console.log(
+        `${ref}: resuming crashed attempt ${attempt.id} — re-anchoring PR #${attempt.prNumber} on ${accepted.join(", ")}`,
+      );
+      try {
+        const result = await deliverQueue(
+          ref,
+          project,
+          config,
+          token,
+          cloneDir,
+          attempt.prNumber,
+          accepted,
+          attempt.id,
+        );
+        await finishAttempt(config, token, attempt.id, {
+          outcome: result.outcome,
+          derivedHeadSha: result.derivedHeadSha,
+        });
+      } catch (driveErr) {
+        // no-branch / merge-retry exhausted — a genuine pre-merge failure.
+        await finishAttempt(config, token, attempt.id, { outcome: "merge_failed" }).catch(
+          (e: Error) => console.error(`could not finish resumed attempt for ${ref}: ${e.message}`),
+        );
+        const message = `crashed mid-attempt; re-drive of PR #${attempt.prNumber} failed: ${(driveErr as Error).message}`;
+        await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch(
+          (e: Error) => console.error(`could not comment the failure on ${ref}: ${e.message}`),
+        );
+        await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
+          (e: Error) =>
+            console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+        );
+      }
     } else {
+      // CLOSED unmerged — the merge never landed and won't.
       await finishAttempt(config, token, attempt.id, { outcome: "merge_failed" });
       await postComment(config, token, ref, crashedAttemptComment(ref, attempt.prNumber)).catch(
         (e: Error) => console.error(`could not comment the crash on ${ref}: ${e.message}`),
