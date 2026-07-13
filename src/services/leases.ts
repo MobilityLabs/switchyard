@@ -4,6 +4,7 @@ import { claimLeases, issues } from "../db/schema.js";
 import { SwitchyardError } from "./errors.js";
 import { recordEvent } from "./events.js";
 import { hashToken, mintToken } from "./tokens.js";
+import { getSetting } from "./settings.js";
 
 export type ClaimLease = typeof claimLeases.$inferSelect;
 
@@ -82,6 +83,32 @@ export function validateLease(
         "it over, that session now owns the work.",
     );
   }
+}
+
+/**
+ * SYD-210 Layer B: renew a lease's liveness window. Validates the holder's
+ * token, then bumps last_beat_at and sets expires_at = now +
+ * claims.heartbeat_window_seconds. The window is SHORTER than the mint TTL, so
+ * the first heartbeat collapses a container claim's 8h fallback to ~10 min of
+ * honest liveness — a container that keeps beating stays alive, a dead one
+ * loses its lease within one window. Interactive claims never heartbeat and
+ * keep the long TTL.
+ */
+export function heartbeatLease(
+  db: DbOrTx,
+  issueId: number,
+  actorId: number,
+  token: string | undefined,
+): ClaimLease {
+  validateLease(db, issueId, actorId, token);
+  const active = getActiveLease(db, issueId)!;
+  const now = nowSeconds();
+  return db
+    .update(claimLeases)
+    .set({ lastBeatAt: now, expiresAt: now + getSetting(db as Db, "claims.heartbeat_window_seconds") })
+    .where(eq(claimLeases.id, active.id))
+    .returning()
+    .get();
 }
 
 /**

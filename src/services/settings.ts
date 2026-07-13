@@ -33,6 +33,12 @@ export const REGISTRY = {
   "claims.stale_seconds": { type: "number", default: 4 * 3600 },
   "claims.deviation_seconds": { type: "number", default: 3600 },
   "claims.lease_ttl_seconds": { type: "number", default: 8 * 3600 },
+  // SYD-210 Layer B: a heartbeat renews a lease to now + this window (= the
+  // host worker's N missed beats x interval, 10 x 60s). Shorter than the mint
+  // TTL, so a heartbeated (container) claim gets honest ~10-min liveness while
+  // an un-heartbeated (interactive) claim keeps the long lease_ttl_seconds.
+  // Also the server-uptime grace after a redeploy before expiry may resume.
+  "claims.heartbeat_window_seconds": { type: "number", default: 600 },
   "auth.login_link_ttl_seconds": { type: "number", default: 15 * 60 },
   "webhooks.suppressed_events": { type: "string[]", default: ["progress_note"] },
   "dispatch.max_concurrent": { type: "number", default: 1 },
