@@ -699,7 +699,11 @@ export function buildContainerizedPrompt(
   return (
     resumedPreamble +
     `Work Switchyard issue ${ref} using the switchyard MCP tools. ` +
-    `Call claim_issue first. Implement the work with tests. Comment verification ` +
+    // SYD-210: the dispatch host already claimed this issue for your session and
+    // holds its lease — do NOT call claim_issue (a re-claim would fail); your
+    // claim-scoped writes are authorized automatically. Call get_issue to read it.
+    `This issue is already claimed for your session — do not call claim_issue; call get_issue to read it. ` +
+    `Implement the work with tests. Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
@@ -995,7 +999,7 @@ export function buildDockerArgs(
   project: WorkerProject,
   config: WorkerConfig,
   env: NodeJS.ProcessEnv,
-  opts: { resumed?: boolean } = {},
+  opts: { resumed?: boolean; leaseToken?: string } = {},
 ): string[] {
   const engine = config.engine ?? "claude";
 
@@ -1062,6 +1066,11 @@ export function buildDockerArgs(
     `SWITCHYARD_URL=${config.url}`,
     "-e",
     "SWITCHYARD_TOKEN",
+    // SYD-210 Layer B: the session-scoped lease, passed bare (value from the
+    // spawn env, never argv) exactly like SWITCHYARD_TOKEN — container-entry.sh
+    // adds it as the X-Switchyard-Lease MCP header so the session's
+    // claim-scoped writes carry the lease without it entering the transcript.
+    ...(opts.leaseToken ? ["-e", "SWITCHYARD_LEASE"] : []),
     ...credArgs,
     "-e",
     `WORKER_PROMPT=${prompt}`,
@@ -1115,4 +1124,29 @@ export function partitionContainerSessions(
     (liveContainerNames.has(containerNameFor(s.ref)) ? live : orphaned).push(s);
   }
   return { orphaned, live };
+}
+
+// SYD-210 Layer B host-side heartbeat cadence. Interval 60s x miss-limit 10 =
+// a ~10-min window that comfortably exceeds the worst-case tracker redeploy
+// (~5-15s, SYD-66) — and the server also gates expiry on its own uptime, so a
+// redeploy can't mass-expire live leases regardless.
+export const HEARTBEAT_INTERVAL_MS = 60_000;
+export const HEARTBEAT_MISS_LIMIT = 10;
+
+/**
+ * Fold one heartbeat outcome into the consecutive-failure count and decide
+ * whether to cancel the session. A success resets the count; `cancel` becomes
+ * true once `missLimit` beats fail in a row (~missLimit x interval of silence),
+ * which the host uses to terminate a session whose lease it can no longer
+ * renew rather than racing a re-dispatch. Pure so the decision is unit-tested
+ * independently of the timer/fetch wiring.
+ */
+export function heartbeatTick(
+  failures: number,
+  ok: boolean,
+  missLimit: number = HEARTBEAT_MISS_LIMIT,
+): { failures: number; cancel: boolean } {
+  if (ok) return { failures: 0, cancel: false };
+  const next = failures + 1;
+  return { failures: next, cancel: next >= missLimit };
 }

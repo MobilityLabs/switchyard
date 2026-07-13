@@ -119,13 +119,21 @@ fi
 
 # Written as a file rather than `claude mcp add --header ...` so the bearer
 # token never appears in any process argv (visible via ps / docker top).
+# SYD-210 Layer B: when the host injects a session-scoped lease, add it as the
+# X-Switchyard-Lease MCP header so claim-scoped writes carry the lease. Absent
+# for answer/non-lease sessions.
+if [ -n "${SWITCHYARD_LEASE:-}" ]; then
+  MCP_HEADERS="\"Authorization\": \"Bearer $SWITCHYARD_TOKEN\", \"X-Switchyard-Lease\": \"$SWITCHYARD_LEASE\""
+else
+  MCP_HEADERS="\"Authorization\": \"Bearer $SWITCHYARD_TOKEN\""
+fi
 cat > /tmp/switchyard-mcp.json <<MCPEOF
 {
   "mcpServers": {
     "switchyard": {
       "type": "http",
       "url": "$SWITCHYARD_URL/mcp",
-      "headers": { "Authorization": "Bearer $SWITCHYARD_TOKEN" }
+      "headers": { $MCP_HEADERS }
     }
   }
 }

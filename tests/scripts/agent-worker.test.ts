@@ -588,7 +588,9 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
     spawnMock.mockReturnValue(child);
     const fetchMock = fetchRouter({
       "/api/issues?status=todo": { ok: true, body: [issue] },
-      [`/api/issues/${ref}/claim`]: { ok: true, body: {} },
+      // SYD-210: the host claim mints the lease and returns its token, which the
+      // worker threads to the session and heartbeats.
+      [`/api/issues/${ref}/claim`]: { ok: true, body: { leaseToken: "lease_test" } },
     });
     vi.stubGlobal("fetch", fetchMock);
 

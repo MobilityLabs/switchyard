@@ -81,6 +81,9 @@ import {
   partitionContainerSessions,
   egressMode,
   ensureEgressGuard,
+  heartbeatTick,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_MISS_LIMIT,
   type WorkerConfig,
   type WorkerProject,
   type WorkerIssue,
@@ -322,9 +325,13 @@ export async function refreshDispatchPolicy(config: WorkerConfig, token: string)
  * coordinating human session) both select the same unassigned todo and spin
  * up sessions before either calls claim_issue — selection and claim are now
  * atomic from this worker's side, not just from the dispatched session's.
- * The session still calls claim_issue itself per the prompt, but that just
- * reclaims the same actor's own issue at that point (a no-op check) since
- * the session authenticates with this same worker's token.
+ * The host claim mints the session-scoped lease (SYD-210); its plaintext token
+ * is returned here ONCE and threaded to the dispatched session out-of-band (an
+ * MCP connection header, never argv, never the LLM transcript) so its
+ * claim-scoped calls carry the lease, and the host heartbeats it while the
+ * session runs. The dispatched session must therefore NOT call claim_issue —
+ * a same-actor re-claim against the active lease would fail loudly (see
+ * buildPrompt).
  *
  * A refusal (already claimed, now blocked) means another actor won the race
  * — logged and treated as "skip this ref", not an error: it needs no retry
@@ -333,25 +340,89 @@ export async function refreshDispatchPolicy(config: WorkerConfig, token: string)
  * failures still retry across a self-deploy restart via withRetry, same as
  * the other tracker writes.
  */
-async function claimIssueHost(config: WorkerConfig, token: string, ref: string): Promise<boolean> {
+async function claimIssueHost(
+  config: WorkerConfig,
+  token: string,
+  ref: string,
+): Promise<string | null> {
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/claim`;
   try {
-    await withRetry(async () => {
+    return await withRetry(async () => {
       const res = await fetch(url, {
         method: "POST",
         headers: { authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new HttpStatusError(res.status, await res.text());
+      const body = (await res.json()) as { leaseToken?: string };
+      // A claim always mints a lease; an absent token is a server/version
+      // mismatch (un-upgraded tracker) — treat as a lost race so we skip
+      // rather than dispatch a session that can't authenticate its writes.
+      return body.leaseToken ?? null;
     });
-    return true;
   } catch (err) {
     if (err instanceof HttpStatusError && err.status < 500) {
       console.log(`skipping ${ref}: lost the claim race (${err.message})`);
     } else {
       console.error(`could not claim ${ref} before dispatch: ${(err as Error).message}`);
     }
+    return null;
+  }
+}
+
+/**
+ * SYD-210 Layer B: renew a dispatched session's lease on the tracker. Returns
+ * true on a 2xx. The host calls this on a timer (startLeaseHeartbeat) so a
+ * live-but-quiet container keeps its claim, and a session the host can no
+ * longer reach loses it within the heartbeat window.
+ */
+async function postHeartbeat(
+  config: WorkerConfig,
+  token: string,
+  leaseToken: string,
+  ref: string,
+): Promise<boolean> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/heartbeat`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "X-Switchyard-Lease": leaseToken },
+    });
+    return res.ok;
+  } catch {
     return false;
   }
+}
+
+/**
+ * Starts the host-side heartbeat loop for a running session and returns a stop
+ * function. Every interval it renews the lease; after HEARTBEAT_MISS_LIMIT
+ * consecutive failures it calls `onExhausted` (which kills the session) and
+ * stops — the honest-liveness cancellation that replaces the 4h idle guess.
+ */
+function startLeaseHeartbeat(
+  config: WorkerConfig,
+  token: string,
+  leaseToken: string,
+  ref: string,
+  onExhausted: () => void,
+  log: (message: string) => void,
+): () => void {
+  let failures = 0;
+  const timer = setInterval(() => {
+    void postHeartbeat(config, token, leaseToken, ref).then((ok) => {
+      const r = heartbeatTick(failures, ok);
+      failures = r.failures;
+      if (!ok) log(`[worker] ${ref}: lease heartbeat failed (${failures}/${HEARTBEAT_MISS_LIMIT})`);
+      if (r.cancel) {
+        log(`[worker] ${ref}: ${HEARTBEAT_MISS_LIMIT} missed heartbeats — cancelling session`);
+        stop();
+        onExhausted();
+      }
+    });
+  }, HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  const stop = () => clearInterval(timer);
+  return stop;
 }
 
 export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): string {
@@ -363,7 +434,11 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
   return (
     resumedPreamble +
     `Work Switchyard issue ${ref} using the switchyard MCP tools. ` +
-    `Call claim_issue first. ` +
+    // SYD-210: the dispatch host already claimed this issue for your session and
+    // holds its lease — do NOT call claim_issue (a re-claim would fail). Your
+    // claim-scoped calls (update_issue, request_human_input) are authorized
+    // automatically; just call get_issue to read it and start work.
+    `This issue is already claimed for your session — do not call claim_issue; call get_issue to read it. ` +
     `Record a one-line note with the progress_note tool each time you start a new ` +
     `step (reading code, writing tests, implementing, verifying) so humans can ` +
     `watch progress live. ` +
@@ -489,7 +564,7 @@ export function dispatch(
   config: WorkerConfig,
   token: string,
   role: WorkerRole,
-  opts: { resumed?: boolean } = {},
+  opts: { resumed?: boolean; leaseToken?: string } = {},
 ): void {
   const project = config.projects[projectKeyOf(issue.ref)];
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
@@ -521,6 +596,13 @@ export function dispatch(
       child = spawn("docker", dockerArgs, {
         detached: true,
         stdio: ["ignore", fd, fd],
+        // SYD-210 Layer B: hand the lease to the container via the spawn env
+        // (bare -e SWITCHYARD_LEASE in dockerArgs reads it here) so it never
+        // appears in argv. Per-spawn env avoids collisions across concurrent
+        // containers.
+        env: opts.leaseToken
+          ? { ...process.env, SWITCHYARD_LEASE: opts.leaseToken }
+          : process.env,
       });
     } else {
       // Headless sessions can't answer permission prompts — grant the tools the
@@ -562,6 +644,15 @@ export function dispatch(
   activeMode.set(issue.ref, config.containerized ? "container" : "cli");
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
 
+  // SYD-210 Layer B: heartbeat the lease while the session runs; after N missed
+  // renewals, kill it (honest liveness — a dead/wedged session loses its claim
+  // within the window instead of holding it out to the 8h TTL).
+  const stopHeartbeat = opts.leaseToken
+    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () =>
+        killSession(child, config.containerized ? `syd-${issue.ref}` : null),
+      logLine)
+    : () => {};
+
   // Watchdog (SYD-115): a hung `claude -p` or stuck `docker run` would
   // otherwise hold this maxConcurrent slot forever. Cleared on exit/error
   // below so a session that finishes normally never gets killed late.
@@ -590,6 +681,7 @@ export function dispatch(
 
   child.on("exit", (code) => {
     clearTimeout(watchdog);
+    stopHeartbeat();
     active.delete(issue.ref);
     activeMode.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
@@ -598,6 +690,7 @@ export function dispatch(
 
   child.on("error", (err) => {
     clearTimeout(watchdog);
+    stopHeartbeat();
     active.delete(issue.ref);
     activeMode.delete(issue.ref);
     // 'error' can fire after a successful 'spawn' with no 'exit' to follow —
@@ -622,7 +715,7 @@ function dispatchSdk(
   token: string,
   role: WorkerRole,
   logPath: string,
-  opts: { resumed?: boolean },
+  opts: { resumed?: boolean; leaseToken?: string },
 ): void {
   const allowedTools = config.allowedTools ?? [
     "mcp__switchyard__*",
@@ -653,6 +746,16 @@ function dispatchSdk(
     (message) => safeAppend(`[worker] ${message}\n`),
   );
 
+  // SYD-210 Layer B: heartbeat the lease while the SDK session runs; on N missed
+  // renewals, abort the query (the SDK's own cancellation) rather than racing a
+  // re-dispatch. Stopped when the session settles (finally, below).
+  const sdkAbort = new AbortController();
+  const stopHeartbeat = opts.leaseToken
+    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () => sdkAbort.abort(), (m) =>
+        safeAppend(`${m}\n`),
+      )
+    : () => {};
+
   const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
   import(runnerPath)
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
@@ -661,9 +764,11 @@ function dispatchSdk(
         cwd: repo,
         switchyardUrl: config.url,
         switchyardToken: token,
+        switchyardLeaseToken: opts.leaseToken,
         allowedTools,
         logPath,
         timeoutMs: sessionTimeoutMs(config),
+        externalAbortSignal: sdkAbort.signal,
       }),
     )
     .then(
@@ -689,6 +794,7 @@ function dispatchSdk(
       console.error(`sdk dispatch cleanup error for ${issue.ref}: ${err.message}`),
     )
     .finally(() => {
+      stopHeartbeat();
       active.delete(issue.ref);
       if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
     });
@@ -906,10 +1012,11 @@ export async function runTick(
             );
             continue;
           }
-          if (!(await claimIssueHost(config, token, issue.ref))) continue;
+          const leaseToken = await claimIssueHost(config, token, issue.ref);
+          if (!leaseToken) continue;
           recordAttempt(retryState, issue.ref, issue.updatedAt);
           const resumed = resumeRefs.delete(issue.ref);
-          dispatch(issue, config, token, role, { resumed });
+          dispatch(issue, config, token, role, { resumed, leaseToken });
         }
       } catch (err) {
         console.error(`poll failed: ${(err as Error).message}`);
