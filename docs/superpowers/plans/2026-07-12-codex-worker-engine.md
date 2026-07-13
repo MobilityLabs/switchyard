@@ -141,9 +141,11 @@ describe("codex engine builders", () => {
     expect(toml).not.toMatch(/Bearer |token = /);
   });
 
-  it("builds a non-interactive codex exec argv", () => {
+  it("builds a headless codex exec argv (container is the sandbox)", () => {
+    // Spike (Task 1): codex 0.142.5 dropped --ask-for-approval; headless
+    // full-auto is --dangerously-bypass-approvals-and-sandbox.
     expect(buildCodexExecArgs("do the thing")).toEqual([
-      "exec", "do the thing", "--ask-for-approval", "never",
+      "exec", "--dangerously-bypass-approvals-and-sandbox", "do the thing",
     ]);
   });
 
@@ -177,8 +179,11 @@ export const DEFAULT_CODEX_IMAGE = "switchyard-worker-codex";
 /** Env var Codex is told (via bearer_token_env_var) to read the switchyard MCP token from at run time. */
 export const CODEX_BEARER_TOKEN_ENV_VAR = "SWITCHYARD_TOKEN";
 
-/** Proxy-held ChatGPT OAuth token the syd-egress sidecar injects for the Codex host. */
+/** Proxy-held ChatGPT OAuth token the syd-egress sidecar injects for the Codex host (secret). */
 export const CODEX_OAUTH_TOKEN_VAR = "CODEX_OAUTH_TOKEN";
+
+/** ChatGPT account UUID (NON-secret) codex sends as the chatgpt-account-id header; goes in the container's placeholder auth.json. */
+export const CODEX_ACCOUNT_ID_VAR = "CODEX_ACCOUNT_ID";
 
 export function buildCodexConfigToml(
   switchyardUrl: string,
@@ -188,8 +193,10 @@ export function buildCodexConfigToml(
   return `[mcp_servers.switchyard]\nurl = "${url}"\nbearer_token_env_var = "${tokenEnvVar}"\n`;
 }
 
+// Spike (Task 1): headless full-auto in codex 0.142.5 (the container is the
+// sandbox). `--ask-for-approval never` was removed in this version.
 export function buildCodexExecArgs(prompt: string): string[] {
-  return ["exec", prompt, "--ask-for-approval", "never"];
+  return ["exec", "--dangerously-bypass-approvals-and-sandbox", prompt];
 }
 ```
 
@@ -323,8 +330,10 @@ it("codex engine: image + CA mount, no real credential and no Claude placeholder
   expect(joined).toMatch(/-v [^ ]*egress-ca[^ ]*:\/ca:ro/);
   expect(joined).not.toContain("cxo-REAL");
   expect(joined).not.toContain("CLAUDE_CODE_OAUTH_TOKEN"); // no Claude cred/placeholder on the codex path
-  const passesCodex = args.some((a, i) => a === "-e" && args[i + 1] === "CODEX_OAUTH_TOKEN");
-  expect(passesCodex).toBe(false); // real token stays in the sidecar, not the container
+  const passesToken = args.some((a, i) => a === "-e" && args[i + 1] === "CODEX_OAUTH_TOKEN");
+  expect(passesToken).toBe(false); // real token stays in the sidecar, not the container
+  const passesAcct = args.some((a, i) => a === "-e" && args[i + 1] === "CODEX_ACCOUNT_ID");
+  expect(passesAcct).toBe(true); // non-secret account UUID goes to the container (for auth.json)
   expect(args).toContain("SWITCHYARD_TOKEN"); // scoped token still bare-passed
 });
 ```
@@ -360,12 +369,16 @@ Then set `credArgs` per engine (replacing the current Claude-only proxy/open com
   const proxy = egressMode(config) === "proxy";
   const credArgs =
     engine === "codex"
-      ? proxy
-        // The sidecar injects the real ChatGPT token; the container gets only
-        // the CA (mounted here) + a placeholder auth.json (written by the entry
-        // script). No real credential, no CLAUDE placeholder.
-        ? ["-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
-        : ["-e", "CODEX_OAUTH_TOKEN"] // open mode: no sidecar, real token in-container
+      // The container always gets the non-secret account UUID (for the
+      // placeholder auth.json's chatgpt-account-id). Proxy mode: the sidecar
+      // injects the real token, container gets only the CA — no real token, no
+      // CLAUDE placeholder. Open mode (no sidecar): the real token in-container.
+      ? [
+          "-e", "CODEX_ACCOUNT_ID",
+          ...(proxy
+            ? ["-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
+            : ["-e", "CODEX_OAUTH_TOKEN"]),
+        ]
       : proxy
         ? ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
         : ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
@@ -415,11 +428,10 @@ set -eu
 : "${SWITCHYARD_TOKEN:?SWITCHYARD_TOKEN is required}"
 : "${WORKER_PROMPT:?WORKER_PROMPT is required}"
 
-# Trust the egress proxy CA via the SYSTEM store — Codex is Rust and does not
-# read NODE_EXTRA_CA_CERTS (contrast container-entry.sh).
+# Trust the egress proxy CA. Spike (Task 1): codex (Rust) honors SSL_CERT_FILE —
+# no system-store install needed (contrast container-entry.sh's NODE_EXTRA_CA_CERTS).
 if [ -f /ca/mitmproxy-ca-cert.pem ]; then
-  cp /ca/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/switchyard-egress.crt
-  update-ca-certificates
+  export SSL_CERT_FILE=/ca/mitmproxy-ca-cert.pem
 fi
 
 git config --global --add safe.directory /origin
@@ -440,9 +452,11 @@ if [ -n "${STACK_CHECKS:-}" ] && [ -f scripts/stack-check.mjs ]; then
 fi
 
 # Codex reads MCP config + auth from $CODEX_HOME. The token name (not value)
-# goes in config.toml; the placeholder auth.json makes codex attempt the call
-# while the proxy injects the real ChatGPT token (onecli pattern). Exact stub
-# shape from the Task 1 spike.
+# goes in config.toml. The placeholder auth.json (spike Task 1) carries the REAL
+# account_id (non-secret — codex sends it as the chatgpt-account-id header, which
+# the backend matches against the injected token's account) + a PLACEHOLDER
+# access_token; the proxy injects the real Authorization: Bearer.
+: "${CODEX_ACCOUNT_ID:?CODEX_ACCOUNT_ID is required (the non-secret ChatGPT account UUID)}"
 export CODEX_HOME=/tmp/codex-home
 mkdir -p "$CODEX_HOME"
 cat > "$CODEX_HOME/config.toml" <<TOMLEOF
@@ -451,11 +465,15 @@ url = "$SWITCHYARD_URL/mcp"
 bearer_token_env_var = "SWITCHYARD_TOKEN"
 TOMLEOF
 chmod 600 "$CODEX_HOME/config.toml"
-printf '%s\n' "$CODEX_AUTH_JSON_STUB" > "$CODEX_HOME/auth.json"   # stub from Task 1 (env-provided or inlined)
+cat > "$CODEX_HOME/auth.json" <<AUTHEOF
+{"OPENAI_API_KEY":null,"tokens":{"id_token":"placeholder","access_token":"placeholder","refresh_token":"placeholder","account_id":"$CODEX_ACCOUNT_ID"},"last_refresh":"2026-01-01T00:00:00Z"}
+AUTHEOF
 chmod 600 "$CODEX_HOME/auth.json"
 
+# Headless full-auto — the container is the sandbox (spike Task 1; the old
+# --ask-for-approval never was removed in codex 0.142.5).
 set +e
-codex exec "$WORKER_PROMPT" --ask-for-approval never
+codex exec --dangerously-bypass-approvals-and-sandbox "$WORKER_PROMPT" < /dev/null
 CODEX_EXIT=$?
 set -e
 
@@ -476,7 +494,7 @@ exit "$CODEX_EXIT"
 Run: `sh -n scripts/container-entry.codex.sh`
 Expected: no output (valid).
 
-- [ ] **Step 3: Create `Dockerfile.worker.codex`.** Read `Dockerfile.worker` first and mirror it (base image, non-root user, the `/prime-workspace-trust.mjs` + `/npm-ci-guard.mjs` copies, git/node toolchain), plus: install the `codex` CLI, install `ca-certificates` (for `update-ca-certificates`), and `COPY scripts/container-entry.codex.sh /entry.sh`. Keep `ENTRYPOINT ["/bin/sh", "/entry.sh"]`.
+- [ ] **Step 3: Create `Dockerfile.worker.codex`.** Read `Dockerfile.worker` first and mirror it (base image, non-root user, the `/prime-workspace-trust.mjs` + `/npm-ci-guard.mjs` copies, git/node toolchain), plus: install the `codex` CLI and `COPY scripts/container-entry.codex.sh /entry.sh`. Keep `ENTRYPOINT ["/bin/sh", "/entry.sh"]`. (No CA tooling needed — the entry script points `SSL_CERT_FILE` at the mounted cert, per the Task 1 spike.)
 
 - [ ] **Step 4: Add the build script** to `package.json` `scripts`:
 
@@ -506,7 +524,7 @@ git commit -m "feat: Codex worker image + entry (system-store CA, placeholder au
 
 - [ ] **Step 1: Full gate.** `npm run typecheck`, `npm run build:ui`, `npm test` — all green.
 
-- [ ] **Step 2: Provision the Codex worker (host).** Extract the real ChatGPT token from `codex login`'s `auth.json` into the worker `.env` as `CODEX_OAUTH_TOKEN` (per Task 1). Write `switchyard-worker.codex.json` with `engine: "codex"`, `label: "auto-codex"`, `containerized: true`, and its own minted token. Restart/kick the egress guard so `ensureEgressGuard` recreates `syd-egress` with `INJECT_KEYS` now including `CODEX_OAUTH_TOKEN`.
+- [ ] **Step 2: Provision the Codex worker (host).** From `codex login`'s `auth.json`: `CODEX_OAUTH_TOKEN=$(jq -r .tokens.access_token ~/.codex/auth.json)` (secret) and `CODEX_ACCOUNT_ID=$(jq -r .tokens.account_id ~/.codex/auth.json)` (non-secret) into the worker `.env`. Write `switchyard-worker.codex.json` with `engine: "codex"`, `label: "auto-codex"`, `containerized: true`, `egressAllow: ["github.com"]` (spike: codex reaches github.com), and its own minted token. Use the **real** codex binary path (not a cmux temp-dir shim) for the launchd job. Kick the egress guard so `ensureEgressGuard` recreates `syd-egress` with `INJECT_KEYS` now including `CODEX_OAUTH_TOKEN`. **Token refresh:** the access token lives ~10 days — a periodic re-extract into `.env` (or a login refresh) keeps it valid; note this in the worker doctor.
 
 - [ ] **Step 3: Dispatch a real `auto-codex` issue.** Confirm it produces its `agent/<ref>` PR — i.e. the injected ChatGPT-OAuth path reaches the backend and `codex exec` works with the CA trusted.
 
