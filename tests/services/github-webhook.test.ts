@@ -5,6 +5,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
+import { findPrState } from "../../src/services/pr-state.js";
 import {
   handleGithubWebhook,
   refFromBranch,
@@ -502,6 +503,148 @@ describe("handleGithubWebhook / ingestion groundwork (SYD-205)", () => {
     expect(activity.find((a) => a.type === "gh_pushed")!.payload).toMatchObject({
       repo: "acme/widgets",
     });
+  });
+});
+
+describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
+  const opened = (action: string, pr: Record<string, unknown> = {}) => ({
+    action,
+    repository: { full_name: "acme/bound" },
+    pull_request: {
+      number: 12,
+      html_url: "https://github.com/acme/bound/pull/12",
+      head: { ref: "agent/SYD-1", sha: "a".repeat(40) },
+      updated_at: "2026-07-12T10:00:00Z",
+      title: null,
+      body: null,
+      ...pr,
+    },
+  });
+
+  it("writes an attributed pr_state row on opened, with exactly one gh_pr_opened event (co-write, no double record)", () => {
+    const db = setup(["acme/bound"]);
+    const outcome = handleGithubWebhook(db, "pull_request", opened("opened"));
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
+    const row = findPrState(db, "acme/bound", 12)!;
+    expect(row).toMatchObject({ status: "open", issueRef: "SYD-1", headSha: "a".repeat(40) });
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
+  });
+
+  it("transitions the row to merged on a merged close", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(db, "pull_request", opened("opened"));
+    handleGithubWebhook(db, "pull_request", {
+      ...opened("closed", {
+        merged: true,
+        merge_commit_sha: "m".repeat(40),
+        updated_at: "2026-07-12T11:00:00Z",
+      }),
+    });
+    expect(findPrState(db, "acme/bound", 12)!.status).toBe("merged");
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_merged")).toHaveLength(1);
+  });
+
+  it("synchronize refreshes headSha/ghUpdatedAt on the row without recording an event", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(db, "pull_request", opened("opened"));
+    const outcome = handleGithubWebhook(
+      db,
+      "pull_request",
+      opened("synchronize", {
+        head: { ref: "agent/SYD-1", sha: "b".repeat(40) },
+        updated_at: "2026-07-12T11:00:00Z",
+      }),
+    );
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "synchronize", recorded: false });
+    const row = findPrState(db, "acme/bound", 12)!;
+    expect(row.headSha).toBe("b".repeat(40));
+    expect(row.ghUpdatedAt).toBe(Math.floor(Date.parse("2026-07-12T11:00:00Z") / 1000));
+    expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created", "gh_pr_opened"]);
+  });
+
+  it("an out-of-order stale synchronize does not regress the stored headSha", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(
+      db,
+      "pull_request",
+      opened("opened", {
+        head: { ref: "agent/SYD-1", sha: "b".repeat(40) },
+        updated_at: "2026-07-12T11:00:00Z",
+      }),
+    );
+    handleGithubWebhook(
+      db,
+      "pull_request",
+      opened("synchronize", {
+        head: { ref: "agent/SYD-1", sha: "a".repeat(40) },
+        updated_at: "2026-07-12T09:00:00Z",
+      }),
+    );
+    expect(findPrState(db, "acme/bound", 12)!.headSha).toBe("b".repeat(40));
+  });
+
+  it("reopened after close makes the row open again", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(db, "pull_request", opened("opened"));
+    handleGithubWebhook(
+      db,
+      "pull_request",
+      opened("closed", { merged: false, updated_at: "2026-07-12T11:00:00Z" }),
+    );
+    expect(findPrState(db, "acme/bound", 12)!.status).toBe("closed");
+    handleGithubWebhook(
+      db,
+      "pull_request",
+      opened("reopened", { updated_at: "2026-07-12T12:00:00Z" }),
+    );
+    expect(findPrState(db, "acme/bound", 12)!.status).toBe("open");
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_reopened")).toHaveLength(1);
+  });
+
+  it("a late redelivered opened after a close leaves the row closed and adds no event", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(db, "pull_request", opened("opened"));
+    handleGithubWebhook(
+      db,
+      "pull_request",
+      opened("closed", { merged: false, updated_at: "2026-07-12T11:00:00Z" }),
+    );
+    const redelivery = handleGithubWebhook(db, "pull_request", opened("opened"));
+    expect(redelivery).toMatchObject({ handled: true, duplicate: true });
+    expect(findPrState(db, "acme/bound", 12)!.status).toBe("closed");
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
+  });
+
+  it("a text-matched PR (non-agent branch) records display events but never touches pr_state", () => {
+    const db = setup(["acme/bound"]);
+    handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      repository: { full_name: "acme/bound" },
+      pull_request: {
+        number: 33,
+        html_url: "https://github.com/acme/bound/pull/33",
+        head: { ref: "feat/manual", sha: "c".repeat(40) },
+        updated_at: "2026-07-12T10:00:00Z",
+        title: "SYD-1: manual fix",
+        body: null,
+      },
+    });
+    expect(findPrState(db, "acme/bound", 33)).toBeUndefined();
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
+  });
+
+  it("an agent/SYD-1 PR in a repo bound to another project records display events but no pr_state row (cross-repo)", () => {
+    const db = setup(["acme/bound"]);
+    const human = createActor(db, { name: "sean2", type: "human" }).actor;
+    createProject(db, human, { key: "OTH", name: "Other" });
+    addGithubRepo(db, human, { fullName: "acme/other", projectKey: "OTH" });
+
+    handleGithubWebhook(db, "pull_request", {
+      ...opened("opened"),
+      repository: { full_name: "acme/other" },
+    });
+    expect(findPrState(db, "acme/other", 12)).toBeUndefined();
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 });
 

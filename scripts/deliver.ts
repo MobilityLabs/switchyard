@@ -67,6 +67,7 @@ import {
   dispatchConflictResolution,
   pollUntilMergeable,
   originOwnerRepo,
+  prFreshness,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 import { execFile } from "node:child_process";
@@ -245,11 +246,21 @@ async function finishDelivery(
   }
   const commentBody = deliveryComment({ prNumber, mergeSha, deploy });
   await postComment(config, token, ref, note ? `${note}\n\n${commentBody}` : commentBody);
+  // GitHub's own head/timestamp for the merged PR (SYD-206): the merge writer
+  // of pr_state must never use a local clock. Best-effort — a failed lookup
+  // never drops the delivered event.
+  let freshness: { headSha: string; ghUpdatedAt: string } | undefined;
+  try {
+    freshness = await prFreshness(project.repo, prNumber);
+  } catch (err) {
+    console.error(`could not fetch PR freshness for ${ref} #${prNumber}: ${(err as Error).message}`);
+  }
   await postDeliveryEvent(config, token, ref, {
     type: "delivered",
     prNumber,
     mergeSha,
     deploy,
+    ...(freshness ?? {}),
   }).catch((e: Error) =>
     console.error(`could not record delivered event for ${ref}: ${e.message}`),
   );

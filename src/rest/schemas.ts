@@ -65,6 +65,8 @@ export const deliveryEventBody = z.discriminatedUnion("type", [
     mergeSha: z.string().min(1),
     deploy: deployResult,
     repo: repoField,
+    headSha: z.string().min(1).optional(),
+    ghUpdatedAt: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal("delivery_failed"),

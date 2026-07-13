@@ -38,6 +38,15 @@ export async function listPullRequests(repo: string, limit = 50): Promise<GhPr[]
   return JSON.parse(out || "[]") as GhPr[];
 }
 
+/** A single PR by number — the targeted refresh (SYD-206) for open pr_state
+ * rows that fell outside the poll window. Same execFile-argv posture as the
+ * list call: repo names and numbers are inert arguments, never a shell
+ * string. */
+export async function viewPullRequest(repo: string, number: number): Promise<GhPr> {
+  const out = await run(["pr", "view", String(number), "--repo", repo, "--json", PR_FIELDS]);
+  return JSON.parse(out) as GhPr;
+}
+
 /** The latest workflow run for a branch, or null if it has none yet. */
 export async function latestRun(repo: string, branch: string): Promise<GhRun | null> {
   const out = await run([

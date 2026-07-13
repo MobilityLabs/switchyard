@@ -106,6 +106,31 @@ describe("POST /issues/:ref/delivery-events", () => {
     });
   });
 
+  it("accepts and records GitHub freshness fields on delivered (the merge writer's timestamp source, SYD-206)", async () => {
+    const res = await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST",
+      headers: workerH,
+      body: JSON.stringify({
+        type: "delivered",
+        prNumber: 7,
+        mergeSha: "deadbeef",
+        deploy: { ran: false },
+        repo: "acme/widgets",
+        headSha: "e".repeat(40),
+        ghUpdatedAt: "2026-07-12T11:00:00Z",
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const issue = await body<{ activity: { type: string; payload: Record<string, unknown> }[] }>(
+      await app.request("/issues/SYD-1", { headers: workerH }),
+    );
+    expect(issue.activity.find((a) => a.type === "delivered")?.payload).toMatchObject({
+      headSha: "e".repeat(40),
+      ghUpdatedAt: "2026-07-12T11:00:00Z",
+    });
+  });
+
   it("records a delivery_failed event", async () => {
     const res = await app.request("/issues/SYD-1/delivery-events", {
       method: "POST",

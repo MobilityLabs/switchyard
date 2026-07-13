@@ -5,6 +5,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
+import { findPrState } from "../../src/services/pr-state.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 function setup(boundRepos: string[] = []) {
@@ -154,6 +155,64 @@ describe("recordDeliveryEvent / ingestion groundwork (SYD-205)", () => {
       }),
     ).toThrowError(/ambiguous/);
     expect(getActivity(db, "SYD-1").map((a) => a.type)).toEqual(["created"]);
+  });
+
+  it("pr_opened writes an attributed pr_state row at publish time (the claim gate's publish-time close, SYD-206)", () => {
+    const { db, worker } = setup(["acme/bound"]);
+    recordDeliveryEvent(db, worker, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 12,
+      url: "https://github.com/acme/bound/pull/12",
+      headSha: "a".repeat(40),
+      ghUpdatedAt: "2026-07-12T10:00:00Z",
+    });
+    const row = findPrState(db, "acme/bound", 12)!;
+    expect(row).toMatchObject({
+      status: "open",
+      issueRef: "SYD-1",
+      branch: "agent/SYD-1",
+      headSha: "a".repeat(40),
+    });
+  });
+
+  it("delivered transitions the pr_state row to merged", () => {
+    const { db, worker } = setup(["acme/bound"]);
+    recordDeliveryEvent(db, worker, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 12,
+      url: "https://github.com/acme/bound/pull/12",
+      ghUpdatedAt: "2026-07-12T10:00:00Z",
+    });
+    recordDeliveryEvent(db, worker, "SYD-1", {
+      type: "delivered",
+      prNumber: 12,
+      mergeSha: "m".repeat(40),
+      deploy: { ran: false },
+      headSha: "a".repeat(40),
+      ghUpdatedAt: "2026-07-12T11:00:00Z",
+    });
+    expect(findPrState(db, "acme/bound", 12)!.status).toBe("merged");
+  });
+
+  it("never writes pr_state when the event's repo is not bound to the issue's project", () => {
+    const { db, worker } = setup(["acme/bound"]);
+    recordDeliveryEvent(db, worker, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 12,
+      url: "https://github.com/acme/unrelated/pull/12",
+      repo: "acme/unrelated",
+    });
+    expect(findPrState(db, "acme/unrelated", 12)).toBeUndefined();
+  });
+
+  it("skips pr_state entirely when no repo is known (nothing to key the row on)", () => {
+    const { db, worker } = setup();
+    recordDeliveryEvent(db, worker, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 12,
+      url: "https://x/12",
+    });
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "pr_opened")).toHaveLength(1);
   });
 
   it("parses a malformed ghUpdatedAt fail-closed to null instead of rejecting the event", () => {

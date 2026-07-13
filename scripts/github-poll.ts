@@ -33,15 +33,26 @@ import { fileURLToPath } from "node:url";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import type { WorkerConfig } from "./worker-select.js";
 import {
-  diffRepoState,
+  observeRepoState,
+  selectRefreshCandidates,
   parsePollStateText,
   type PollStateFile,
   type PollEvent,
+  type RepoPollState,
 } from "./github-poll-lib.js";
-import { listPullRequests, latestRun } from "./github-poll-exec.js";
+import { listPullRequests, latestRun, viewPullRequest } from "./github-poll-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
 const DEFAULT_POLL_SECONDS = 120;
+
+// Targeted-refresh cadence (SYD-206): an open pr_state row that fell out of
+// the 50-window gets its own `gh pr view` at most this often — it burns a
+// GitHub API call per PR, so it runs slower than the tick.
+const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+// Consecutive targeted-refresh failures before the staleness alarm: the row
+// may be blocking the claim gate forever (repo renamed/unlinked, PR
+// transferred), and silence is the failure mode the spec forbids.
+const STALE_REFRESH_THRESHOLD = 3;
 
 function repoRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -111,6 +122,27 @@ async function postGithubEvent(
   return (await res.json().catch(() => ({}))) as GithubEventOutcome;
 }
 
+/** Open pr_state rows for a repo, from GET /api/pr-state — the refresh
+ * work-list. Tolerant of an older server without the endpoint (deploy skew)
+ * and of transport errors: no list just means no targeted refresh this
+ * tick. */
+async function fetchOpenPrNumbers(url: string, token: string, repo: string): Promise<number[]> {
+  try {
+    const res = await fetch(
+      `${url.replace(/\/$/, "")}/api/pr-state?repo=${encodeURIComponent(repo)}&status=open`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return [];
+    const rows: unknown = await res.json();
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .map((r) => Number((r as { prNumber?: unknown }).prNumber))
+      .filter((n) => Number.isInteger(n));
+  } catch {
+    return [];
+  }
+}
+
 // Exported for tests (SYD-177): the state-persistence ordering below is what
 // keeps a failed POST from permanently swallowing a PR's events.
 export async function pollRepo(
@@ -121,6 +153,37 @@ export async function pollRepo(
   dryRun: boolean,
 ): Promise<void> {
   const prs = await listPullRequests(fullName);
+  const repoState: RepoPollState = state[fullName] ?? {};
+
+  // Targeted refresh (SYD-206): open pr_state rows outside the poll window
+  // still get observed, on a slower cadence, so "absence is not evidence"
+  // has a live producer behind it. Failures never transition anything — they
+  // count toward the staleness alarm and get retried next interval.
+  const openRows = await fetchOpenPrNumbers(config.url, token, fullName);
+  const candidates = selectRefreshCandidates(
+    openRows,
+    new Set(prs.map((pr) => pr.number)),
+    repoState,
+    Date.now(),
+    REFRESH_INTERVAL_MS,
+  );
+  for (const prNumber of candidates) {
+    const entry = (repoState[prNumber] ??= { state: "OPEN", lastRunConclusion: null });
+    entry.lastRefreshAt = Date.now();
+    try {
+      prs.push(await viewPullRequest(fullName, prNumber));
+      entry.refreshFailures = 0;
+    } catch (err) {
+      entry.refreshFailures = (entry.refreshFailures ?? 0) + 1;
+      const detail = `targeted refresh of ${fullName}#${prNumber} failed (${entry.refreshFailures} consecutive): ${(err as Error).message}`;
+      console.error(
+        entry.refreshFailures >= STALE_REFRESH_THRESHOLD
+          ? `github-poll: STALE open pr_state row — ${detail} — the row may be blocking the claim gate; check whether the repo was renamed/unlinked or the PR transferred`
+          : `github-poll: ${detail}`,
+      );
+    }
+  }
+
   const runs = new Map(
     await Promise.all(
       prs
@@ -128,7 +191,7 @@ export async function pollRepo(
         .map(async (pr) => [pr.number, await latestRun(fullName, pr.headRefName)] as const),
     ),
   );
-  const { events, next } = diffRepoState(prs, runs, state[fullName] ?? {});
+  const { events, next } = observeRepoState(prs, runs, repoState);
 
   for (const ev of events) {
     if (dryRun) {
@@ -136,14 +199,15 @@ export async function pollRepo(
       continue;
     }
     const outcome = await postGithubEvent(config.url, token, ev, fullName);
-    // Steady-state "opened" reconciliation (SYD-177) is deduped server-side
-    // every tick; only log events the server actually recorded.
+    // Steady-state re-observation (SYD-177/206) is absorbed server-side every
+    // tick; only log events the server actually recorded.
     if (!outcome.duplicate) console.log(`${fullName}: posted ${ev.event}`);
   }
 
   // Advance the persisted state only after every event landed (SYD-177): a
-  // failed POST leaves the old state in place, so the next tick re-diffs and
-  // re-emits — the server's dedupe drops anything that did make it through.
+  // failed POST leaves the old state in place, so the next tick re-observes
+  // and re-emits — the server's dedupe drops anything that did make it
+  // through.
   state[fullName] = next;
 }
 

@@ -169,6 +169,33 @@ export const githubRepos = sqliteTable("github_repos", {
   createdAt: integer("created_at").notNull().default(now()),
 });
 
+// Mutable PR state, one row per (repo, prNumber) — the single source of truth
+// the sync overhaul (SYD-206, spec: docs/2026-07-12-sync-simplification-
+// assessment.md) migrates PR readers onto. Written ONLY via upsertPrState
+// (src/services/pr-state.ts), which enforces the ordering discipline (terminal
+// states never regress, monotonic ghUpdatedAt, recency-checked reopened) and
+// co-writes the canonical transition event. ghUpdatedAt is GitHub's own
+// updated_at as epoch seconds — never a local clock, so host skew can't
+// out-rank later genuine updates.
+export const prState = sqliteTable(
+  "pr_state",
+  {
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    branch: text("branch"),
+    // Set only from the strict agent/<ref> branch match AND when this repo is
+    // bound to that ref's project — display-only PRs keep it null.
+    issueRef: text("issue_ref"),
+    status: text("status", { enum: ["open", "merged", "closed"] }).notNull(),
+    headSha: text("head_sha"),
+    ghUpdatedAt: integer("gh_updated_at"),
+    url: text("url"),
+    lastTransitionEventId: integer("last_transition_event_id"),
+    updatedAt: integer("updated_at").notNull().default(now()),
+  },
+  (t) => [primaryKey({ columns: [t.repo, t.prNumber] }), index("pr_state_issue_ref_idx").on(t.issueRef)],
+);
+
 // Config knobs (SYD-154): rows exist only for values overriding the
 // compile-time registry default in src/services/settings.ts — "reset to
 // default" deletes the row. Not an events-table concern (same reasoning as

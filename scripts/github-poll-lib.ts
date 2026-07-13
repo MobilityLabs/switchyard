@@ -34,13 +34,20 @@ export type GhRun = {
   url: string;
 };
 
-/** Last-seen state per PR number, persisted across ticks so close/merge
- * transitions and check conclusions fire once per change. "opened" is
- * deliberately NOT gated on this (SYD-177) — it re-emits for every open PR
- * and relies on the server's dedupe instead. */
+/** Last-seen state per PR number, persisted across ticks. Since SYD-206 the
+ * pull_request observation is NOT gated on this (every seen PR re-emits and
+ * the server's upsert/dedupe absorbs repeats) — it still gates check_suite
+ * conclusions (fire once per change) and carries the targeted-refresh
+ * bookkeeping for open pr_state rows outside the poll window. */
 export type TrackedPr = {
   state: GhPrState;
   lastRunConclusion: string | null;
+  /** Last targeted `gh pr view` attempt (ms epoch) — refreshes run on a
+   * slower cadence than the tick. */
+  lastRefreshAt?: number;
+  /** Consecutive targeted-refresh failures; past a threshold the poller
+   * raises the staleness alarm (and never transitions state on error). */
+  refreshFailures?: number;
 };
 
 export type RepoPollState = Record<number, TrackedPr>;
@@ -80,31 +87,22 @@ function checkSuitePayload(pr: GhPr, run: GhRun): Record<string, unknown> {
 }
 
 /**
- * Diffs a repo's current PRs (and each open one's latest workflow run, when
- * known) against the last-seen state and returns the events that changed
- * since, plus the updated state to persist.
+ * Upsert-observed-state (SYD-206, replacing the old emit-transitions diff):
+ * EVERY PR in the poll result yields a pull_request observation on every
+ * tick — "opened" for OPEN, "closed" (with the `merged` flag) for
+ * CLOSED/MERGED, including PRs first observed already terminal. The server's
+ * upsertPrState/dedupe absorbs repeats, so a lost POST heals within one tick
+ * and a repo linked after its PRs settled still gets correct terminal state
+ * (never-saw-open heal) — this is what deletes the SYD-94 reconcile pass.
  *
- * - Every PR currently OPEN → "opened", on every tick, not just the first
- *   (SYD-177): the server dedupes by (issue, type, prNumber), so repeats are
- *   dropped there — and a PR whose original opened event was lost anywhere
- *   in the pipeline (worker crashed before posting pr_opened, a POST from
- *   here failed after state was persisted) gets it backfilled within one
- *   tick instead of staying invisible to the SYD-99 claim gate forever.
- * - A PR previously tracked OPEN that is no longer OPEN → "closed" (the
- *   payload's `merged` flag distinguishes a merge from a plain close, same
- *   as the real webhook's `pull_request.closed` action).
- * - A PR first observed already CLOSED/MERGED (e.g. the repo was linked
- *   after the PR settled) is recorded but produces no event — we never
- *   witnessed it open, so there's no transition to report.
- * - An OPEN PR whose latest *completed* run conclusion differs from the
- *   last-seen conclusion → "check_suite" (a run still queued/in_progress
- *   never fires; only a conclusion change does, mirroring `check_suite`
- *   only firing on `action: "completed"`).
+ * check_suite stays state-gated: an OPEN PR whose latest *completed* run
+ * conclusion differs from the last-seen conclusion fires once per change.
  *
- * PRs missing from `prs` (e.g. they fell outside the poll window) are left
- * untouched in the returned state rather than dropped.
+ * PRs missing from `prs` (fell outside the poll window) are left untouched in
+ * the returned state rather than dropped — absence is not evidence; the
+ * targeted refresh below covers open rows beyond the window.
  */
-export function diffRepoState(
+export function observeRepoState(
   prs: GhPr[],
   runs: Map<number, GhRun | null>,
   prior: RepoPollState,
@@ -114,11 +112,10 @@ export function diffRepoState(
 
   for (const pr of prs) {
     const known = prior[pr.number];
-    if (pr.state === "OPEN") {
-      events.push({ event: "pull_request", payload: prPayload(pr, "opened") });
-    } else if (known?.state === "OPEN") {
-      events.push({ event: "pull_request", payload: prPayload(pr, "closed") });
-    }
+    events.push({
+      event: "pull_request",
+      payload: prPayload(pr, pr.state === "OPEN" ? "opened" : "closed"),
+    });
 
     let lastRunConclusion = known?.lastRunConclusion ?? null;
     if (pr.state === "OPEN") {
@@ -128,10 +125,30 @@ export function diffRepoState(
         lastRunConclusion = run.conclusion;
       }
     }
-    next[pr.number] = { state: pr.state, lastRunConclusion };
+    next[pr.number] = { ...known, state: pr.state, lastRunConclusion };
   }
 
   return { events, next };
+}
+
+/**
+ * Which open pr_state rows deserve a targeted `gh pr view` this tick: they
+ * are absent from the poll window (so the tick itself won't refresh them) and
+ * haven't been attempted within `intervalMs` (the refresh runs on a slower
+ * cadence than the tick — it burns a GitHub API call per PR).
+ */
+export function selectRefreshCandidates(
+  openRowNumbers: number[],
+  windowNumbers: Set<number>,
+  state: RepoPollState,
+  nowMs: number,
+  intervalMs: number,
+): number[] {
+  return openRowNumbers.filter((n) => {
+    if (windowNumbers.has(n)) return false;
+    const lastRefreshAt = state[n]?.lastRefreshAt;
+    return lastRefreshAt === undefined || nowMs - lastRefreshAt > intervalMs;
+  });
 }
 
 export type PollStateFile = Record<string, RepoPollState>; // keyed by repo "owner/repo"

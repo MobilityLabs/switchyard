@@ -11,6 +11,7 @@ import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
 import { boundRepoFullNames } from "./github-repos.js";
 import { parseGhTimestamp } from "./github-webhook.js";
+import { upsertPrState, attributedRef } from "./pr-state.js";
 
 export type DeployResult = { ran: false } | { ran: true; ok: boolean; tail: string };
 
@@ -26,7 +27,15 @@ export type DeliveryEventInput =
       headSha?: string;
       ghUpdatedAt?: string;
     }
-  | { type: "delivered"; prNumber: number; mergeSha: string; deploy: DeployResult; repo?: string }
+  | {
+      type: "delivered";
+      prNumber: number;
+      mergeSha: string;
+      deploy: DeployResult;
+      repo?: string;
+      headSha?: string;
+      ghUpdatedAt?: string;
+    }
   | { type: "delivery_failed"; message: string; repo?: string };
 
 export function recordDeliveryEvent(
@@ -64,6 +73,30 @@ export function recordDeliveryEvent(
   if (input.type === "pr_opened") {
     payload.headSha = input.headSha ?? null;
     payload.ghUpdatedAt = parseGhTimestamp(input.ghUpdatedAt);
+  } else if (input.type === "delivered" && input.ghUpdatedAt !== undefined) {
+    payload.ghUpdatedAt = parseGhTimestamp(input.ghUpdatedAt);
   }
   recordEvent(db, { issueId: issue.id, actorId: actor.id, type, payload });
+
+  // SYD-206: the publish and the merge are two of pr_state's four writers —
+  // this is what closes the claim gate at publish time even on poll-only
+  // repos (no freshness window), and keeps board state from waiting on
+  // webhook/poll lag after a merge. Attribution is still repo-bound: a repo
+  // that isn't bound to this issue's project never writes its claim-gating
+  // state, exactly as in webhook ingestion.
+  if (repo !== null && (input.type === "pr_opened" || input.type === "delivered")) {
+    const branch = `agent/${issue.ref}`;
+    if (attributedRef(db, repo, branch) === issue.ref) {
+      upsertPrState(db, actor, {
+        repo,
+        prNumber: input.prNumber,
+        status: input.type === "pr_opened" ? "open" : "merged",
+        branch,
+        url: input.type === "pr_opened" ? input.url : undefined,
+        headSha: input.headSha ?? null,
+        ghUpdatedAt: input.ghUpdatedAt ?? null,
+        mergeSha: input.type === "delivered" ? input.mergeSha : undefined,
+      });
+    }
+  }
 }
