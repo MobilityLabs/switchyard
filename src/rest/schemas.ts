@@ -45,19 +45,32 @@ const deployResult = z.union([
   z.object({ ran: z.literal(false) }),
   z.object({ ran: z.literal(true), ok: z.boolean(), tail: z.string() }),
 ]);
+// SYD-205 ingestion groundwork: `repo` (and `headSha`/`ghUpdatedAt` on
+// pr_opened) stay OPTIONAL until the worker host go-live — making them
+// required now would 400 the un-upgraded worker and silently drop its
+// pr_opened publish (the deploy-skew rule in the sync-simplification spec).
+const repoField = z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"').optional();
 export const deliveryEventBody = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("pr_opened"),
     prNumber: z.number().int().positive(),
     url: z.string().url(),
+    repo: repoField,
+    headSha: z.string().min(1).optional(),
+    ghUpdatedAt: z.string().min(1).optional(),
   }),
   z.object({
     type: z.literal("delivered"),
     prNumber: z.number().int().positive(),
     mergeSha: z.string().min(1),
     deploy: deployResult,
+    repo: repoField,
   }),
-  z.object({ type: z.literal("delivery_failed"), message: z.string().min(1) }),
+  z.object({
+    type: z.literal("delivery_failed"),
+    message: z.string().min(1),
+    repo: repoField,
+  }),
 ]);
 export const agentSessionCreateBody = z.object({
   ref: z.string(),
@@ -86,6 +99,9 @@ export const githubEventBody = z.object({
   // Shape varies by event type; handleGithubWebhook validates the fields it
   // actually reads against a per-event zod schema (src/services/github-webhook.ts).
   payload: z.unknown(),
+  // Optional-first per the SYD-205 deploy-skew rule; the server infers a sole
+  // bound repo when absent.
+  repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"').optional(),
 });
 export const settingPutBody = z.object({ value: z.any() });
 

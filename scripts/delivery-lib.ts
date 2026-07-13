@@ -372,12 +372,34 @@ export function parsePrNumberFromUrl(url: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** Freshness lookup for a just-published/just-merged PR (SYD-205): the
+ * worker's headSha/ghUpdatedAt must come from GitHub's own record, never the
+ * host clock, so clock skew can't out-rank later genuine updates. */
+export function buildPrViewFreshnessArgs(prNumber: number, ownerRepo: string): string[] {
+  return ["pr", "view", String(prNumber), "-R", ownerRepo, "--json", "headRefOid,updatedAt"];
+}
+
 /** The subset of a structured delivery event the server records (SYD-54),
- * posted to POST /issues/:ref/delivery-events by deliver.ts and the worker. */
+ * posted to POST /issues/:ref/delivery-events by deliver.ts and the worker.
+ * repo/headSha/ghUpdatedAt are optional while the tracker and the worker
+ * host deploy separately (SYD-205 deploy-skew rule). */
 export type DeliveryEventInput =
-  | { type: "pr_opened"; prNumber: number; url: string }
-  | { type: "delivered"; prNumber: number; mergeSha: string; deploy: DeliveryResult["deploy"] }
-  | { type: "delivery_failed"; message: string };
+  | {
+      type: "pr_opened";
+      prNumber: number;
+      url: string;
+      repo?: string;
+      headSha?: string;
+      ghUpdatedAt?: string;
+    }
+  | {
+      type: "delivered";
+      prNumber: number;
+      mergeSha: string;
+      deploy: DeliveryResult["deploy"];
+      repo?: string;
+    }
+  | { type: "delivery_failed"; message: string; repo?: string };
 
 export type DeliveryResult = {
   prNumber: number;

@@ -11,6 +11,8 @@ function pr(o: Partial<GhPr>): GhPr {
   return {
     number: 1,
     headRefName: "agent/SYD-1",
+    headRefOid: "e".repeat(40),
+    updatedAt: "2026-07-12T10:00:00Z",
     title: "unrelated title",
     body: null,
     url: "https://github.com/acme/widgets/pull/1",
@@ -41,7 +43,8 @@ describe("diffRepoState / pull requests", () => {
           pull_request: {
             number: 1,
             html_url: "https://github.com/acme/widgets/pull/1",
-            head: { ref: "agent/SYD-1" },
+            head: { ref: "agent/SYD-1", sha: "e".repeat(40) },
+            updated_at: "2026-07-12T10:00:00Z",
             title: "unrelated title",
             body: null,
             merged: false,

@@ -17,6 +17,8 @@ export type GhPrState = "OPEN" | "CLOSED" | "MERGED";
 export type GhPr = {
   number: number;
   headRefName: string;
+  headRefOid: string;
+  updatedAt: string;
   title: string;
   body: string | null;
   url: string;
@@ -53,7 +55,10 @@ function prPayload(pr: GhPr, action: "opened" | "closed"): Record<string, unknow
     pull_request: {
       number: pr.number,
       html_url: pr.url,
-      head: { ref: pr.headRefName },
+      // head.sha + updated_at keep poll-only repos' headSha/ghUpdatedAt fresh
+      // (SYD-205) — same shape a real webhook delivery carries.
+      head: { ref: pr.headRefName, sha: pr.headRefOid },
+      updated_at: pr.updatedAt,
       title: pr.title,
       body: pr.body,
       merged: pr.state === "MERGED",

@@ -10,6 +10,7 @@ const runDeploy = vi.fn();
 const findOpenAgentPr = vi.fn();
 const findMergedAgentPr = vi.fn();
 const dispatchConflictResolution = vi.fn();
+const originOwnerRepo = vi.fn();
 
 vi.mock("../../scripts/delivery-exec.js", () => ({
   attemptAutoRebase: (...args: unknown[]) => attemptAutoRebase(...args),
@@ -21,6 +22,7 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   findOpenAgentPr: (...args: unknown[]) => findOpenAgentPr(...args),
   findMergedAgentPr: (...args: unknown[]) => findMergedAgentPr(...args),
   dispatchConflictResolution: (...args: unknown[]) => dispatchConflictResolution(...args),
+  originOwnerRepo: (...args: unknown[]) => originOwnerRepo(...args),
 }));
 
 const { deliverQueue } = await import("../../scripts/deliver.js");
@@ -47,6 +49,7 @@ describe("deliverQueue (SYD-174)", () => {
     ensureCleanClone.mockReset();
     runVerification.mockReset();
     runDeploy.mockReset();
+    originOwnerRepo.mockReset();
     pollUntilMergeable.mockResolvedValue("MERGEABLE");
   });
 
@@ -85,6 +88,45 @@ describe("deliverQueue (SYD-174)", () => {
 
     expect(attemptAutoRebase).toHaveBeenCalledTimes(2);
     expect(mergeAgentPr).toHaveBeenCalledTimes(2);
+  });
+
+  it("names the origin repo on the delivered event (SYD-205)", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+    mergeAgentPr.mockResolvedValue("merged-sha");
+    originOwnerRepo.mockResolvedValue("acme/widgets");
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+
+    const eventCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/issues/SYD-174/delivery-events"),
+    );
+    expect(eventCalls).toHaveLength(1);
+    expect(JSON.parse(eventCalls[0][1].body as string)).toMatchObject({
+      type: "delivered",
+      prNumber: 42,
+      mergeSha: "merged-sha",
+      repo: "acme/widgets",
+    });
+  });
+
+  it("posts the delivery event without a repo when the origin lookup fails (never drops the event)", async () => {
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "rebased-sha" });
+    mergeAgentPr.mockResolvedValue("merged-sha");
+    originOwnerRepo.mockRejectedValue(new Error("no origin remote"));
+    const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+
+    await deliverQueue("SYD-174", project, config, token, "/clone/syd", 42);
+
+    const eventCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/issues/SYD-174/delivery-events"),
+    );
+    expect(eventCalls).toHaveLength(1);
+    const posted = JSON.parse(eventCalls[0][1].body as string);
+    expect(posted).toMatchObject({ type: "delivered", prNumber: 42 });
+    expect(posted.repo).toBeUndefined();
   });
 
   it("gives up once the queue-mode retry budget is exhausted", async () => {

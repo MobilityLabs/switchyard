@@ -216,6 +216,19 @@ describe("computeDeliveryStatus", () => {
     expect(status).toMatchObject({ state: "closed", mergeSha: null });
   });
 
+  it("reports open again from gh_pr_reopened after a close (SYD-205)", () => {
+    const status = computeDeliveryStatus([
+      ev({ type: "gh_pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+      ev({ type: "gh_pr_closed", createdAt: 2, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+      ev({
+        type: "gh_pr_reopened",
+        createdAt: 3,
+        payload: { prNumber: 7, url: "https://x/pull/7", branch: "agent/SYD-1" },
+      }),
+    ]);
+    expect(status).toMatchObject({ prNumber: 7, state: "open" });
+  });
+
   it("folds gh_checks_passed / gh_checks_failed into the checks field, latest wins", () => {
     const passed = computeDeliveryStatus([
       ev({ type: "gh_pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),

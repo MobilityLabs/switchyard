@@ -55,6 +55,27 @@ describe("getOpenPr", () => {
     });
   });
 
+  it("flags an issue open again after gh_pr_reopened follows a close (SYD-205)", () => {
+    const { db, agent } = setup();
+    const issue = getIssue(db, "SYD-1");
+    const pr = { prNumber: 41, url: "https://github.com/acme/widgets/pull/41" };
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_opened",
+      payload: { ...pr, branch: "agent/SYD-1" },
+    });
+    recordEvent(db, { issueId: issue.id, actorId: agent.id, type: "gh_pr_closed", payload: pr });
+    expect(getOpenPr(db, issue.id)).toBeNull();
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_reopened",
+      payload: { ...pr, branch: "agent/SYD-1" },
+    });
+    expect(getOpenPr(db, issue.id)).toEqual(pr);
+  });
+
   it("clears once delivered", () => {
     const { db, human, agent } = setup();
     const issue = getIssue(db, "SYD-1");

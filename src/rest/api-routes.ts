@@ -437,8 +437,8 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
         "Only a trusted human-authenticated poller may post GitHub events — agents cannot call /github-events.",
       );
     }
-    const { event, payload } = c.req.valid("json");
-    const outcome = handleGithubWebhook(db, event, payload);
+    const { event, payload, repo } = c.req.valid("json");
+    const outcome = handleGithubWebhook(db, event, payload, repo);
     return c.json({ ok: true, ...outcome });
   });
 

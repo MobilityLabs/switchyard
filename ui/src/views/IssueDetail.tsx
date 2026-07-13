@@ -96,7 +96,7 @@ export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | nu
   let lastFailedAt = -Infinity;
 
   for (const ev of activity) {
-    if (ev.type === "pr_opened" || ev.type === "gh_pr_opened") {
+    if (ev.type === "pr_opened" || ev.type === "gh_pr_opened" || ev.type === "gh_pr_reopened") {
       prNumber = Number(ev.payload.prNumber);
       url = String(ev.payload.url ?? "") || url;
       state = "open";
@@ -681,10 +681,21 @@ export function Event({
       </p>
     );
   }
-  if (ev.type === "gh_pr_opened" || ev.type === "gh_pr_merged" || ev.type === "gh_pr_closed") {
+  if (
+    ev.type === "gh_pr_opened" ||
+    ev.type === "gh_pr_merged" ||
+    ev.type === "gh_pr_closed" ||
+    ev.type === "gh_pr_reopened"
+  ) {
     const url = String(ev.payload.url ?? "");
     const verb =
-      ev.type === "gh_pr_opened" ? "opened" : ev.type === "gh_pr_merged" ? "merged" : "closed";
+      ev.type === "gh_pr_opened"
+        ? "opened"
+        : ev.type === "gh_pr_merged"
+          ? "merged"
+          : ev.type === "gh_pr_reopened"
+            ? "reopened"
+            : "closed";
     return (
       <p className="event">
         GitHub: {verb}{" "}

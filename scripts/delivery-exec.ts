@@ -28,6 +28,7 @@ import {
   buildDetachOntoMainArgs,
   buildSyncLocalMainArgs,
   buildPrViewMergeableArgs,
+  buildPrViewFreshnessArgs,
   shouldRetryMergePoll,
   parsePrNumberFromUrl,
   tailOf,
@@ -79,9 +80,23 @@ export async function runGit(args: string[], opts: { cwd?: string } = {}): Promi
 // that branch checked out for review.
 const GH_CWD = os.tmpdir();
 
-async function originOwnerRepo(repo: string): Promise<string> {
+export async function originOwnerRepo(repo: string): Promise<string> {
   const url = await runGit(["-C", repo, "remote", "get-url", "origin"]);
   return parseOwnerRepo(url);
+}
+
+/** GitHub's own head SHA + updated_at for a PR (SYD-205) — the freshness
+ * fields the worker attaches to its pr_opened publish so pr_state (SYD-206)
+ * has a producer at publish time. */
+export async function prFreshness(
+  repo: string,
+  prNumber: number,
+): Promise<{ headSha: string; ghUpdatedAt: string }> {
+  const ownerRepo = await originOwnerRepo(repo);
+  const out = JSON.parse(
+    await run("gh", buildPrViewFreshnessArgs(prNumber, ownerRepo), { cwd: GH_CWD }),
+  ) as { headRefOid: string; updatedAt: string };
+  return { headSha: out.headRefOid, ghUpdatedAt: out.updatedAt };
 }
 
 /**

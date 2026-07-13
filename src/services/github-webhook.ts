@@ -18,6 +18,7 @@ import type { Db } from "../db/index.js";
 import { getOrCreateActor } from "./actors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
+import { boundRepoFullNames } from "./github-repos.js";
 
 const GITHUB_ACTOR_NAME = "github";
 
@@ -35,7 +36,10 @@ const pullRequestPayloadSchema = z.object({
       merge_commit_sha: z.string().nullable().optional(),
       title: z.string().nullable().optional(),
       body: z.string().nullable().optional(),
-      head: z.object({ ref: z.string().optional() }).optional(),
+      head: z.object({ ref: z.string().optional(), sha: z.string().optional() }).optional(),
+      // Deliberately unknown, not string: a malformed timestamp must fail
+      // closed to null (parseGhTimestamp), never reject the whole delivery.
+      updated_at: z.unknown().optional(),
     })
     .optional(),
 });
@@ -97,8 +101,18 @@ function resolveRef(branchCandidates: unknown[], textCandidates: unknown[] = [])
 }
 
 export type GithubWebhookOutcome =
-  | { handled: true; ref: string; type: string; duplicate?: true }
+  | { handled: true; ref: string; type: string; duplicate?: true; recorded?: false }
   | { handled: false; reason: string };
+
+/**
+ * GitHub timestamps parse fail-closed (SYD-205): a malformed or absent
+ * `updated_at` becomes null — "no freshness information" — never "treat as
+ * newest". The pr_state monotonic guard (SYD-206) builds on this.
+ */
+export function parseGhTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" || Number.isNaN(Date.parse(value))) return null;
+  return value;
+}
 
 /**
  * Dedupe key for a delivery: matches an existing event of the same type on
@@ -123,28 +137,45 @@ function isDuplicate(
   return !!row;
 }
 
+const AMBIGUOUS_REPO_REASON =
+  "repo is ambiguous — the issue's project has multiple bound repos and the delivery does not name one";
+
+/** Fills in `repo` when the delivery didn't name one (SYD-205 deploy-skew
+ * rule): a sole bound repo is unambiguous, several bound repos reject rather
+ * than guess, none bound records null (nothing to attribute to). */
+function resolveRepo(db: Db, projectId: number, repo: string | null): string | null | "ambiguous" {
+  if (repo !== null) return repo;
+  const bound = boundRepoFullNames(db, projectId);
+  if (bound.length === 1) return bound[0];
+  if (bound.length > 1) return "ambiguous";
+  return null;
+}
+
 function record(
   db: Db,
   ref: string,
   type: string,
   payload: Record<string, unknown>,
+  repo: string | null,
   dedupe?: { jsonPath: string; value: string | number | null },
 ): GithubWebhookOutcome {
-  let issueId: number;
+  let issue: { id: number; projectId: number };
   try {
-    issueId = getIssue(db, ref).id;
+    issue = getIssue(db, ref);
   } catch {
     return { handled: false, reason: `no Switchyard issue matches ref ${ref}` };
   }
-  if (dedupe && isDuplicate(db, issueId, type, dedupe.jsonPath, dedupe.value)) {
+  const resolvedRepo = resolveRepo(db, issue.projectId, repo);
+  if (resolvedRepo === "ambiguous") return { handled: false, reason: AMBIGUOUS_REPO_REASON };
+  if (dedupe && isDuplicate(db, issue.id, type, dedupe.jsonPath, dedupe.value)) {
     return { handled: true, ref, type, duplicate: true };
   }
   const actor = getOrCreateActor(db, GITHUB_ACTOR_NAME, "agent");
-  recordEvent(db, { issueId, actorId: actor.id, type, payload });
+  recordEvent(db, { issueId: issue.id, actorId: actor.id, type, payload: { ...payload, repo: resolvedRepo } });
   return { handled: true, ref, type };
 }
 
-function handlePullRequest(db: Db, rawPayload: unknown): GithubWebhookOutcome {
+function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): GithubWebhookOutcome {
   const parsed = pullRequestPayloadSchema.safeParse(rawPayload);
   if (!parsed.success) return { handled: false, reason: "malformed pull_request payload" };
   const payload = parsed.data;
@@ -155,6 +186,8 @@ function handlePullRequest(db: Db, rawPayload: unknown): GithubWebhookOutcome {
 
   const prNumber = Number(pr.number);
   const url = String(pr.html_url ?? "");
+  const headSha = pr.head?.sha ?? null;
+  const ghUpdatedAt = parseGhTimestamp(pr.updated_at);
 
   const byPrNumber = { jsonPath: "$.prNumber", value: prNumber };
   if (payload.action === "opened") {
@@ -162,7 +195,8 @@ function handlePullRequest(db: Db, rawPayload: unknown): GithubWebhookOutcome {
       db,
       ref,
       "gh_pr_opened",
-      { prNumber, url, branch: pr.head?.ref ?? null },
+      { prNumber, url, branch: pr.head?.ref ?? null, headSha, ghUpdatedAt },
+      repo,
       byPrNumber,
     );
   }
@@ -172,10 +206,36 @@ function handlePullRequest(db: Db, rawPayload: unknown): GithubWebhookOutcome {
           db,
           ref,
           "gh_pr_merged",
-          { prNumber, url, mergeSha: pr.merge_commit_sha ?? null },
+          { prNumber, url, mergeSha: pr.merge_commit_sha ?? null, headSha, ghUpdatedAt },
+          repo,
           byPrNumber,
         )
-      : record(db, ref, "gh_pr_closed", { prNumber, url }, byPrNumber);
+      : record(db, ref, "gh_pr_closed", { prNumber, url, headSha, ghUpdatedAt }, repo, byPrNumber);
+  }
+  if (payload.action === "reopened") {
+    // A PR can legitimately reopen more than once, so dedupe by GitHub's own
+    // timestamp (a redelivery repeats it; a genuine re-reopen carries a newer
+    // one) rather than by prNumber.
+    return record(
+      db,
+      ref,
+      "gh_pr_reopened",
+      { prNumber, url, branch: pr.head?.ref ?? null, headSha, ghUpdatedAt },
+      repo,
+      { jsonPath: "$.ghUpdatedAt", value: ghUpdatedAt },
+    );
+  }
+  if (payload.action === "synchronize") {
+    // Groundwork only (SYD-205): parse and acknowledge — synchronize is a
+    // same-status head refresh, not a transition, so no audit event is
+    // recorded. upsertPrState (SYD-206) hooks in here to persist
+    // headSha/ghUpdatedAt.
+    try {
+      getIssue(db, ref);
+    } catch {
+      return { handled: false, reason: `no Switchyard issue matches ref ${ref}` };
+    }
+    return { handled: true, ref, type: "synchronize", recorded: false };
   }
   return { handled: false, reason: `ignored pull_request action "${payload.action}"` };
 }
@@ -185,7 +245,7 @@ function branchFromGitRef(gitRef: unknown): string | null {
   return gitRef.slice("refs/heads/".length);
 }
 
-function handlePush(db: Db, rawPayload: unknown): GithubWebhookOutcome {
+function handlePush(db: Db, rawPayload: unknown, repo: string | null): GithubWebhookOutcome {
   const parsed = pushPayloadSchema.safeParse(rawPayload);
   if (!parsed.success) return { handled: false, reason: "malformed push payload" };
   const payload = parsed.data;
@@ -210,11 +270,12 @@ function handlePush(db: Db, rawPayload: unknown): GithubWebhookOutcome {
       branch,
       url: typeof payload.compare === "string" ? payload.compare : null,
     },
+    repo,
     { jsonPath: "$.headSha", value: headSha },
   );
 }
 
-function handleCheckSuite(db: Db, rawPayload: unknown): GithubWebhookOutcome {
+function handleCheckSuite(db: Db, rawPayload: unknown, repo: string | null): GithubWebhookOutcome {
   const parsed = checkSuitePayloadSchema.safeParse(rawPayload);
   if (!parsed.success) return { handled: false, reason: "malformed check_suite payload" };
   const payload = parsed.data;
@@ -230,21 +291,30 @@ function handleCheckSuite(db: Db, rawPayload: unknown): GithubWebhookOutcome {
   const conclusion = String(suite.conclusion ?? "");
   const type = conclusion === "success" ? "gh_checks_passed" : "gh_checks_failed";
   const headSha = suite.head_sha ?? null;
-  return record(db, ref, type, { conclusion, headSha }, { jsonPath: "$.headSha", value: headSha });
+  return record(db, ref, type, { conclusion, headSha }, repo, {
+    jsonPath: "$.headSha",
+    value: headSha,
+  });
 }
 
 export function handleGithubWebhook(
   db: Db,
   githubEvent: string,
   payload: unknown,
+  repo?: string,
 ): GithubWebhookOutcome {
+  // Repo identity (SYD-205): an explicitly named repo (the /github-events
+  // top-level field) wins, then the payload's own repository.full_name (real
+  // webhook deliveries always carry it), then the sole-bound-repo inference
+  // in record() for producers that predate the field.
+  const resolvedRepo = repo ?? repositoryFullName(payload) ?? null;
   switch (githubEvent) {
     case "pull_request":
-      return handlePullRequest(db, payload);
+      return handlePullRequest(db, payload, resolvedRepo);
     case "check_suite":
-      return handleCheckSuite(db, payload);
+      return handleCheckSuite(db, payload, resolvedRepo);
     case "push":
-      return handlePush(db, payload);
+      return handlePush(db, payload, resolvedRepo);
     default:
       return { handled: false, reason: `unsupported event type "${githubEvent}"` };
   }

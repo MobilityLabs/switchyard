@@ -65,3 +65,18 @@ export function removeGithubRepo(db: Db, actor: Actor, id: number): void {
 export function findGithubRepo(db: Db, fullName: string): GithubRepo | undefined {
   return db.select().from(githubRepos).where(eq(githubRepos.fullName, fullName)).get();
 }
+
+/**
+ * Full names of the repos bound to a project. Used to infer `repo` for
+ * ingested PR events that don't name one (SYD-205 deploy-skew rule: the new
+ * ingress fields stay optional until the worker host upgrades, so the server
+ * fills the gap — but only when exactly one bound repo makes it unambiguous).
+ */
+export function boundRepoFullNames(db: Db, projectId: number): string[] {
+  return db
+    .select({ fullName: githubRepos.fullName })
+    .from(githubRepos)
+    .where(eq(githubRepos.projectId, projectId))
+    .all()
+    .map((r) => r.fullName);
+}

@@ -23,6 +23,8 @@ function openPr(number: number): GhPr {
   return {
     number,
     headRefName: `agent/SYD-${number}`,
+    headRefOid: "f".repeat(40),
+    updatedAt: "2026-07-12T10:00:00Z",
     title: "t",
     body: null,
     url: `http://github.test/pull/${number}`,
@@ -85,6 +87,26 @@ describe("pollRepo", () => {
     expect(JSON.parse(eventCalls[0][1].body as string)).toMatchObject({
       event: "pull_request",
       payload: { action: "opened" },
+    });
+  });
+
+  it("names the polled repo on every POST so the server never has to infer it (SYD-205)", async () => {
+    vi.mocked(listPullRequests).mockResolvedValue([openPr(7)]);
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, handled: true, ref: "SYD-7", type: "gh_pr_opened" }),
+    });
+
+    await pollRepo("acme/widgets", config, "tok", {}, false);
+    const eventCalls = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/github-events"),
+    );
+    expect(eventCalls).toHaveLength(1);
+    const posted = JSON.parse(eventCalls[0][1].body as string);
+    expect(posted.repo).toBe("acme/widgets");
+    expect(posted.payload.pull_request).toMatchObject({
+      head: { ref: "agent/SYD-7", sha: "f".repeat(40) },
+      updated_at: "2026-07-12T10:00:00Z",
     });
   });
 });

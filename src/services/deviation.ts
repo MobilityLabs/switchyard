@@ -41,7 +41,7 @@ function openingEventId(db: Db, issueId: number, prNumber: number): number {
   const row = db.all<{ eventId: number | null }>(sql`
     SELECT MAX(id) AS eventId FROM events
     WHERE issue_id = ${issueId}
-      AND type IN ('pr_opened', 'gh_pr_opened')
+      AND type IN ('pr_opened', 'gh_pr_opened', 'gh_pr_reopened')
       AND json_extract(payload, '$.prNumber') = ${prNumber}
   `)[0];
   return row?.eventId ?? 0;

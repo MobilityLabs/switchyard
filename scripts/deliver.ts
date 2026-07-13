@@ -66,6 +66,7 @@ import {
   findMergedAgentPr,
   dispatchConflictResolution,
   pollUntilMergeable,
+  originOwnerRepo,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 import { execFile } from "node:child_process";
@@ -173,15 +174,26 @@ async function postComment(
 }
 
 /** Records a structured delivery event (SYD-54) alongside the prose comment
- * so the issue UI can render a delivery strip without parsing text. */
+ * so the issue UI can render a delivery strip without parsing text. Names the
+ * project's origin repo on every event (SYD-205) — best-effort, so a missing
+ * origin remote can never drop the event itself. */
 async function postDeliveryEvent(
   config: WorkerConfig,
   token: string,
   ref: string,
   input: DeliveryEventInput,
 ): Promise<void> {
+  let event = input;
+  const project = config.projects[projectKeyOf(ref)];
+  if (!event.repo && project) {
+    try {
+      event = { ...event, repo: await originOwnerRepo(project.repo) };
+    } catch (err) {
+      console.error(`could not resolve origin repo for ${ref}: ${(err as Error).message}`);
+    }
+  }
   const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/delivery-events`;
-  await postWithRetry(url, token, `POST delivery-events on ${ref}`, input);
+  await postWithRetry(url, token, `POST delivery-events on ${ref}`, event);
 }
 
 /**
