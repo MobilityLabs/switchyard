@@ -9,7 +9,7 @@ else is refused. This is the credential-injection + allowlist half of the
 `syd-egress` sidecar (SYD-186); it replaces tinyproxy's default-deny filter.
 
 The pure decision functions (`injection_for`, `host_allowed`,
-`connect_decision`) carry the policy and are exercised by `--selftest`
+`connect_decision`, `request_decision`) carry the policy and are exercised by `--selftest`
 (no mitmproxy dependency). The mitmproxy hooks at the bottom are thin shells
 that apply those decisions; they are import-guarded so `--selftest` runs under
 a bare Python (mitmproxy absent).
@@ -84,6 +84,31 @@ def connect_decision(host: str, allowlist: set) -> str:
     return "deny"
 
 
+def request_decision(scheme: str, host: str, pretty_host: str, allowlist: set) -> str:
+    """Policy for non-CONNECT flows reaching the request hook: 'inject',
+    'allow', or 'deny' (SYD-190).
+
+    Plain-HTTP proxy requests (absolute-form, no CONNECT) never passed the
+    http_connect() gate, so the allowlist must be applied here — and BOTH the
+    connection target (`host`) and the Host header (`pretty_host`) must be
+    allowlisted, or a request could smuggle a provider Host header toward an
+    arbitrary target. Credentials are never injected over cleartext, so plain
+    HTTP to a provider host is denied outright, not injected.
+
+    MITM'd TLS flows re-check the CONNECT decision (defense in depth) and
+    inject only when the Host header names a provider host.
+    """
+    h = host.lower()
+    p = pretty_host.lower()
+    if (scheme or "").lower() != "https":
+        if host_allowed(h, allowlist) and host_allowed(p, allowlist):
+            return "allow"
+        return "deny"
+    if connect_decision(h, allowlist) == "deny":
+        return "deny"
+    return "inject" if p in PROVIDER_HOSTS else "allow"
+
+
 def parse_allowlist(env: Mapping) -> set:
     """ALLOWED_DOMAINS is comma-separated hostnames (same format tinyproxy
     consumed in scripts/egress-proxy-entry.sh). Blanks are dropped."""
@@ -118,24 +143,38 @@ def tls_clienthello(data) -> None:  # noqa: ANN001
         data.ignore_connection = True
 
 
+def _deny(flow) -> None:  # noqa: ANN001
+    from mitmproxy import http
+
+    flow.response = http.Response.make(
+        403, b"egress denied: host not in allowlist\n",
+        {"Content-Type": "text/plain"},
+    )
+
+
 def http_connect(flow) -> None:  # noqa: ANN001
     """Default-deny gate at CONNECT time: refuse any host that is neither a
     provider host nor on the allowlist, before any TLS is established."""
-    from mitmproxy import http
-
     allowlist = parse_allowlist(os.environ)
     if connect_decision(flow.request.host, allowlist) == "deny":
-        flow.response = http.Response.make(
-            403, b"egress denied: host not in allowlist\n",
-            {"Content-Type": "text/plain"},
-        )
+        _deny(flow)
 
 
 def request(flow) -> None:  # noqa: ANN001
-    """Inject the real credential for MITM'd provider hosts."""
-    ops = injection_for(flow.request.pretty_host, os.environ)
-    if ops is not None:
-        _apply(flow.request.headers, ops)
+    """Gate every non-CONNECT flow by the allowlist, then inject the real
+    credential for MITM'd provider hosts. Plain-HTTP requests bypass
+    http_connect() entirely (SYD-190), so the default-deny lives here too."""
+    allowlist = parse_allowlist(os.environ)
+    decision = request_decision(
+        flow.request.scheme, flow.request.host, flow.request.pretty_host, allowlist,
+    )
+    if decision == "deny":
+        _deny(flow)
+        return
+    if decision == "inject":
+        ops = injection_for(flow.request.pretty_host, os.environ)
+        if ops is not None:
+            _apply(flow.request.headers, ops)
 
 
 def _selftest() -> None:
@@ -174,6 +213,22 @@ def _selftest() -> None:
     assert connect_decision("registry.npmjs.org", allow) == "tunnel"
     assert connect_decision("evil.example.com", allow) == "deny"
     assert connect_decision("api.anthropic.com.attacker.net", allow) == "deny"
+
+    # request()-path policy (SYD-190): plain HTTP is allowlist-only — both the
+    # connection target and the Host header must be allowlisted, and provider
+    # hosts are denied (never inject a credential over cleartext).
+    assert request_decision("http", "evil.example.com", "evil.example.com", allow) == "deny"
+    assert request_decision("http", "registry.npmjs.org", "registry.npmjs.org", allow) == "allow"
+    assert request_decision("HTTP", "REGISTRY.npmjs.org", "registry.NPMJS.org", allow) == "allow"
+    assert request_decision("http", "api.anthropic.com", "api.anthropic.com", allow) == "deny"
+    # Host-header smuggle: allowlisted target, provider Host header -> deny.
+    assert request_decision("http", "registry.npmjs.org", "api.anthropic.com", allow) == "deny"
+    assert request_decision("http", "api.anthropic.com", "registry.npmjs.org", allow) == "deny"
+    # MITM'd TLS flows: provider -> inject; non-provider Host header on a
+    # provider connection -> forward without injection; denied host -> deny.
+    assert request_decision("https", "api.anthropic.com", "api.anthropic.com", allow) == "inject"
+    assert request_decision("https", "api.anthropic.com", "elsewhere.example", allow) == "allow"
+    assert request_decision("https", "evil.example.com", "evil.example.com", allow) == "deny"
 
     # Allowlist parsing from the env string.
     assert parse_allowlist({"ALLOWED_DOMAINS": "a.com, b.com ,, c.com"}) == {"a.com", "b.com", "c.com"}
