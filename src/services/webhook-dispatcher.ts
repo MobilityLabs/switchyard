@@ -93,8 +93,9 @@ export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
     try {
       // No explicit staleSeconds: releaseStaleClaims reads claims.stale_seconds
       // fresh from settings every tick, so a human's edit in the UI takes
-      // effect on the next sweep, not just at process start.
-      releaseStaleClaims(db);
+      // effect on the next sweep, not just at process start. serverStartedAt
+      // shares the lease sweep's post-restart grace (SYD-210 review).
+      releaseStaleClaims(db, undefined, serverStartedAt);
     } catch (err) {
       console.error("stale claim release:", err);
     }

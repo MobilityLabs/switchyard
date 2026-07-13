@@ -192,6 +192,22 @@ describe("releaseStaleClaims", () => {
     expect(getIssue(db, "AIPI-1").status).toBe("todo");
   });
 
+  it("skips the sweep within the server-uptime grace window after a restart (SYD-210 review)", () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
+    updateIssue(db, human, "AIPI-1", { status: "todo" });
+    claimLeaseless("AIPI-1");
+    const id = getIssue(db, "AIPI-1").id;
+    ageAllEvents(db, id, 5 * 3600); // stale by the 4h default
+    const now = Math.floor(Date.now() / 1000);
+    // just restarted (within the 600s heartbeat window): do not release — a
+    // correlated restart must not let the legacy stale sweep release either.
+    expect(releaseStaleClaims(db, undefined, now - 60)).toBe(0);
+    expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
+    // past the grace window: the legacy sweep resumes.
+    expect(releaseStaleClaims(db, undefined, now - 601)).toBe(1);
+    expect(getIssue(db, "AIPI-1").status).toBe("todo");
+  });
+
   it("respects a custom maxIdleSeconds", () => {
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     updateIssue(db, human, "AIPI-1", { status: "todo" });

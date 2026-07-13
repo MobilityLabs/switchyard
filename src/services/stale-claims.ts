@@ -21,8 +21,21 @@ import { getActiveLease } from "./leases.js";
 export function releaseStaleClaims(
   db: Db,
   maxIdleSeconds: number = getSetting(db, "claims.stale_seconds"),
+  serverStartedAt?: number,
 ): number {
   const now = Math.floor(Date.now() / 1000);
+  // SYD-210 review: share the lease sweep's server-uptime grace (leases.ts
+  // expireLeases). A tracker redeploy is a correlated outage — right after
+  // restart, don't let the legacy idle sweep release either, or a lease whose
+  // liveness lapsed during the outage (invisible to the leased-skip below) could
+  // be released the instant the server comes back, before its container
+  // re-heartbeats. Skip the whole sweep for one heartbeat window after start.
+  if (
+    serverStartedAt !== undefined &&
+    now - serverStartedAt < getSetting(db, "claims.heartbeat_window_seconds")
+  ) {
+    return 0;
+  }
   const cutoff = now - maxIdleSeconds;
 
   const inProgress = db.select().from(issues).where(eq(issues.status, "in_progress")).all();

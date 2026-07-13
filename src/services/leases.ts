@@ -136,10 +136,22 @@ export function invalidateLease(tx: DbOrTx, issueId: number): void {
  * Returns the number of issues released.
  *
  * SYD-210 Layer B server-uptime gate: a tracker redeploy is a correlated
- * outage — every container's heartbeats fail at once during the ~5–15s
- * restart. When `serverStartedAt` is given, the sweep is skipped entirely
- * until the server has been continuously up for one full heartbeat window,
- * giving every live container a chance to re-heartbeat before any expiry fires.
+ * outage — every container's heartbeats fail at once during the ~5–15s restart.
+ * When `serverStartedAt` is given, the sweep is skipped entirely until the
+ * server has been continuously up for one full heartbeat window.
+ *
+ * What this actually buys (do not over-read the guarantee): the PRIMARY
+ * protection against a redeploy is the heartbeat cadence itself — a beat every
+ * 60s keeps expires_at ≥540s out, so any outage shorter than that never lapses
+ * a lease. The gate does NOT resurrect a lease that DID lapse during a longer
+ * outage: heartbeatLease → validateLease → getActiveLease requires
+ * `expires_at > now`, so a lapsed lease can't be re-heartbeated regardless. The
+ * gate closes two remaining gaps: (1) the narrow post-restart window where the
+ * 2s sweep could beat the next 60s heartbeat to a just-lapsed lease, and (2)
+ * paired with releaseStaleClaims' matching grace, it stops the legacy idle
+ * sweep from releasing a lapsed-lease issue the instant the server returns. An
+ * outage longer than the window still loses those leases (the host cancels
+ * those containers on its own missed-beat counter) — an accepted cost.
  */
 export function expireLeases(
   db: Db,
