@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
-import { createActor } from "../../src/services/actors.js";
+import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 import {
   findResumeRefs,
@@ -12,11 +13,13 @@ import {
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
 let agentH: Record<string, string>, humanH: Record<string, string>;
+let humanActor: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
   const human = createActor(db, { name: "sean", type: "human" });
+  humanActor = human.actor;
   agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };
   createProject(db, human.actor, { key: "SYD", name: "Switchyard" });
@@ -227,6 +230,7 @@ describe("escalation, snooze, and duplicate routes", () => {
     const noFailure = await app.request(`/issues/${filed.ref}/redeliver`, {
       method: "POST",
       headers: humanH,
+      body: "{}",
     });
     expect(noFailure.status).toBe(400);
     expect((await body<{ error: string }>(noFailure)).error).toMatch(
@@ -242,19 +246,71 @@ describe("escalation, snooze, and duplicate routes", () => {
     const denied = await app.request(`/issues/${filed.ref}/redeliver`, {
       method: "POST",
       headers: agentH,
+      body: "{}",
     });
     expect(denied.status).toBe(400);
     expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
 
-    // SYD-208: redeliverIssue now requires a compare-and-set expectedHeadSha
-    // against pr_state's attributed pin — the REST route doesn't carry that
-    // param through until Task 4, and this issue has no pr_state row at all,
-    // so the retry is refused rather than succeeding.
+    // This issue has no pr_state row at all (no repo bound, no PR ever
+    // opened), so deliveryPinFor finds nothing to redeliver — refused before
+    // the expectedHeadSha compare-and-set even gets a chance to run.
     const retried = await app.request(`/issues/${filed.ref}/redeliver`, {
       method: "POST",
       headers: humanH,
+      body: "{}",
     });
     expect(retried.status).toBe(400);
     expect((await body<{ error: string }>(retried)).error).toMatch(/no agent PR on record/i);
+  });
+
+  it("redeliver succeeds with a confirmed head SHA and refuses a moved one (SYD-208)", async () => {
+    addGithubRepo(db, humanActor, { fullName: "acme/widgets", projectKey: "SYD" });
+    const filed = await body<{ ref: string }>(
+      await app.request("/issues", {
+        method: "POST",
+        headers: humanH,
+        body: JSON.stringify({ projectKey: "SYD", title: "Ship it again" }),
+      }),
+    );
+    // pr_opened writes the pr_state row (attributed via the agent/<ref>
+    // branch convention) that deliveryPinFor reads back below.
+    await app.request(`/issues/${filed.ref}/delivery-events`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({
+        type: "pr_opened",
+        prNumber: 55,
+        url: "https://github.com/acme/widgets/pull/55",
+        headSha: "sha55",
+      }),
+    });
+    await app.request(`/issues/${filed.ref}/delivery-events`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ type: "delivery_failed", message: "merge conflict" }),
+    });
+
+    const movedHead = await app.request(`/issues/${filed.ref}/redeliver`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ expectedHeadSha: "stale-sha" }),
+    });
+    expect(movedHead.status).toBe(400);
+    expect((await body<{ error: string }>(movedHead)).error).toMatch(/head moved/i);
+
+    const ok = await app.request(`/issues/${filed.ref}/redeliver`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ expectedHeadSha: "sha55" }),
+    });
+    expect(ok.status).toBe(200);
+
+    const detail = await body<{
+      activity: { type: string; payload: Record<string, unknown> }[];
+    }>(await app.request(`/issues/${filed.ref}`, { headers: humanH }));
+    const ev = detail.activity.find((a) => a.type === "redeliver_requested");
+    expect(ev?.payload).toEqual({
+      pin: { repo: "acme/widgets", prNumber: 55, headSha: "sha55" },
+    });
   });
 });

@@ -1,20 +1,17 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
-import { createActor, type Actor } from "../../src/services/actors.js";
+import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
-import { updateIssue } from "../../src/services/issues.js";
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
 let agentH: Record<string, string>, humanH: Record<string, string>;
-let humanActor: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
   const human = createActor(db, { name: "sean", type: "human" });
-  humanActor = human.actor;
   agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };
   createProject(db, human.actor, { key: "SYD", name: "Switchyard" });
@@ -176,6 +173,60 @@ describe("issue routes", () => {
     );
   });
 
+  it("requires a matching expectedHeadSha to stamp done over an open PR, and detail carries deliveryPin (SYD-208)", async () => {
+    await app.request("/issues", {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ projectKey: "SYD", title: "Ship it" }),
+    });
+    await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "todo" }),
+    });
+    await app.request("/issues/SYD-1/claim", { method: "POST", headers: agentH });
+    await app.request("/issues/SYD-1/delivery-events", {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({
+        type: "pr_opened",
+        prNumber: 41,
+        url: "https://github.com/acme/widgets/pull/41",
+        headSha: "sha41",
+      }),
+    });
+
+    const missing = await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done" }),
+    });
+    expect(missing.status).toBe(400);
+    expect((await body<{ error: string }>(missing)).error).toMatch(/current head: sha41/i);
+
+    const ok = await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done", expectedHeadSha: "sha41" }),
+    });
+    expect(ok.status).toBe(200);
+
+    const detail = await body<{
+      deliveryPin: {
+        repo: string;
+        prNumber: number;
+        headSha: string | null;
+        status: string;
+      } | null;
+    }>(await app.request("/issues/SYD-1", { headers: humanH }));
+    expect(detail.deliveryPin).toEqual({
+      repo: "acme/widgets",
+      prNumber: 41,
+      headSha: "sha41",
+      status: "open",
+    });
+  });
+
   it("filters the list to done-but-not-yet-merged via ?open_pr=true (SYD-171)", async () => {
     await app.request("/issues", {
       method: "POST",
@@ -224,11 +275,15 @@ describe("issue routes", () => {
         deploy: { ran: false },
       }),
     });
-    // SYD-208: the PATCH route doesn't carry expectedHeadSha through to
-    // updateIssue until Task 4 wires it into issueUpdateBody, so stamping
-    // SYD-1 done (still-open PR) is driven through the service directly here
-    // — this test is about the open_pr filter, not the pin gate itself.
-    updateIssue(db, humanActor, "SYD-1", { status: "done", expectedHeadSha: "sha41" });
+    // SYD-208: stamping SYD-1 done (still-open PR) now carries the
+    // compare-and-set expectedHeadSha through the REST PATCH body — this
+    // test is about the open_pr filter, not the pin gate itself, which gets
+    // its own dedicated test below.
+    await app.request("/issues/SYD-1", {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ status: "done", expectedHeadSha: "sha41" }),
+    });
     await app.request("/issues/SYD-2", {
       method: "PATCH",
       headers: humanH,

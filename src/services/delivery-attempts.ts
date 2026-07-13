@@ -105,6 +105,21 @@ export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorizat
 }
 
 /**
+ * Shared gate for every delivery-infrastructure surface (start/finish an
+ * attempt, or read the work queue): refuses agent actors for the same reason
+ * recordDeliveryEvent does (SYD-108) — delivery-attempt state is
+ * infrastructure, not something a dispatched agent should be able to
+ * trigger, fake, or even observe for itself.
+ */
+function requireDeliveryInfra(actor: Actor, action: string): void {
+  if (actor.type === "agent") {
+    throw new SwitchyardError(
+      `Only the delivery infrastructure (a human-typed token) may ${action} — agents cannot self-authorize their own delivery.`,
+    );
+  }
+}
+
+/**
  * Opens a delivery attempt against an authorization event. Refuses agent
  * actors for the same reason recordDeliveryEvent does (SYD-108): a delivery
  * attempt is infrastructure state, not something a dispatched agent should
@@ -116,11 +131,7 @@ export function startDeliveryAttempt(
   ref: string,
   input: { authorizationId: number; prNumber?: number; headSha?: string; deployRetry?: boolean },
 ): DeliveryAttemptRow {
-  if (actor.type === "agent") {
-    throw new SwitchyardError(
-      "Only the delivery infrastructure (a human-typed token) may start a delivery attempt — agents cannot self-authorize their own delivery.",
-    );
-  }
+  requireDeliveryInfra(actor, "start a delivery attempt");
   return db.transaction((tx): DeliveryAttemptRow => {
     const issue = getIssue(tx, ref);
     const authEvent = tx
@@ -182,11 +193,7 @@ export function finishDeliveryAttempt(
   attemptId: number,
   input: { outcome: DeliveryOutcome; derivedHeadSha?: string },
 ): DeliveryAttemptRow {
-  if (actor.type === "agent") {
-    throw new SwitchyardError(
-      "Only the delivery infrastructure (a human-typed token) may finish a delivery attempt — agents cannot post delivery outcomes.",
-    );
-  }
+  requireDeliveryInfra(actor, "finish a delivery attempt");
   if (input.outcome === "skipped_rollout") {
     throw new SwitchyardError("skipped_rollout is written only by the rollout backfill.");
   }
@@ -212,6 +219,26 @@ export function finishDeliveryAttempt(
       .returning()
       .get();
   });
+}
+
+/**
+ * The delivery worker's poll surface (Task-6 contract): everything it needs
+ * to decide what to do next in one round-trip — pending authorizations to
+ * start, attempts it opened but never finished (e.g. a crash mid-delivery),
+ * and deploy-only retries whose backoff has elapsed. Same human-only gate as
+ * start/finish — an agent has no business observing delivery-infra state
+ * either.
+ */
+export function getDeliveryWork(
+  db: Db,
+  actor: Actor,
+): { pending: PendingAuthorization[]; unfinished: DeliveryAttemptRow[]; deployRetries: DeployRetry[] } {
+  requireDeliveryInfra(actor, "read the delivery work queue");
+  return {
+    pending: listPendingDeliveryAuthorizations(db),
+    unfinished: listUnfinishedAttempts(db),
+    deployRetries: listDeployRetries(db),
+  };
 }
 
 /** Attempts still awaiting an outcome, oldest first. */

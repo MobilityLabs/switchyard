@@ -38,6 +38,39 @@ export const issueUpdateBody = z.object({
   assigneeName: z.string().nullable().optional(),
   labels: z.array(z.string()).optional(),
   workerPreference: z.string().nullable().optional(),
+  // SYD-208: compare-and-set proof that the human reviewed this exact head
+  // before stamping done over an open agent PR — see updateIssue's pin gate.
+  expectedHeadSha: z.string().min(1).optional(),
+});
+
+export const redeliverBody = z.object({ expectedHeadSha: z.string().min(1).optional() });
+
+// SYD-208: the Task-6 worker's outcome vocabulary excludes skipped_rollout —
+// that value is written only by the one-time rollout backfill
+// (ensureRolloutBackfill), never by a live delivery attempt, so the schema
+// layer refuses it before it ever reaches finishDeliveryAttempt's own guard.
+// Written as a literal tuple (rather than DELIVERY_OUTCOMES.filter(...) cast
+// to a tuple type) so z.enum's tuple requirement typechecks cleanly; a REST
+// test asserts this list equals DELIVERY_OUTCOMES minus skipped_rollout so
+// the two can't silently drift apart.
+export const WORKER_OUTCOMES = [
+  "merged_deployed",
+  "merged_deploy_failed",
+  "verify_failed",
+  "conflict_bounced",
+  "merge_failed",
+  "checks_timeout",
+  "sha_chain_disarmed",
+] as const;
+export const deliveryAttemptStartBody = z.object({
+  authorizationId: z.number().int().positive(),
+  prNumber: z.number().int().positive().optional(),
+  headSha: z.string().min(1).optional(),
+  deployRetry: z.boolean().optional(),
+});
+export const deliveryAttemptFinishBody = z.object({
+  outcome: z.enum(WORKER_OUTCOMES),
+  derivedHeadSha: z.string().min(1).optional(),
 });
 
 export const commentBody = z.object({ body: z.string() });

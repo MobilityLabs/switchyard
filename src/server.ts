@@ -130,6 +130,12 @@ export function startServer(db: Db, port: number) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const { openDb } = await import("./db/index.js");
   const db = openDb(process.env.SWITCHYARD_DB ?? "switchyard.db");
+  const { ensureRolloutBackfill } = await import("./services/delivery-attempts.js");
+  const rollout = ensureRolloutBackfill(db);
+  if (!rollout.alreadyDone)
+    console.log(
+      `delivery rollout backfill: ${rollout.backfilled} authorization(s) marked skipped_rollout`,
+    );
   startServer(db, Number(process.env.PORT ?? 3300));
   const { startWebhookDispatcher } = await import("./services/webhook-dispatcher.js");
   startWebhookDispatcher(db);

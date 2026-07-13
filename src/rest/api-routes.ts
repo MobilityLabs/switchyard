@@ -34,7 +34,12 @@ import {
   recordProgressNote,
 } from "../services/agent-sessions.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
-import { getOpenPr, listOpenPrByIssueId } from "../services/pr-status.js";
+import { getOpenPr, listOpenPrByIssueId, deliveryPinFor } from "../services/pr-status.js";
+import {
+  getDeliveryWork,
+  startDeliveryAttempt,
+  finishDeliveryAttempt,
+} from "../services/delivery-attempts.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
@@ -91,6 +96,9 @@ import {
   snoozeBody,
   duplicateBody,
   settingPutBody,
+  redeliverBody,
+  deliveryAttemptStartBody,
+  deliveryAttemptFinishBody,
 } from "./schemas.js";
 
 type Env = { Variables: { actor: Actor } };
@@ -213,6 +221,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       ...issue,
       attention: getAttention(db, issue.id),
       openPr: getOpenPr(db, issue.id),
+      deliveryPin: deliveryPinFor(db, issue.id),
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),
@@ -337,8 +346,49 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     c.json(markDuplicate(db, c.var.actor, c.req.param("ref"), c.req.valid("json").of)),
   );
 
-  app.post("/issues/:ref/redeliver", (c) =>
-    c.json(redeliverIssue(db, c.var.actor, c.req.param("ref"))),
+  app.post("/issues/:ref/redeliver", body(redeliverBody), (c) =>
+    c.json(
+      redeliverIssue(
+        db,
+        c.var.actor,
+        c.req.param("ref"),
+        c.req.valid("json").expectedHeadSha,
+      ),
+    ),
+  );
+
+  // Task-6 worker contract (SYD-208): human-token-only read of what delivery
+  // work is outstanding — pending authorizations, attempts left unfinished
+  // (e.g. a crash mid-delivery), and deploy-only retries whose backoff has
+  // elapsed. The agent-refusal gate lives in the service (getDeliveryWork),
+  // same pattern as recordDeliveryEvent — not a route-level requireHumanCaller.
+  app.get("/delivery-work", (c) => c.json(getDeliveryWork(db, c.var.actor)));
+
+  app.post(
+    "/issues/:ref/delivery-attempts",
+    body(deliveryAttemptStartBody),
+    (c) =>
+      c.json(
+        startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json")),
+      ),
+  );
+
+  const parseAttemptId = (idParam: string): number => {
+    const id = Number(idParam);
+    if (!Number.isInteger(id))
+      throw new SwitchyardError(`There is no delivery attempt with id ${idParam}.`);
+    return id;
+  };
+
+  app.patch("/delivery-attempts/:id", body(deliveryAttemptFinishBody), (c) =>
+    c.json(
+      finishDeliveryAttempt(
+        db,
+        c.var.actor,
+        parseAttemptId(c.req.param("id")),
+        c.req.valid("json"),
+      ),
+    ),
   );
 
   app.get("/next-task", (c) =>
