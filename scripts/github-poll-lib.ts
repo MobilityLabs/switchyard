@@ -151,6 +151,73 @@ export function selectRefreshCandidates(
   });
 }
 
+/** Strict agent branch shape — must stay in lockstep with the server's
+ * refFromBranch (src/services/github-webhook.ts): upsertPrState only ever
+ * attributes rows whose branch matches this. */
+const AGENT_BRANCH_RE = /^agent\/([A-Z]{2,10}-\d+)$/;
+
+export type LinkedRepoBinding = { fullName: string; projectId: number | null };
+
+/**
+ * Cutover preflight (SYD-207): every worker-configured project's repo must be
+ * linked AND bound to that project (`github_repos.projectId` is nullable —
+ * an unbound repo silently turns real agent PRs into display-only rows and
+ * blinds the claim gate). Returns one problem string per broken project;
+ * a non-empty result blocks the backfill and, from the poller's periodic
+ * check, is logged loudly so a post-cutover unbinding is caught too.
+ */
+export function preflightRepoBindings(
+  configured: { projectKey: string; repo: string }[],
+  linked: LinkedRepoBinding[],
+  serverProjects: { id: number; key: string }[],
+): string[] {
+  const projectIdByKey = new Map(serverProjects.map((p) => [p.key, p.id]));
+  const problems: string[] = [];
+  for (const { projectKey, repo } of configured) {
+    const projectId = projectIdByKey.get(projectKey);
+    if (projectId === undefined) {
+      problems.push(`project "${projectKey}" (repo ${repo}) does not exist on the server`);
+      continue;
+    }
+    const row = linked.find((l) => l.fullName === repo);
+    if (!row) {
+      problems.push(
+        `project "${projectKey}": repo ${repo} is not linked — add it via POST /api/github-repos with projectKey "${projectKey}"`,
+      );
+    } else if (row.projectId === null) {
+      problems.push(
+        `project "${projectKey}": repo ${repo} is linked but not bound to a project — its agent PRs are display-only and never gate claims; re-link it with projectKey "${projectKey}"`,
+      );
+    } else if (row.projectId !== projectId) {
+      problems.push(
+        `project "${projectKey}": repo ${repo} is bound to a different project (id ${row.projectId}, expected ${projectId})`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * Backfill work selection (SYD-207): which windowed PRs are agent PRs worth
+ * upserting, and which agent branches still need a targeted `gh pr list
+ * --head` lookup. Lookups happen ONLY when the window returned exactly
+ * `windowLimit` rows — a shorter result means the repo's entire PR history
+ * fit in the window, so a beyond-window PR (the SYD-179 shape) cannot exist.
+ */
+export function selectBackfillWork(
+  windowPrs: GhPr[],
+  windowLimit: number,
+  issueRefs: string[],
+): { agentPrs: GhPr[]; lookupBranches: string[] } {
+  const agentPrs = windowPrs.filter((pr) => AGENT_BRANCH_RE.test(pr.headRefName));
+  if (windowPrs.length < windowLimit) return { agentPrs, lookupBranches: [] };
+  const covered = new Set(windowPrs.map((pr) => pr.headRefName));
+  const lookupBranches = issueRefs
+    .map((ref) => `agent/${ref}`)
+    .filter((branch) => !covered.has(branch));
+  return { agentPrs, lookupBranches };
+}
+
 export type PollStateFile = Record<string, RepoPollState>; // keyed by repo "owner/repo"
 
 export function parsePollStateText(text: string): PollStateFile {

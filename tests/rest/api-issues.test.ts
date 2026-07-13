@@ -3,6 +3,7 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
 let agentH: Record<string, string>, humanH: Record<string, string>;
@@ -14,6 +15,9 @@ beforeEach(() => {
   agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };
   createProject(db, human.actor, { key: "SYD", name: "Switchyard" });
+  // Bound repo so the delivery-events publish writes pr_state — post-SYD-207
+  // the list/detail openPr fields read pr_state, not events.
+  addGithubRepo(db, human.actor, { fullName: "acme/widgets", projectKey: "SYD" });
   app = buildApiRoutes(db);
 });
 

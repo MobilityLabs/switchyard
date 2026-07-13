@@ -102,28 +102,6 @@ export function feedGap(
   return oldest > lastEventId + 1 ? { from: lastEventId + 1, to: oldest - 1 } : null;
 }
 
-/** The subset of a GET /api/issues?attention=delivery_failed row the
- * reconciliation pass needs (SYD-94). */
-export type AttentionIssueRow = { ref: string; attention: { reason: string } | null };
-
-/**
- * Selects reconciliation candidates: issues flagged `delivery_failed` on a
- * configured project. The server-side `attention` query filter already
- * restricts to that reason, but this stays defensive (and re-checks the
- * project allowlist the same way findDeliverableRefs does) so a future looser
- * query, or a caller that fetches unfiltered, can't sweep in refs the worker
- * doesn't own.
- */
-export function selectReconcilableRefs(
-  rows: AttentionIssueRow[],
-  projectKeys: Iterable<string>,
-): string[] {
-  const keys = new Set(projectKeys);
-  return rows
-    .filter((r) => r.attention?.reason === "delivery_failed" && keys.has(projectKeyOf(r.ref)))
-    .map((r) => r.ref);
-}
-
 export function buildPrTitle(ref: string, issueTitle: string): string {
   return `${ref}: ${issueTitle}`;
 }
@@ -270,27 +248,6 @@ export function shouldRetryMergePoll(
   timeoutMs: number = MERGE_POLL_TIMEOUT_MS,
 ): boolean {
   return state === "UNKNOWN" && elapsedMs < timeoutMs;
-}
-
-/** Finds a *merged* PR for agent/<ref> regardless of whether deliver.ts's own
- * merge ever ran (SYD-94 reconciliation) — unlike buildPrListArgs (open only),
- * this looks at closed+merged history so a manually-merged PR is found even
- * though `mergeAgentPr` never touched it. */
-export function buildMergedPrForBranchArgs(ref: string, ownerRepo: string): string[] {
-  return [
-    "pr",
-    "list",
-    "-R",
-    ownerRepo,
-    "--head",
-    agentBranch(ref),
-    "--state",
-    "merged",
-    "--json",
-    "number,mergeCommit",
-    "--limit",
-    "1",
-  ];
 }
 
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */
@@ -444,17 +401,6 @@ export function deliveryFailureComment(ref: string, message: string): string {
     `Delivery FAILED for ${ref}: ${message}\n` +
     `The agent PR was not delivered — check scripts/deliver.ts logs, resolve, ` +
     `and click Retry delivery on the attention banner (or merge manually).`
-  );
-}
-
-/** Posted when the reconciliation pass (SYD-94) finds that a `delivery_failed`
- * PR was actually merged manually (e.g. a human resolved conflicts outside
- * the gate) — distinct from deliveryComment so it's clear the gate never ran
- * the merge or deploy for this one. */
-export function reconciledComment(prNumber: number, mergeSha: string): string {
-  return (
-    `Reconciled: PR #${prNumber} was merged manually at \`${mergeSha}\` (not by this delivery gate) — ` +
-    `clearing the stale delivery_failed attention flag. No deploy was run; if this needs deploying, run it by hand.`
   );
 }
 

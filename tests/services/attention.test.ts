@@ -4,7 +4,12 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue, updateIssue, claimIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
+import { recordEvent } from "../../src/services/events.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
+import { upsertPrState } from "../../src/services/pr-state.js";
 import { getAttention, listAttentionByIssueId } from "../../src/services/attention.js";
+
+const REPO = "acme/widgets";
 
 function setup() {
   const db = openDb(":memory:");
@@ -12,6 +17,9 @@ function setup() {
   const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+  // Bound repo so PR-shaped writes land in pr_state — post-SYD-207 both the
+  // deviation composition and the merged-PR clearing read pr_state.
+  addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
   return { db, human, agent };
 }
 
@@ -43,6 +51,59 @@ describe("getAttention", () => {
       deploy: { ran: false },
     });
     expect(getAttention(db, issue.id)).toBeNull();
+  });
+
+  it("clears when the PR merges outside the delivery worker (pr_state observation, replaces SYD-94)", () => {
+    const { db, human } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    // A human merges agent/SYD-1 by hand; the webhook/poller observation
+    // lands in pr_state with a co-written transition event newer than the
+    // failure — that is what clears the flag now (the deleted SYD-94
+    // reconcile pass used to do this with per-ref gh lookups).
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 7,
+      status: "merged",
+      branch: "agent/SYD-1",
+      url: `https://github.com/${REPO}/pull/7`,
+      ghUpdatedAt: "2026-07-13T11:00:00Z",
+      mergeSha: "abc123",
+    });
+    expect(getAttention(db, issue.id)).toBeNull();
+    expect(listAttentionByIssueId(db).size).toBe(0);
+  });
+
+  it("a legacy raw gh_pr_merged event does NOT clear the flag (audit-only post-SYD-207)", () => {
+    const { db, human, agent } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "merge conflict" });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 7, url: `https://github.com/${REPO}/pull/7`, mergeSha: "abc" },
+    });
+    expect(getAttention(db, issue.id)?.reason).toBe("delivery_failed");
+  });
+
+  it("a merge observed BEFORE the failure does not clear it (deploy-failed-after-merge)", () => {
+    const { db, human } = setup();
+    const issue = getIssue(db, "SYD-1");
+    // Merge lands first (pr_state row + transition event)...
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 7,
+      status: "merged",
+      branch: "agent/SYD-1",
+      url: `https://github.com/${REPO}/pull/7`,
+      ghUpdatedAt: "2026-07-13T10:00:00Z",
+      mergeSha: "abc123",
+    });
+    // ...then the post-merge deploy fails. The stale merged row must not
+    // swallow the newer failure.
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "deploy broke" });
+    expect(getAttention(db, issue.id)?.reason).toBe("delivery_failed");
   });
 
   it("re-flags if delivery fails again after a successful delivery", () => {

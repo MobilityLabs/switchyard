@@ -13,6 +13,7 @@ import {
 } from "../../src/services/dependencies.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 
 let db: Db, human: Actor, agent: Actor;
 beforeEach(() => {
@@ -20,6 +21,9 @@ beforeEach(() => {
   human = createActor(db, { name: "sean", type: "human" }).actor;
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
+  // Bound repo so recordDeliveryEvent's publish writes pr_state — post-SYD-207
+  // nextTask's open-PR exclusion reads pr_state, not events.
+  addGithubRepo(db, human, { fullName: "acme/widgets", projectKey: "AIPI" });
   createIssue(db, human, { projectKey: "AIPI", title: "Schema", priority: "high" }); // AIPI-1
   createIssue(db, human, { projectKey: "AIPI", title: "API", priority: "urgent" }); // AIPI-2
   createIssue(db, human, { projectKey: "AIPI", title: "Docs", priority: "low" }); // AIPI-3

@@ -11,7 +11,6 @@ import {
   buildPrViewUrlArgs,
   buildPrViewFreshnessArgs,
   buildPrViewMergeShaArgs,
-  buildMergedPrForBranchArgs,
   parseOwnerRepo,
   buildPrTitle,
   buildPrBody,
@@ -30,8 +29,6 @@ import {
   autoRebasedNote,
   autoRebaseConflictComment,
   autoRebaseVerifyFailedComment,
-  reconciledComment,
-  selectReconcilableRefs,
   shouldDispatchConflictResolution,
   buildConflictResolutionPrompt,
   buildConflictResolutionDockerArgs,
@@ -393,61 +390,6 @@ describe("auto-rebase comment bodies (SYD-85)", () => {
     expect(body).toContain("agent/SYD-9");
     expect(body).toContain("TypeError: boom");
     expect(body).toContain("NOT pushed, NOT merged");
-  });
-});
-
-describe("buildMergedPrForBranchArgs (SYD-94)", () => {
-  it("looks up merged PRs for the branch, not open ones", () => {
-    expect(buildMergedPrForBranchArgs("SYD-9", "MobilityLabs/switchyard")).toEqual([
-      "pr",
-      "list",
-      "-R",
-      "MobilityLabs/switchyard",
-      "--head",
-      "agent/SYD-9",
-      "--state",
-      "merged",
-      "--json",
-      "number,mergeCommit",
-      "--limit",
-      "1",
-    ]);
-  });
-});
-
-describe("reconciledComment (SYD-94)", () => {
-  it("names the PR and merge sha, and notes no deploy ran", () => {
-    const body = reconciledComment(41, "abc123");
-    expect(body).toContain("PR #41");
-    expect(body).toContain("abc123");
-    expect(body).toContain("merged manually");
-    expect(body).toContain("No deploy was run");
-  });
-});
-
-describe("selectReconcilableRefs (SYD-94)", () => {
-  const keys = ["SYD"];
-
-  it("selects refs flagged delivery_failed on a configured project", () => {
-    const rows = [
-      { ref: "SYD-9", attention: { reason: "delivery_failed" } },
-      { ref: "SYD-10", attention: null },
-    ];
-    expect(selectReconcilableRefs(rows, keys)).toEqual(["SYD-9"]);
-  });
-
-  it("ignores unconfigured projects even if flagged", () => {
-    const rows = [{ ref: "OTHER-1", attention: { reason: "delivery_failed" } }];
-    expect(selectReconcilableRefs(rows, keys)).toEqual([]);
-  });
-
-  it("ignores other attention reasons", () => {
-    const rows = [{ ref: "SYD-9", attention: { reason: "something_else" } }];
-    expect(selectReconcilableRefs(rows, keys)).toEqual([]);
-  });
-
-  it("empty input yields no candidates", () => {
-    expect(selectReconcilableRefs([], keys)).toEqual([]);
   });
 });
 

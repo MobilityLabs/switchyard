@@ -107,10 +107,6 @@ export type DeliveryConfig = {
   /** On merge failure, try a mechanical rebase-onto-main + verify + retry
    * before escalating to a human (default true). SYD-85. */
   autoRebase?: boolean;
-  /** Each tick, check issues flagged `delivery_failed` for a PR that was
-   * actually merged manually and clear the stale attention flag (default
-   * true). SYD-94. */
-  reconcile?: boolean;
   /**
    * When autoRebase hits real conflict hunks, dispatch a one-shot
    * conflict-resolution worker session (same container image as code

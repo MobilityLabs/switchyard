@@ -267,7 +267,6 @@ describe("validateWorkerConfig", () => {
             deploy: false,
             verify: false,
             autoRebase: true,
-            reconcile: true,
             conflictResolution: true,
           },
         }),
@@ -302,7 +301,6 @@ describe("validateWorkerConfig", () => {
           deploy: 1,
           verify: "yes",
           autoRebase: "nope",
-          reconcile: "nope",
           conflictResolution: "nope",
         },
       });
@@ -312,7 +310,6 @@ describe("validateWorkerConfig", () => {
       expect(problems.some((p) => p.includes("delivery.deploy"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.verify"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.autoRebase"))).toBe(true);
-      expect(problems.some((p) => p.includes("delivery.reconcile"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.conflictResolution"))).toBe(true);
     });
   });

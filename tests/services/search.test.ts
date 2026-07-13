@@ -6,6 +6,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { searchIssues } from "../../src/services/search.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
 
 let db: Db, human: Actor;
 beforeEach(() => {
@@ -13,6 +14,9 @@ beforeEach(() => {
   human = createActor(db, { name: "sean", type: "human" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
   createProject(db, human, { key: "HAND", name: "housing" });
+  // Bound repo so recordDeliveryEvent's publish writes pr_state — post-SYD-207
+  // the ?openPr= filter reads pr_state, not events.
+  addGithubRepo(db, human, { fullName: "acme/widgets", projectKey: "AIPI" });
   createIssue(db, human, { projectKey: "AIPI", title: "Fix flaky API test", labels: ["testing"] });
   createIssue(db, human, { projectKey: "AIPI", title: "Write docs" });
   createIssue(db, human, { projectKey: "HAND", title: "Map layer bug" });
