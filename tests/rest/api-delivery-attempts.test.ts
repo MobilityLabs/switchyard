@@ -189,6 +189,58 @@ describe("PATCH /api/delivery-attempts/:id", () => {
   });
 });
 
+describe("PATCH /api/delivery-attempts/:id/derived-head (SYD-209)", () => {
+  it("persists derivedHeadSha on an open attempt without finishing it", async () => {
+    const headSha = "a".repeat(40);
+    const authorizationId = await seedPendingAuthorization(headSha);
+    const started = await body<{ id: number }>(
+      await app.request("/issues/SYD-1/delivery-attempts", {
+        method: "POST",
+        headers: humanH,
+        body: JSON.stringify({ authorizationId, prNumber: 9, headSha }),
+      }),
+    );
+
+    const s1 = "b".repeat(40);
+    const res = await app.request(`/delivery-attempts/${started.id}/derived-head`, {
+      method: "PATCH",
+      headers: humanH,
+      body: JSON.stringify({ derivedHeadSha: s1 }),
+    });
+    expect(res.status).toBe(200);
+    const row = await body<{ derivedHeadSha: string; outcome: string | null; finishedAt: number | null }>(res);
+    expect(row.derivedHeadSha).toBe(s1);
+    expect(row.outcome).toBeNull();
+    expect(row.finishedAt).toBeNull();
+
+    // Still surfaced as unfinished crash-resumption work, now carrying S1.
+    const work = await body<{ unfinished: { id: number; derivedHeadSha: string }[] }>(
+      await app.request("/delivery-work", { headers: humanH }),
+    );
+    expect(work.unfinished).toHaveLength(1);
+    expect(work.unfinished[0].derivedHeadSha).toBe(s1);
+  });
+
+  it("refuses agent tokens", async () => {
+    const headSha = "c".repeat(40);
+    const authorizationId = await seedPendingAuthorization(headSha);
+    const started = await body<{ id: number }>(
+      await app.request("/issues/SYD-1/delivery-attempts", {
+        method: "POST",
+        headers: humanH,
+        body: JSON.stringify({ authorizationId, prNumber: 9, headSha }),
+      }),
+    );
+    const res = await app.request(`/delivery-attempts/${started.id}/derived-head`, {
+      method: "PATCH",
+      headers: agentH,
+      body: JSON.stringify({ derivedHeadSha: "d".repeat(40) }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/delivery infrastructure/);
+  });
+});
+
 // SYD-208 handoff note: WORKER_OUTCOMES is hand-written (not
 // DELIVERY_OUTCOMES.filter(...) cast to a tuple) so z.enum typechecks
 // cleanly — this pins the two lists together so they can't silently drift.

@@ -14,6 +14,7 @@ import {
   listPendingDeliveryAuthorizations,
   startDeliveryAttempt,
   finishDeliveryAttempt,
+  recordDerivedHead,
   listUnfinishedAttempts,
   deployRetryDue,
   listDeployRetries,
@@ -366,6 +367,62 @@ describe("startDeliveryAttempt / finishDeliveryAttempt", () => {
     expect(() =>
       finishDeliveryAttempt(db, human, attempt.id, { outcome: "skipped_rollout" }),
     ).toThrow(/skipped_rollout is written only by the rollout backfill/);
+  });
+});
+
+describe("recordDerivedHead (SYD-209 interim S1 persist)", () => {
+  it("persists derivedHeadSha on an open attempt without finishing it", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    stampDone(db, human, issue.ref);
+    const [pending] = listPendingDeliveryAuthorizations(db);
+    const attempt = startDeliveryAttempt(db, human, issue.ref, {
+      authorizationId: pending.authorizationId,
+      prNumber: 5,
+      headSha: "s0-authorized-head",
+    });
+
+    const updated = recordDerivedHead(db, human, attempt.id, "s1-rebased-head");
+    expect(updated.derivedHeadSha).toBe("s1-rebased-head");
+    // Still open: no outcome, no finishedAt — this is a mid-attempt write so a
+    // crash after the rebase re-anchors on S1 rather than disarming.
+    expect(updated.outcome).toBeNull();
+    expect(updated.finishedAt).toBeNull();
+
+    // And it stays in the crash-resumption queue carrying S1.
+    const unfinished = listUnfinishedAttempts(db);
+    expect(unfinished).toHaveLength(1);
+    expect(unfinished[0].id).toBe(attempt.id);
+    expect(unfinished[0].derivedHeadSha).toBe("s1-rebased-head");
+  });
+
+  it("refuses to record on an already-finished attempt", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    stampDone(db, human, issue.ref);
+    const [pending] = listPendingDeliveryAuthorizations(db);
+    const attempt = startDeliveryAttempt(db, human, issue.ref, {
+      authorizationId: pending.authorizationId,
+    });
+    finishDeliveryAttempt(db, human, attempt.id, { outcome: "merged_deployed" });
+
+    expect(() => recordDerivedHead(db, human, attempt.id, "s1")).toThrow(
+      /does not exist or has already been finished/,
+    );
+  });
+
+  it("refuses an agent actor (delivery infra is human-token only)", () => {
+    const { db, human, agent } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    stampDone(db, human, issue.ref);
+    const [pending] = listPendingDeliveryAuthorizations(db);
+    const attempt = startDeliveryAttempt(db, human, issue.ref, {
+      authorizationId: pending.authorizationId,
+    });
+
+    expect(() => recordDerivedHead(db, agent, attempt.id, "s1")).toThrow(
+      /Only the delivery infrastructure/,
+    );
   });
 });
 

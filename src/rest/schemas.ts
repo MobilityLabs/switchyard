@@ -73,6 +73,13 @@ export const deliveryAttemptFinishBody = z.object({
   derivedHeadSha: z.string().min(1).optional(),
 });
 
+// SYD-209: the worker persists the post-rebase head (S1) mid-attempt — before
+// the merge, so a crash re-anchors on S1 — via a dedicated route that does NOT
+// finish the attempt (no outcome field).
+export const deliveryAttemptDerivedHeadBody = z.object({
+  derivedHeadSha: z.string().min(1),
+});
+
 export const commentBody = z.object({ body: z.string() });
 const deployResult = z.union([
   z.object({ ran: z.literal(false) }),
