@@ -8,7 +8,7 @@ export const projectBody = z.object({ key: z.string(), name: z.string() });
 export const projectUpdateBody = z.object({ name: z.string().min(1) });
 export const actorCreateBody = z.object({
   name: z.string().min(1),
-  type: z.enum(["human", "agent"]),
+  type: z.enum(["human", "agent", "service"]),
 });
 
 const provenance = z.object({

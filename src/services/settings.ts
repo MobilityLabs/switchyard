@@ -60,7 +60,7 @@ export type SettingView = {
 };
 
 function requireHuman(actor: Actor): void {
-  if (actor.type === "agent") {
+  if (actor.type !== "human") {
     throw new SwitchyardError(
       "Settings are human-only — ask a human to change instance config or dispatch policy.",
     );

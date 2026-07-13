@@ -4,7 +4,8 @@ import { actors } from "../db/schema.js";
 import { SwitchyardError } from "./errors.js";
 import { hashToken, mintToken } from "./tokens.js";
 
-export type Actor = { id: number; name: string; type: "human" | "agent" };
+export type ActorType = "human" | "agent" | "service";
+export type Actor = { id: number; name: string; type: ActorType };
 export type ActorWithStatus = Actor & { createdAt: number; hasToken: boolean };
 
 function requireHuman(actor: Actor, action: string): void {
@@ -15,7 +16,7 @@ function requireHuman(actor: Actor, action: string): void {
 
 export function createActor(
   db: Db,
-  input: { name: string; type: "human" | "agent" },
+  input: { name: string; type: ActorType },
 ): { actor: Actor; token: string } {
   const existing = db.select().from(actors).where(eq(actors.name, input.name)).get();
   if (existing) {
@@ -46,7 +47,7 @@ export function authenticate(db: Db, token: string): Actor | null {
  * that doesn't authenticate through Switchyard (e.g. the GitHub webhook
  * receiver) — unlike createActor, this never throws on an existing name.
  */
-export function getOrCreateActor(db: Db, name: string, type: "human" | "agent"): Actor {
+export function getOrCreateActor(db: Db, name: string, type: ActorType): Actor {
   const existing = db.select().from(actors).where(eq(actors.name, name)).get();
   if (existing) return { id: existing.id, name: existing.name, type: existing.type };
   const row = db.insert(actors).values({ name, type }).returning().get();

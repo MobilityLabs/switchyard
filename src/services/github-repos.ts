@@ -10,7 +10,7 @@ export type GithubRepo = typeof githubRepos.$inferSelect;
 const FULL_NAME_RE = /^[\w.-]+\/[\w.-]+$/;
 
 function requireHuman(actor: Actor): void {
-  if (actor.type === "agent") {
+  if (actor.type !== "human") {
     throw new SwitchyardError(
       "Only humans manage linked GitHub repos — ask a human to link or unlink a repo.",
     );

@@ -51,7 +51,7 @@ export function removeDependency(
   blockerRef: string,
   blockedRef: string,
 ): void {
-  if (actor.type === "agent") {
+  if (actor.type !== "human") {
     throw new SwitchyardError(
       "Only humans remove dependencies — if you believe a blocker is wrong, say so in a comment.",
     );

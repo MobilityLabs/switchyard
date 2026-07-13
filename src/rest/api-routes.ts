@@ -106,7 +106,7 @@ import {
 type Env = { Variables: { actor: Actor; leaseToken?: string } };
 
 function requireHumanCaller(actor: Actor, action: string): void {
-  if (actor.type === "agent") {
+  if (actor.type !== "human") {
     throw new SwitchyardError(`Only humans can ${action} — ask a human to do this.`);
   }
 }
