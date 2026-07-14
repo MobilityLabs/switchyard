@@ -15,6 +15,12 @@ export function usePasteUpload(ref: string, setDraft: Dispatch<SetStateAction<st
     const files = Array.from(e.clipboardData?.files ?? []);
     if (files.length === 0) return;
     e.preventDefault();
+    if (!ref) {
+      setUploadError(
+        "Save the issue before pasting images or videos — attachments need an issue to attach to.",
+      );
+      return;
+    }
     setUploading(true);
     setUploadError(null);
     try {

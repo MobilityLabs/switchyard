@@ -51,6 +51,19 @@ function fakePaste(files: File[]): {
   return { event, preventDefault };
 }
 
+function HarnessNoRef({
+  initialDraft,
+  expose,
+}: {
+  initialDraft: string;
+  expose: (s: State) => void;
+}) {
+  const [draft, setDraft] = useState(initialDraft);
+  const paste = usePasteUpload("", draft, setDraft);
+  expose({ draft, ...paste });
+  return <textarea ref={paste.textareaRef} defaultValue={initialDraft} />;
+}
+
 describe("usePasteUpload", () => {
   afterEach(() => {
     vi.mocked(uploadAttachment).mockReset();
@@ -297,6 +310,37 @@ describe("usePasteUpload", () => {
 
     expect(state!.uploading).toBe(false);
     expect(state!.uploadError).toBe("upload failed");
+    expect(state!.draft).toBe("hello");
+  });
+
+  it("shows a clear error and never calls the API when ref is empty (e.g. an unsaved new issue)", async () => {
+    let state: State | null = null;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <HarnessNoRef
+          initialDraft="hello"
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
+
+    const file = new File(["x"], "x.png", { type: "image/png" });
+    const { event, preventDefault } = fakePaste([file]);
+    await act(async () => {
+      await state!.onPaste(event);
+    });
+
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(uploadAttachment).not.toHaveBeenCalled();
+    expect(state!.uploading).toBe(false);
+    expect(state!.uploadError).toBe(
+      "Save the issue before pasting images or videos — attachments need an issue to attach to.",
+    );
     expect(state!.draft).toBe("hello");
   });
 

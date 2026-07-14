@@ -24,8 +24,9 @@ export default function NewIssue() {
   const [error, setError] = useState<string | null>(null);
 
   // Same shape as Triage/IssueDetail/Review, but there's no issue ref yet —
-  // paste-to-upload only works once the issue exists, so it errors clearly
-  // via uploadError if someone pastes before submitting.
+  // paste-to-upload only works once the issue exists, so usePasteUpload
+  // short-circuits with a clear uploadError instead of hitting the API
+  // (which 404s on an empty ref) if someone pastes before submitting.
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     "",
     setDescription,
