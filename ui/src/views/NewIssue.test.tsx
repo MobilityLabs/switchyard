@@ -15,7 +15,7 @@ vi.mock("../api", () => ({
 }));
 vi.mock("../router", () => ({ navigate: vi.fn() }));
 
-import { createIssue, listProjects, updateIssue } from "../api";
+import { createIssue, listProjects, updateIssue, uploadAttachment } from "../api";
 import { navigate } from "../router";
 import NewIssue from "./NewIssue";
 import type { Issue, Project } from "../types";
@@ -88,6 +88,7 @@ describe("NewIssue", () => {
     vi.mocked(createIssue).mockReset();
     vi.mocked(listProjects).mockReset();
     vi.mocked(updateIssue).mockReset();
+    vi.mocked(uploadAttachment).mockReset();
     vi.mocked(navigate).mockReset();
   });
 
@@ -168,6 +169,82 @@ describe("NewIssue", () => {
     await submitForm(container);
 
     expect(updateIssue).toHaveBeenCalledWith("SYD-9", { labels: ["bug", "ui"], status: "todo" });
+    expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
+  });
+
+  it("buffers pasted files, then uploads and replaces their placeholders after creation", async () => {
+    vi.mocked(createIssue).mockResolvedValueOnce(issue({ ref: "SYD-9" }));
+    vi.mocked(uploadAttachment).mockResolvedValueOnce({
+      id: 1,
+      url: "/attachments/1",
+      markdown: "![diagram.png](/attachments/1)",
+    });
+    vi.mocked(updateIssue).mockResolvedValueOnce(issue({ ref: "SYD-9" }));
+    const container = await render();
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => {
+      setValue(titleInput, "Paste works");
+      setValue(textarea, "See");
+    });
+
+    const file = new File(["image"], "diagram.png", { type: "image/png" });
+    await act(async () => {
+      textarea.dispatchEvent(
+        Object.assign(new Event("paste", { bubbles: true, cancelable: true }), {
+          clipboardData: { files: [file] },
+        }),
+      );
+    });
+
+    expect(uploadAttachment).not.toHaveBeenCalled();
+    expect(textarea.value).toContain("![pending upload: diagram.png]");
+
+    await submitForm(container);
+
+    expect(createIssue).toHaveBeenCalledWith(
+      expect.objectContaining({ description: expect.stringContaining("attachment-pending:1") }),
+    );
+    expect(uploadAttachment).toHaveBeenCalledWith("SYD-9", file);
+    expect(updateIssue).toHaveBeenCalledWith("SYD-9", {
+      description: "See ![diagram.png](/attachments/1)",
+    });
+    expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
+  });
+
+  it("retries a failed deferred upload without creating a duplicate issue", async () => {
+    vi.mocked(createIssue).mockResolvedValueOnce(issue({ ref: "SYD-9" }));
+    vi.mocked(uploadAttachment)
+      .mockRejectedValueOnce(new Error("upload failed"))
+      .mockResolvedValueOnce({ id: 1, url: "/a", markdown: "![image](/a)" });
+    vi.mocked(updateIssue).mockResolvedValueOnce(issue({ ref: "SYD-9" }));
+    const container = await render();
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    await act(async () => {
+      setValue(titleInput, "Retry upload");
+    });
+    const file = new File(["image"], "image.png", { type: "image/png" });
+    await act(async () => {
+      textarea.dispatchEvent(
+        Object.assign(new Event("paste", { bubbles: true, cancelable: true }), {
+          clipboardData: { files: [file] },
+        }),
+      );
+    });
+
+    await submitForm(container);
+    expect(container.textContent).toContain("upload failed");
+    expect(navigate).not.toHaveBeenCalled();
+
+    await submitForm(container);
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    expect(uploadAttachment).toHaveBeenCalledTimes(2);
+    expect(updateIssue).toHaveBeenCalledWith("SYD-9", { description: "![image](/a)" });
     expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
   });
 

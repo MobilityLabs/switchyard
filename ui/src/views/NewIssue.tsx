@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { createIssue, listProjects, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
-import { usePasteUpload } from "../usePasteUpload";
+import { useDeferredPasteUpload } from "../usePasteUpload";
 import { Composer } from "../Composer";
 import { navigate } from "../router";
 import { PRIORITIES, SUMMARY_MAX_LENGTH, WORKER_PREFERENCES, type Priority } from "../types";
@@ -22,15 +22,10 @@ export default function NewIssue() {
   const [startInTodo, setStartInTodo] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const createdRef = useRef<string | null>(null);
 
-  // Same shape as Triage/IssueDetail/Review, but there's no issue ref yet —
-  // paste-to-upload only works once the issue exists, so usePasteUpload
-  // short-circuits with a clear uploadError instead of hitting the API
-  // (which 404s on an empty ref) if someone pastes before submitting.
-  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
-    "",
-    setDescription,
-  );
+  const paste = useDeferredPasteUpload(setDescription);
+  const { uploading, uploadPending } = paste;
 
   // Falls back to the first loaded project until the user picks one
   // explicitly, same pattern as Shell's board-project fallback.
@@ -44,21 +39,32 @@ export default function NewIssue() {
 
     const labels = parseLabels(labelsInput);
 
-    createIssue({
-      projectKey: effectiveProjectKey,
-      title: trimmedTitle,
-      summary: summary.trim() || undefined,
-      description: description.trim(),
-      priority,
-      workerPreference: workerPreference || null,
-      parentRef: parentRef.trim() || undefined,
-    })
-      .then((issue) => {
+    const create = createdRef.current
+      ? Promise.resolve({ ref: createdRef.current })
+      : createIssue({
+          projectKey: effectiveProjectKey,
+          title: trimmedTitle,
+          summary: summary.trim() || undefined,
+          description: description.trim(),
+          priority,
+          workerPreference: workerPreference || null,
+          parentRef: parentRef.trim() || undefined,
+        }).then((issue) => {
+          createdRef.current = issue.ref;
+          return issue;
+        });
+
+    create
+      .then(async (issue) => {
+        const uploadedDescription = (await uploadPending(issue.ref, description)).trim();
         const patch: Partial<{ labels: string[]; status: "todo" }> = {};
         if (labels.length > 0) patch.labels = labels;
         if (startInTodo) patch.status = "todo";
-        if (Object.keys(patch).length === 0) return issue;
-        return updateIssue(issue.ref, patch).then(() => issue);
+        const descriptionChanged = uploadedDescription !== description.trim();
+        const fullPatch: typeof patch & { description?: string } = patch;
+        if (descriptionChanged) fullPatch.description = uploadedDescription;
+        if (Object.keys(fullPatch).length > 0) await updateIssue(issue.ref, fullPatch);
+        return issue;
       })
       .then(
         (issue) => navigate({ view: "issue", ref: issue.ref }),
@@ -121,7 +127,7 @@ export default function NewIssue() {
             value={description}
             onChange={setDescription}
             placeholder="Details… (paste an image or video to attach it)"
-            paste={{ onPaste, uploading, uploadError, setUploadError, textareaRef }}
+            paste={paste}
           />
         </label>
 
@@ -147,10 +153,7 @@ export default function NewIssue() {
 
         <label>
           Preferred worker
-          <select
-            value={workerPreference}
-            onChange={(e) => setWorkerPreference(e.target.value)}
-          >
+          <select value={workerPreference} onChange={(e) => setWorkerPreference(e.target.value)}>
             <option value="">Any</option>
             {WORKER_PREFERENCES.map((w) => (
               <option key={w} value={w}>
