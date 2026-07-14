@@ -195,6 +195,19 @@ Results pin §C's rule and §B's placeholder, then commit into this spec.
    different host (Code Assist API) with a different auth shape than the
    provisioned `x-goog-api-key` rule — its own spike + addon rule + Node-CLI CA
    trust (`NODE_EXTRA_CA_CERTS`, like Claude) + `engine: "gemini"`.
+5. **Cross-engine dispatch routing (decided 2026-07-13, SYD-187):** each
+   engine's worker should try its own backlog first, falling back to the
+   shared one rather than either strictly partitioning by label or ignoring
+   engine affinity entirely. This is exactly what SYD-201's soft-affinity
+   sort already does — `selectDispatchable` orders `workerPreference` match >
+   neutral > foreign, never excluding, so a worker never starves when its own
+   backlog is empty. To use it for an engine worker: set that worker's
+   `dispatchPolicy` to `"all-todo"` (not `"labeled"`, which is a hard filter
+   with no fallback) and set `worker_preference` (matching the worker's
+   `engine`, e.g. `"codex"`) on the issues that should route there — via
+   `file_issue`/`update_issue`'s `worker_preference` field, same as any other
+   triage decision. No further code change; the mechanism was already built
+   ahead of this decision.
 
 ## Spike results (Task 1 — resolved 2026-07-12)
 
