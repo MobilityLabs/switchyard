@@ -135,6 +135,7 @@ export const EVENT_KINDS = [
   "pr_opened",
   "delivered",
   "delivery_failed",
+  "delivery_resolved",
   // GitHub ingestion (webhook + poller)
   "gh_pr_opened",
   "gh_pr_reopened",

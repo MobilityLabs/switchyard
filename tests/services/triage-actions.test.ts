@@ -7,7 +7,12 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { searchIssues } from "../../src/services/search.js";
-import { snoozeIssue, markDuplicate, redeliverIssue } from "../../src/services/triage-actions.js";
+import {
+  snoozeIssue,
+  markDuplicate,
+  redeliverIssue,
+  resolveDeliveryFailure,
+} from "../../src/services/triage-actions.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 
@@ -242,6 +247,83 @@ describe("redeliverIssue SHA pin (SYD-208)", () => {
     expect(() => redeliverIssue(db, human, "AIPI-1", "whatever")).toThrowError(
       /no agent PR on record/i,
     );
+  });
+});
+
+// SYD-178: the fix for SYD-108 merged via a feat/ branch, which pr_state
+// never attributes to the issue (strict agent/<ref> match, SYD-206) — Retry
+// had nothing to re-authorize, so the delivery_failed flag stayed lit
+// forever. resolveDeliveryFailure is the human's explicit escape hatch.
+describe("resolveDeliveryFailure", () => {
+  it("rejects agents legibly", () => {
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    expect(() => resolveDeliveryFailure(db, agent, "AIPI-1", "merged by hand")).toThrowError(
+      /human/i,
+    );
+  });
+
+  it("rejects an empty or blank note", () => {
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    expect(() => resolveDeliveryFailure(db, human, "AIPI-1", "")).toThrowError(/note is required/i);
+    expect(() => resolveDeliveryFailure(db, human, "AIPI-1", "   ")).toThrowError(
+      /note is required/i,
+    );
+  });
+
+  it("rejects an issue with no unresolved delivery failure", () => {
+    expect(() => resolveDeliveryFailure(db, human, "AIPI-1", "merged by hand")).toThrowError(
+      /no unresolved delivery failure/i,
+    );
+  });
+
+  it("rejects an issue whose delivery_failed was already resolved", () => {
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    resolveDeliveryFailure(db, human, "AIPI-1", "merged by hand");
+    expect(() => resolveDeliveryFailure(db, human, "AIPI-1", "merged by hand")).toThrowError(
+      /no unresolved delivery failure/i,
+    );
+  });
+
+  it("has no agent-PR requirement, unlike redeliver — it works with no pr_state row at all", () => {
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "rebase onto main hit real conflicts",
+    });
+    const updated = resolveDeliveryFailure(db, human, "AIPI-1", "merged via feat/AIPI-1 PR #124");
+    const events = listIssueEvents(db, updated.id);
+    const resolved = events.at(-1)!;
+    expect(resolved.type).toBe("delivery_resolved");
+    expect(resolved.actorName).toBe(human.name);
+    expect(resolved.payload).toEqual({ note: "merged via feat/AIPI-1 PR #124" });
+  });
+
+  it("trims the note", () => {
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    const updated = resolveDeliveryFailure(db, human, "AIPI-1", "  merged by hand  ");
+    const resolved = listIssueEvents(db, updated.id).at(-1)!;
+    expect(resolved.payload).toEqual({ note: "merged by hand" });
+  });
+
+  it("does not change issue status", () => {
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: "merge conflict",
+    });
+    const before = getIssue(db, "AIPI-1");
+    const updated = resolveDeliveryFailure(db, human, "AIPI-1", "merged by hand");
+    expect(updated.status).toBe(before.status);
   });
 });
 

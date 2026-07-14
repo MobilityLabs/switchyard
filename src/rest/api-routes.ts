@@ -45,7 +45,12 @@ import { listRecentEventsPage, listUnansweredQuestions } from "../services/event
 import { getDeliveryHealth } from "../services/delivery-health.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
-import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-actions.js";
+import {
+  snoozeIssue,
+  markDuplicate,
+  redeliverIssue,
+  resolveDeliveryFailure,
+} from "../services/triage-actions.js";
 import {
   addWebhook,
   listWebhooks,
@@ -99,6 +104,7 @@ import {
   duplicateBody,
   settingPutBody,
   redeliverBody,
+  resolveDeliveryBody,
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
   deliveryAttemptDerivedHeadBody,
@@ -382,6 +388,16 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
         c.req.param("ref"),
         c.req.valid("json").expectedHeadSha,
       ),
+    ),
+  );
+
+  // SYD-178: an explicit human "this is actually resolved" action for a
+  // delivery_failed flag pr_state can never auto-clear (e.g. the fix landed
+  // through a non-agent branch) — Retry is a dead end there since there's no
+  // attributed PR to re-authorize.
+  app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
+    c.json(
+      resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note),
     ),
   );
 

@@ -14,6 +14,7 @@ vi.mock("../api", () => ({
   removeDependency: vi.fn(),
   updateIssue: vi.fn(() => Promise.resolve({})),
   redeliverIssue: vi.fn(() => Promise.resolve({})),
+  resolveDeliveryFailure: vi.fn(() => Promise.resolve({})),
   listActors: vi.fn(() => Promise.resolve([])),
   listAgentSessions: vi.fn(() => Promise.resolve([])),
 }));
@@ -29,8 +30,20 @@ import IssueDetail, {
   RestampBanner,
   withAttachmentIds,
 } from "./IssueDetail";
-import { getIssue, listAgentSessions, redeliverIssue, updateIssue } from "../api";
-import type { Activity, Attachment, IssueDetail as IssueDetailType, Issue, Status } from "../types";
+import {
+  getIssue,
+  listAgentSessions,
+  redeliverIssue,
+  resolveDeliveryFailure,
+  updateIssue,
+} from "../api";
+import type {
+  Activity,
+  Attachment,
+  IssueDetail as IssueDetailType,
+  Issue,
+  Status,
+} from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -84,12 +97,18 @@ describe("DescriptionSection", () => {
 // rendered `attention` — a delivery_failed issue looked clean on its own
 // page, which is where a human goes to investigate.
 describe("AttentionBanner", () => {
-  async function render(attention: Issue["attention"], onRetry?: () => void): Promise<HTMLElement> {
+  async function render(
+    attention: Issue["attention"],
+    onRetry?: () => void,
+    onResolveClick?: () => void,
+  ): Promise<HTMLElement> {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<AttentionBanner attention={attention} onRetry={onRetry} />);
+      root.render(
+        <AttentionBanner attention={attention} onRetry={onRetry} onResolveClick={onResolveClick} />,
+      );
     });
     return container;
   }
@@ -124,6 +143,41 @@ describe("AttentionBanner", () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(clicked).toBe(1);
+  });
+
+  it("renders no Mark resolved button when onResolveClick is not passed", async () => {
+    const container = await render({ reason: "delivery_failed", message: "merge conflict" });
+    expect(container.querySelector(".resolve-delivery")).toBeNull();
+  });
+
+  // SYD-178: Retry only helps when there's an agent PR pr_state can
+  // re-authorize — a fix merged via a non-agent branch needs a separate,
+  // explicit way for a human to clear the flag.
+  it("renders a Mark resolved button that calls onResolveClick when clicked", async () => {
+    let clicked = 0;
+    const container = await render(
+      { reason: "delivery_failed", message: "merge conflict" },
+      undefined,
+      () => {
+        clicked += 1;
+      },
+    );
+    const button = container.querySelector(".resolve-delivery") as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(clicked).toBe(1);
+  });
+
+  it("renders neither action button for a non-delivery attention reason", async () => {
+    const container = await render(
+      { reason: "stale_claim", message: "claimed 3 days ago" },
+      () => {},
+      () => {},
+    );
+    expect(container.querySelector(".retry-delivery")).toBeNull();
+    expect(container.querySelector(".resolve-delivery")).toBeNull();
   });
 });
 
@@ -333,6 +387,30 @@ describe("computeDeliveryStatus", () => {
     expect(status?.failedMessage).toBeNull();
     expect(status?.state).toBe("merged");
   });
+
+  // SYD-178: a fix merged via a non-agent branch never produces a
+  // delivered/gh_pr_merged event pr_state would recognize — a human's
+  // explicit delivery_resolved is the only thing that clears the strip too.
+  it("clears an earlier delivery_failed once a later delivery_resolved fires", () => {
+    const status = computeDeliveryStatus([
+      ev({ type: "pr_opened", createdAt: 1, payload: { prNumber: 7, url: "https://x/pull/7" } }),
+      ev({ type: "delivery_failed", createdAt: 2, payload: { message: "rebase hit conflicts" } }),
+      ev({
+        type: "delivery_resolved",
+        createdAt: 3,
+        payload: { note: "merged via feat/SYD-1 PR #124" },
+      }),
+    ]);
+    expect(status?.failedMessage).toBeNull();
+  });
+
+  it("does not let an earlier delivery_resolved mask a later delivery_failed", () => {
+    const status = computeDeliveryStatus([
+      ev({ type: "delivery_resolved", createdAt: 1, payload: { note: "resolved once" } }),
+      ev({ type: "delivery_failed", createdAt: 2, payload: { message: "failed again" } }),
+    ]);
+    expect(status?.failedMessage).toBe("failed again");
+  });
 });
 
 describe("withAttachmentIds", () => {
@@ -420,6 +498,18 @@ describe("Event rendering for delivery events", () => {
     expect(container.textContent).toContain("PR #9");
     expect(container.textContent).toContain("abcdef1");
     expect(container.textContent).toContain("deploy FAILED");
+  });
+
+  it("renders a delivery_resolved event with its note (SYD-178)", async () => {
+    const container = await render(
+      ev({
+        type: "delivery_resolved",
+        actorName: "sean",
+        payload: { note: "merged via feat/SYD-1 PR #124" },
+      }),
+    );
+    expect(container.textContent).toContain("sean");
+    expect(container.textContent).toContain("merged via feat/SYD-1 PR #124");
   });
 
   it("links the PR in a gh_pr_merged event with its merge sha", async () => {
@@ -721,6 +811,7 @@ describe("IssueDetail status select and Retry send the rendered PR head sha (SYD
   beforeEach(() => {
     vi.mocked(updateIssue).mockClear();
     vi.mocked(redeliverIssue).mockClear();
+    vi.mocked(resolveDeliveryFailure).mockClear();
   });
 
   it("sends the openPr headSha as expectedHeadSha when the status select is changed to done", async () => {
@@ -783,5 +874,35 @@ describe("IssueDetail status select and Retry send the rendered PR head sha (SYD
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(redeliverIssue).toHaveBeenCalledWith("SYD-1", "def456");
+  });
+
+  // SYD-178: a fix merged via a non-agent branch leaves deliveryPin null (no
+  // pr_state row to re-authorize) — Mark resolved must still work there.
+  it("opens a prompt and calls resolveDeliveryFailure with the typed note when Mark resolved is submitted", async () => {
+    const container = await renderIssueDetail(
+      detail({
+        attention: { reason: "delivery_failed", message: "rebase hit real conflicts" },
+        deliveryPin: null,
+      }),
+    );
+    const button = container.querySelector(".resolve-delivery") as HTMLButtonElement;
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const input = container.querySelector(".modal input") as HTMLInputElement;
+    expect(input).not.toBeNull();
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      nativeSetter.call(input, "merged via feat/SYD-1 PR #124");
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    const submit = container.querySelector(".modal .primary") as HTMLButtonElement;
+    await act(async () => {
+      submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(resolveDeliveryFailure).toHaveBeenCalledWith("SYD-1", "merged via feat/SYD-1 PR #124");
   });
 });

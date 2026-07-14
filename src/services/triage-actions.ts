@@ -149,3 +149,37 @@ export function redeliverIssue(
   });
   return getIssue(db, ref);
 }
+
+/**
+ * Explicitly clears a stuck delivery_failed flag (SYD-178). Retry only helps
+ * when pr_state has an attributed PR to re-authorize (a strict agent/<ref>
+ * branch, SYD-206) — a fix that lands through any other path (an interactive
+ * feat/<ref> branch, a manual merge on GitHub) never gets one, so the
+ * delivery worker never sees anything to redeliver and the banner is a dead
+ * end forever. This gives a human an explicit escape hatch: attest the issue
+ * is actually resolved, without pretending a `delivered` event (which implies
+ * deliver.ts's merge+deploy actually ran) fired. A note is required — this
+ * silences a "needs my action" signal, so it gets the same provenance bar as
+ * everything else here. Human-only, like the rest of this file — agents
+ * still can't clear their own failures.
+ */
+export function resolveDeliveryFailure(db: Db, actor: Actor, ref: string, note: string): IssueView {
+  requireHuman(actor, "resolve a delivery failure");
+  if (!note.trim()) {
+    throw new SwitchyardError(
+      "A note is required — say how you confirmed the delivery actually succeeded.",
+    );
+  }
+  const current = getIssue(db, ref);
+  const attention = getAttention(db, current.id);
+  if (attention?.reason !== "delivery_failed") {
+    throw new SwitchyardError(`${ref} has no unresolved delivery failure to resolve.`);
+  }
+  recordEvent(db, {
+    issueId: current.id,
+    actorId: actor.id,
+    type: "delivery_resolved",
+    payload: { note: note.trim() },
+  });
+  return getIssue(db, ref);
+}
