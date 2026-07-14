@@ -177,6 +177,77 @@ describe("listAttentionByIssueId", () => {
   });
 });
 
+describe("getAttention — done_without_merged_pr (SYD-204)", () => {
+  it("flags a done issue that reached done from in_review with no PR ever recorded", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    const flag = getAttention(db, getIssue(db, "SYD-1").id);
+    expect(flag?.reason).toBe("done_without_merged_pr");
+  });
+
+  it("clears once a human merges the stale branch by hand (a later pr_state 'merged' row)", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(getAttention(db, getIssue(db, "SYD-1").id)?.reason).toBe("done_without_merged_pr");
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 9,
+      status: "merged",
+      branch: "agent/SYD-1",
+      url: `https://github.com/${REPO}/pull/9`,
+      ghUpdatedAt: "2026-07-14T10:00:00Z",
+      mergeSha: "abc123",
+    });
+    expect(getAttention(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+
+  it("delivery_failed outranks a co-occurring done_without_merged_pr", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "boom" });
+    expect(getAttention(db, getIssue(db, "SYD-1").id)).toEqual({
+      reason: "delivery_failed",
+      message: "boom",
+    });
+  });
+
+  it("includes done_without_merged_pr issues in the bulk map", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Clean" }); // SYD-2
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    const flags = listAttentionByIssueId(db);
+    expect(flags.get(getIssue(db, "SYD-1").id)?.reason).toBe("done_without_merged_pr");
+    expect(flags.has(getIssue(db, "SYD-2").id)).toBe(false);
+  });
+
+  it("does NOT flag a done issue whose PR merged before the stamp", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "delivered",
+      prNumber: 41,
+      mergeSha: "abc",
+      deploy: { ran: false },
+    });
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(getAttention(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+});
+
 describe("getAttention — composes process deviations", () => {
   it("surfaces a process deviation as an attention flag", () => {
     const { db, human, agent } = setup();
@@ -217,6 +288,8 @@ describe("getAttention — composes process deviations", () => {
       "open_pr_not_in_review",
     );
     recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "boom" });
-    expect(listAttentionByIssueId(db).get(getIssue(db, "SYD-1").id)?.reason).toBe("delivery_failed");
+    expect(listAttentionByIssueId(db).get(getIssue(db, "SYD-1").id)?.reason).toBe(
+      "delivery_failed",
+    );
   });
 });
