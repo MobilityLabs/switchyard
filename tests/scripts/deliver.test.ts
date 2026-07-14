@@ -175,6 +175,39 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
   });
 
+  it("seeds the anchor with the worker's prior derived heads so its own rebase isn't disarmed (SYD-231)", async () => {
+    // A re-stamp still pinned to S0, but a prior attempt already force-pushed
+    // its rebase "s1prev" — so the branch sits at s1prev, not S0.
+    installFetch({
+      pending: [
+        {
+          authorizationId: 5,
+          ref: "SYD-9",
+          kind: "redeliver",
+          pin: { repo: "acme/widgets", prNumber: 42, headSha: "s0abc" },
+          priorHeads: ["s1prev"],
+        },
+      ],
+      unfinished: [],
+      deployRetries: [],
+    });
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "s1prev", mergeCommit: null });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s2new" });
+    waitForChecks.mockResolvedValue("passing");
+    mergeAgentPr.mockResolvedValue("merged-sha");
+
+    await tick(config, token, newTickGate(), false);
+
+    // Anchor carries S0 AND the prior derived head, so attemptAutoRebase accepts
+    // the branch's current head (s1prev) as the worker's own rather than disarming.
+    expect(attemptAutoRebase).toHaveBeenCalledWith("/repo/syd", expect.any(String), "SYD-9", [
+      "s0abc",
+      "s1prev",
+    ]);
+    expect(mergeAgentPr).toHaveBeenCalledWith("/repo/syd", 42, "s2new");
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merged_deployed" });
+  });
+
   it("a pin with no headSha (no S0 to anchor) disarms without touching the branch", async () => {
     installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: null }));
     prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "whatever", mergeCommit: null });

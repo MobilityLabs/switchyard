@@ -74,7 +74,13 @@ describe("GET /api/delivery-work", () => {
     const authorizationId = await seedPendingAuthorization(headSha);
 
     const work = await body<{
-      pending: { authorizationId: number; ref: string; kind: string; pin: unknown }[];
+      pending: {
+        authorizationId: number;
+        ref: string;
+        kind: string;
+        pin: unknown;
+        priorHeads: string[];
+      }[];
       unfinished: unknown[];
       deployRetries: unknown[];
     }>(await app.request("/delivery-work", { headers: humanH }));
@@ -85,6 +91,7 @@ describe("GET /api/delivery-work", () => {
         ref: "SYD-1",
         kind: "done_stamp",
         pin: { repo: "acme/widgets", prNumber: 9, headSha },
+        priorHeads: [],
       },
     ]);
     expect(work.unfinished).toEqual([]);
