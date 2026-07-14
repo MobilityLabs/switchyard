@@ -209,6 +209,11 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, engine: "codex" })).toEqual([]);
   });
 
+  it("accepts engine: gemini, including with egress: open (its open mode passes the real key)", () => {
+    expect(validateWorkerConfig({ ...good, engine: "gemini" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, engine: "gemini", egress: "open" })).toEqual([]);
+  });
+
   it("rejects engine: codex with egress: open, and still accepts codex with the default proxy egress", () => {
     const problems = validateWorkerConfig({ ...good, engine: "codex", egress: "open" });
     expect(problems.join(" ")).toMatch(/codex/);
