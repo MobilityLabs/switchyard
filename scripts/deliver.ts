@@ -602,6 +602,13 @@ async function deliverPending(
     // Keep attemptId live across the orchestrator so a thrown pre-merge failure
     // (no branch, merge-retry exhausted) is still stamped merge_failed by the
     // outer catch; the orchestrator persists S1 to this same attempt id.
+    // SYD-231: anchor the SHA chain on S0 (the human-stamped head) AND every
+    // rebased head the worker itself force-pushed on prior attempts for this PR.
+    // A prior bounced attempt can leave the branch at its own S1; without this,
+    // a re-stamp (still pinned to S0) would see that head as "moved" and disarm
+    // instead of re-rebasing it. Only the worker's own recorded outputs are
+    // trusted here, so a genuine third-party push still breaks the chain.
+    const acceptedHeads = [...new Set([auth.pin.headSha, ...(auth.priorHeads ?? [])])];
     const result = await deliverQueue(
       ref,
       project,
@@ -609,7 +616,7 @@ async function deliverPending(
       token,
       cloneDir,
       auth.pin.prNumber,
-      [auth.pin.headSha],
+      acceptedHeads,
       attemptId,
     );
     const id = attemptId;

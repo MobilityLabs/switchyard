@@ -36,6 +36,11 @@ export type WorkAuthorization = {
   ref: string;
   kind: "done_stamp" | "redeliver";
   pin: WorkPin | null;
+  // SYD-231: rebased heads this worker recorded on prior attempts for the
+  // pinned PR. Seeded into the SHA-chain anchor alongside S0 so a branch left
+  // at one of the worker's own earlier rebases is re-rebased, not disarmed.
+  // Optional so an older server (deploy skew) that omits it still parses.
+  priorHeads?: string[];
 };
 
 export type WorkAttempt = {
