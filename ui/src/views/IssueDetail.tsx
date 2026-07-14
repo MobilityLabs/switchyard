@@ -6,11 +6,13 @@ import {
   listAgentSessions,
   redeliverIssue,
   removeDependency,
+  resolveDeliveryFailure,
   updateIssue,
 } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
+import { PromptModal } from "../Modal";
 import { href } from "../router";
 import {
   PRIORITIES,
@@ -82,7 +84,8 @@ export type DeliveryStatus = {
  * over the activity feed (oldest-first) into the latest known PR + delivery
  * state. A delivery_failed only surfaces if nothing has delivered
  * successfully since it fired — a later delivered/gh_pr_merged event (e.g. a
- * re-stamp after a fix) clears it.
+ * re-stamp after a fix), or a delivery_resolved event (SYD-178: a human's
+ * explicit resolution of a flag pr_state could never auto-clear), clears it.
  */
 export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | null {
   let prNumber: number | null = null;
@@ -114,6 +117,11 @@ export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | nu
     } else if (ev.type === "delivery_failed") {
       failedMessage = String(ev.payload.message ?? "delivery failed");
       lastFailedAt = ev.createdAt;
+    } else if (ev.type === "delivery_resolved") {
+      // SYD-178: a human's explicit "this actually landed" clears the
+      // strip's inline failure banner the same way a later delivered/merged
+      // event would — it just doesn't know a PR/merge SHA to show.
+      lastDeliveredAt = ev.createdAt;
     } else if (ev.type === "gh_checks_passed") {
       checks = "passed";
     } else if (ev.type === "gh_checks_failed") {
@@ -242,9 +250,11 @@ export function ActivityFeed({
 export function AttentionBanner({
   attention,
   onRetry,
+  onResolveClick,
 }: {
   attention: Issue["attention"];
   onRetry?: () => void;
+  onResolveClick?: () => void;
 }) {
   if (!attention) return null;
   const isError = attention.reason === "delivery_failed";
@@ -254,6 +264,11 @@ export function AttentionBanner({
       {isError && onRetry && (
         <button className="retry-delivery" onClick={onRetry}>
           Retry delivery
+        </button>
+      )}
+      {isError && onResolveClick && (
+        <button className="resolve-delivery" onClick={onResolveClick}>
+          Mark resolved…
         </button>
       )}
     </p>
@@ -330,6 +345,7 @@ export function AgentSessionStrip({ refId }: { refId: string }) {
 export default function IssueDetail({ refId }: { refId: string }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [resolveOpen, setResolveOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     refId,
@@ -410,7 +426,19 @@ export default function IssueDetail({ refId }: { refId: string }) {
       <AttentionBanner
         attention={data.attention}
         onRetry={() => act(() => redeliverIssue(refId, data.deliveryPin?.headSha ?? undefined))}
+        onResolveClick={() => setResolveOpen(true)}
       />
+      {resolveOpen && (
+        <PromptModal
+          title={`Mark ${data.ref}'s delivery as resolved — how did you confirm it?`}
+          placeholder="e.g. merged via feat/SYD-1 PR #124"
+          onCancel={() => setResolveOpen(false)}
+          onSubmit={(note) => {
+            setResolveOpen(false);
+            act(() => resolveDeliveryFailure(refId, note));
+          }}
+        />
+      )}
       <div className="labels-row">
         {otherLabels.map((label) => (
           <span key={label} className="chip label-chip">
@@ -686,6 +714,14 @@ export function Event({
       <p className="event delivery-failed">
         <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")}{" "}
         <time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "delivery_resolved") {
+    return (
+      <p className="event delivery-resolved">
+        <strong>{ev.actorName}</strong> marked the delivery resolved:{" "}
+        {String(ev.payload.note ?? "")} <time>{when}</time>
       </p>
     );
   }
