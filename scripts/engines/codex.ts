@@ -19,12 +19,27 @@ export const CODEX_OAUTH_TOKEN_VAR = "CODEX_OAUTH_TOKEN";
 /** ChatGPT account UUID (NON-secret) codex sends as the chatgpt-account-id header; goes in the container's placeholder auth.json. */
 export const CODEX_ACCOUNT_ID_VAR = "CODEX_ACCOUNT_ID";
 
+/** Env var the session-scoped lease is passed in (SYD-210); codex reads it via env_http_headers (SYD-220). */
+export const CODEX_LEASE_ENV_VAR = "SWITCHYARD_LEASE";
+
+/** MCP header the lease rides in, matched by the tracker's lease enforcement (SYD-210). */
+export const SWITCHYARD_LEASE_HEADER = "X-Switchyard-Lease";
+
 export function buildCodexConfigToml(
   switchyardUrl: string,
   tokenEnvVar: string = CODEX_BEARER_TOKEN_ENV_VAR,
+  opts: { leaseEnvVar?: string } = {},
 ): string {
   const url = `${switchyardUrl.replace(/\/$/, "")}/mcp`;
-  return `[mcp_servers.switchyard]\nurl = "${url}"\nbearer_token_env_var = "${tokenEnvVar}"\n`;
+  let toml = `[mcp_servers.switchyard]\nurl = "${url}"\nbearer_token_env_var = "${tokenEnvVar}"\n`;
+  // SYD-220: codex 0.144.x supports env_http_headers — the env var NAME (never
+  // its value) sourcing a custom header, exact parity with bearer_token_env_var.
+  // Under lease enforcement the session's claim-scoped writes must carry the
+  // lease as X-Switchyard-Lease; the value stays in the env, out of the file/argv.
+  if (opts.leaseEnvVar) {
+    toml += `env_http_headers = { "${SWITCHYARD_LEASE_HEADER}" = "${opts.leaseEnvVar}" }\n`;
+  }
+  return toml;
 }
 
 // Spike (Task 1): headless full-auto in codex 0.142.5 (the container is the

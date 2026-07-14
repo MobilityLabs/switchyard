@@ -798,7 +798,7 @@ describe("buildDockerArgs", () => {
     expect(noLease).not.toContain("SWITCHYARD_LEASE");
   });
 
-  it("does NOT inject SWITCHYARD_LEASE for the codex engine (its entry script can't send the header yet — SYD-210)", () => {
+  it("injects SWITCHYARD_LEASE bare for the codex engine when leased (env_http_headers reads it — SYD-220)", () => {
     const args = buildDockerArgs(
       issue({ ref: "SYD-1" }),
       project,
@@ -806,7 +806,17 @@ describe("buildDockerArgs", () => {
       { CODEX_OAUTH_TOKEN: "x", CODEX_ACCOUNT_ID: "acct" } as NodeJS.ProcessEnv,
       { leaseToken: "lease_abc" },
     );
-    expect(args).not.toContain("SWITCHYARD_LEASE");
+    expect(args).toContain("SWITCHYARD_LEASE"); // bare -e name, value from spawn env
+    expect(args.some((a) => a.startsWith("SWITCHYARD_LEASE="))).toBe(false); // value never in argv
+    expect(args.join(" ")).not.toContain("lease_abc");
+    // Absent when there is no lease.
+    const noLease = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, engine: "codex" },
+      { CODEX_OAUTH_TOKEN: "x", CODEX_ACCOUNT_ID: "acct" } as NodeJS.ProcessEnv,
+    );
+    expect(noLease).not.toContain("SWITCHYARD_LEASE");
   });
 
   it("proxy mode: agent container gets a placeholder + CA mount and no real credential (SYD-186)", () => {
