@@ -437,6 +437,52 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     expect(mergeAgentPr).not.toHaveBeenCalled();
   });
 
+  it("does not post delivery_failed comment or event if merge+deploy succeed but finishAttempt PATCH throws (SYD-217)", async () => {
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
+    
+    // Make the PATCH to finish the attempt throw (using 400 so withRetry fails immediately without backoff delays)
+    const originalFetch = fetch;
+    const fetchMockWrapper = vi.fn(async (url: unknown, init?: RequestInit) => {
+      const u = String(url);
+      const method = init?.method ?? "GET";
+      if (u.includes("/api/delivery-attempts/") && method === "PATCH" && !u.endsWith("/derived-head")) {
+        return new Response("Tracker error", { status: 400 });
+      }
+      return originalFetch(url as any, init);
+    });
+    vi.stubGlobal("fetch", fetchMockWrapper);
+
+    // First call inside deliverPending returns OPEN so it tries to merge.
+    // Second call in outer catch block returns MERGED (because it succeeded).
+    prLiveState
+      .mockResolvedValueOnce({ state: "OPEN", headRefOid: "s0abc", mergeCommit: null })
+      .mockResolvedValueOnce({ state: "MERGED", headRefOid: "s1def", mergeCommit: "m-sha" });
+
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s1def" });
+    waitForChecks.mockResolvedValue("passing");
+    mergeAgentPr.mockResolvedValue("merged-sha");
+
+    await tick(config, token, newTickGate(), false);
+
+    // mergeAgentPr was still called
+    expect(mergeAgentPr).toHaveBeenCalledWith("/repo/syd", 42, "s1def");
+
+    // No delivery_failed comments or events were posted
+    const failureComments = fetchMockWrapper.mock.calls.filter(([u, init]) => {
+      if (!String(u).endsWith("/comments")) return false;
+      const body = JSON.parse((init as RequestInit).body as string);
+      return body.body && body.body.includes("Delivery FAILED");
+    });
+    expect(failureComments).toHaveLength(0);
+
+    const failureEvents = fetchMockWrapper.mock.calls.filter(([u, init]) => {
+      if (!String(u).endsWith("/delivery-events")) return false;
+      const body = JSON.parse((init as RequestInit).body as string);
+      return body.type === "delivery_failed";
+    });
+    expect(failureEvents).toHaveLength(0);
+  });
+
   it("skips refs outside the configured projects", async () => {
     const work: DeliveryWork = {
       pending: [
