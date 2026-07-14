@@ -70,6 +70,10 @@ describe("settings", () => {
     expect(() => setSetting(db, human, "dispatch.max_concurrent", 1.5)).toThrowError(
       /positive integer/i,
     );
+    expect(() => setSetting(db, human, "wip.limit.in_review", -1)).toThrowError(
+      /non-negative integer/i,
+    );
+    expect(setSetting(db, human, "wip.limit.in_review", 0).value).toBe(0);
     expect(() => setSetting(db, human, "instance.name", "")).toThrowError(/non-empty string/i);
     expect(() => setSetting(db, human, "instance.name", 42)).toThrowError(/non-empty string/i);
     expect(() => setSetting(db, human, "webhooks.suppressed_events", "nope")).toThrowError(
@@ -103,6 +107,8 @@ describe("settings", () => {
       intervalSeconds: REGISTRY["dispatch.poll_seconds"].default,
       eventPollSeconds: REGISTRY["dispatch.event_poll_seconds"].default,
       heartbeatWindowSeconds: REGISTRY["claims.heartbeat_window_seconds"].default,
+      wipLimits: { backlog: 0, todo: 0, in_progress: 0, in_review: 5 },
+      columnCounts: {},
     });
   });
 
