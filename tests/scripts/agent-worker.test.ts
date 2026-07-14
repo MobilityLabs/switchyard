@@ -299,6 +299,19 @@ describe("buildPrompt progress-note convention (SYD-43)", () => {
   });
 });
 
+describe("buildPrompt visual-evidence convention (SYD-183)", () => {
+  it("tells the session to attach a screenshot for UI work", () => {
+    const prompt = buildPrompt("SYD-7");
+    expect(prompt).toMatch(/UI.*screenshot/i);
+    expect(prompt).toMatch(/attach_file/);
+  });
+
+  it("tells the session to attach a diagram for architecture work", () => {
+    const prompt = buildPrompt("SYD-7");
+    expect(prompt).toMatch(/architecture.*diagram/i);
+  });
+});
+
 describe("session lifecycle reporting (SYD-43)", () => {
   const config: WorkerConfig = {
     url: "http://localhost:3300",

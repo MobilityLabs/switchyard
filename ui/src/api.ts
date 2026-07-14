@@ -132,6 +132,11 @@ export const redeliverIssue = (ref: string, expectedHeadSha?: string) =>
     method: "POST",
     body: JSON.stringify({ expectedHeadSha }),
   });
+export const resolveDeliveryFailure = (ref: string, note?: string) =>
+  api<Issue>(`/api/issues/${ref}/resolve-delivery`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
 export const addDependency = (blockerRef: string, blockedRef: string) =>
   api<{ ok: true }>("/api/dependencies", {
     method: "POST",

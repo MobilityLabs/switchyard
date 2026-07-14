@@ -433,6 +433,21 @@ export function evaluateBranchProtection(
   return { ok: problems.length === 0, problems };
 }
 
+/**
+ * Whether the SYD-222 startup gate should refuse to run the delivery worker:
+ * only when the operator opted in via `delivery.requireBranchProtection` AND
+ * at least one linked repo actually failed (or couldn't verify) its branch-
+ * protection check. Pure so the gating decision is testable without shelling
+ * out to `gh` — see `warnOnRelaxedBranchProtection` in deliver.ts, which
+ * still warns unconditionally regardless of this gate.
+ */
+export function shouldRefuseUnprotectedMain(
+  requireBranchProtection: boolean | undefined,
+  failingProjectKeys: string[],
+): boolean {
+  return requireBranchProtection === true && failingProjectKeys.length > 0;
+}
+
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */
 export function parseOwnerRepo(remoteUrl: string): string {
   const trimmed = remoteUrl.trim().replace(/\.git$/, "");

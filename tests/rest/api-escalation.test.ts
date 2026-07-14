@@ -315,4 +315,84 @@ describe("escalation, snooze, and duplicate routes", () => {
       pin: { repo: "acme/widgets", prNumber: 55, headSha: "sha55" },
     });
   });
+
+  // SYD-178: a fix merged through a non-agent (feat/) branch never gets a
+  // pr_state row, so redeliver has nothing to re-authorize — resolve-delivery
+  // is the human's explicit way to clear the stuck flag instead.
+  it("resolve-delivery rejects a missing note before any business-rule check runs", async () => {
+    const filed = await body<{ ref: string }>(
+      await app.request("/issues", {
+        method: "POST",
+        headers: humanH,
+        body: JSON.stringify({ projectKey: "SYD", title: "Ship it interactively" }),
+      }),
+    );
+    const noNote = await app.request(`/issues/${filed.ref}/resolve-delivery`, {
+      method: "POST",
+      headers: humanH,
+      body: "{}",
+    });
+    expect(noNote.status).toBe(400);
+    expect((await body<{ error: string }>(noNote)).error).toMatch(/note/i);
+  });
+
+  it("resolve-delivery is human-only, requires an unresolved failure, and clears it without needing a PR on record", async () => {
+    const filed = await body<{ ref: string }>(
+      await app.request("/issues", {
+        method: "POST",
+        headers: humanH,
+        body: JSON.stringify({ projectKey: "SYD", title: "Ship it interactively" }),
+      }),
+    );
+    const NOTE = "merged via feat/ PR #124";
+
+    const noFailure = await app.request(`/issues/${filed.ref}/resolve-delivery`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ note: NOTE }),
+    });
+    expect(noFailure.status).toBe(400);
+    expect((await body<{ error: string }>(noFailure)).error).toMatch(
+      /no unresolved delivery failure/i,
+    );
+
+    await app.request(`/issues/${filed.ref}/delivery-events`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ type: "delivery_failed", message: "rebase hit real conflicts" }),
+    });
+
+    const denied = await app.request(`/issues/${filed.ref}/resolve-delivery`, {
+      method: "POST",
+      headers: agentH,
+      body: JSON.stringify({ note: NOTE }),
+    });
+    expect(denied.status).toBe(400);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+
+    // No repo bound, no PR ever opened — resolve-delivery still succeeds
+    // where redeliver would refuse with "no agent PR on record".
+    const ok = await app.request(`/issues/${filed.ref}/resolve-delivery`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ note: NOTE }),
+    });
+    expect(ok.status).toBe(200);
+
+    const detail = await body<{
+      attention: unknown;
+      activity: { type: string; payload: Record<string, unknown> }[];
+    }>(await app.request(`/issues/${filed.ref}`, { headers: humanH }));
+    expect(detail.attention).toBeNull();
+    const ev = detail.activity.find((a) => a.type === "delivery_resolved");
+    expect(ev?.payload).toEqual({ note: NOTE });
+
+    const again = await app.request(`/issues/${filed.ref}/resolve-delivery`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ note: NOTE }),
+    });
+    expect(again.status).toBe(400);
+    expect((await body<{ error: string }>(again)).error).toMatch(/no unresolved delivery failure/i);
+  });
 });

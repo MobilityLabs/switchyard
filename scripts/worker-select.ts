@@ -96,6 +96,13 @@ export type DeliveryConfig = {
   cloneDir?: string;
   /** Run the merged project's `npm run deploy` after merging (default true). */
   deploy?: boolean;
+  /**
+   * Refuse to start (log + exit 1) instead of only warning when a linked
+   * repo's `main` branch protection is relaxed (SYD-222). Default false —
+   * `warnOnRelaxedBranchProtection` stays a loud but non-blocking startup
+   * alarm, matching its existing best-effort/never-blocks-delivery contract.
+   */
+  requireBranchProtection?: boolean;
 };
 
 export type GithubPollConfig = {

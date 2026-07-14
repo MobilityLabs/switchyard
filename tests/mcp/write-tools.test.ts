@@ -42,6 +42,13 @@ describe("MCP write tools", () => {
     expect(fileIssue.description).toMatch(/priority/i);
   });
 
+  it("attach_file's description steers UI work to screenshots and architecture work to diagrams (SYD-183)", async () => {
+    const { tools } = await client.listTools();
+    const attachFile = tools.find((t) => t.name === "attach_file")!;
+    expect(attachFile.description).toMatch(/UI.*screenshot/i);
+    expect(attachFile.description).toMatch(/architecture.*diagram/i);
+  });
+
   it("file_issue creates a triage issue with provenance", async () => {
     const r = await client.callTool({
       name: "file_issue",

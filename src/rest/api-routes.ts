@@ -48,9 +48,15 @@ import {
   recordDerivedHead,
 } from "../services/delivery-attempts.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
+import { getDeliveryHealth } from "../services/delivery-health.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
-import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-actions.js";
+import {
+  snoozeIssue,
+  markDuplicate,
+  redeliverIssue,
+  resolveDeliveryFailure,
+} from "../services/triage-actions.js";
 import {
   addWebhook,
   listWebhooks,
@@ -105,6 +111,7 @@ import {
   duplicateBody,
   settingPutBody,
   redeliverBody,
+  resolveDeliveryBody,
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
   deliveryAttemptDerivedHeadBody,
@@ -399,6 +406,16 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     ),
   );
 
+  // SYD-178: an explicit human "this is actually resolved" action for a
+  // delivery_failed flag pr_state can never auto-clear (e.g. the fix landed
+  // through a non-agent branch) — Retry is a dead end there since there's no
+  // attributed PR to re-authorize.
+  app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
+    c.json(
+      resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note),
+    ),
+  );
+
   // Task-6 worker contract (SYD-208): human-token-only read of what delivery
   // work is outstanding — pending authorizations, attempts left unfinished
   // (e.g. a crash mid-delivery), and deploy-only retries whose backoff has
@@ -406,8 +423,25 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // same pattern as recordDeliveryEvent — not a route-level requireHumanCaller.
   app.get("/delivery-work", (c) => c.json(getDeliveryWork(db, c.var.actor)));
 
-  app.post("/issues/:ref/delivery-attempts", body(deliveryAttemptStartBody), (c) =>
-    c.json(startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
+  // Delivery health surface (SYD-180): rolling-window aggregate over the
+  // delivery_attempts ledger — first-attempt success rate, how many issues
+  // needed a manual redeliver, and which ones needed it most. Read-only, no
+  // agent gate (unlike /delivery-work): it's an observability rollup, not
+  // trigger-shaped infra state an agent could exploit.
+  app.get("/delivery-health", (c) => {
+    const hoursParam = c.req.query("hours");
+    return c.json(
+      getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined),
+    );
+  });
+
+  app.post(
+    "/issues/:ref/delivery-attempts",
+    body(deliveryAttemptStartBody),
+    (c) =>
+      c.json(
+        startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json")),
+      ),
   );
 
   const parseAttemptId = (idParam: string): number => {
