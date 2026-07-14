@@ -9,3 +9,10 @@ dist/
 switchyard-worker.json
 .env
 .tmp/
+
+# SYD-189: track only the shared board-process config under .claude/ (the
+# Stop-hook settings + slash commands). Ignore local cruft — git worktrees live
+# under .claude/worktrees/, and settings.local.json is per-developer.
+.claude/*
+!.claude/settings.json
+!.claude/commands/
