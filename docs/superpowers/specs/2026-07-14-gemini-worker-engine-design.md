@@ -115,8 +115,11 @@ during implementation and add it if absent. No new lifecycle machinery.
 
 gemini-cli reads MCP servers from `settings.json` under `mcpServers`, supporting
 the **`httpUrl`** (streamable HTTP) transport with a **`headers`** map, and it
-**expands `$VAR`/`${VAR}`** in settings values (`resolveEnvVars`). So the entry
-script writes a `0600 settings.json` under **`GEMINI_DIR=/tmp/gemini-home`** with:
+**expands `$VAR`/`${VAR}`** in settings values (`resolveEnvVars`). gemini-cli
+resolves global settings from **`os.homedir()/.gemini/settings.json`** (the
+`.gemini` dir name is a fixed constant, not an env override), so the entry script
+writes a `0600 $HOME/.gemini/settings.json` (the disposable container user's home)
+with:
 
 ```json
 {
@@ -146,6 +149,9 @@ The rest of `container-entry.gemini.sh` mirrors `container-entry.codex.sh`:
 clone `/origin`→`/work`, `BASE_BRANCH` fetch + `agent/<ref>` checkout,
 `prime-workspace-trust`, `npm ci` guard, stack checks, `NODE_EXTRA_CA_CERTS` from
 the mounted `/ca`, run the session, commit-count gate, `agent/<ref>`-only push.
+(`security.auth.selectedType: "gemini-api-key"` in the written settings.json,
+plus `GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key` in the env, both select the
+API-key mode non-interactively.)
 
 ### E. Container contract
 

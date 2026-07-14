@@ -953,6 +953,40 @@ describe("buildDockerArgs", () => {
     expect(passesAcct).toBe(true); // non-secret account UUID goes to the container (for auth.json)
     expect(args).toContain("SWITCHYARD_TOKEN"); // scoped token still bare-passed
   });
+
+  it("gemini engine: image + placeholder key + CA mount, no real key, non-interactive auth type (SYD-225)", () => {
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, engine: "gemini" },
+      { GEMINI_API_KEY: "gk-REAL" } as NodeJS.ProcessEnv,
+    );
+    const joined = args.join(" ");
+    expect(args[args.length - 1]).toBe("switchyard-worker-gemini");
+    expect(joined).toMatch(/-v [^ ]*egress-ca[^ ]*:\/ca:ro/); // CA mounted (proxy)
+    expect(joined).toContain("GEMINI_API_KEY=placeholder"); // placeholder; real key stays in the sidecar
+    expect(joined).not.toContain("gk-REAL"); // real value never crosses in
+    const passesRealKey = args.some((a, i) => a === "-e" && args[i + 1] === "GEMINI_API_KEY");
+    expect(passesRealKey).toBe(false); // no bare real-key passthrough in proxy mode
+    expect(joined).toContain("GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key"); // non-interactive auth select
+    expect(joined).not.toContain("CLAUDE_CODE_OAUTH_TOKEN"); // no Claude cred/placeholder on the gemini path
+    expect(args).toContain("SWITCHYARD_TOKEN"); // scoped token still bare-passed
+  });
+
+  it("gemini open mode: the real GEMINI_API_KEY is passed bare, no placeholder, no CA (SYD-225)", () => {
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, engine: "gemini", egress: "open" },
+      { GEMINI_API_KEY: "gk-REAL" } as NodeJS.ProcessEnv,
+    );
+    const joined = args.join(" ");
+    const passesRealKey = args.some((a, i) => a === "-e" && args[i + 1] === "GEMINI_API_KEY");
+    expect(passesRealKey).toBe(true); // without a sidecar the container needs the real key, bare
+    expect(joined).not.toContain("GEMINI_API_KEY=placeholder");
+    expect(joined).not.toContain(":/ca:ro");
+    expect(joined).not.toContain("gk-REAL"); // still bare, never a value in argv
+  });
 });
 
 describe("stackChecksEnv", () => {
