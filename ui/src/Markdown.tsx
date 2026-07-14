@@ -28,14 +28,17 @@ hljs.registerLanguage("diff", diff);
 hljs.registerLanguage("markdown", markdownLang); // covers md alias
 
 // Matches, in priority order: a repo-relative file path (optionally with a
-// ":<line>" suffix), a standalone commit SHA (7-40 hex chars), or an
-// @mention (word chars plus "./-" so actor names like "claude/dev" match).
-// Applied only to plain-text token leaves from the markdown parser, so
-// fenced/inline code is never touched (those go through marked's separate
-// code/codespan renderers, which we leave untouched).
+// ":<line>" suffix), a standalone commit SHA (7-40 hex chars), a GitHub
+// PR/issue reference ("#<number>"), or an @mention (word chars plus "./-" so
+// actor names like "claude/dev" match). Applied only to plain-text token
+// leaves from the markdown parser, so fenced/inline code is never touched
+// (those go through marked's separate code/codespan renderers, which we leave
+// untouched). Switchyard's own refs are "SYD-20", never "#20", so the pr
+// branch can't collide with them.
 const TOKEN_RE = new RegExp(
   "(?<path>\\b(?:src|scripts|tests|ui|docs|drizzle)\\/[\\w./-]+\\.(?:ts|tsx|js|md|json|sql|sh)(?::\\d+)?\\b)" +
     "|(?<sha>\\b[0-9a-f]{7,40}\\b)" +
+    "|#(?<pr>\\d+)\\b" +
     "|@(?<mention>[A-Za-z0-9_]+(?:[./-][A-Za-z0-9_]+)*)",
   "g",
 );
@@ -72,7 +75,12 @@ function autolink(
     // capture groups are also numbered, so offset sits three from the end,
     // not at rest[0].
     const offset = rest[rest.length - 3] as number;
-    const groups = rest[rest.length - 1] as { path?: string; sha?: string; mention?: string };
+    const groups = rest[rest.length - 1] as {
+      path?: string;
+      sha?: string;
+      pr?: string;
+      mention?: string;
+    };
     if (groups.path) {
       const lineMatch = /^(.*):(\d+)$/.exec(groups.path);
       const linkPath = lineMatch ? lineMatch[1] : groups.path;
@@ -84,6 +92,12 @@ function autolink(
     if (groups.sha) {
       if (!repo) return `<code>${groups.sha}</code>`;
       return `<a href="${repo}/commit/${groups.sha}"><code>${groups.sha}</code></a>`;
+    }
+    if (groups.pr) {
+      // GitHub redirects /pull/N to /issues/N (and vice versa), so a single
+      // /pull/ target is correct whether N is a PR or a plain issue.
+      if (!repo) return match;
+      return `<a href="${repo}/pull/${groups.pr}">#${groups.pr}</a>`;
     }
     if (groups.mention) {
       const lower = groups.mention.toLowerCase();
