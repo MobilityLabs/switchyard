@@ -15,6 +15,7 @@ import { recordEvent, listIssueEvents } from "../../src/services/events.js";
 import {
   upsertPrState,
   findPrState,
+  listPrState,
   type PrObservation,
 } from "../../src/services/pr-state.js";
 
@@ -73,6 +74,25 @@ describe("upsertPrState / insert + attribution", () => {
       ghUpdatedAt: T1,
     });
     expect(row.lastTransitionEventId).toBe(ev.id);
+  });
+
+  it("normalizes repo casing on write and read: link lowercase, observe canonical case, binding + pr_state both resolve (SYD-212)", () => {
+    const { db, human, github } = setup({ bindRepo: false });
+    addGithubRepo(db, human, { fullName: REPO.toLowerCase(), projectKey: "SYD" });
+
+    const canonicalRepo = "Acme/Widgets";
+    const outcome = upsertPrState(db, github, obs({ repo: canonicalRepo }));
+    expect(outcome).toMatchObject({ applied: true, transition: "opened" });
+
+    // Attribution succeeded (bound repo matched despite differing casing)...
+    const rowByLower = findPrState(db, REPO.toLowerCase(), 12)!;
+    expect(rowByLower.issueRef).toBe("SYD-1");
+    // ...and the stored row itself converged on one (lowercase) casing rather
+    // than splitting into a second row under the canonical-case key.
+    expect(rowByLower.repo).toBe("acme/widgets");
+    expect(findPrState(db, canonicalRepo, 12)?.repo).toBe("acme/widgets");
+    expect(listPrState(db, { repo: canonicalRepo })).toHaveLength(1);
+    expect(listPrState(db, { repo: REPO.toLowerCase() })).toHaveLength(1);
   });
 
   it("refuses attribution for an agent/<ref> PR in a repo not bound to that ref's project (cross-repo), writing a display-only row and no event", () => {

@@ -62,6 +62,29 @@ describe("github repos", () => {
     expect(findGithubRepo(db, "acme/other")).toBeUndefined();
   });
 
+  it("normalizes fullName to lowercase on write and matches regardless of casing (SYD-212)", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const repo = addGithubRepo(db, human, { fullName: "MobilityLabs/Switchyard" });
+    expect(repo.fullName).toBe("mobilitylabs/switchyard");
+
+    // A hand-typed lowercase link and a canonical-case lookup (or vice versa)
+    // both resolve to the same row — this is the exact drift the worker's
+    // canonical-case publishes vs. a hand-typed lowercase link used to hit.
+    expect(findGithubRepo(db, "MobilityLabs/Switchyard")?.id).toBe(repo.id);
+    expect(findGithubRepo(db, "mobilitylabs/switchyard")?.id).toBe(repo.id);
+    expect(findGithubRepo(db, "MOBILITYLABS/SWITCHYARD")?.id).toBe(repo.id);
+  });
+
+  it("rejects linking the same repo twice under different casing", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    addGithubRepo(db, human, { fullName: "acme/widgets" });
+    expect(() => addGithubRepo(db, human, { fullName: "Acme/Widgets" })).toThrowError(
+      /already linked/i,
+    );
+  });
+
   it("rejects agent actors managing linked repos", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;

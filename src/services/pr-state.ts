@@ -32,13 +32,14 @@
 //   recorded by the old direct-write path — never yields a second copy; the
 //   event id (new or the deduped original's) becomes lastTransitionEventId.
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
 import { prState, githubRepos, type EventKind } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
+import { normalizeRepoFullName } from "./github-repos.js";
 import { recordEvent, findEventIdByPayload } from "./events.js";
 import { parseGhTimestamp, refFromBranch } from "./github-webhook.js";
 
@@ -77,7 +78,7 @@ export function findPrState(db: DbOrTx, repo: string, prNumber: number): PrState
   return db
     .select()
     .from(prState)
-    .where(and(eq(prState.repo, repo), eq(prState.prNumber, prNumber)))
+    .where(and(sql`lower(${prState.repo}) = lower(${repo})`, eq(prState.prNumber, prNumber)))
     .get();
 }
 
@@ -95,7 +96,7 @@ export function listPrState(
     );
   }
   const conditions = [
-    filter.repo !== undefined ? eq(prState.repo, filter.repo) : undefined,
+    filter.repo !== undefined ? sql`lower(${prState.repo}) = lower(${filter.repo})` : undefined,
     filter.status !== undefined ? eq(prState.status, filter.status as PrStatus) : undefined,
   ].filter((c) => c !== undefined);
   const query = db.select().from(prState);
@@ -120,7 +121,12 @@ export function attributedRef(
   const bound = db
     .select({ id: githubRepos.id })
     .from(githubRepos)
-    .where(and(eq(githubRepos.fullName, repo), eq(githubRepos.projectId, projectId)))
+    .where(
+      and(
+        sql`lower(${githubRepos.fullName}) = lower(${repo})`,
+        eq(githubRepos.projectId, projectId),
+      ),
+    )
     .get();
   if (!bound) return null;
   try {
@@ -180,7 +186,12 @@ function decide(existing: PrStateRow | undefined, o: PrObservation, ts: number |
   return { apply: false, reason: "merged is final" };
 }
 
-export function upsertPrState(db: Db, actor: Actor, o: PrObservation): UpsertPrStateOutcome {
+export function upsertPrState(db: Db, actor: Actor, input: PrObservation): UpsertPrStateOutcome {
+  // upsertPrState is the ONLY writer of pr_state (see module comment), so
+  // normalizing the repo casing here — not just at each caller's ingestion
+  // boundary — is what guarantees the (repo, prNumber) key converges on one
+  // casing even for rows written before every boundary was updated (SYD-212).
+  const o = { ...input, repo: normalizeRepoFullName(input.repo) };
   const ts = ghEpoch(o.ghUpdatedAt);
   return db.transaction((tx): UpsertPrStateOutcome => {
     const existing = findPrState(tx, o.repo, o.prNumber);
@@ -221,6 +232,10 @@ export function upsertPrState(db: Db, actor: Actor, o: PrObservation): UpsertPrS
     }
 
     const next = {
+      // Included even on update so a legacy row written before SYD-212 (any
+      // casing) converges on the normalized repo string the next time it's
+      // touched, instead of keeping its original casing forever.
+      repo: o.repo,
       branch: o.branch ?? existing?.branch ?? null,
       issueRef,
       status: o.status,
@@ -236,11 +251,13 @@ export function upsertPrState(db: Db, actor: Actor, o: PrObservation): UpsertPrS
     if (existing) {
       tx.update(prState)
         .set(next)
-        .where(and(eq(prState.repo, o.repo), eq(prState.prNumber, o.prNumber)))
+        .where(
+          and(sql`lower(${prState.repo}) = lower(${o.repo})`, eq(prState.prNumber, o.prNumber)),
+        )
         .run();
     } else {
       tx.insert(prState)
-        .values({ repo: o.repo, prNumber: o.prNumber, ...next })
+        .values({ prNumber: o.prNumber, ...next })
         .run();
     }
     return { applied: true, transition: decision.transition };

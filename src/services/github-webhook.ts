@@ -19,7 +19,7 @@ import type { EventKind } from "../db/schema.js";
 import { getOrCreateActor } from "./actors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
-import { boundRepoFullNames } from "./github-repos.js";
+import { boundRepoFullNames, normalizeRepoFullName } from "./github-repos.js";
 import { upsertPrState, attributedRef, type PrObservation } from "./pr-state.js";
 
 const GITHUB_ACTOR_NAME = "github";
@@ -74,7 +74,8 @@ const repositoryPayloadSchema = z.object({
 
 /** Used before the event type is known, to pick which secret to verify the delivery against. */
 export function repositoryFullName(payload: unknown): string | undefined {
-  return repositoryPayloadSchema.safeParse(payload).data?.repository?.full_name;
+  const fullName = repositoryPayloadSchema.safeParse(payload).data?.repository?.full_name;
+  return fullName === undefined ? undefined : normalizeRepoFullName(fullName);
 }
 
 const AGENT_BRANCH_RE = /^agent\/([A-Z]{2,10}-\d+)$/;
@@ -374,8 +375,11 @@ export function handleGithubWebhook(
   // Repo identity (SYD-205): an explicitly named repo (the /github-events
   // top-level field) wins, then the payload's own repository.full_name (real
   // webhook deliveries always carry it), then the sole-bound-repo inference
-  // in record() for producers that predate the field.
-  const resolvedRepo = repo ?? repositoryFullName(payload) ?? null;
+  // in record() for producers that predate the field. Normalized here (SYD-212)
+  // so an explicitly named repo converges on the same casing as one parsed
+  // out of the payload, regardless of how the caller typed it.
+  const namedRepo = repo !== undefined ? normalizeRepoFullName(repo) : undefined;
+  const resolvedRepo = namedRepo ?? repositoryFullName(payload) ?? null;
   switch (githubEvent) {
     case "pull_request":
       return handlePullRequest(db, payload, resolvedRepo);
