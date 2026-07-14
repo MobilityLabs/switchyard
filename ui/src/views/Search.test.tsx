@@ -33,6 +33,8 @@ const ISSUE: Issue = {
   sourceDetail: null,
   sourceUrl: null,
   needsInput: false,
+  workerPreference: null,
+  parentId: null,
   snoozedUntil: null,
   createdAt: 0,
   updatedAt: 1700000000,

@@ -203,6 +203,22 @@ export function Card({
           ) : null;
         })()}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
+      {issue.workerPreference === "interactive" ? (
+        <span className="badge worker-pref interactive" title="Interactive session only — not headless-dispatched">
+          👤 interactive
+        </span>
+      ) : (
+        issue.workerPreference && (
+          <span className="badge worker-pref" title={`Preferred worker: ${issue.workerPreference}`}>
+            {issue.workerPreference}
+          </span>
+        )
+      )}
+      {!!issue.childCount && (
+        <span className="badge epic-badge" title="Child stories under this epic">
+          {issue.childCount} {issue.childCount === 1 ? "story" : "stories"}
+        </span>
+      )}
       {issue.labels.length > 0 && (
         <div className="label-chips-ro">
           {issue.labels.map((l) => (

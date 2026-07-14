@@ -4,7 +4,7 @@ import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { Composer } from "../Composer";
 import { navigate } from "../router";
-import { PRIORITIES, SUMMARY_MAX_LENGTH, type Priority } from "../types";
+import { PRIORITIES, SUMMARY_MAX_LENGTH, WORKER_PREFERENCES, type Priority } from "../types";
 import { parseLabels } from "../labels";
 
 export default function NewIssue() {
@@ -17,6 +17,8 @@ export default function NewIssue() {
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<Priority>("none");
   const [labelsInput, setLabelsInput] = useState("");
+  const [workerPreference, setWorkerPreference] = useState("");
+  const [parentRef, setParentRef] = useState("");
   const [startInTodo, setStartInTodo] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +49,8 @@ export default function NewIssue() {
       summary: summary.trim() || undefined,
       description: description.trim(),
       priority,
+      workerPreference: workerPreference || null,
+      parentRef: parentRef.trim() || undefined,
     })
       .then((issue) => {
         const patch: Partial<{ labels: string[]; status: "todo" }> = {};
@@ -137,6 +141,30 @@ export default function NewIssue() {
             value={labelsInput}
             onChange={(e) => setLabelsInput(e.target.value)}
             placeholder="comma, separated, labels"
+          />
+        </label>
+
+        <label>
+          Preferred worker
+          <select
+            value={workerPreference}
+            onChange={(e) => setWorkerPreference(e.target.value)}
+          >
+            <option value="">Any</option>
+            {WORKER_PREFERENCES.map((w) => (
+              <option key={w} value={w}>
+                {w === "interactive" ? "interactive (no headless dispatch)" : w}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Parent (epic)
+          <input
+            value={parentRef}
+            onChange={(e) => setParentRef(e.target.value)}
+            placeholder="e.g. SYD-1 — nest this as a story under an epic"
           />
         </label>
 

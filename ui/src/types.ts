@@ -20,6 +20,10 @@ export type Status = (typeof STATUSES)[number];
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 export const SUMMARY_MAX_LENGTH = 280;
+/** Reserved workerPreference selecting a human-attended interactive session (never headless dispatch). */
+export const INTERACTIVE_PREFERENCE = "interactive";
+/** Options for the "preferred worker" dropdown: an engine name, or the interactive sentinel. */
+export const WORKER_PREFERENCES = ["claude", "codex", "gemini", INTERACTIVE_PREFERENCE] as const;
 export type Issue = {
   id: number;
   ref: string;
@@ -31,6 +35,9 @@ export type Issue = {
   assigneeId: number | null;
   creatorId: number;
   labels: string[];
+  workerPreference: string | null;
+  parentId: number | null;
+  childCount?: number;
   sourceType: "session" | "todo" | "ci" | "manual" | null;
   sourceDetail: string | null;
   sourceUrl: string | null;
@@ -67,6 +74,10 @@ export type IssueDetail = Issue & {
   activity: Activity[];
   dependencies: { blockedBy: DependencyRef[]; blocks: DependencyRef[] };
   attachments: Attachment[];
+  /** Epic → stories: child issues nested under this one. */
+  children: DependencyRef[];
+  /** The parent issue's ref for display/edit, or null if top-level. */
+  parentRef: string | null;
   deliveryPin: {
     repo: string;
     prNumber: number;

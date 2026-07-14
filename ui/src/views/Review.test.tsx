@@ -52,6 +52,8 @@ function issue(ref: string, title = `Title for ${ref}`): Issue {
     sourceDetail: null,
     sourceUrl: null,
     needsInput: false,
+    workerPreference: null,
+    parentId: null,
     snoozedUntil: null,
     createdAt: 0,
     updatedAt: 0,
@@ -67,6 +69,8 @@ function detailOf(i: Issue): IssueDetail {
     dependencies: { blockedBy: [], blocks: [] },
     attachments: [],
     deliveryPin: null,
+    children: [],
+    parentRef: null,
   };
 }
 

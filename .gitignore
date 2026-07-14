@@ -16,3 +16,4 @@ switchyard-worker.json
 .claude/*
 !.claude/settings.json
 !.claude/commands/
+!.claude/skills/

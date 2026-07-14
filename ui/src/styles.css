@@ -777,6 +777,29 @@ h2 {
   font-size: 11px;
   padding: 1px 7px;
 }
+/* Worker-preference + epic/story badges (make-issue / interactive routing). */
+.badge.worker-pref {
+  background: #e3e8ef;
+  color: #384252;
+}
+.badge.worker-pref.interactive {
+  background: #6b4fbb;
+  color: #fff;
+}
+.badge.epic-badge {
+  background: #dce9dc;
+  color: #2f5233;
+}
+.hierarchy .parent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.hierarchy .parent-row input {
+  flex: 1;
+  min-width: 0;
+}
 .review-head {
   display: flex;
   align-items: center;

@@ -38,6 +38,7 @@ export const issueUpdateBody = z.object({
   assigneeName: z.string().nullable().optional(),
   labels: z.array(z.string()).optional(),
   workerPreference: z.string().nullable().optional(),
+  parentRef: z.string().nullable().optional(),
   // SYD-208: compare-and-set proof that the human reviewed this exact head
   // before stamping done over an open agent PR — see updateIssue's pin gate.
   expectedHeadSha: z.string().min(1).optional(),
