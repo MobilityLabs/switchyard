@@ -74,7 +74,6 @@ export default function Review({
 
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     current?.ref ?? "",
-    draft,
     setDraft,
   );
 
