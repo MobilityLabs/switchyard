@@ -143,7 +143,6 @@ export function TriageRow({
   const [commentError, setCommentError] = useState<string | null>(null);
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     issue.ref,
-    draft,
     setDraft,
   );
   const [duplicateOpen, setDuplicateOpen] = useState(false);

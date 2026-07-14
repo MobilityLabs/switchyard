@@ -275,6 +275,33 @@ export function AttentionBanner({
   );
 }
 
+/** SYD-230: a done issue with an open agent PR that never delivered — the
+ * pin-less-done case (pr_state was blind to the PR when it was stamped done, so
+ * the done-stamp carried no delivery pin). Offers a one-click re-authorize
+ * without the done→in_review→done round-trip. The delivery_failed case has its
+ * own "Retry delivery" in AttentionBanner, so defer to it and render nothing. */
+export function RestampBanner({
+  status,
+  openPr,
+  attention,
+  onRestamp,
+}: {
+  status: Status;
+  openPr: Issue["openPr"];
+  attention: Issue["attention"];
+  onRestamp: () => void;
+}) {
+  if (status !== "done" || !openPr || attention?.reason === "delivery_failed") return null;
+  return (
+    <p className="banner info restamp-delivery">
+      📦 PR #{openPr.prNumber} is open but hasn’t been delivered yet.{" "}
+      <button className="retry-delivery" onClick={onRestamp}>
+        Re-stamp delivery
+      </button>
+    </p>
+  );
+}
+
 function DeliveryStrip({ status }: { status: DeliveryStatus }) {
   return (
     <div className="delivery-strip panel">
@@ -349,7 +376,6 @@ export default function IssueDetail({ refId }: { refId: string }) {
   const [draft, setDraft] = useState("");
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     refId,
-    draft,
     setDraft,
   );
   const actorNames = useActorNames();
@@ -427,6 +453,12 @@ export default function IssueDetail({ refId }: { refId: string }) {
         attention={data.attention}
         onRetry={() => act(() => redeliverIssue(refId, data.deliveryPin?.headSha ?? undefined))}
         onResolveClick={() => setResolveOpen(true)}
+      />
+      <RestampBanner
+        status={data.status}
+        openPr={data.openPr}
+        attention={data.attention}
+        onRestamp={() => act(() => redeliverIssue(refId, data.openPr?.headSha ?? undefined))}
       />
       {resolveOpen && (
         <PromptModal
@@ -589,8 +621,8 @@ function Dependencies({
       <h3>Dependencies</h3>
       {openBlockers.length > 0 && (
         <p className="banner warn">
-          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents can&apos;t
-          claim this issue.
+          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents
+          can&apos;t claim this issue.
         </p>
       )}
       {deps.blockedBy.length > 0 && (

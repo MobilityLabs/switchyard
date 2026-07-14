@@ -176,6 +176,38 @@ describe("handleGithubWebhook / check_suite", () => {
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_checks_failed" });
   });
 
+  it.each(["timed_out", "action_required", "startup_failure"])(
+    "records gh_checks_failed on conclusion %s",
+    (conclusion) => {
+      const db = setup();
+      const outcome = handleGithubWebhook(db, "check_suite", {
+        action: "completed",
+        check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion },
+      });
+      expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_checks_failed" });
+    },
+  );
+
+  it.each(["neutral", "skipped", "cancelled", "stale"])(
+    "does not record gh_checks_failed for the non-failure conclusion %s",
+    (conclusion) => {
+      const db = setup();
+      const outcome = handleGithubWebhook(db, "check_suite", {
+        action: "completed",
+        check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion },
+      });
+      expect(outcome).toEqual({
+        handled: false,
+        reason: `ignored check_suite conclusion "${conclusion}"`,
+      });
+      expect(
+        getActivity(db, "SYD-1").filter(
+          (a) => a.type === "gh_checks_passed" || a.type === "gh_checks_failed",
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
   it("matches via an associated pull_request's branch when head_branch isn't agent/<ref>", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "check_suite", {

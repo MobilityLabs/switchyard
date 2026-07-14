@@ -11,6 +11,7 @@
     "dev:ui": "vite --config ui/vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",
+    "verify": "tsx scripts/verify-worker-parity.ts",
     "db:generate": "drizzle-kit generate",
     "deploy": "sh scripts/deploy-nas.sh",
     "init-worker": "tsx scripts/init-worker.ts",

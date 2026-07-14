@@ -334,6 +334,12 @@ function handlePush(db: Db, rawPayload: unknown, repo: string | null): GithubWeb
   );
 }
 
+// Conclusions that actually mean the suite failed. Everything else GitHub can
+// report as "completed" — neutral, skipped, cancelled, stale — is either an
+// intentionally-skipped check or a non-failure outcome, so it's ignored
+// rather than misreported as gh_checks_failed (SYD-194).
+const FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
+
 function handleCheckSuite(db: Db, rawPayload: unknown, repo: string | null): GithubWebhookOutcome {
   const parsed = checkSuitePayloadSchema.safeParse(rawPayload);
   if (!parsed.success) return { handled: false, reason: "malformed check_suite payload" };
@@ -348,6 +354,9 @@ function handleCheckSuite(db: Db, rawPayload: unknown, repo: string | null): Git
   if (!ref) return { handled: false, reason: "no issue ref found in check_suite branch" };
 
   const conclusion = String(suite.conclusion ?? "");
+  if (conclusion !== "success" && !FAILING_CONCLUSIONS.has(conclusion)) {
+    return { handled: false, reason: `ignored check_suite conclusion "${conclusion}"` };
+  }
   const type = conclusion === "success" ? "gh_checks_passed" : "gh_checks_failed";
   const headSha = suite.head_sha ?? null;
   return record(db, ref, type, { conclusion, headSha }, repo, {

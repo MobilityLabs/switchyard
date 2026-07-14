@@ -375,6 +375,9 @@ export function buildMcpServer(
       description:
         "Attach an image or short video to an issue as evidence (png/jpg/gif/webp/avif/mp4/webm/mov, " +
         "≤20MB decoded). The issue's activity feed shows a thumbnail/link for this automatically. " +
+        "For UI work, attach a screenshot of the change (before/after where relevant); for " +
+        "architecture work, attach a diagram (e.g. a Mermaid diagram rendered to PNG) — a rendered " +
+        "image lets a human sign off at a glance instead of reading the diff. " +
         "Also include the returned markdown snippet in your next comment when you want to call out " +
         "or discuss the attachment, not just record it. " +
         "PREFER uploading from disk instead of base64: if the file is already on disk and you have a " +

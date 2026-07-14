@@ -26,7 +26,6 @@ export default function NewIssue() {
   // via uploadError if someone pastes before submitting.
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     "",
-    description,
     setDescription,
   );
 

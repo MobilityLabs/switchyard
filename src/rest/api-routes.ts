@@ -42,6 +42,7 @@ import {
   recordDerivedHead,
 } from "../services/delivery-attempts.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
+import { getDeliveryHealth } from "../services/delivery-health.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import {
@@ -406,6 +407,18 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // elapsed. The agent-refusal gate lives in the service (getDeliveryWork),
   // same pattern as recordDeliveryEvent — not a route-level requireHumanCaller.
   app.get("/delivery-work", (c) => c.json(getDeliveryWork(db, c.var.actor)));
+
+  // Delivery health surface (SYD-180): rolling-window aggregate over the
+  // delivery_attempts ledger — first-attempt success rate, how many issues
+  // needed a manual redeliver, and which ones needed it most. Read-only, no
+  // agent gate (unlike /delivery-work): it's an observability rollup, not
+  // trigger-shaped infra state an agent could exploit.
+  app.get("/delivery-health", (c) => {
+    const hoursParam = c.req.query("hours");
+    return c.json(
+      getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined),
+    );
+  });
 
   app.post(
     "/issues/:ref/delivery-attempts",
