@@ -265,6 +265,7 @@ describe("validateWorkerConfig", () => {
             pollSeconds: 30,
             cloneDir: "/tmp/clones",
             deploy: false,
+            requireBranchProtection: true,
           },
         }),
       ).toEqual([]);
@@ -286,12 +287,14 @@ describe("validateWorkerConfig", () => {
           pollSeconds: -5,
           cloneDir: "",
           deploy: 1,
+          requireBranchProtection: "yes",
         },
       });
       expect(problems.some((p) => p.includes("delivery.openPrs"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.pollSeconds"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.cloneDir"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.deploy"))).toBe(true);
+      expect(problems.some((p) => p.includes("delivery.requireBranchProtection"))).toBe(true);
     });
   });
 
@@ -826,17 +829,23 @@ describe("buildProtectMainArgs", () => {
     ]);
   });
 
-  it("blocks force-push and deletion, leaves required reviews off", () => {
+  it("blocks force-push and deletion, requires the CI check, enforces admins, leaves required reviews off (SYD-222)", () => {
     const { input } = buildProtectMainArgs("seanperkins", "nocturne");
     const body = JSON.parse(input);
     expect(body).toEqual({
-      required_status_checks: null,
-      enforce_admins: false,
+      required_status_checks: { strict: false, checks: [{ context: "test" }] },
+      enforce_admins: true,
       required_pull_request_reviews: null,
       restrictions: null,
       allow_force_pushes: false,
       allow_deletions: false,
     });
+  });
+
+  it("lets the caller name a different CI check context", () => {
+    const { input } = buildProtectMainArgs("seanperkins", "nocturne", "build");
+    const body = JSON.parse(input);
+    expect(body.required_status_checks).toEqual({ strict: false, checks: [{ context: "build" }] });
   });
 });
 

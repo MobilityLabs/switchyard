@@ -43,6 +43,7 @@ import {
   queueDeliveredNote,
   buildBranchProtectionArgs,
   evaluateBranchProtection,
+  shouldRefuseUnprotectedMain,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
 
@@ -599,6 +600,21 @@ describe("branch-protection health check (SYD-209)", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.problems.join(" ")).toMatch(/admin/i);
+  });
+});
+
+describe("shouldRefuseUnprotectedMain (SYD-222)", () => {
+  it("never refuses when the operator hasn't opted in, even with failing repos", () => {
+    expect(shouldRefuseUnprotectedMain(undefined, ["SYD"])).toBe(false);
+    expect(shouldRefuseUnprotectedMain(false, ["SYD"])).toBe(false);
+  });
+
+  it("never refuses when opted in but nothing is failing", () => {
+    expect(shouldRefuseUnprotectedMain(true, [])).toBe(false);
+  });
+
+  it("refuses only once opted in AND at least one repo is failing", () => {
+    expect(shouldRefuseUnprotectedMain(true, ["SYD", "NOC"])).toBe(true);
   });
 });
 

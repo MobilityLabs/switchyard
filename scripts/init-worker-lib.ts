@@ -145,7 +145,7 @@ export function validateWorkerConfig(raw: unknown): string[] {
       ) {
         problems.push("`delivery.cloneDir` must be a non-empty path");
       }
-      for (const key of ["openPrs", "deploy"] as const) {
+      for (const key of ["openPrs", "deploy", "requireBranchProtection"] as const) {
         if (d[key] !== undefined && typeof d[key] !== "boolean") {
           problems.push(`\`delivery.${key}\` must be true or false`);
         }
@@ -813,21 +813,30 @@ export function formatDockerfileStackGuidance(
 
 /**
  * argv + stdin payload for `gh api -X PUT .../branches/main/protection`: the
- * standard force-push/deletion block used across onboarded repos (see
- * docs/onboarding-a-project.md step 4). Required reviews stay off until
- * there's a second GitHub identity to review with (SYD-19).
+ * standard protection applied across onboarded repos (see
+ * docs/onboarding-a-project.md step 4) — force-push/deletion blocked, the CI
+ * job required as a status check, and admins held to the same gate.
+ *
+ * SYD-222: this used to ship `required_status_checks: null` and
+ * `enforce_admins: false`, which is exactly the relaxed config
+ * `warnOnRelaxedBranchProtection` alarms on — SYD-209 made CI the sole check
+ * authority for delivery, so a repo protected by the old payload had nothing
+ * actually enforcing it. `ciCheckContext` defaults to "test", the job name in
+ * `.github/workflows/ci.yml`. Required reviews stay off until there's a
+ * second GitHub identity to review with (SYD-19).
  */
 export function buildProtectMainArgs(
   owner: string,
   repo: string,
+  ciCheckContext = "test",
 ): { args: string[]; input: string } {
   return {
     args: ["api", "-X", "PUT", `repos/${owner}/${repo}/branches/main/protection`, "--input", "-"],
     input:
       JSON.stringify(
         {
-          required_status_checks: null,
-          enforce_admins: false,
+          required_status_checks: { strict: false, checks: [{ context: ciCheckContext }] },
+          enforce_admins: true,
           required_pull_request_reviews: null,
           restrictions: null,
           allow_force_pushes: false,
