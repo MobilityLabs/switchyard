@@ -587,7 +587,15 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
     `Record a one-line note with the progress_note tool each time you start a new ` +
     `step (reading code, writing tests, implementing, verifying) so humans can ` +
     `watch progress live. ` +
-    `Implement the work with tests. Comment verification ` +
+    `Implement the work with tests. ` +
+    // SYD-183: a rendered image lets a human sign off at a glance instead of
+    // reading a diff — attach_file/switchyard-attach stream it without
+    // spending output tokens base64-encoding through the model (SYD-182).
+    `If this issue touches UI, attach a screenshot of the change (before/after where ` +
+    `relevant) with attach_file (or the switchyard-attach/attach.mjs CLI) before moving ` +
+    `to in_review. If it touches architecture, attach a diagram (e.g. a Mermaid diagram ` +
+    `rendered to PNG) the same way. ` +
+    `Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
