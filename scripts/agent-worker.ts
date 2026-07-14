@@ -10,10 +10,12 @@
 // Role split (SYD-67): "code" and "answer" are independently enableable — the
 // answerer is cheap, read-only, and safe to leave running everywhere; the code
 // role spawns containers that produce PRs and consume real capacity. Each role
-// takes its own pidfile lock (worker.pid / worker-code.pid / worker-answer.pid)
-// so "code" and "answer" can run side by side, but neither can double-run
-// itself, and an "all" worker refuses to start while either single-role worker
-// is running (and vice versa) — see checkRoleLockConflict.
+// takes its own pidfile lock (worker-<label>.pid / worker-<label>-code.pid /
+// worker-<label>-answer.pid, namespaced by the config `label` since SYD-234) so
+// "code" and "answer" can run side by side, but neither can double-run itself,
+// and an "all" worker refuses to start while either single-role worker of the
+// same label is running (and vice versa) — see checkRoleLockConflict. Different
+// labels (claude/codex/gemini engine workers) never collide.
 //
 // Besides the main issue poll (intervalSeconds), a lightweight event-feed poll
 // (eventPollSeconds, default 15s) watches for needs_input_cleared — a human
@@ -1539,13 +1541,21 @@ export async function reconcileContainerSessions(
  * "code" and "answer" workers can run side by side, but an "all" worker and
  * any single-role worker refuse to start together — see
  * checkRoleLockConflict for the exclusion rule.
+ *
+ * `label` (SYD-234) namespaces all three pidfiles by the worker's config
+ * `label`, so a codex worker (auto-codex) and a gemini worker (auto-gemini)
+ * hold independent locks instead of colliding on the same role — that's what
+ * lets multiple engine workers run on one checkout. The all-vs-single-role
+ * exclusion then applies *within* a label's namespace: checkRoleLockConflict
+ * only ever sees this label's three locks, so a different engine's lock is
+ * invisible to it (no cross-engine false conflict) and needs no change.
  */
-function acquireRoleLock(role: WorkerRole): () => void {
+function acquireRoleLock(role: WorkerRole, label?: string): () => void {
   const dir = path.join(repoRoot(), ".superpowers");
   const paths = {
-    all: path.join(dir, workerPidFileName("all")),
-    code: path.join(dir, workerPidFileName("code")),
-    answer: path.join(dir, workerPidFileName("answer")),
+    all: path.join(dir, workerPidFileName("all", label)),
+    code: path.join(dir, workerPidFileName("code", label)),
+    answer: path.join(dir, workerPidFileName("answer", label)),
   };
   const conflict = checkRoleLockConflict(role, {
     all: isLocked(paths.all),
@@ -1603,7 +1613,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const releaseLock = acquireRoleLock(role);
+  const releaseLock = acquireRoleLock(role, config.label);
   if (!dryRun) {
     await reconcileContainerSessions(config, token).catch((err: Error) =>
       console.error(`startup reconciliation failed: ${err.message}`),
