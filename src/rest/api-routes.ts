@@ -23,6 +23,7 @@ import {
   updateIssue,
   listChildren,
   childCountsByParent,
+  issueRefById,
   claimIssue,
   heartbeatClaim,
 } from "../services/issues.js";
@@ -251,6 +252,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),
       children: listChildren(db, ref),
+      parentRef: issueRefById(db, issue.parentId),
     });
   });
 

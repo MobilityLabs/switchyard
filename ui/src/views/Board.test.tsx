@@ -37,6 +37,8 @@ function issue(o: Partial<Issue> = {}): Issue {
     sourceDetail: null,
     sourceUrl: null,
     needsInput: false,
+    workerPreference: null,
+    parentId: null,
     snoozedUntil: null,
     createdAt: 0,
     updatedAt: 0,

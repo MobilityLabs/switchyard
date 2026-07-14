@@ -107,6 +107,13 @@ export function getIssue(db: DbOrTx, ref: string): IssueView {
   return toView(db, row);
 }
 
+/** The ref (e.g. "SYD-1") of an issue by row id, or null — for showing a parent link. */
+export function issueRefById(db: DbOrTx, id: number | null): string | null {
+  if (id === null) return null;
+  const row = db.select().from(issues).where(eq(issues.id, id)).get();
+  return row ? toView(db, row).ref : null;
+}
+
 /** Child issues (epic → stories) of `ref`, ordered by issue number. */
 export function listChildren(db: DbOrTx, ref: string): IssueView[] {
   const parent = getIssue(db, ref);

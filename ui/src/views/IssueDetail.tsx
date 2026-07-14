@@ -17,6 +17,7 @@ import { href } from "../router";
 import {
   PRIORITIES,
   STATUSES,
+  WORKER_PREFERENCES,
   type Activity,
   type Attachment,
   type DependencyRef,
@@ -441,6 +442,25 @@ export default function IssueDetail({ refId }: { refId: string }) {
             </option>
           ))}
         </select>
+        <select
+          value={data.workerPreference ?? ""}
+          title="Preferred worker/engine — 'interactive' keeps this issue off headless dispatch"
+          onChange={(e) =>
+            act(() => updateIssue(refId, { workerPreference: e.target.value || null }))
+          }
+        >
+          <option value="">worker: any</option>
+          {WORKER_PREFERENCES.map((w) => (
+            <option key={w} value={w}>
+              {w}
+            </option>
+          ))}
+        </select>
+        {data.children.length > 0 && (
+          <span className="badge epic-badge" title="Child stories under this epic">
+            {data.children.length} {data.children.length === 1 ? "story" : "stories"}
+          </span>
+        )}
         <button
           className={`pill auto-pill${isAuto ? " active" : ""}`}
           title="Opt this issue into unattended agent dispatch (label: auto)"
@@ -515,6 +535,8 @@ export default function IssueDetail({ refId }: { refId: string }) {
       )}
       <DescriptionSection issue={data} projectKey={projectKey} knownActorNames={actorNames} />
 
+      <Hierarchy refId={refId} parentRef={data.parentRef} stories={data.children} act={act} />
+
       <Dependencies refId={refId} deps={data.dependencies} act={act} />
 
       {data.attachments.length > 0 && <AttachmentsStrip attachments={data.attachments} />}
@@ -571,6 +593,77 @@ function AttachmentsStrip({ attachments }: { attachments: Attachment[] }) {
 }
 
 const OPEN_STATUSES: Status[] = ["triage", "backlog", "todo", "in_progress", "in_review"];
+
+function Hierarchy({
+  refId,
+  parentRef,
+  stories,
+  act,
+}: {
+  refId: string;
+  parentRef: string | null;
+  stories: DependencyRef[];
+  act: (fn: () => Promise<unknown>) => void;
+}) {
+  const [parent, setParent] = useState(parentRef ?? "");
+  const saveParent = () => {
+    const ref = parent.trim().toUpperCase();
+    if (ref === (parentRef ?? "")) return;
+    act(() => updateIssue(refId, { parentRef: ref || null }));
+  };
+
+  return (
+    <div className="hierarchy panel">
+      <h3>Epic / stories</h3>
+      <div className="parent-row">
+        <span>Parent</span>
+        {parentRef && (
+          <a className="ref" href={href({ view: "issue", ref: parentRef })}>
+            {parentRef}
+          </a>
+        )}
+        <input
+          value={parent}
+          onChange={(e) => setParent(e.target.value)}
+          placeholder="e.g. SYD-1 — nest under an epic"
+        />
+        <button onClick={saveParent}>Save</button>
+        {parentRef && (
+          <button
+            className="chip-remove"
+            title="Detach from parent"
+            onClick={() => {
+              setParent("");
+              act(() => updateIssue(refId, { parentRef: null }));
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {stories.length > 0 ? (
+        <>
+          <h4>Stories ({stories.length})</h4>
+          <ul className="dep-list">
+            {stories.map((s) => (
+              <li key={s.ref}>
+                <a className="ref" href={href({ view: "issue", ref: s.ref })}>
+                  {s.ref}
+                </a>{" "}
+                {s.title}{" "}
+                <span className={`badge dep-status dep-${s.status}`}>
+                  {s.status.replace(/_/g, " ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="empty">No child stories.</p>
+      )}
+    </div>
+  );
+}
 
 function Dependencies({
   refId,

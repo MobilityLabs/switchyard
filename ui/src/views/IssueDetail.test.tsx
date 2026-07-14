@@ -783,12 +783,16 @@ describe("IssueDetail status select and Retry send the rendered PR head sha (SYD
       sourceDetail: null,
       sourceUrl: null,
       needsInput: false,
+      workerPreference: null,
+      parentId: null,
       snoozedUntil: null,
       createdAt: 0,
       updatedAt: 0,
       attention: null,
       openPr: null,
       deliveryPin: null,
+      children: [],
+      parentRef: null,
       activity: [],
       dependencies: { blockedBy: [], blocks: [] },
       attachments: [],
@@ -812,6 +816,34 @@ describe("IssueDetail status select and Retry send the rendered PR head sha (SYD
     vi.mocked(updateIssue).mockClear();
     vi.mocked(redeliverIssue).mockClear();
     vi.mocked(resolveDeliveryFailure).mockClear();
+  });
+
+  it("gathers child stories into a section and badges the count", async () => {
+    const container = await renderIssueDetail(
+      detail({
+        children: [
+          { ref: "SYD-2", title: "Story A", status: "todo" },
+          { ref: "SYD-3", title: "Story B", status: "in_review" },
+        ],
+      }),
+    );
+    const text = container.textContent ?? "";
+    expect(text).toContain("Stories (2)");
+    expect(text).toContain("2 stories"); // header count badge
+    expect(container.querySelector('a[href*="SYD-2"]')).not.toBeNull();
+    expect(container.querySelector('a[href*="SYD-3"]')).not.toBeNull();
+  });
+
+  it("changes the preferred worker via the header select (PATCH workerPreference)", async () => {
+    const container = await renderIssueDetail(detail());
+    const select = [...container.querySelectorAll("select")].find((s) =>
+      [...s.options].some((o) => o.value === "interactive"),
+    )!;
+    await act(async () => {
+      select.value = "interactive";
+      select.dispatchEvent(new window.Event("change", { bubbles: true }));
+    });
+    expect(updateIssue).toHaveBeenCalledWith("SYD-1", { workerPreference: "interactive" });
   });
 
   it("sends the openPr headSha as expectedHeadSha when the status select is changed to done", async () => {

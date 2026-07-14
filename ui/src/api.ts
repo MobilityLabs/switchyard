@@ -101,6 +101,8 @@ export const updateIssue = (
     summary: string | null;
     assigneeName: string | null;
     labels: string[];
+    workerPreference: string | null;
+    parentRef: string | null;
     expectedHeadSha: string;
   }>,
 ) => api<Issue>(`/api/issues/${ref}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -110,6 +112,8 @@ export const createIssue = (input: {
   description?: string;
   summary?: string;
   priority?: Priority;
+  workerPreference?: string | null;
+  parentRef?: string;
 }) => api<Issue>("/api/issues", { method: "POST", body: JSON.stringify(input) });
 export const claimIssue = (ref: string) =>
   api<Issue>(`/api/issues/${ref}/claim`, { method: "POST" });

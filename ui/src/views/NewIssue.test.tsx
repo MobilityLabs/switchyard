@@ -43,6 +43,8 @@ function issue(o: Partial<Issue> = {}): Issue {
     sourceDetail: null,
     sourceUrl: null,
     needsInput: false,
+    workerPreference: null,
+    parentId: null,
     snoozedUntil: null,
     createdAt: 0,
     updatedAt: 0,
@@ -134,6 +136,8 @@ describe("NewIssue", () => {
       summary: undefined,
       description: "details",
       priority: "none",
+      workerPreference: null,
+      parentRef: undefined,
     });
     expect(updateIssue).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
