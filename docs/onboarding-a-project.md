@@ -58,8 +58,9 @@ project repo having a GitHub `origin` remote.
 
 ### 4. Branch protection on the repo's `main`
 
-Blocks force-push/deletion; required reviews stay off until there's a second
-GitHub identity (SYD-19):
+Blocks force-push/deletion, requires the CI workflow's `test` check, and
+enforces that on admin credentials too — required reviews stay off until
+there's a second GitHub identity (SYD-19):
 
 ```bash
 npm run init-worker -- --protect-main       # all configured projects
@@ -68,6 +69,18 @@ npm run init-worker -- --protect-main NOC   # just one
 
 Resolves owner/repo from each project's `origin` remote and applies the same
 protection previously pasted by hand from this doc.
+
+**Do this before relying on delivery.** SYD-209 made CI the sole check
+authority for the delivery worker — it merges an `agent/<ref>` PR once
+GitHub's required checks are green, with no client-side verify gate. That
+only holds if `main` actually *requires* those checks (SYD-222): a
+`main` with no required status checks lets a red or check-less head merge,
+and `enforce_admins` off lets an admin credential bypass the gate and push
+`main` directly. `deliver.ts` re-checks this live at startup and on every
+health probe (`warnOnRelaxedBranchProtection`) and logs a loud warning if a
+linked repo's protection is relaxed; set `delivery.requireBranchProtection:
+true` in `switchyard-worker.json` to make that a hard refusal-to-start
+instead of a warning.
 
 ### 5. Make sure the MCP registration is user-scoped
 

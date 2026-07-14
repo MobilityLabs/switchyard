@@ -45,6 +45,8 @@ export const issueUpdateBody = z.object({
 
 export const redeliverBody = z.object({ expectedHeadSha: z.string().min(1).optional() });
 
+export const resolveDeliveryBody = z.object({ note: z.string().min(1) });
+
 // SYD-208: the Task-6 worker's outcome vocabulary excludes skipped_rollout —
 // that value is written only by the one-time rollout backfill
 // (ensureRolloutBackfill), never by a live delivery attempt, so the schema

@@ -49,6 +49,15 @@ export type PendingAuthorization = {
   ref: string;
   kind: "done_stamp" | "redeliver";
   pin: DeliveryPinPayload | null;
+  /**
+   * SYD-231: distinct rebased heads the worker itself recorded (derived_head_sha)
+   * on prior attempts for this issue's pinned PR. The worker seeds its SHA-chain
+   * anchor with these alongside the pin's S0, so a branch left at one of its own
+   * prior rebases (a bounced attempt already force-pushed it) is recognized and
+   * re-rebased instead of disarmed as a "moved head". Only the worker's own
+   * outputs land here, so a genuine third-party push is still rejected.
+   */
+  priorHeads: string[];
 };
 
 export type DeliveryAttemptRow = typeof deliveryAttempts.$inferSelect;
@@ -110,15 +119,29 @@ export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorizat
       AND NOT EXISTS (SELECT 1 FROM delivery_attempts da WHERE da.authorization_id = e.id)
     ORDER BY e.id ASC
   `);
-  return rows.map((r) => ({
-    authorizationId: r.authorizationId,
-    ref: r.ref,
-    kind: r.kind,
-    pin:
+  return rows.map((r) => {
+    const pin =
       r.pinRepo !== null
         ? { repo: r.pinRepo, prNumber: r.pinPrNumber as number, headSha: r.pinHeadSha }
-        : null,
-  }));
+        : null;
+    // SYD-231: the worker's own rebased heads recorded on prior attempts for
+    // this exact PR — scoped by (issueRef, prNumber) so a different PR's rebase
+    // can never anchor this one. Only derived_head_sha (heads the worker
+    // force-pushed itself) counts; a third-party push is never recorded here.
+    const priorHeads =
+      pin === null
+        ? []
+        : db
+            .all<{ h: string }>(sql`
+              SELECT DISTINCT derived_head_sha AS h
+              FROM delivery_attempts
+              WHERE issue_ref = ${r.ref}
+                AND pr_number = ${pin.prNumber}
+                AND derived_head_sha IS NOT NULL
+            `)
+            .map((x) => x.h);
+    return { authorizationId: r.authorizationId, ref: r.ref, kind: r.kind, pin, priorHeads };
+  });
 }
 
 /**

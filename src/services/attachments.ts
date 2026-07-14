@@ -2,6 +2,8 @@ import path from "node:path";
 import { promises as fs, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { asc, eq } from "drizzle-orm";
+import { JSDOM } from "jsdom";
+import createDOMPurify from "dompurify";
 import type { Db } from "../db/index.js";
 import { attachments, actors } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -9,8 +11,6 @@ import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
 
-// SVG is deliberately excluded — it's an XSS vector (can carry <script>/event
-// handlers and gets treated as markup, not a raster image, by some renderers).
 export const ALLOWED_ATTACHMENT_TYPES: Record<string, string> = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -18,10 +18,54 @@ export const ALLOWED_ATTACHMENT_TYPES: Record<string, string> = {
   gif: "image/gif",
   webp: "image/webp",
   avif: "image/avif",
+  svg: "image/svg+xml",
   mp4: "video/mp4",
   webm: "video/webm",
   mov: "video/quicktime",
 };
+
+export const SVG_EXTENSION = "svg";
+
+// SVG is a stored-XSS vector when served from our own origin: a top-level
+// render of an unsanitized upload can run embedded <script>/on*/foreignObject
+// content. Sanitize server-side before the bytes ever hit disk, on a single
+// module-scoped DOMPurify instance bound to a jsdom window (DOMPurify needs a
+// DOM to walk; jsdom gives it one without a real browser).
+const domPurifyWindow = new JSDOM("").window;
+const svgPurifier = createDOMPurify(domPurifyWindow as unknown as Window & typeof globalThis);
+
+// href/xlink:href are how SVG references other content (<use>, gradients,
+// clip-paths) — DOMPurify's default URI check allows http(s) through, so a
+// remote reference would survive sanitization otherwise. Only same-document
+// fragment refs ("#id") and inline data: URIs are legitimate for a diagram;
+// anything else (remote URL, javascript:, etc.) is stripped.
+svgPurifier.addHook("uponSanitizeAttribute", (_node, data) => {
+  if (data.attrName === "href" || data.attrName === "xlink:href") {
+    const value = data.attrValue.trim();
+    if (!value.startsWith("#") && !value.startsWith("data:")) {
+      data.keepAttr = false;
+    }
+  }
+});
+
+const SVG_SANITIZE_CONFIG = {
+  USE_PROFILES: { svg: true, svgFilters: true },
+  // script/foreignObject are already excluded by the svg profile; listed here
+  // to keep the intent explicit. <style> is dropped wholesale rather than
+  // parsed, since DOMPurify doesn't deep-sanitize CSS block contents.
+  FORBID_TAGS: ["script", "foreignObject", "style", "iframe"] as string[],
+  // DOMPurify's svg profile excludes <use> outright (it's historically been
+  // an external-reference XSS vector), but <use href="#local-id"> is the
+  // standard way diagrams reuse a <defs> symbol. Safe to re-allow now that
+  // the uponSanitizeAttribute hook above already strips any href/xlink:href
+  // that isn't a same-document fragment or a data: URI.
+  ADD_TAGS: ["use"] as string[],
+};
+
+export function sanitizeSvg(data: Buffer): Buffer {
+  const clean = svgPurifier.sanitize(data.toString("utf8"), SVG_SANITIZE_CONFIG);
+  return Buffer.from(clean, "utf8");
+}
 
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov"]);
 
@@ -58,11 +102,6 @@ export async function saveAttachment(
   const sanitized = sanitizeFilename(filename);
   const ext = extensionOf(sanitized);
 
-  if (ext === "svg") {
-    throw new SwitchyardError(
-      "SVG attachments are rejected — SVG can embed scripts and is an XSS vector. Convert to a raster format (PNG/JPEG) and try again.",
-    );
-  }
   const contentType = ALLOWED_ATTACHMENT_TYPES[ext];
   if (!contentType) {
     throw new SwitchyardError(
@@ -73,6 +112,11 @@ export async function saveAttachment(
     throw new SwitchyardError(
       `Attachment is ${(data.length / (1024 * 1024)).toFixed(1)}MB — attachments must be 20MB or smaller.`,
     );
+  }
+  // Sanitize before the bytes ever reach the temp file — never store a raw
+  // SVG upload, even transiently.
+  if (ext === SVG_EXTENSION) {
+    data = sanitizeSvg(data);
   }
 
   // Durability ordering (SYD-192): events is an append-only audit log, so

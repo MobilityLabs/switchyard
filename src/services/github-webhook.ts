@@ -19,7 +19,7 @@ import type { EventKind } from "../db/schema.js";
 import { getOrCreateActor } from "./actors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
-import { boundRepoFullNames } from "./github-repos.js";
+import { boundRepoFullNames, normalizeRepoFullName } from "./github-repos.js";
 import { upsertPrState, attributedRef, type PrObservation } from "./pr-state.js";
 
 const GITHUB_ACTOR_NAME = "github";
@@ -74,7 +74,8 @@ const repositoryPayloadSchema = z.object({
 
 /** Used before the event type is known, to pick which secret to verify the delivery against. */
 export function repositoryFullName(payload: unknown): string | undefined {
-  return repositoryPayloadSchema.safeParse(payload).data?.repository?.full_name;
+  const fullName = repositoryPayloadSchema.safeParse(payload).data?.repository?.full_name;
+  return fullName === undefined ? undefined : normalizeRepoFullName(fullName);
 }
 
 const AGENT_BRANCH_RE = /^agent\/([A-Z]{2,10}-\d+)$/;
@@ -334,6 +335,12 @@ function handlePush(db: Db, rawPayload: unknown, repo: string | null): GithubWeb
   );
 }
 
+// Conclusions that actually mean the suite failed. Everything else GitHub can
+// report as "completed" — neutral, skipped, cancelled, stale — is either an
+// intentionally-skipped check or a non-failure outcome, so it's ignored
+// rather than misreported as gh_checks_failed (SYD-194).
+const FAILING_CONCLUSIONS = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
+
 function handleCheckSuite(db: Db, rawPayload: unknown, repo: string | null): GithubWebhookOutcome {
   const parsed = checkSuitePayloadSchema.safeParse(rawPayload);
   if (!parsed.success) return { handled: false, reason: "malformed check_suite payload" };
@@ -348,6 +355,9 @@ function handleCheckSuite(db: Db, rawPayload: unknown, repo: string | null): Git
   if (!ref) return { handled: false, reason: "no issue ref found in check_suite branch" };
 
   const conclusion = String(suite.conclusion ?? "");
+  if (conclusion !== "success" && !FAILING_CONCLUSIONS.has(conclusion)) {
+    return { handled: false, reason: `ignored check_suite conclusion "${conclusion}"` };
+  }
   const type = conclusion === "success" ? "gh_checks_passed" : "gh_checks_failed";
   const headSha = suite.head_sha ?? null;
   return record(db, ref, type, { conclusion, headSha }, repo, {
@@ -365,8 +375,11 @@ export function handleGithubWebhook(
   // Repo identity (SYD-205): an explicitly named repo (the /github-events
   // top-level field) wins, then the payload's own repository.full_name (real
   // webhook deliveries always carry it), then the sole-bound-repo inference
-  // in record() for producers that predate the field.
-  const resolvedRepo = repo ?? repositoryFullName(payload) ?? null;
+  // in record() for producers that predate the field. Normalized here (SYD-212)
+  // so an explicitly named repo converges on the same casing as one parsed
+  // out of the payload, regardless of how the caller typed it.
+  const namedRepo = repo !== undefined ? normalizeRepoFullName(repo) : undefined;
+  const resolvedRepo = namedRepo ?? repositoryFullName(payload) ?? null;
   switch (githubEvent) {
     case "pull_request":
       return handlePullRequest(db, payload, resolvedRepo);

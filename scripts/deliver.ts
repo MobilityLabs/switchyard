@@ -50,6 +50,7 @@ import {
   resumeActionFor,
   agentBranch,
   resolveInfraToken,
+  shouldRefuseUnprotectedMain,
   type DeliveryEventInput,
   type DeliveryWork,
   type WorkAuthorization,
@@ -601,6 +602,13 @@ async function deliverPending(
     // Keep attemptId live across the orchestrator so a thrown pre-merge failure
     // (no branch, merge-retry exhausted) is still stamped merge_failed by the
     // outer catch; the orchestrator persists S1 to this same attempt id.
+    // SYD-231: anchor the SHA chain on S0 (the human-stamped head) AND every
+    // rebased head the worker itself force-pushed on prior attempts for this PR.
+    // A prior bounced attempt can leave the branch at its own S1; without this,
+    // a re-stamp (still pinned to S0) would see that head as "moved" and disarm
+    // instead of re-rebasing it. Only the worker's own recorded outputs are
+    // trusted here, so a genuine third-party push still breaks the chain.
+    const acceptedHeads = [...new Set([auth.pin.headSha, ...(auth.priorHeads ?? [])])];
     const result = await deliverQueue(
       ref,
       project,
@@ -608,7 +616,7 @@ async function deliverPending(
       token,
       cloneDir,
       auth.pin.prNumber,
-      [auth.pin.headSha],
+      acceptedHeads,
       attemptId,
     );
     const id = attemptId;
@@ -858,13 +866,22 @@ async function tick(
  * checks, an empty required-checks list, or admins allowed to bypass). CI is
  * the sole check authority, so an unprotected main would let the delivery
  * worker merge unverified code — this surfaces that off-box misconfiguration
- * instead of trusting it. Read-only and best-effort: it never blocks delivery.
+ * instead of trusting it. Read-only and always best-effort here: it never
+ * blocks delivery by itself.
+ *
+ * Returns the keys of every project that failed (or couldn't verify) the
+ * check, so the caller can optionally turn this from a warning into a hard
+ * startup gate via `delivery.requireBranchProtection` (SYD-222) — a repo
+ * whose check errored (e.g. no `origin` remote) is treated the same as a
+ * failing one: unverifiable protection is not verified protection.
  */
-export async function warnOnRelaxedBranchProtection(config: WorkerConfig): Promise<void> {
+export async function warnOnRelaxedBranchProtection(config: WorkerConfig): Promise<string[]> {
+  const failing: string[] = [];
   for (const [key, proj] of Object.entries(config.projects)) {
     try {
       const health = await checkBranchProtection(proj.repo);
       if (!health.ok) {
+        failing.push(key);
         console.error(
           `WARNING: ${key}'s repo has relaxed branch protection on main — CI is the sole check ` +
             `authority (SYD-209), so delivery merges are unguarded until this is fixed:\n  - ` +
@@ -872,9 +889,11 @@ export async function warnOnRelaxedBranchProtection(config: WorkerConfig): Promi
         );
       }
     } catch (err) {
+      failing.push(key);
       console.error(`could not check branch protection for ${key}: ${(err as Error).message}`);
     }
   }
+  return failing;
 }
 
 async function main(): Promise<void> {
@@ -897,8 +916,18 @@ async function main(): Promise<void> {
   // so the merge's safety rests on GitHub actually requiring those checks on
   // main. Warn loudly at startup if any linked repo's protection is relaxed —
   // an operator alarm, never a silent downgrade. Best-effort and read-only, so
-  // it runs in dry-run too and never blocks the tick loop.
-  await warnOnRelaxedBranchProtection(config);
+  // it runs in dry-run too and never blocks the tick loop by itself.
+  const unprotected = await warnOnRelaxedBranchProtection(config);
+
+  // SYD-222: an operator can opt a repo into refusing to start at all, rather
+  // than merging with the warning alarm as the only signal.
+  if (shouldRefuseUnprotectedMain(config.delivery?.requireBranchProtection, unprotected)) {
+    console.error(
+      `refusing to start: delivery.requireBranchProtection is set and main's branch protection ` +
+        `could not be verified as safe for: ${unprotected.join(", ")}`,
+    );
+    process.exit(1);
+  }
 
   // Dry runs are non-mutating (never start/finish an attempt, merge, deploy,
   // or comment), so they're safe to overlap with a live worker or each other —

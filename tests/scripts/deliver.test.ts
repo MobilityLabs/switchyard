@@ -13,6 +13,7 @@ const findOpenAgentPr = vi.fn();
 const originOwnerRepo = vi.fn();
 const prFreshness = vi.fn();
 const prLiveState = vi.fn();
+const checkBranchProtection = vi.fn();
 
 vi.mock("../../scripts/delivery-exec.js", () => ({
   attemptAutoRebase: (...args: unknown[]) => attemptAutoRebase(...args),
@@ -25,9 +26,10 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   originOwnerRepo: (...args: unknown[]) => originOwnerRepo(...args),
   prFreshness: (...args: unknown[]) => prFreshness(...args),
   prLiveState: (...args: unknown[]) => prLiveState(...args),
+  checkBranchProtection: (...args: unknown[]) => checkBranchProtection(...args),
 }));
 
-const { deliverQueue, tick } = await import("../../scripts/deliver.js");
+const { deliverQueue, tick, warnOnRelaxedBranchProtection } = await import("../../scripts/deliver.js");
 
 const token = "test-token";
 const project: WorkerProject = { repo: "/repo/syd" };
@@ -103,6 +105,7 @@ function resetExecMocks(): void {
     originOwnerRepo,
     prFreshness,
     prLiveState,
+    checkBranchProtection,
   ]) {
     m.mockReset();
   }
@@ -170,6 +173,39 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     const events = deliveryEventCalls("SYD-9");
     expect(events).toHaveLength(1);
     expect(bodyOf(events[0])).toMatchObject({ type: "delivery_failed" });
+  });
+
+  it("seeds the anchor with the worker's prior derived heads so its own rebase isn't disarmed (SYD-231)", async () => {
+    // A re-stamp still pinned to S0, but a prior attempt already force-pushed
+    // its rebase "s1prev" — so the branch sits at s1prev, not S0.
+    installFetch({
+      pending: [
+        {
+          authorizationId: 5,
+          ref: "SYD-9",
+          kind: "redeliver",
+          pin: { repo: "acme/widgets", prNumber: 42, headSha: "s0abc" },
+          priorHeads: ["s1prev"],
+        },
+      ],
+      unfinished: [],
+      deployRetries: [],
+    });
+    prLiveState.mockResolvedValue({ state: "OPEN", headRefOid: "s1prev", mergeCommit: null });
+    attemptAutoRebase.mockResolvedValue({ status: "rebased", sha: "s2new" });
+    waitForChecks.mockResolvedValue("passing");
+    mergeAgentPr.mockResolvedValue("merged-sha");
+
+    await tick(config, token, newTickGate(), false);
+
+    // Anchor carries S0 AND the prior derived head, so attemptAutoRebase accepts
+    // the branch's current head (s1prev) as the worker's own rather than disarming.
+    expect(attemptAutoRebase).toHaveBeenCalledWith("/repo/syd", expect.any(String), "SYD-9", [
+      "s0abc",
+      "s1prev",
+    ]);
+    expect(mergeAgentPr).toHaveBeenCalledWith("/repo/syd", 42, "s2new");
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merged_deployed" });
   });
 
   it("a pin with no headSha (no S0 to anchor) disarms without touching the branch", async () => {
@@ -611,5 +647,48 @@ describe("deliverQueue orchestrator (SYD-209)", () => {
       headSha: "f".repeat(40),
       ghUpdatedAt: "2026-07-12T11:00:00Z",
     });
+  });
+});
+
+describe("warnOnRelaxedBranchProtection (SYD-209/SYD-222)", () => {
+  const config: WorkerConfig = {
+    url: "http://localhost:3300",
+    label: "auto",
+    intervalSeconds: 300,
+    maxConcurrent: 1,
+    projects: { SYD: { repo: "/repo/syd" }, NOC: { repo: "/repo/noc" } },
+  };
+
+  beforeEach(() => resetExecMocks());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("returns no failing keys when every linked repo's protection checks out", async () => {
+    checkBranchProtection.mockResolvedValue({ ok: true, problems: [] });
+
+    const failing = await warnOnRelaxedBranchProtection(config);
+
+    expect(failing).toEqual([]);
+    expect(checkBranchProtection).toHaveBeenCalledWith("/repo/syd");
+    expect(checkBranchProtection).toHaveBeenCalledWith("/repo/noc");
+  });
+
+  it("returns the key of a repo whose protection is relaxed", async () => {
+    checkBranchProtection.mockImplementation(async (repo: string) =>
+      repo === "/repo/syd"
+        ? { ok: false, problems: ["main has no required status checks (CI is not enforced)"] }
+        : { ok: true, problems: [] },
+    );
+
+    const failing = await warnOnRelaxedBranchProtection(config);
+
+    expect(failing).toEqual(["SYD"]);
+  });
+
+  it("treats a thrown check (e.g. no origin remote) as failing too — unverifiable is not verified", async () => {
+    checkBranchProtection.mockRejectedValue(new Error("no origin remote"));
+
+    const failing = await warnOnRelaxedBranchProtection(config);
+
+    expect(failing).toEqual(["SYD", "NOC"]);
   });
 });

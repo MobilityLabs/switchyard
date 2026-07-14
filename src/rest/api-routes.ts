@@ -17,7 +17,13 @@ import { createLoginLink, getSessionActor } from "../services/auth.js";
 import { createProject, listProjects, updateProject } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
-import { createIssue, getIssue, updateIssue, claimIssue, heartbeatClaim } from "../services/issues.js";
+import {
+  createIssue,
+  getIssue,
+  updateIssue,
+  claimIssue,
+  heartbeatClaim,
+} from "../services/issues.js";
 import {
   addDependency,
   listBlockedIssueIds,
@@ -42,9 +48,15 @@ import {
   recordDerivedHead,
 } from "../services/delivery-attempts.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
+import { getDeliveryHealth } from "../services/delivery-health.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
-import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-actions.js";
+import {
+  snoozeIssue,
+  markDuplicate,
+  redeliverIssue,
+  resolveDeliveryFailure,
+} from "../services/triage-actions.js";
 import {
   addWebhook,
   listWebhooks,
@@ -73,6 +85,7 @@ import {
   listAttachments,
   defaultAttachmentsDir,
   MAX_ATTACHMENT_SIZE,
+  ALLOWED_ATTACHMENT_TYPES,
 } from "../services/attachments.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -98,6 +111,7 @@ import {
   duplicateBody,
   settingPutBody,
   redeliverBody,
+  resolveDeliveryBody,
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
   deliveryAttemptDerivedHeadBody,
@@ -348,7 +362,20 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     }
     c.header("Content-Type", row.contentType);
     c.header("X-Content-Type-Options", "nosniff");
-    c.header("Content-Disposition", `inline; filename="${row.filename}"`);
+    // SVG is sanitized on upload, but forcing download (rather than inline
+    // top-level render) on the raw URL is a second layer of defense against
+    // stored XSS — a browser navigated straight to this URL won't execute
+    // whatever the sanitizer missed. The activity feed's inline preview goes
+    // through markdown `![]()` -> <img>, which never executes SVG script
+    // regardless of this header, so that display path is unaffected.
+    const isSvg = row.contentType === ALLOWED_ATTACHMENT_TYPES.svg;
+    c.header(
+      "Content-Disposition",
+      `${isSvg ? "attachment" : "inline"}; filename="${row.filename}"`,
+    );
+    if (isSvg) {
+      c.header("Content-Security-Policy", "script-src 'none'; sandbox");
+    }
     c.header("Cache-Control", "private, max-age=31536000, immutable");
     return c.body(new Uint8Array(data));
   });
@@ -375,12 +402,17 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.post("/issues/:ref/redeliver", body(redeliverBody), (c) =>
     c.json(
-      redeliverIssue(
-        db,
-        c.var.actor,
-        c.req.param("ref"),
-        c.req.valid("json").expectedHeadSha,
-      ),
+      redeliverIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").expectedHeadSha),
+    ),
+  );
+
+  // SYD-178: an explicit human "this is actually resolved" action for a
+  // delivery_failed flag pr_state can never auto-clear (e.g. the fix landed
+  // through a non-agent branch) — Retry is a dead end there since there's no
+  // attributed PR to re-authorize.
+  app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
+    c.json(
+      resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note),
     ),
   );
 
@@ -390,6 +422,18 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // elapsed. The agent-refusal gate lives in the service (getDeliveryWork),
   // same pattern as recordDeliveryEvent — not a route-level requireHumanCaller.
   app.get("/delivery-work", (c) => c.json(getDeliveryWork(db, c.var.actor)));
+
+  // Delivery health surface (SYD-180): rolling-window aggregate over the
+  // delivery_attempts ledger — first-attempt success rate, how many issues
+  // needed a manual redeliver, and which ones needed it most. Read-only, no
+  // agent gate (unlike /delivery-work): it's an observability rollup, not
+  // trigger-shaped infra state an agent could exploit.
+  app.get("/delivery-health", (c) => {
+    const hoursParam = c.req.query("hours");
+    return c.json(
+      getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined),
+    );
+  });
 
   app.post(
     "/issues/:ref/delivery-attempts",
@@ -420,18 +464,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   // SYD-209: persist the post-rebase head (S1) on an open attempt without
   // finishing it, so a crash between rebase and merge re-anchors on S1.
-  app.patch(
-    "/delivery-attempts/:id/derived-head",
-    body(deliveryAttemptDerivedHeadBody),
-    (c) =>
-      c.json(
-        recordDerivedHead(
-          db,
-          c.var.actor,
-          parseAttemptId(c.req.param("id")),
-          c.req.valid("json").derivedHeadSha,
-        ),
+  app.patch("/delivery-attempts/:id/derived-head", body(deliveryAttemptDerivedHeadBody), (c) =>
+    c.json(
+      recordDerivedHead(
+        db,
+        c.var.actor,
+        parseAttemptId(c.req.param("id")),
+        c.req.valid("json").derivedHeadSha,
       ),
+    ),
   );
 
   app.get("/next-task", (c) =>

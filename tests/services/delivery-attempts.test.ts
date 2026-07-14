@@ -130,7 +130,77 @@ describe("listPendingDeliveryAuthorizations", () => {
       ref: issue.ref,
       kind: "done_stamp",
       pin: { repo: REPO, prNumber: 7, headSha: "abc" },
+      priorHeads: [],
     });
+  });
+
+  // SYD-231: a delivery whose prior attempt already force-pushed a rebased
+  // head S1 leaves the branch at S1. A re-stamp still pins the original S0, so
+  // the worker's SHA-chain anchor [S0] would reject its OWN rebase as a
+  // "moved head" and disarm. Carrying the prior attempts' recorded derived
+  // heads lets the worker recognize S1 as authorized and re-rebase instead.
+  it("carries the worker's prior recorded derived heads for the PR (SYD-231)", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    updateIssue(db, human, issue.ref, { status: "done" });
+    // First re-stamp: its attempt force-pushed a rebased head "S1" and bounced.
+    const auth1 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 7, headSha: "S0" } },
+    });
+    const attempt1 = startDeliveryAttempt(db, human, issue.ref, {
+      authorizationId: auth1,
+      prNumber: 7,
+      headSha: "S0",
+    });
+    finishDeliveryAttempt(db, human, attempt1.id, {
+      outcome: "sha_chain_disarmed",
+      derivedHeadSha: "S1",
+    });
+    // Second re-stamp: still pinned to S0, but the branch now sits at S1.
+    const auth2 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 7, headSha: "S0" } },
+    });
+
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending.map((p) => p.authorizationId)).toEqual([auth2]);
+    expect(pending[0].priorHeads).toContain("S1");
+  });
+
+  it("does not carry derived heads recorded for a different PR number (SYD-231)", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    updateIssue(db, human, issue.ref, { status: "done" });
+    const auth1 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 8, headSha: "other-S0" } },
+    });
+    const attempt1 = startDeliveryAttempt(db, human, issue.ref, {
+      authorizationId: auth1,
+      prNumber: 8,
+      headSha: "other-S0",
+    });
+    finishDeliveryAttempt(db, human, attempt1.id, {
+      outcome: "sha_chain_disarmed",
+      derivedHeadSha: "other-S1",
+    });
+    const auth2 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 7, headSha: "S0" } },
+    });
+
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending.map((p) => p.authorizationId)).toEqual([auth2]);
+    expect(pending[0].priorHeads).not.toContain("other-S1");
   });
 
   it("no-spin: once an attempt row exists for the authorization, it is not pending", () => {

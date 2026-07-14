@@ -36,6 +36,11 @@ export type WorkAuthorization = {
   ref: string;
   kind: "done_stamp" | "redeliver";
   pin: WorkPin | null;
+  // SYD-231: rebased heads this worker recorded on prior attempts for the
+  // pinned PR. Seeded into the SHA-chain anchor alongside S0 so a branch left
+  // at one of the worker's own earlier rebases is re-rebased, not disarmed.
+  // Optional so an older server (deploy skew) that omits it still parses.
+  priorHeads?: string[];
 };
 
 export type WorkAttempt = {
@@ -431,6 +436,21 @@ export function evaluateBranchProtection(
     problems.push("enforce_admins is off — an admin credential can bypass required checks / push main");
   }
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * Whether the SYD-222 startup gate should refuse to run the delivery worker:
+ * only when the operator opted in via `delivery.requireBranchProtection` AND
+ * at least one linked repo actually failed (or couldn't verify) its branch-
+ * protection check. Pure so the gating decision is testable without shelling
+ * out to `gh` — see `warnOnRelaxedBranchProtection` in deliver.ts, which
+ * still warns unconditionally regardless of this gate.
+ */
+export function shouldRefuseUnprotectedMain(
+  requireBranchProtection: boolean | undefined,
+  failingProjectKeys: string[],
+): boolean {
+  return requireBranchProtection === true && failingProjectKeys.length > 0;
 }
 
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */

@@ -623,6 +623,41 @@ h2 {
   background: var(--danger);
   color: #14161a;
 }
+.banner.info {
+  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  margin: 0 0 12px;
+}
+.banner.info .retry-delivery {
+  margin-left: 10px;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  cursor: pointer;
+}
+.banner.info .retry-delivery:hover {
+  background: var(--accent);
+  color: #14161a;
+}
+.banner.danger .resolve-delivery {
+  margin-left: 6px;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  cursor: pointer;
+}
+.banner.danger .resolve-delivery:hover {
+  background: var(--danger);
+  color: #14161a;
+}
 .needs-input-lane {
   margin-bottom: 22px;
 }

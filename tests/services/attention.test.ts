@@ -8,6 +8,7 @@ import { recordEvent } from "../../src/services/events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
 import { getAttention, listAttentionByIssueId } from "../../src/services/attention.js";
+import { resolveDeliveryFailure } from "../../src/services/triage-actions.js";
 
 const REPO = "acme/widgets";
 
@@ -85,6 +86,33 @@ describe("getAttention", () => {
       payload: { prNumber: 7, url: `https://github.com/${REPO}/pull/7`, mergeSha: "abc" },
     });
     expect(getAttention(db, issue.id)?.reason).toBe("delivery_failed");
+  });
+
+  // SYD-178: SYD-108's fix merged via a feat/ branch — pr_state's strict
+  // agent/<ref> attribution (SYD-206) never picks that up, so neither a
+  // `delivered` event nor a pr_state-observed merge ever clears the flag.
+  // resolveDeliveryFailure is the human's explicit way out.
+  it("stays flagged forever on a merge via a non-agent branch, until a human explicitly resolves it", () => {
+    const { db, human, agent } = setup();
+    const issue = getIssue(db, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "delivery_failed",
+      message: "rebase onto main hit real conflicts",
+    });
+    // The interactive fix merges via feat/SYD-1, observed by the webhook as a
+    // free-text match only — never touches pr_state (attributedRef requires a
+    // strict agent/<ref> branch).
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: agent.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 124, url: `https://github.com/${REPO}/pull/124`, mergeSha: "aea0dd6" },
+    });
+    expect(getAttention(db, issue.id)?.reason).toBe("delivery_failed");
+
+    resolveDeliveryFailure(db, human, "SYD-1", "merged via feat/SYD-1 PR #124");
+    expect(getAttention(db, issue.id)).toBeNull();
+    expect(listAttentionByIssueId(db).size).toBe(0);
   });
 
   it("a merge observed BEFORE the failure does not clear it (deploy-failed-after-merge)", () => {
