@@ -5,6 +5,7 @@
 //   npm run init-worker -- --install-launchd-code      # doctor, then install the code-role-only LaunchAgent (SYD-67)
 //   npm run init-worker -- --install-launchd-answer    # doctor, then install the answer-role-only LaunchAgent (SYD-67)
 //   npm run init-worker -- --install-launchd-deliver   # doctor, then install deliver.ts's KeepAlive LaunchAgent
+//   npm run init-worker -- --install-launchd-poll      # doctor, then install github-poll.ts's KeepAlive LaunchAgent
 //   npm run init-worker -- --self-test                 # doctor, then one dry-run worker tick
 //   npm run init-worker -- --protect-main [KEY]        # doctor, then apply branch protection to main
 //                                                       # (all configured projects, or just KEY)
@@ -84,6 +85,7 @@ import {
   parseMcpServerNames,
   parsePlistPath,
   renderDeliverPlist,
+  renderPollPlist,
   renderClaudeMdSnippet,
   renderWorkerPlist,
   stackParityGaps,
@@ -92,6 +94,7 @@ import {
   validateWorkerConfig,
   workerLaunchdLabel,
   DELIVER_LAUNCHD_LABEL,
+  POLL_LAUNCHD_LABEL,
   type CheckResult,
   type RoleStatus,
   type UserStackCapture,
@@ -507,12 +510,16 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   // the config alone: whether `gh` is actually installed and authenticated,
   // and whether each project repo actually has a GitHub `origin` to open PRs
   // and merge against.
-  if (config?.delivery) {
+  const pollPlistInstalled = existsSync(
+    path.join(os.homedir(), "Library", "LaunchAgents", `${POLL_LAUNCHD_LABEL}.plist`),
+  );
+  const pollRequested = process.argv.includes("--install-launchd-poll");
+  if (config?.delivery || config?.githubPoll || pollPlistInstalled || pollRequested) {
     const hasGh = commandExists("gh");
     results.push({
       name: "gh CLI",
       ok: hasGh,
-      note: hasGh ? undefined : "required for the delivery gate — https://cli.github.com",
+      note: hasGh ? undefined : "required for delivery/GitHub polling — https://cli.github.com",
     });
     if (hasGh) {
       const auth = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
@@ -522,7 +529,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         note: auth.status === 0 ? undefined : "run: gh auth login",
       });
     }
-    for (const [key, project] of Object.entries(config.projects)) {
+    for (const [key, project] of Object.entries(config?.projects ?? {})) {
       const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], {
         encoding: "utf8",
       });
@@ -608,6 +615,69 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     );
   }
 
+  // The poller is separately managed from dispatch/delivery. Surface both
+  // installation and live pid-lock state, then validate the exact Node/PATH
+  // baked into its plist so a stale LaunchAgent cannot fail silently.
+  const pollPlistPath = path.join(
+    os.homedir(),
+    "Library",
+    "LaunchAgents",
+    `${POLL_LAUNCHD_LABEL}.plist`,
+  );
+  const pollInstalled = existsSync(pollPlistPath);
+  const pollRunning = pollAlreadyRunning();
+  results.push({
+    name: "GitHub poll LaunchAgent",
+    ok: true,
+    warn: !pollRunning,
+    note: pollRunning
+      ? pollInstalled
+        ? "running, installed"
+        : "running, not installed"
+      : pollInstalled
+        ? "installed, not running"
+        : "not installed — run: npm run init-worker -- --install-launchd-poll",
+  });
+  if (pollInstalled) {
+    results.push(
+      checkPlistPinnedNode({ noun: "GitHub poll", plistPath: pollPlistPath, enginesNode }),
+    );
+  }
+
+  if (config?.githubPoll || pollInstalled || pollRequested) {
+    const infraToken = env.SWITCHYARD_SERVICE_TOKEN || env.SWITCHYARD_TOKEN;
+    results.push({
+      name: "GitHub poll service token",
+      ok: Boolean(infraToken),
+      note: infraToken ? undefined : "set SWITCHYARD_SERVICE_TOKEN (preferred) or SWITCHYARD_TOKEN",
+    });
+    if (infraToken && config) {
+      const base = config.url.replace(/\/$/, "");
+      try {
+        const me = await fetch(`${base}/api/me`, {
+          headers: { authorization: `Bearer ${infraToken}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!me.ok) {
+          results.push({
+            name: "GitHub poll token valid",
+            ok: false,
+            note: `/api/me returned ${me.status}`,
+          });
+        } else {
+          const actor = (await me.json()) as { name: string; type: string };
+          results.push({
+            name: "GitHub poll token is a non-agent actor",
+            ok: actor.type !== "agent",
+            note: `${actor.name} (${actor.type})`,
+          });
+        }
+      } catch (err) {
+        results.push({ name: "GitHub poll token valid", ok: false, note: (err as Error).message });
+      }
+    }
+  }
+
   return { results, config };
 }
 
@@ -628,11 +698,17 @@ function defaultConfigLabel(): string | undefined {
 }
 
 function workerAlreadyRunning(role: WorkerRole): boolean {
-  return isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role, defaultConfigLabel())));
+  return isLocked(
+    path.join(repoRoot, ".superpowers", workerPidFileName(role, defaultConfigLabel())),
+  );
 }
 
 function deliverAlreadyRunning(): boolean {
   return isLocked(path.join(repoRoot, ".superpowers", "deliver.pid"));
+}
+
+function pollAlreadyRunning(): boolean {
+  return isLocked(path.join(repoRoot, ".superpowers", "github-poll.pid"));
 }
 
 /** Shared write-plist / launchctl-load flow for the worker and deliver LaunchAgents. */
@@ -762,6 +838,22 @@ function installLaunchdDeliver(config: WorkerConfig | null): void {
     noun: "delivery worker",
   });
   console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "deliver.out.log")}`);
+}
+
+/** Install the always-on GitHub poller, which is valid with default poll settings. */
+function installLaunchdPoll(): void {
+  const plist = renderPollPlist({
+    repoRoot,
+    nodeBinDir: path.dirname(process.execPath),
+    home: os.homedir(),
+  });
+  installPlist({
+    label: POLL_LAUNCHD_LABEL,
+    plist,
+    alreadyRunning: pollAlreadyRunning,
+    noun: "GitHub poll worker",
+  });
+  console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "poll.out.log")}`);
 }
 
 /**
@@ -1132,6 +1224,7 @@ async function main(): Promise<void> {
   if (args.includes("--install-launchd-code")) installLaunchd("code");
   if (args.includes("--install-launchd-answer")) installLaunchd("answer");
   if (args.includes("--install-launchd-deliver")) installLaunchdDeliver(config);
+  if (args.includes("--install-launchd-poll")) installLaunchdPoll();
 
   const protectIdx = args.indexOf("--protect-main");
   if (protectIdx !== -1) {

@@ -76,7 +76,9 @@ export function validateWorkerConfig(raw: unknown): string[] {
     problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
   }
   if (c.token !== undefined && (typeof c.token !== "string" || c.token.length === 0)) {
-    problems.push("`token` must be a non-empty string (the NAME of the env var holding this worker's token)");
+    problems.push(
+      "`token` must be a non-empty string (the NAME of the env var holding this worker's token)",
+    );
   }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
@@ -331,6 +333,7 @@ export const WORKER_LAUNCHD_LABEL = "com.switchyard.worker";
 export const WORKER_CODE_LAUNCHD_LABEL = "com.switchyard.worker-code";
 export const WORKER_ANSWER_LAUNCHD_LABEL = "com.switchyard.worker-answer";
 export const DELIVER_LAUNCHD_LABEL = "com.switchyard.deliver";
+export const POLL_LAUNCHD_LABEL = "com.switchyard.poll";
 
 /** LaunchAgent label for a given worker role (SYD-67) — "all" keeps the pre-split label. */
 export function workerLaunchdLabel(role: WorkerRole): string {
@@ -467,6 +470,22 @@ export function renderDeliverPlist(opts: {
     scriptRelPath: "scripts/deliver.ts",
     logStem: "deliver",
     generatedBy: "npm run init-worker -- --install-launchd-deliver",
+  });
+}
+
+/** Render the LaunchAgent that keeps the GitHub polling fallback alive. */
+export function renderPollPlist(opts: {
+  repoRoot: string;
+  nodeBinDir: string;
+  home: string;
+  extraPathDirs?: string[];
+}): string {
+  return renderLaunchdPlist({
+    ...opts,
+    label: POLL_LAUNCHD_LABEL,
+    scriptRelPath: "scripts/github-poll.ts",
+    logStem: "poll",
+    generatedBy: "npm run init-worker -- --install-launchd-poll",
   });
 }
 

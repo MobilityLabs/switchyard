@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProtectMainArgs,
   DELIVER_LAUNCHD_LABEL,
+  POLL_LAUNCHD_LABEL,
   WORKER_LAUNCHD_LABEL,
   WORKER_CODE_LAUNCHD_LABEL,
   WORKER_ANSWER_LAUNCHD_LABEL,
@@ -18,6 +19,7 @@ import {
   parseMcpServerNames,
   parsePlistPath,
   renderDeliverPlist,
+  renderPollPlist,
   renderClaudeMdSnippet,
   renderWorkerPlist,
   stackParityGaps,
@@ -777,6 +779,35 @@ describe("renderDeliverPlist", () => {
     expect(plist).toContain("worker-logs/deliver.out.log");
     expect(plist).toContain("worker-logs/deliver.err.log");
     expect(plist).not.toContain("launchd.out.log");
+  });
+});
+
+describe("renderPollPlist", () => {
+  const plist = renderPollPlist({
+    repoRoot: "/Users/sean/sites/switchyard",
+    nodeBinDir: "/Users/sean/.nvm/versions/node/v24.13.0/bin",
+    home: "/Users/sean",
+  });
+
+  it("execs github-poll.ts under the poll service's own label", () => {
+    expect(plist).toContain(`<string>${POLL_LAUNCHD_LABEL}</string>`);
+    expect(POLL_LAUNCHD_LABEL).not.toBe(DELIVER_LAUNCHD_LABEL);
+    expect(plist).toContain("/node_modules/.bin/tsx</string>");
+    expect(plist).toContain("/scripts/github-poll.ts</string>");
+    expect(plist).not.toContain("deliver.ts");
+    expect(plist).not.toContain("agent-worker.ts");
+  });
+
+  it("records regeneration provenance and dedicated poll logs", () => {
+    expect(plist).toContain("--install-launchd-poll");
+    expect(plist).toContain("worker-logs/poll.out.log");
+    expect(plist).toContain("worker-logs/poll.err.log");
+  });
+
+  it("restarts only after failure without embedding credentials", () => {
+    expect(plist).toMatch(/<key>SuccessfulExit<\/key>\s*<false\/>/);
+    expect(plist).not.toContain(".env");
+    expect(plist).not.toMatch(/syd_|sya_|OAUTH/);
   });
 });
 
