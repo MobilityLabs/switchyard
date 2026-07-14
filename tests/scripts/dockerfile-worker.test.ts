@@ -8,6 +8,7 @@ import path from "node:path";
 describe.each([
   ["Dockerfile.worker", "../../Dockerfile.worker"],
   ["Dockerfile.worker.codex", "../../Dockerfile.worker.codex"],
+  ["Dockerfile.worker.gemini", "../../Dockerfile.worker.gemini"],
 ])("%s native module toolchain (SYD-224)", (_name, relPath) => {
   const raw = readFileSync(path.join(__dirname, relPath), "utf8");
   const aptInstallLine = raw

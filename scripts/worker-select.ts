@@ -2,6 +2,12 @@
 // Kept separate from the polling/spawning loop so it's trivially unit-testable.
 
 import { DEFAULT_CODEX_IMAGE } from "./engines/codex.js";
+import {
+  DEFAULT_GEMINI_IMAGE,
+  GEMINI_API_KEY_VAR,
+  GEMINI_DEFAULT_AUTH_TYPE_VAR,
+  GEMINI_API_KEY_AUTH_TYPE,
+} from "./engines/gemini.js";
 
 /** The subset of an /api/issues row the selector needs. */
 export type WorkerIssue = {
@@ -133,8 +139,8 @@ export type WorkerConfig = {
    * SDK (worker-sdk/ must be installed; incompatible with `containerized`).
    */
   runner?: "cli" | "sdk";
-  /** Which agent engine this worker drives: "claude" (default) or "codex". Selected per-worker-process. */
-  engine?: "claude" | "codex";
+  /** Which agent engine this worker drives: "claude" (default), "codex", or "gemini". Selected per-worker-process. */
+  engine?: "claude" | "codex" | "gemini";
   /**
    * NAME of the env var holding this worker's switchyard bearer token (default
    * "SWITCHYARD_TOKEN"). Lets a second worker process (e.g. a codex worker via
@@ -1021,11 +1027,22 @@ export function buildDockerArgs(
       "containerized Codex dispatch requires CODEX_OAUTH_TOKEN in the worker's environment (the injector's ChatGPT token)",
     );
   }
+  if (engine === "gemini" && !env.GEMINI_API_KEY) {
+    throw new Error(
+      "containerized Gemini dispatch requires GEMINI_API_KEY in the worker's environment (the injector's AI-Studio key)",
+    );
+  }
 
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   const baseBranch = project.baseBranch ?? DEFAULT_BASE_BRANCH;
   const prompt = buildContainerizedPrompt(issue.ref, { ...opts, baseBranch });
-  const image = config.image ?? (engine === "codex" ? DEFAULT_CODEX_IMAGE : DEFAULT_WORKER_IMAGE);
+  const image =
+    config.image ??
+    (engine === "codex"
+      ? DEFAULT_CODEX_IMAGE
+      : engine === "gemini"
+        ? DEFAULT_GEMINI_IMAGE
+        : DEFAULT_WORKER_IMAGE);
   const stackChecks = stackChecksEnv(project.stack);
 
   // Provider-credential handling depends on the egress mode (SYD-186) and,
@@ -1036,18 +1053,34 @@ export function buildDockerArgs(
   // - open: no injecting sidecar, so the real credential must reach the
   //   container — bare `-e VAR` (value from the worker env, never argv).
   // Codex additionally always gets the non-secret CODEX_ACCOUNT_ID (needed for
-  // the placeholder/real auth.json's chatgpt-account-id) in both modes.
+  // the placeholder/real auth.json's chatgpt-account-id) in both modes. Gemini
+  // (SYD-225) is a static AI-Studio key: proxy mode gets a placeholder key + CA
+  // mount (the sidecar injects the real x-goog-api-key), open mode gets the real
+  // key bare; both select API-key auth non-interactively and disable gemini's
+  // own sandbox (the container is the sandbox).
   const proxy = egressMode(config) === "proxy";
-  const credArgs =
-    engine === "codex"
-      ? [
-          "-e",
-          "CODEX_ACCOUNT_ID",
-          ...(proxy ? ["-v", `${EGRESS_CA_VOLUME}:/ca:ro`] : ["-e", "CODEX_OAUTH_TOKEN"]),
-        ]
-      : proxy
-        ? ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
-        : ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
+  let credArgs: string[];
+  if (engine === "codex") {
+    credArgs = [
+      "-e",
+      "CODEX_ACCOUNT_ID",
+      ...(proxy ? ["-v", `${EGRESS_CA_VOLUME}:/ca:ro`] : ["-e", "CODEX_OAUTH_TOKEN"]),
+    ];
+  } else if (engine === "gemini") {
+    credArgs = [
+      ...(proxy
+        ? ["-e", `${GEMINI_API_KEY_VAR}=placeholder`, "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
+        : ["-e", GEMINI_API_KEY_VAR]),
+      "-e",
+      `${GEMINI_DEFAULT_AUTH_TYPE_VAR}=${GEMINI_API_KEY_AUTH_TYPE}`,
+      "-e",
+      "GEMINI_SANDBOX=false",
+    ];
+  } else if (proxy) {
+    credArgs = ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`];
+  } else {
+    credArgs = ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
+  }
 
   return [
     "run",
