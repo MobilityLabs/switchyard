@@ -21,6 +21,8 @@ import {
   createIssue,
   getIssue,
   updateIssue,
+  listChildren,
+  childCountsByParent,
   claimIssue,
   heartbeatClaim,
 } from "../services/issues.js";
@@ -221,12 +223,14 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     const attention = listAttentionByIssueId(db);
     const openPrs = listOpenPrByIssueId(db);
     const blocked = listBlockedIssueIds(db);
+    const childCounts = childCountsByParent(db);
     return c.json(
       results.map((r) => ({
         ...r,
         attention: attention.get(r.id) ?? null,
         openPr: openPrs.get(r.id) ?? null,
         blocked: blocked.has(r.id),
+        childCount: childCounts.get(r.id) ?? 0,
       })),
     );
   });
@@ -246,6 +250,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),
+      children: listChildren(db, ref),
     });
   });
 

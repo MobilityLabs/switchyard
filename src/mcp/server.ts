@@ -255,6 +255,7 @@ export function buildMcpServer(
         assignee: z.string().nullable().optional(),
         labels: z.array(z.string()).optional(),
         worker_preference: z.string().nullable().optional(),
+        parent_ref: z.string().nullable().optional(),
         expected_head_sha: z.string().optional(),
         lease_token: z.string().optional(),
       },
@@ -270,6 +271,7 @@ export function buildMcpServer(
         assignee?: string | null;
         labels?: string[];
         worker_preference?: string | null;
+        parent_ref?: string | null;
         expected_head_sha?: string;
         lease_token?: string;
       }) => {
@@ -293,6 +295,7 @@ export function buildMcpServer(
             assigneeName: a.assignee,
             labels: a.labels,
             workerPreference: a.worker_preference,
+            parentRef: a.parent_ref,
             expectedHeadSha: a.expected_head_sha,
           },
           { presented: a.lease_token ?? connectionLeaseToken, minted },

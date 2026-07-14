@@ -113,6 +113,7 @@ export const EVENT_KINDS = [
   "summary_changed",
   "labels_changed",
   "worker_preference_changed",
+  "parent_changed",
   "snoozed",
   "marked_duplicate",
   "redeliver_requested",

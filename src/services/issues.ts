@@ -107,6 +107,28 @@ export function getIssue(db: DbOrTx, ref: string): IssueView {
   return toView(db, row);
 }
 
+/** Child issues (epic → stories) of `ref`, ordered by issue number. */
+export function listChildren(db: DbOrTx, ref: string): IssueView[] {
+  const parent = getIssue(db, ref);
+  const rows = db.select().from(issues).where(eq(issues.parentId, parent.id)).all();
+  return rows.map((r) => toView(db, r)).sort((a, b) => a.number - b.number);
+}
+
+/** Map of parent issue id → number of children, for at-a-glance epic badges. */
+export function childCountsByParent(db: DbOrTx): Map<number, number> {
+  const rows = db
+    .select({ parentId: issues.parentId, count: sql<number>`count(*)` })
+    .from(issues)
+    .where(sql`${issues.parentId} is not null`)
+    .groupBy(issues.parentId)
+    .all();
+  const map = new Map<number, number>();
+  for (const r of rows) {
+    if (r.parentId !== null) map.set(r.parentId, Number(r.count));
+  }
+  return map;
+}
+
 export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): IssueView {
   // SYD-213: a `service` token is trusted worker-host infra whose mandate is
   // posting PR/delivery events, reading, and commenting — never authoring board
@@ -171,6 +193,8 @@ export type UpdateIssueInput = {
   assigneeName?: string | null;
   labels?: string[];
   workerPreference?: string | null;
+  /** Re-parent (epic/story): a parent issue ref, or null to detach. */
+  parentRef?: string | null;
   /** SYD-208: required to stamp done over an issue with an open agent PR —
    * the head SHA the human reviewed, compared-and-set against pr_state's
    * current head. */
@@ -505,6 +529,20 @@ export function updateIssue(
         type: "worker_preference_changed",
         payload: { from: current.workerPreference, to: patch.workerPreference },
       });
+    }
+
+    if (patch.parentRef !== undefined) {
+      const parentId = patch.parentRef === null ? null : getIssue(tx, patch.parentRef).id;
+      if (parentId === current.id) {
+        throw new SwitchyardError(`${ref} can't be its own parent.`);
+      }
+      if (parentId !== current.parentId) {
+        changes.parentId = parentId;
+        toRecord.push({
+          type: "parent_changed",
+          payload: { from: current.parentId, to: patch.parentRef ?? null },
+        });
+      }
     }
 
     if (patch.status !== undefined && actor.type === "human" && current.needsInput) {
