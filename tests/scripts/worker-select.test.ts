@@ -514,6 +514,28 @@ describe("workerPidFileName", () => {
     expect(workerPidFileName("code")).toBe("worker-code.pid");
     expect(workerPidFileName("answer")).toBe("worker-answer.pid");
   });
+
+  // SYD-234: a per-worker label namespaces the pidfile so multiple engine
+  // workers (claude/codex/gemini) each get their own role lock instead of
+  // fighting over one machine-global worker-<role>.pid.
+  it("namespaces the pidfile by label when one is given", () => {
+    expect(workerPidFileName("all", "auto-codex")).toBe("worker-auto-codex.pid");
+    expect(workerPidFileName("code", "auto-codex")).toBe("worker-auto-codex-code.pid");
+    expect(workerPidFileName("answer", "auto-gemini")).toBe("worker-auto-gemini-answer.pid");
+  });
+
+  it("gives different-labelled workers of the same role distinct locks", () => {
+    expect(workerPidFileName("code", "auto-codex")).not.toBe(workerPidFileName("code", "auto-gemini"));
+    expect(workerPidFileName("code", "auto-codex")).not.toBe(workerPidFileName("code", "auto"));
+  });
+
+  it("keeps same-label same-role stable so acquirePidLock still self-excludes", () => {
+    expect(workerPidFileName("code", "auto-codex")).toBe(workerPidFileName("code", "auto-codex"));
+  });
+
+  it("sanitizes filesystem-unsafe characters in the label", () => {
+    expect(workerPidFileName("code", "a/b")).toBe("worker-a_b-code.pid");
+  });
 });
 
 describe("checkRoleLockConflict", () => {

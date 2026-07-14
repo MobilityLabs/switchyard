@@ -553,7 +553,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   const roles: WorkerRole[] = ["all", "code", "answer"];
   const roleStatuses: RoleStatus[] = roles.map((role) => ({
     role,
-    running: isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role))),
+    running: isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role, config?.label))),
     installed: existsSync(
       path.join(os.homedir(), "Library", "LaunchAgents", `${workerLaunchdLabel(role)}.plist`),
     ),
@@ -611,8 +611,24 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   return { results, config };
 }
 
+/**
+ * Best-effort read of the default worker config's `label` (SYD-234) so the
+ * running-check looks at the same label-namespaced pidfile the worker writes.
+ * init-worker only ever manages the default `switchyard-worker.json` worker, so
+ * this is always its label; falls back to the legacy (unlabeled) name if the
+ * config is missing or malformed.
+ */
+function defaultConfigLabel(): string | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as { label?: unknown };
+    return typeof parsed.label === "string" ? parsed.label : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function workerAlreadyRunning(role: WorkerRole): boolean {
-  return isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role)));
+  return isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role, defaultConfigLabel())));
 }
 
 function deliverAlreadyRunning(): boolean {

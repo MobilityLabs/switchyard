@@ -303,9 +303,19 @@ export function configPathFromArgs(args: string[], defaultPath: string, repoRoot
   return value.startsWith("/") ? value : `${repoRoot}/${value}`;
 }
 
-/** Pidfile basename for a role's single-instance lock — kept distinct so "code" and "answer" can run side by side. */
-export function workerPidFileName(role: WorkerRole): string {
-  return role === "all" ? "worker.pid" : `worker-${role}.pid`;
+/**
+ * Pidfile basename for a role's single-instance lock — kept distinct so "code"
+ * and "answer" can run side by side. A `label` (SYD-234) namespaces the file so
+ * multiple engine workers (claude/codex/gemini, each with a unique config
+ * `label`) get independent role locks instead of fighting over one
+ * machine-global `worker-<role>.pid`. Omit `label` for the legacy names — the
+ * label is folded into the filename, so it's sanitized to stay path-safe.
+ */
+export function workerPidFileName(role: WorkerRole, label?: string): string {
+  const roleSuffix = role === "all" ? "" : `-${role}`;
+  if (!label) return `worker${roleSuffix}.pid`;
+  const safeLabel = label.replace(/[^A-Za-z0-9._-]/g, "_");
+  return `worker-${safeLabel}${roleSuffix}.pid`;
 }
 
 /**
