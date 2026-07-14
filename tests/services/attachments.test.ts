@@ -86,3 +86,43 @@ describe("saveAttachment durability ordering (SYD-192)", () => {
     expect(added).toEqual([]);
   });
 });
+
+describe("saveAttachment SVG sanitization (SYD-184)", () => {
+  it("stores a script-bearing SVG with the script neutralized rather than rejecting it", async () => {
+    const dir = path.join(tmpRoot, "attachments");
+    const malicious = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><circle r="5"/></svg>`,
+    );
+    const { attachment, markdown } = await saveAttachment(
+      db,
+      human,
+      "SYD-1",
+      "diagram.svg",
+      malicious,
+      dir,
+    );
+
+    const onDisk = readFileSync(path.join(dir, String(attachment.id))).toString("utf8");
+    expect(onDisk).not.toMatch(/<script/i);
+    expect(onDisk).not.toMatch(/onload/i);
+    expect(onDisk).toContain("<circle");
+    expect(attachment.contentType).toBe("image/svg+xml");
+    expect(markdown).toBe(`![diagram.svg](/api/attachments/${attachment.id}/diagram.svg)`);
+
+    const added = getActivity(db, "SYD-1").filter((a) => a.type === "attachment_added");
+    expect(added).toHaveLength(1);
+    expect(added[0].payload.contentType).toBe("image/svg+xml");
+  });
+
+  it("stores a benign SVG unchanged in substance", async () => {
+    const dir = path.join(tmpRoot, "attachments");
+    const benign = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="80" height="40"/><text x="10" y="60">Service A</text></svg>`,
+    );
+    const { attachment } = await saveAttachment(db, human, "SYD-1", "arch.svg", benign, dir);
+
+    const onDisk = readFileSync(path.join(dir, String(attachment.id))).toString("utf8");
+    expect(onDisk).toContain('viewBox="0 0 100 100"');
+    expect(onDisk).toContain("Service A");
+  });
+});

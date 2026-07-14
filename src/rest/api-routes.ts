@@ -17,7 +17,13 @@ import { createLoginLink, getSessionActor } from "../services/auth.js";
 import { createProject, listProjects, updateProject } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
-import { createIssue, getIssue, updateIssue, claimIssue, heartbeatClaim } from "../services/issues.js";
+import {
+  createIssue,
+  getIssue,
+  updateIssue,
+  claimIssue,
+  heartbeatClaim,
+} from "../services/issues.js";
 import {
   addDependency,
   listBlockedIssueIds,
@@ -73,6 +79,7 @@ import {
   listAttachments,
   defaultAttachmentsDir,
   MAX_ATTACHMENT_SIZE,
+  ALLOWED_ATTACHMENT_TYPES,
 } from "../services/attachments.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -348,7 +355,20 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     }
     c.header("Content-Type", row.contentType);
     c.header("X-Content-Type-Options", "nosniff");
-    c.header("Content-Disposition", `inline; filename="${row.filename}"`);
+    // SVG is sanitized on upload, but forcing download (rather than inline
+    // top-level render) on the raw URL is a second layer of defense against
+    // stored XSS — a browser navigated straight to this URL won't execute
+    // whatever the sanitizer missed. The activity feed's inline preview goes
+    // through markdown `![]()` -> <img>, which never executes SVG script
+    // regardless of this header, so that display path is unaffected.
+    const isSvg = row.contentType === ALLOWED_ATTACHMENT_TYPES.svg;
+    c.header(
+      "Content-Disposition",
+      `${isSvg ? "attachment" : "inline"}; filename="${row.filename}"`,
+    );
+    if (isSvg) {
+      c.header("Content-Security-Policy", "script-src 'none'; sandbox");
+    }
     c.header("Cache-Control", "private, max-age=31536000, immutable");
     return c.body(new Uint8Array(data));
   });
@@ -375,12 +395,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.post("/issues/:ref/redeliver", body(redeliverBody), (c) =>
     c.json(
-      redeliverIssue(
-        db,
-        c.var.actor,
-        c.req.param("ref"),
-        c.req.valid("json").expectedHeadSha,
-      ),
+      redeliverIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").expectedHeadSha),
     ),
   );
 
@@ -391,13 +406,8 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // same pattern as recordDeliveryEvent — not a route-level requireHumanCaller.
   app.get("/delivery-work", (c) => c.json(getDeliveryWork(db, c.var.actor)));
 
-  app.post(
-    "/issues/:ref/delivery-attempts",
-    body(deliveryAttemptStartBody),
-    (c) =>
-      c.json(
-        startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json")),
-      ),
+  app.post("/issues/:ref/delivery-attempts", body(deliveryAttemptStartBody), (c) =>
+    c.json(startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
   );
 
   const parseAttemptId = (idParam: string): number => {
@@ -420,18 +430,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   // SYD-209: persist the post-rebase head (S1) on an open attempt without
   // finishing it, so a crash between rebase and merge re-anchors on S1.
-  app.patch(
-    "/delivery-attempts/:id/derived-head",
-    body(deliveryAttemptDerivedHeadBody),
-    (c) =>
-      c.json(
-        recordDerivedHead(
-          db,
-          c.var.actor,
-          parseAttemptId(c.req.param("id")),
-          c.req.valid("json").derivedHeadSha,
-        ),
+  app.patch("/delivery-attempts/:id/derived-head", body(deliveryAttemptDerivedHeadBody), (c) =>
+    c.json(
+      recordDerivedHead(
+        db,
+        c.var.actor,
+        parseAttemptId(c.req.param("id")),
+        c.req.valid("json").derivedHeadSha,
       ),
+    ),
   );
 
   app.get("/next-task", (c) =>
