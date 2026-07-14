@@ -44,6 +44,9 @@ import {
   buildBranchProtectionArgs,
   evaluateBranchProtection,
   shouldRefuseUnprotectedMain,
+  buildPrListMergedArgs,
+  closedPrAlreadyDeliveredComment,
+  closedPrDeadEndComment,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
 
@@ -544,6 +547,41 @@ describe("comment bodies", () => {
     const body = deliveryFailureComment("SYD-9", "merge conflict");
     expect(body).toContain("SYD-9");
     expect(body).toContain("merge conflict");
+  });
+});
+
+describe("closed-unmerged-pin redeliver dead end (SYD-232)", () => {
+  it("buildPrListMergedArgs carries -R and filters to the merged state for the issue's branch", () => {
+    expect(buildPrListMergedArgs("SYD-9", "MobilityLabs/switchyard")).toEqual([
+      "pr",
+      "list",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--head",
+      "agent/SYD-9",
+      "--state",
+      "merged",
+      "--json",
+      "number,mergeCommit",
+      "--limit",
+      "10",
+    ]);
+  });
+
+  it("closedPrAlreadyDeliveredComment names both PRs and the merge SHA, distinct from a failure", () => {
+    const body = closedPrAlreadyDeliveredComment("SYD-9", 61, 124, "abc1234");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("PR #61");
+    expect(body).toContain("PR #124");
+    expect(body).toContain("abc1234");
+    expect(body).not.toContain("Delivery FAILED");
+  });
+
+  it("closedPrDeadEndComment gives an actionable next step instead of a generic bounce", () => {
+    const body = closedPrDeadEndComment("SYD-9", 61);
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("PR #61");
+    expect(body).toMatch(/re-open|re-run the agent/i);
   });
 });
 

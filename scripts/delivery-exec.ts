@@ -27,6 +27,7 @@ import {
   buildPrViewFreshnessArgs,
   buildPrViewLiveStateArgs,
   buildPrViewChecksArgs,
+  buildPrListMergedArgs,
   buildBranchProtectionArgs,
   evaluateChecks,
   evaluateBranchProtection,
@@ -170,6 +171,26 @@ export async function findOpenAgentPr(repo: string, ref: string): Promise<number
     number: number;
   }[];
   return open.length > 0 ? open[0].number : null;
+}
+
+/**
+ * SYD-232: the most recent MERGED PR on this same agent/<ref> branch, if any —
+ * checked before bouncing a pinned PR that closed unmerged, since a fresh
+ * dispatch can reopen a replacement PR on the same branch name that already
+ * delivered the work under a different number (e.g. SYD-108's #61 → #124).
+ * Null when nothing on the branch has ever merged.
+ */
+export async function findMergedAgentPr(
+  repo: string,
+  ref: string,
+): Promise<{ prNumber: number; mergeSha: string } | null> {
+  const ownerRepo = await originOwnerRepo(repo);
+  const merged = JSON.parse(
+    await run("gh", buildPrListMergedArgs(ref, ownerRepo), { cwd: GH_CWD }),
+  ) as { number: number; mergeCommit: { oid: string } | null }[];
+  if (merged.length === 0) return null;
+  const best = merged.reduce((a, b) => (b.number > a.number ? b : a));
+  return best.mergeCommit ? { prNumber: best.number, mergeSha: best.mergeCommit.oid } : null;
 }
 
 /**
