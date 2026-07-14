@@ -368,6 +368,37 @@ export function shouldKeepWaitingForChecks(
   return state === "pending" && elapsedMs < timeoutMs;
 }
 
+/** SYD-216: how long the wait-for-checks loop waits out a *first* head-moved
+ * verdict before re-reading, to absorb GitHub's read-after-write lag right
+ * after the S1 force-push — deliberately much shorter than
+ * CHECKS_POLL_INTERVAL_MS, since this settles eventual consistency, not CI. */
+export const HEAD_MOVED_SETTLE_MS = 3000;
+
+export type ChecksWaitAction = "stop" | "poll" | "settle-head-moved";
+
+/**
+ * Next action for the wait-for-checks loop (SYD-216). GitHub's PR API is
+ * read-after-write eventually consistent: the very first read right after
+ * `attemptAutoRebase` force-pushes S1 can momentarily still report the
+ * pre-push head, which `evaluateChecks` reports as `head-moved` — the same
+ * verdict a genuine third-party push produces. Give the *first* head-moved
+ * one short settle+re-read (`settle-head-moved`) before treating it as
+ * definitive; `headMovedSettled` tracks whether that grace read has already
+ * happened; if the re-read still shows head-moved (or any occurrence after
+ * the first), it's `stop` and the caller disarms — the fail-safe behavior
+ * stays intact, it just no longer fires on a one-poll consistency lag. Pure
+ * so the state machine is testable without a real clock or shelling out.
+ */
+export function nextChecksWaitAction(
+  state: ChecksState,
+  elapsedMs: number,
+  timeoutMs: number,
+  headMovedSettled: boolean,
+): ChecksWaitAction {
+  if (state === "head-moved") return headMovedSettled ? "stop" : "settle-head-moved";
+  return shouldKeepWaitingForChecks(state, elapsedMs, timeoutMs) ? "poll" : "stop";
+}
+
 export function buildPrViewChecksArgs(prNumber: number, ownerRepo: string): string[] {
   return [
     "pr",

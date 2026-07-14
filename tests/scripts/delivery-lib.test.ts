@@ -28,6 +28,8 @@ import {
   buildPrViewChecksArgs,
   evaluateChecks,
   shouldKeepWaitingForChecks,
+  nextChecksWaitAction,
+  HEAD_MOVED_SETTLE_MS,
   CHECKS_WAIT_TIMEOUT_MS,
   deliveryComment,
   deliveryFailureComment,
@@ -449,6 +451,43 @@ describe("shouldKeepWaitingForChecks (SYD-209)", () => {
   it("defaults the timeout to CHECKS_WAIT_TIMEOUT_MS", () => {
     expect(shouldKeepWaitingForChecks("pending", CHECKS_WAIT_TIMEOUT_MS - 1)).toBe(true);
     expect(shouldKeepWaitingForChecks("pending", CHECKS_WAIT_TIMEOUT_MS)).toBe(false);
+  });
+});
+
+describe("nextChecksWaitAction (SYD-216 head-moved settle)", () => {
+  it("gives a first head-moved a settle+re-read instead of stopping immediately", () => {
+    expect(nextChecksWaitAction("head-moved", 0, 1000, false)).toBe("settle-head-moved");
+  });
+
+  it("stops on head-moved once the one grace read has already happened", () => {
+    expect(nextChecksWaitAction("head-moved", 0, 1000, true)).toBe("stop");
+  });
+
+  it("still stops on head-moved even if the timeout has otherwise elapsed", () => {
+    // head-moved is never subject to the pending/timeout clock — only whether
+    // it's had its one settle read.
+    expect(nextChecksWaitAction("head-moved", 999999, 1000, true)).toBe("stop");
+  });
+
+  it("keeps polling on pending regardless of headMovedSettled", () => {
+    expect(nextChecksWaitAction("pending", 0, 1000, false)).toBe("poll");
+    expect(nextChecksWaitAction("pending", 0, 1000, true)).toBe("poll");
+  });
+
+  it("stops immediately on a definitive passing/failing verdict", () => {
+    expect(nextChecksWaitAction("passing", 0, 1000, false)).toBe("stop");
+    expect(nextChecksWaitAction("failing", 0, 1000, false)).toBe("stop");
+  });
+
+  it("stops on pending once the timeout has elapsed", () => {
+    expect(nextChecksWaitAction("pending", 1000, 1000, false)).toBe("stop");
+  });
+});
+
+describe("HEAD_MOVED_SETTLE_MS (SYD-216)", () => {
+  it("is a short settle window, well under the CI checks poll interval", () => {
+    expect(HEAD_MOVED_SETTLE_MS).toBeGreaterThan(0);
+    expect(HEAD_MOVED_SETTLE_MS).toBeLessThan(CHECKS_WAIT_TIMEOUT_MS);
   });
 });
 

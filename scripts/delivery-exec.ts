@@ -30,7 +30,8 @@ import {
   buildBranchProtectionArgs,
   evaluateChecks,
   evaluateBranchProtection,
-  shouldKeepWaitingForChecks,
+  nextChecksWaitAction,
+  HEAD_MOVED_SETTLE_MS,
   shouldRetryMergePoll,
   parsePrNumberFromUrl,
   tailOf,
@@ -224,6 +225,14 @@ export async function readChecks(repo: string, prNumber: number): Promise<Checks
  * GitHub Actions outage can't stall the sequential per-ref loop forever. The
  * returned verdict IS the chain's step-3 live read: `passing` only when the
  * head GitHub reports checks for is still S1 and every one concluded green.
+ *
+ * SYD-216: GitHub's PR API is read-after-write eventually consistent, so the
+ * very first read right after the force-push can momentarily still report
+ * the pre-push head — indistinguishable from a genuine third-party push. The
+ * first `head-moved` verdict gets one short settle+re-read
+ * (HEAD_MOVED_SETTLE_MS, not the CI poll interval) before it's accepted as
+ * definitive; a second consecutive head-moved (or any later one) disarms
+ * exactly as before.
  */
 export async function waitForChecks(
   repo: string,
@@ -235,9 +244,13 @@ export async function waitForChecks(
   const timeoutMs = opts.timeoutMs ?? CHECKS_WAIT_TIMEOUT_MS;
   const start = Date.now();
   let state = evaluateChecks(await readChecks(repo, prNumber), expectedS1);
-  while (shouldKeepWaitingForChecks(state, Date.now() - start, timeoutMs)) {
-    await sleep(pollIntervalMs);
+  let headMovedSettled = false;
+  let action = nextChecksWaitAction(state, Date.now() - start, timeoutMs, headMovedSettled);
+  while (action !== "stop") {
+    if (action === "settle-head-moved") headMovedSettled = true;
+    await sleep(action === "settle-head-moved" ? HEAD_MOVED_SETTLE_MS : pollIntervalMs);
     state = evaluateChecks(await readChecks(repo, prNumber), expectedS1);
+    action = nextChecksWaitAction(state, Date.now() - start, timeoutMs, headMovedSettled);
   }
   return state;
 }
