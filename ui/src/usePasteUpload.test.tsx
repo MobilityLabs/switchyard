@@ -19,9 +19,11 @@ type State = ReturnType<typeof usePasteUpload> & { draft: string };
 
 function Harness({ initialDraft, expose }: { initialDraft: string; expose: (s: State) => void }) {
   const [draft, setDraft] = useState(initialDraft);
-  const paste = usePasteUpload("SYD-1", draft, setDraft);
+  const paste = usePasteUpload("SYD-1", setDraft);
   expose({ draft, ...paste });
-  return <textarea ref={paste.textareaRef} defaultValue={initialDraft} />;
+  return (
+    <textarea ref={paste.textareaRef} value={draft} onChange={(e) => setDraft(e.target.value)} />
+  );
 }
 
 function HarnessNoTextarea({
@@ -32,7 +34,7 @@ function HarnessNoTextarea({
   expose: (s: State) => void;
 }) {
   const [draft, setDraft] = useState(initialDraft);
-  const paste = usePasteUpload("SYD-1", draft, setDraft);
+  const paste = usePasteUpload("SYD-1", setDraft);
   expose({ draft, ...paste });
   return null;
 }
@@ -208,6 +210,65 @@ describe("usePasteUpload", () => {
       resolve!({ id: 1, url: "/a", markdown: "![a](1)" });
       await pastePromise;
     });
+    expect(state!.uploading).toBe(false);
+  });
+
+  it("preserves text typed while the upload is in flight (SYD-195)", async () => {
+    let resolve: ((v: { id: number; url: string; markdown: string }) => void) | null = null;
+    vi.mocked(uploadAttachment).mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolve = res;
+        }),
+    );
+    let state: State | null = null;
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <Harness
+          initialDraft="hello"
+          expose={(s) => {
+            state = s;
+          }}
+        />,
+      );
+    });
+
+    const textarea = container.querySelector("textarea")!;
+
+    const file = new File(["x"], "x.png", { type: "image/png" });
+    const { event } = fakePaste([file]);
+    let pastePromise!: Promise<void>;
+    await act(async () => {
+      pastePromise = state!.onPaste(event);
+    });
+    expect(state!.uploading).toBe(true);
+
+    // Simulate the user continuing to type while the upload is still pending:
+    // this is the exact race the old implementation lost — its stale `next`
+    // snapshot from before the await would later overwrite this edit.
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(textarea, "hello there");
+      textarea.selectionStart = textarea.selectionEnd = 11; // cursor at the end, after typing
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(state!.draft).toBe("hello there");
+
+    await act(async () => {
+      resolve!({ id: 1, url: "/a", markdown: "![a](1)" });
+      await pastePromise;
+    });
+
+    // The typed suffix must survive, with the markdown spliced in against
+    // the latest draft rather than the whole draft being clobbered by the
+    // stale pre-upload snapshot.
+    expect(state!.draft).toBe("hello there ![a](1) ");
     expect(state!.uploading).toBe(false);
   });
 

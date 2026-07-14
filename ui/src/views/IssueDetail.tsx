@@ -360,7 +360,6 @@ export default function IssueDetail({ refId }: { refId: string }) {
   const [draft, setDraft] = useState("");
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     refId,
-    draft,
     setDraft,
   );
   const actorNames = useActorNames();
@@ -594,8 +593,8 @@ function Dependencies({
       <h3>Dependencies</h3>
       {openBlockers.length > 0 && (
         <p className="banner warn">
-          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents can&apos;t
-          claim this issue.
+          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents
+          can&apos;t claim this issue.
         </p>
       )}
       {deps.blockedBy.length > 0 && (
