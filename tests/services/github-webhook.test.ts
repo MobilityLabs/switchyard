@@ -665,6 +665,22 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 
+  it("attributes and writes pr_state despite a casing mismatch between the linked repo and the payload's repository.full_name (SYD-212)", () => {
+    // Repo linked with a hand-typed lowercase full name...
+    const db = setup(["acme/bound"]);
+    // ...but the real webhook delivery carries GitHub's canonical case.
+    const outcome = handleGithubWebhook(db, "pull_request", {
+      ...opened("opened"),
+      repository: { full_name: "Acme/Bound" },
+    });
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
+    const row = findPrState(db, "acme/bound", 12)!;
+    expect(row).toMatchObject({ status: "open", issueRef: "SYD-1", repo: "acme/bound" });
+    // The stored row itself is normalized, not left as the canonical-case
+    // string the payload happened to carry.
+    expect(findPrState(db, "Acme/Bound", 12)?.repo).toBe("acme/bound");
+  });
+
   it("an agent/SYD-1 PR in a repo bound to another project records display events but no pr_state row (cross-repo)", () => {
     const db = setup(["acme/bound"]);
     const human = createActor(db, { name: "sean2", type: "human" }).actor;
