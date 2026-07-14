@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   selectDispatchable,
+  INTERACTIVE_PREFERENCE,
   filterRetryCapped,
   recordAttempt,
   findResumeRefs,
@@ -109,6 +110,14 @@ describe("selectDispatchable", () => {
     expect(selectDispatchable(issues, config, [])).toEqual([issues[0]]);
     expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/skipping SYD-2.*open PR.*#41/));
     logSpy.mockRestore();
+  });
+
+  it("skips issues marked workerPreference=interactive (human-attended only, never headless-dispatch)", () => {
+    const issues = [
+      issue({ ref: "SYD-1", labels: ["auto"] }),
+      issue({ ref: "SYD-2", labels: ["auto"], workerPreference: INTERACTIVE_PREFERENCE }),
+    ];
+    expect(selectDispatchable(issues, config, [])).toEqual([issues[0]]);
   });
 
   it("caps selection so active + selected never exceeds maxConcurrent", () => {

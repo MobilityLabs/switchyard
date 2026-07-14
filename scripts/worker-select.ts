@@ -344,6 +344,15 @@ export function checkRoleLockConflict(
  * oldest-first within a priority (SYD-160), so capacity is filled by priority
  * rather than by the feed's arrival order.
  */
+/**
+ * Reserved `workerPreference` value: an issue that must be handled by a
+ * human-attended interactive session, never auto-dispatched to a headless
+ * worker (e.g. it needs live credentials, a real provider CLI, or a mid-task
+ * human decision — the exact case that stranded SYD-220/225's headless workers).
+ * Disjoint from the engine names the soft-affinity sort understands.
+ */
+export const INTERACTIVE_PREFERENCE = "interactive";
+
 export function selectDispatchable<T extends WorkerIssue>(
   issues: T[],
   config: WorkerConfig,
@@ -392,6 +401,9 @@ export function selectDispatchable<T extends WorkerIssue>(
     }
     if (!(projectKeyOf(issue.ref) in config.projects)) continue;
     if (issue.assigneeId !== null) continue;
+    // Human-attended-only: never headless-dispatch an interactive-marked issue,
+    // regardless of engine/dispatchPolicy (a human/interactive session takes it).
+    if (issue.workerPreference === INTERACTIVE_PREFERENCE) continue;
     if (issue.needsInput) continue;
     if (issue.blocked) continue; // SYD-160: an open dependency; claimIssue would refuse it anyway.
     if (issue.openPr) {
