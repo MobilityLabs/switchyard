@@ -269,11 +269,22 @@ branch, and pushes the branch back — it is structurally unable to touch your
 host filesystem or push to `main`. This is the recommended default; the bare
 mode above stays available for repos or setups where Docker isn't practical.
 
-Build the worker image once (rebuild after upgrading `@anthropic-ai/claude-code`
-or changing `scripts/container-entry.sh`):
+Build the worker image once (rebuild after changing `scripts/container-entry.sh`).
+The CLI versions are pinned in their respective Dockerfiles — to upgrade, bump
+their defaults (or override via build arguments) and rebuild.
 
+For the Anthropic/Claude worker:
 ```bash
 npm run build:worker-image
+# or, to use a different version without editing the Dockerfile:
+docker build -f Dockerfile.worker --build-arg CLAUDE_CODE_VERSION=x.y.z -t switchyard-worker .
+```
+
+For the Codex worker:
+```bash
+npm run build:worker-image-codex
+# or, to use a different version without editing the Dockerfile:
+docker build -f Dockerfile.worker.codex --build-arg CODEX_CLI_VERSION=x.y.z -t switchyard-worker-codex .
 ```
 
 Set `containerized: true` in `switchyard-worker.json` (and optionally
