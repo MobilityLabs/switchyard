@@ -87,10 +87,11 @@ export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string):
  * Requests a retry of a stalled delivery (SYD-102). Re-stamping an
  * already-done issue done is a silent no-op — status unchanged means no
  * status_changed event, so deliver.ts's done-stamp scan never sees it. This
- * gives retry a real trigger: a `redeliver_requested` event, fired only when
- * there's an unresolved delivery_failed attention flag to retry, that
- * deliver.ts subscribes to alongside its usual done-stamp scan. Human-only,
- * like the rest of this file — agents still can't drive the delivery gate.
+ * gives retry a real trigger: a `redeliver_requested` event that deliver.ts
+ * subscribes to alongside its usual done-stamp scan. Fired for an unresolved
+ * delivery_failed attention flag, or (SYD-230) to re-stamp an already-done
+ * issue whose open agent PR never delivered. Human-only, like the rest of this
+ * file — agents still can't drive the delivery gate.
  *
  * SYD-208: retrying re-authorizes delivery of whatever PR pr_state currently
  * attributes to this issue, so it is the same compare-and-set as the
@@ -108,10 +109,20 @@ export function redeliverIssue(
   requireHuman(actor, "retry a delivery");
   const current = getIssue(db, ref);
   const attention = getAttention(db, current.id);
-  if (attention?.reason !== "delivery_failed") {
-    throw new SwitchyardError(`${ref} has no unresolved delivery failure to retry.`);
-  }
   const pin = deliveryPinFor(db, current.id);
+  // SYD-230: two doors in, both re-authorizing the SAME pin under the SAME
+  // head-SHA compare-and-set below. (1) An unresolved delivery_failed to
+  // retry. (2) Re-stamp: an already-done issue whose open agent PR never got
+  // delivered — the pin-less-done case (pr_state was blind to the PR at
+  // stamp-time, so the done-stamp carried no pin), recoverable without the
+  // done→in_review→done round-trip. Agents are still refused by requireHuman.
+  const failed = attention?.reason === "delivery_failed";
+  const restampable = current.status === "done" && pin?.status === "open";
+  if (!failed && !restampable) {
+    throw new SwitchyardError(
+      `${ref} has no unresolved delivery failure to retry, and no open agent PR on a done issue to re-stamp.`,
+    );
+  }
   if (!pin) {
     throw new SwitchyardError(`${ref} has no agent PR on record — nothing to redeliver.`);
   }

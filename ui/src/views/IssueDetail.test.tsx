@@ -26,10 +26,11 @@ import IssueDetail, {
   DescriptionSection,
   Event,
   groupProgressNotes,
+  RestampBanner,
   withAttachmentIds,
 } from "./IssueDetail";
 import { getIssue, listAgentSessions, redeliverIssue, updateIssue } from "../api";
-import type { Activity, Attachment, IssueDetail as IssueDetailType, Issue } from "../types";
+import type { Activity, Attachment, IssueDetail as IssueDetailType, Issue, Status } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -119,6 +120,69 @@ describe("AttentionBanner", () => {
     });
     const button = container.querySelector(".retry-delivery") as HTMLButtonElement | null;
     expect(button).not.toBeNull();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(clicked).toBe(1);
+  });
+});
+
+// SYD-230: one-click re-authorize delivery of a done issue whose open agent PR
+// never delivered (pin-less done), without the done→in_review→done round-trip.
+describe("RestampBanner", () => {
+  const openPr: Issue["openPr"] = {
+    prNumber: 7,
+    url: "https://github.com/acme/widgets/pull/7",
+    repo: "acme/widgets",
+    headSha: "sha1",
+  };
+  async function render(props: {
+    status: Status;
+    openPr: Issue["openPr"];
+    attention: Issue["attention"];
+    onRestamp?: () => void;
+  }): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<RestampBanner {...props} onRestamp={props.onRestamp ?? (() => {})} />);
+    });
+    return container;
+  }
+
+  it("renders nothing when the issue is not done", async () => {
+    const container = await render({ status: "in_review", openPr, attention: null });
+    expect(container.querySelector(".retry-delivery")).toBeNull();
+  });
+
+  it("renders nothing when done but there is no open PR", async () => {
+    const container = await render({ status: "done", openPr: null, attention: null });
+    expect(container.querySelector(".retry-delivery")).toBeNull();
+  });
+
+  it("renders nothing when a delivery failure is unresolved (AttentionBanner owns that retry)", async () => {
+    const container = await render({
+      status: "done",
+      openPr,
+      attention: { reason: "delivery_failed", message: "merge conflict" },
+    });
+    expect(container.querySelector(".retry-delivery")).toBeNull();
+  });
+
+  it("renders a Re-stamp delivery button naming the PR that calls onRestamp when clicked", async () => {
+    let clicked = 0;
+    const container = await render({
+      status: "done",
+      openPr,
+      attention: null,
+      onRestamp: () => {
+        clicked += 1;
+      },
+    });
+    const button = container.querySelector(".retry-delivery") as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    expect(container.textContent).toContain("#7");
     await act(async () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
