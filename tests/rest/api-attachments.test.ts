@@ -14,7 +14,10 @@ beforeEach(() => {
   db = openDb(":memory:");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
   agentH = { authorization: `Bearer ${agent.token}` };
-  createProject(db, createActor(db, { name: "sean", type: "human" }).actor, { key: "SYD", name: "Switchyard" });
+  createProject(db, createActor(db, { name: "sean", type: "human" }).actor, {
+    key: "SYD",
+    name: "Switchyard",
+  });
   attachmentsDir = mkdtempSync(path.join(tmpdir(), "syd-attachments-"));
   app = buildApiRoutes(db, attachmentsDir);
 });
@@ -101,12 +104,33 @@ describe("attachment routes", () => {
     expect(list.map((a) => a.filename)).toEqual(["one.png", "two.png"]);
   });
 
-  it("rejects svg attachments", async () => {
+  it("accepts an svg attachment, sanitizing it before storage", async () => {
     const { ref } = await fileIssue();
-    const res = await upload(ref, "evil.svg", Buffer.from("<svg onload=alert(1)></svg>"));
-    expect(res.status).toBe(400);
-    const json = await body<{ error: string }>(res);
-    expect(json.error).toMatch(/svg/i);
+    const malicious = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(2)</script><circle r="5"/></svg>`,
+    );
+    const res = await upload(ref, "evil.svg", malicious);
+    expect(res.status).toBe(200);
+    const json = await body<{ id: number; url: string; markdown: string }>(res);
+    expect(json.markdown).toBe(`![evil.svg](${json.url})`);
+
+    const onDisk = readFileSync(path.join(attachmentsDir, String(json.id))).toString("utf8");
+    expect(onDisk).not.toMatch(/<script/i);
+    expect(onDisk).not.toMatch(/onload/i);
+    expect(onDisk).toContain("<circle");
+  });
+
+  it("serves svg attachments as a forced download with a restrictive CSP", async () => {
+    const { ref } = await fileIssue();
+    const uploaded = await body<{ id: number; url: string }>(
+      await upload(ref, "diagram.svg", Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg"/>`)),
+    );
+
+    const res = await app.request(uploaded.url.replace(/^\/api/, ""), { headers: agentH });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/svg+xml");
+    expect(res.headers.get("content-disposition")).toMatch(/^attachment/);
+    expect(res.headers.get("content-security-policy")).toMatch(/script-src 'none'/);
   });
 
   it("rejects uploads over 20MB (post-parse size check)", async () => {
