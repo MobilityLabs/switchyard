@@ -43,6 +43,7 @@ export type Issue = {
     | { reason: "merged_pr_not_done"; message: string }
     | { reason: "open_pr_not_in_review"; message: string }
     | { reason: "stale_claim"; message: string }
+    | { reason: "done_without_merged_pr"; message: string }
     | null;
   openPr: { prNumber: number; url: string; repo: string; headSha: string | null } | null;
 };
@@ -66,7 +67,12 @@ export type IssueDetail = Issue & {
   activity: Activity[];
   dependencies: { blockedBy: DependencyRef[]; blocks: DependencyRef[] };
   attachments: Attachment[];
-  deliveryPin: { repo: string; prNumber: number; headSha: string | null; status: "open" | "merged" | "closed" } | null;
+  deliveryPin: {
+    repo: string;
+    prNumber: number;
+    headSha: string | null;
+    status: "open" | "merged" | "closed";
+  } | null;
 };
 export type AgentSession = {
   id: number;

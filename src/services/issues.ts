@@ -16,7 +16,8 @@ import { SwitchyardError } from "./errors.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { getOpenBlockers } from "./dependencies.js";
-import { getOpenPr } from "./pr-status.js";
+import { getOpenPr, getMergedPr } from "./pr-status.js";
+import { doneWithoutMergedPr } from "./deviation.js";
 import { getSetting } from "./settings.js";
 import { mintLease, validateLease, invalidateLease, getActiveLease, heartbeatLease } from "./leases.js";
 
@@ -322,6 +323,17 @@ export function updateIssue(
             );
           }
           donePin = { repo: open.repo, prNumber: open.prNumber, headSha: open.headSha };
+        } else {
+          // SYD-204: no open PR to authorize delivery for — check whether this
+          // transition is the done-without-merged-PR deviation (a point-in-time
+          // fact recorded once, not a continuously re-evaluated live signal).
+          const deviation = doneWithoutMergedPr(current.status, open, getMergedPr(tx, current.id));
+          if (deviation) {
+            toRecord.push({
+              type: "process_deviation",
+              payload: { reason: deviation.reason, message: deviation.message },
+            });
+          }
         }
       }
 
