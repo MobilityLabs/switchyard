@@ -496,6 +496,40 @@ h2 {
   border: 1px solid var(--accent);
 }
 
+/* Rich internal refs (SYD-223): issue-ref/PR autolinks + hover popover. */
+.ref-link,
+.pr-link {
+  font-weight: 600;
+}
+.ref-popover {
+  z-index: 50;
+  width: 260px;
+  max-width: calc(100vw - 24px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.ref-popover-status {
+  margin: 0;
+  color: var(--muted);
+}
+.ref-popover-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+}
+.ref-popover-meta {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ref-popover-assignee {
+  color: var(--muted);
+}
+
 .design-embeds {
   display: flex;
   flex-direction: column;

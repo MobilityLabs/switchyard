@@ -13,6 +13,8 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import DOMPurify from "dompurify";
 import { PROJECT_REPOS } from "./config";
+import { href } from "./router";
+import { IssueRefPopover, useIssueRefHover } from "./IssuePopover";
 
 // Small, deliberate language subset (SYD-58) — not hljs's full bundle, so
 // unlisted fence hints (e.g. ```python) fall through to the "unknown
@@ -28,13 +30,25 @@ hljs.registerLanguage("diff", diff);
 hljs.registerLanguage("markdown", markdownLang); // covers md alias
 
 // Matches, in priority order: a repo-relative file path (optionally with a
-// ":<line>" suffix), a standalone commit SHA (7-40 hex chars), or an
-// @mention (word chars plus "./-" so actor names like "claude/dev" match).
-// Applied only to plain-text token leaves from the markdown parser, so
-// fenced/inline code is never touched (those go through marked's separate
-// code/codespan renderers, which we leave untouched).
+// ":<line>" suffix), an issue ref (SYD-83), a PR mention (#155 — the "PR "
+// prefix, if any, is left as plain text; only the "#123" token is linked), a
+// standalone commit SHA (7-40 hex chars), or an @mention (word chars plus
+// "./-" so actor names like "claude/dev" match). Applied only to plain-text
+// token leaves from the markdown parser, so fenced/inline code is never
+// touched (those go through marked's separate code/codespan renderers, which
+// we leave untouched).
+//
+// The issue-ref pattern is a bare heuristic (2-10 uppercase letters, a
+// hyphen, digits) with no cross-check against real project keys — it will
+// false-positive on incidental tokens shaped like a ref (e.g. "UTC-5"). This
+// is an accepted tradeoff (SYD-223): the popover/click-through degrades
+// gracefully (404) for anything that isn't a real issue, and validating
+// against known project keys would require threading a project list through
+// every Markdown call site for little practical benefit.
 const TOKEN_RE = new RegExp(
   "(?<path>\\b(?:src|scripts|tests|ui|docs|drizzle)\\/[\\w./-]+\\.(?:ts|tsx|js|md|json|sql|sh)(?::\\d+)?\\b)" +
+    "|(?<issueRef>\\b[A-Z]{2,10}-\\d+\\b)" +
+    "|#(?<pr>\\d+)\\b" +
     "|(?<sha>\\b[0-9a-f]{7,40}\\b)" +
     "|@(?<mention>[A-Za-z0-9_]+(?:[./-][A-Za-z0-9_]+)*)",
   "g",
@@ -72,14 +86,28 @@ function autolink(
     // capture groups are also numbered, so offset sits three from the end,
     // not at rest[0].
     const offset = rest[rest.length - 3] as number;
-    const groups = rest[rest.length - 1] as { path?: string; sha?: string; mention?: string };
+    const groups = rest[rest.length - 1] as {
+      path?: string;
+      issueRef?: string;
+      pr?: string;
+      sha?: string;
+      mention?: string;
+    };
     if (groups.path) {
       const lineMatch = /^(.*):(\d+)$/.exec(groups.path);
       const linkPath = lineMatch ? lineMatch[1] : groups.path;
       const line = lineMatch ? lineMatch[2] : undefined;
       if (!repo) return `<code>${groups.path}</code>`;
-      const href = `${repo}/blob/main/${linkPath}${line ? `#L${line}` : ""}`;
-      return `<a href="${href}"><code>${groups.path}</code></a>`;
+      const linkHref = `${repo}/blob/main/${linkPath}${line ? `#L${line}` : ""}`;
+      return `<a href="${linkHref}"><code>${groups.path}</code></a>`;
+    }
+    if (groups.issueRef) {
+      const issueHref = href({ view: "issue", ref: groups.issueRef });
+      return `<a href="${issueHref}" class="ref-link" data-issue-ref="${groups.issueRef}">${groups.issueRef}</a>`;
+    }
+    if (groups.pr) {
+      if (!repo) return match;
+      return `<a href="${repo}/pull/${groups.pr}" class="pr-link">${match}</a>`;
     }
     if (groups.sha) {
       if (!repo) return `<code>${groups.sha}</code>`;
@@ -141,6 +169,7 @@ const ALLOWED_ATTR = [
   "disabled",
   "type",
   "start",
+  "data-issue-ref",
 ];
 
 // Matches only our own attachment-serving URLs: a same-origin relative path
@@ -279,6 +308,17 @@ export function Markdown({
     () => renderMarkdown(text, projectKey, knownActorNames),
     [text, projectKey, knownActorNames],
   );
-  // eslint-disable-next-line react/no-danger -- sanitized above via DOMPurify
-  return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+  const { hover, onMouseOver, onMouseOut } = useIssueRefHover();
+  return (
+    <>
+      <div
+        className="markdown"
+        // eslint-disable-next-line react/no-danger -- sanitized above via DOMPurify
+        dangerouslySetInnerHTML={{ __html: html }}
+        onMouseOver={onMouseOver}
+        onMouseOut={onMouseOut}
+      />
+      {hover && <IssueRefPopover refId={hover.ref} rect={hover.rect} />}
+    </>
+  );
 }
