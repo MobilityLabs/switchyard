@@ -40,7 +40,7 @@ function boardHref(container: HTMLElement): string | null {
 
 function navLink(container: HTMLElement, label: string): HTMLAnchorElement {
   const links = [...container.querySelectorAll<HTMLAnchorElement>("nav a")];
-  // Review's label has a count badge appended as a text node sibling.
+  // Counted nav labels have a badge appended as a text node sibling.
   const link = links.find((a) => a.textContent?.startsWith(label));
   if (!link) throw new Error(`no nav link labeled "${label}"`);
   return link;
@@ -206,7 +206,7 @@ describe("Shell triage/review project scoping", () => {
     expect(location.pathname).toBe("/review");
   });
 
-  it("scopes the Review nav badge query to the active project selection", async () => {
+  it("scopes the Triage and Review nav badge queries to the active project selection", async () => {
     const calls: string[] = [];
     const fetchMock = vi.fn(async (url: string) => {
       calls.push(url);
@@ -221,8 +221,35 @@ describe("Shell triage/review project scoping", () => {
       await act(async () => {});
       const issuesCalls = calls.filter((u) => u.startsWith("/api/issues?"));
       expect(
+        issuesCalls.some(
+          (u) =>
+            u.includes("status=triage") &&
+            u.includes("project=SYD") &&
+            u.includes("exclude_snoozed=true"),
+        ),
+      ).toBe(true);
+      expect(
         issuesCalls.some((u) => u.includes("status=in_review") && u.includes("project=SYD")),
       ).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows non-zero Triage and Review counts and hides zero counts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const body = url.includes("status=triage") ? [{ ref: "SYD-1" }, { ref: "SYD-2" }] : [];
+        return { ok: true, json: async () => body } as Response;
+      }),
+    );
+    try {
+      const container = await renderShell();
+      await act(async () => {});
+
+      expect(navLink(container, "Triage").querySelector(".badge")?.textContent).toBe("2");
+      expect(navLink(container, "Review").querySelector(".badge")).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -241,9 +268,9 @@ describe("Shell header (SYD-214)", () => {
   it("no longer renders the header's own new-project popover or its toggle", async () => {
     const container = await renderShell();
     expect(container.querySelector(".new-project-popover")).toBeNull();
-    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "+ Project")).toBe(
-      false,
-    );
+    expect(
+      [...container.querySelectorAll("button")].some((b) => b.textContent === "+ Project"),
+    ).toBe(false);
   });
 
   it("always shows + New issue, the actor badge, and Log out", async () => {

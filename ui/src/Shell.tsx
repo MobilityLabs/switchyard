@@ -65,11 +65,21 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
   const currentProject =
     route.view === "board" ? route.project : (rememberedProject ?? allProjects[0]?.key ?? "");
 
-  // Scopes the Review nav badge to whatever project context is active: the
+  // Scopes the Triage and Review nav badges to whatever project context is active: the
   // route's own project when it carries one, else the SYD-55 remembered
   // project, else unscoped ("All projects").
   const scopeProject: string | null =
     route.view === "triage" || route.view === "review" ? route.project : rememberedProject;
+  const inTriage = usePoll(
+    () =>
+      listIssues({
+        status: "triage",
+        project: scopeProject ?? undefined,
+        excludeSnoozed: true,
+      }),
+    [scopeProject],
+    30000,
+  );
   const inReview = usePoll(
     () => listIssues({ status: "in_review", project: scopeProject ?? undefined }),
     [scopeProject],
@@ -108,6 +118,9 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
         <nav className={navOpen ? "open" : undefined} onClick={() => setNavOpen(false)}>
           <a href={triageHref} className={route.view === "triage" ? "active" : ""}>
             Triage
+            {inTriage.data && inTriage.data.length > 0 && (
+              <span className="badge">{inTriage.data.length}</span>
+            )}
           </a>
           <a
             href={
