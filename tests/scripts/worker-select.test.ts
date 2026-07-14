@@ -1002,6 +1002,9 @@ describe("buildDockerArgs", () => {
     expect(joined).toContain("GEMINI_DEFAULT_AUTH_TYPE=gemini-api-key"); // non-interactive auth select
     expect(joined).not.toContain("CLAUDE_CODE_OAUTH_TOKEN"); // no Claude cred/placeholder on the gemini path
     expect(args).toContain("SWITCHYARD_TOKEN"); // scoped token still bare-passed
+    // gemini-cli refuses to run in the untrusted /work dir (exits 55) even under
+    // --yolo, so trust the workspace non-interactively (SYD-225 go-live).
+    expect(joined).toContain("GEMINI_CLI_TRUST_WORKSPACE=true");
   });
 
   it("gemini open mode: the real GEMINI_API_KEY is passed bare, no placeholder, no CA (SYD-225)", () => {

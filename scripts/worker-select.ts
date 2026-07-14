@@ -1097,6 +1097,13 @@ export function buildDockerArgs(
       `${GEMINI_DEFAULT_AUTH_TYPE_VAR}=${GEMINI_API_KEY_AUTH_TYPE}`,
       "-e",
       "GEMINI_SANDBOX=false",
+      // gemini-cli 0.x refuses to run in an "untrusted" folder — even under
+      // --yolo it downgrades to the interactive approval picker and then exits
+      // 55 headless ("not running in a trusted directory"). The container IS the
+      // sandbox and /work is a fresh disposable clone, so trust it up front
+      // (SYD-225 go-live: every gemini session died here otherwise).
+      "-e",
+      "GEMINI_CLI_TRUST_WORKSPACE=true",
     ];
   } else if (proxy) {
     credArgs = ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`];

@@ -130,6 +130,31 @@ describe("listAgentSessions", () => {
     expect(only.length).toBe(1);
     expect(only[0].ref).toBe("SYD-2");
   });
+
+  it("scopes to a single actor's sessions when actorId is given (engine-scoped reconcile)", () => {
+    const codex = createActor(db, { name: "auto-codex", type: "agent" }).actor;
+    createIssue(db, agent, {
+      projectKey: "SYD",
+      title: "Other",
+      description: "y",
+      provenance: { sourceType: "session" },
+    });
+    startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" }); // claude/worker
+    startAgentSession(db, codex, { ref: "SYD-2", mode: "cli" }); // codex actor
+
+    expect(
+      listAgentSessions(db, { active: true, actorId: agent.id }).map((s) => s.ref),
+    ).toEqual(["SYD-1"]);
+    expect(
+      listAgentSessions(db, { active: true, actorId: codex.id }).map((s) => s.ref),
+    ).toEqual(["SYD-2"]);
+    // unscoped still returns both — the UI panel is not actor-scoped.
+    expect(
+      listAgentSessions(db, { active: true })
+        .map((s) => s.ref)
+        .sort(),
+    ).toEqual(["SYD-1", "SYD-2"]);
+  });
 });
 
 describe("recordProgressNote", () => {

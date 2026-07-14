@@ -289,6 +289,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       listAgentSessions(db, {
         active: c.req.query("active") === "true" ? true : undefined,
         ref: c.req.query("ref") || undefined,
+        // `mine=true` scopes to the caller's own sessions — the dispatch worker's
+        // reconcile uses it so a codex/gemini worker only adopts its own
+        // containers, not another engine's (SYD-234-class isolation).
+        actorId: c.req.query("mine") === "true" ? c.var.actor.id : undefined,
       }),
     ),
   );

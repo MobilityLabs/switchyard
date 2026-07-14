@@ -1228,17 +1228,12 @@ export async function runTick(
             );
             continue;
           }
-          // SYD-210 review (codex): leased dispatch requires the session to
-          // present its lease as an MCP header. The codex container can't yet
-          // (SYD-220), so a codex worker would claim host-side and then dispatch
-          // a session whose every claim-scoped write is rejected — stranding the
-          // issue in_progress. Skip BEFORE claiming so nothing is stranded.
-          if ((config.engine ?? "claude") === "codex") {
-            console.log(
-              `skipping ${issue.ref}: codex leased dispatch not yet supported — see SYD-220`,
-            );
-            continue;
-          }
+          // SYD-220 wired codex's session-scoped lease end-to-end: buildDockerArgs
+          // passes -e SWITCHYARD_LEASE for every engine, and container-entry.codex.sh
+          // names it via codex's env_http_headers so the container presents it as
+          // the X-Switchyard-Lease MCP header (parity with claude/gemini). The old
+          // "codex leased dispatch not yet supported" skip that guarded this spot is
+          // therefore stale and removed — codex now claims + dispatches like the others.
           const leaseToken = await claimIssueHost(config, token, issue.ref);
           if (!leaseToken) continue;
           recordAttempt(retryState, issue.ref, issue.updatedAt);
@@ -1385,11 +1380,14 @@ async function fetchRunningContainerSessions(
   config: WorkerConfig,
   token: string,
 ): Promise<RunningContainerSessionRow[]> {
-  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true`;
+  // mine=true: reconcile only THIS worker's own sessions (SYD-234-class
+  // isolation) — otherwise a codex/gemini worker adopts a claude container
+  // (names aren't engine-scoped) and then 400s reporting its end.
+  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true&mine=true`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
     throw new Error(
-      `GET /api/agent-sessions?active=true failed: ${res.status} ${await res.text()}`,
+      `GET /api/agent-sessions?active=true&mine=true failed: ${res.status} ${await res.text()}`,
     );
   }
   return (await res.json()) as RunningContainerSessionRow[];

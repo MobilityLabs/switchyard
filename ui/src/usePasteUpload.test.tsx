@@ -59,7 +59,7 @@ function HarnessNoRef({
   expose: (s: State) => void;
 }) {
   const [draft, setDraft] = useState(initialDraft);
-  const paste = usePasteUpload("", draft, setDraft);
+  const paste = usePasteUpload("", setDraft);
   expose({ draft, ...paste });
   return <textarea ref={paste.textareaRef} defaultValue={initialDraft} />;
 }
