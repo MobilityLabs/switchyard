@@ -1380,11 +1380,14 @@ async function fetchRunningContainerSessions(
   config: WorkerConfig,
   token: string,
 ): Promise<RunningContainerSessionRow[]> {
-  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true`;
+  // mine=true: reconcile only THIS worker's own sessions (SYD-234-class
+  // isolation) — otherwise a codex/gemini worker adopts a claude container
+  // (names aren't engine-scoped) and then 400s reporting its end.
+  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true&mine=true`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
     throw new Error(
-      `GET /api/agent-sessions?active=true failed: ${res.status} ${await res.text()}`,
+      `GET /api/agent-sessions?active=true&mine=true failed: ${res.status} ${await res.text()}`,
     );
   }
   return (await res.json()) as RunningContainerSessionRow[];

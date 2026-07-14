@@ -149,11 +149,17 @@ export function endAgentSession(
 
 export function listAgentSessions(
   db: Db,
-  filters: { active?: boolean; ref?: string } = {},
+  filters: { active?: boolean; ref?: string; actorId?: number } = {},
   nowSeconds: number = Math.floor(Date.now() / 1000),
 ): AgentSessionView[] {
   const conditions: SQL[] = [];
   if (filters.ref) conditions.push(eq(agentSessions.issueId, getIssue(db, filters.ref).id));
+  // Scope to one actor's own sessions — the worker's startup reconcile passes
+  // its actor so a codex/gemini worker only adopts/closes ITS containers, not a
+  // different engine's (container names aren't engine-scoped, so an unscoped
+  // list cross-adopts and then 400s on the other actor's session). Unset for the
+  // UI panel, which shows every engine's sessions.
+  if (filters.actorId) conditions.push(eq(agentSessions.actorId, filters.actorId));
   if (filters.active) {
     conditions.push(eq(agentSessions.status, "running"));
     conditions.push(
