@@ -244,3 +244,47 @@ describe("redeliverIssue SHA pin (SYD-208)", () => {
     );
   });
 });
+
+// SYD-230: re-stamp lets a human re-authorize delivery of an already-done issue
+// whose done-stamp never triggered delivery (pin-less done — the open agent PR
+// wasn't in pr_state at stamp-time), without a delivery_failure and without the
+// done→in_review→done round-trip.
+describe("redeliverIssue re-stamp on a done issue (SYD-230)", () => {
+  function seedOpenPr(headSha: string) {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha,
+    });
+  }
+  function forceDone() {
+    const id = getIssue(db, "AIPI-1").id;
+    db.update(issues).set({ status: "done" }).where(eq(issues.id, id)).run();
+  }
+
+  it("authorizes delivery for a done issue with an open agent PR and no delivery failure", () => {
+    seedOpenPr("sha1");
+    forceDone();
+    const updated = redeliverIssue(db, human, "AIPI-1", "sha1");
+    expect(updated.status).toBe("done");
+    const requested = listIssueEvents(db, updated.id).at(-1)!;
+    expect(requested.type).toBe("redeliver_requested");
+    expect(requested.payload).toEqual({ pin: { repo: REPO, prNumber: 7, headSha: "sha1" } });
+  });
+
+  it("still enforces the head-SHA compare-and-set on the re-stamp path", () => {
+    seedOpenPr("new-sha");
+    forceDone();
+    expect(() => redeliverIssue(db, human, "AIPI-1", "old-sha")).toThrowError(/new-sha/);
+  });
+
+  it("refuses a non-done issue with an open PR and no delivery failure (re-stamp is done-only)", () => {
+    seedOpenPr("sha1");
+    // status left at its post-create default (not done)
+    expect(() => redeliverIssue(db, human, "AIPI-1", "sha1")).toThrowError(
+      /no unresolved delivery failure/i,
+    );
+  });
+});
