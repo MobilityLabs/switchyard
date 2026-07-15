@@ -8,6 +8,8 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { Db } from "./db/index.js";
 import { authenticate } from "./services/actors.js";
+import { resolveSupervisedPrincipal } from "./services/supervised-sessions.js";
+import { attributionOf } from "./services/attribution.js";
 import { buildMcpServer } from "./mcp/server.js";
 import { buildAuthRoutes } from "./rest/auth-routes.js";
 import { buildApiRoutes } from "./rest/api-routes.js";
@@ -66,7 +68,14 @@ export function createApp(db: Db) {
   app.post("/mcp", async (c) => {
     const auth = c.req.header("authorization") ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-    const actor = token ? authenticate(db, token) : null;
+    // A supervised session's sup_ token resolves FIRST, to a dual-attribution
+    // principal (the accountable human + the agent editing on their behalf);
+    // every write on this connection is then stamped with it, and hard-gated
+    // actions divert to a pending affirmation. The two lookups are disjoint —
+    // authenticate() reads actors.tokenHash, while a sup_ hash lives only in
+    // `sessions` — so this cannot shadow an ordinary bearer.
+    const principal = token ? resolveSupervisedPrincipal(db, token) : null;
+    const actor = principal?.actor ?? (token ? authenticate(db, token) : null);
     if (!actor) {
       return c.json(
         { error: "Missing or invalid bearer token — mint one with the switchyard CLI." },
@@ -79,7 +88,17 @@ export function createApp(db: Db) {
     // header (mirrors REST's X-Switchyard-Lease); bake it into the tool closure
     // so claim-scoped calls carry it without the token entering the transcript.
     const leaseToken = c.req.header("x-switchyard-lease") ?? undefined;
-    const server = buildMcpServer(db, actor, undefined, leaseToken);
+    // A plain principal deliberately gets NO attribution: populating
+    // events.sessionId for a plain session would break POST /auth/logout, whose
+    // deleteSession hard-deletes those rows that events.sessionId FKs onto.
+    const server = buildMcpServer(
+      db,
+      actor,
+      undefined,
+      leaseToken,
+      principal ? attributionOf(principal) : {},
+      principal?.viaAgent,
+    );
     res.on("close", () => {
       transport.close();
       server.close();
