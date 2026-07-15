@@ -275,7 +275,7 @@ function assertAssignee(db: DbOrTx, actor: Actor, current: IssueView, toStatus: 
 export type LeaseChannel = { presented?: string; minted?: { token: string | null } };
 
 export function updateIssue(
-  db: Db,
+  db: DbOrTx,
   actor: Actor,
   ref: string,
   patch: UpdateIssueInput,

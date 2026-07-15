@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import type { Db } from "../db/index.js";
+import type { Db, DbOrTx } from "../db/index.js";
 import { settings } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
@@ -45,7 +45,21 @@ export const REGISTRY = {
   "dispatch.max_answer_concurrent": { type: "number", default: 2 },
   "dispatch.poll_seconds": { type: "number", default: 300 },
   "dispatch.event_poll_seconds": { type: "number", default: 15 },
+  "supervised.hard_gate_actions": {
+    type: "string[]",
+    default: ["done"],
+    description:
+      "Status transitions requiring fresh human affirmation in a supervised session. Only affirmable statuses are allowed (Phase 1: done). Empty = full absorption.",
+  },
 } satisfies Record<string, RegistryEntry>;
+
+// The gated actions an affirmation can actually carry out. Gating anything else
+// would strand the proposal: the divert would park a pending row that
+// affirmPendingAction has no executor for. Lives here rather than in
+// hard-gate.ts (which re-exports it as its public name) to keep settings.ts a
+// leaf — hard-gate.ts imports getSetting and updateIssue, so importing it back
+// would close a settings -> hard-gate -> issues -> settings cycle.
+export const EXECUTABLE_GATE_ACTIONS: readonly string[] = ["done"];
 
 export type SettingKey = keyof typeof REGISTRY;
 
@@ -94,10 +108,20 @@ function validateValue(key: SettingKey, value: unknown): void {
     if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
       throw new SwitchyardError(`Setting "${key}" must be an array of strings.`);
     }
+    // Write-path only (getSetting never re-validates), so tightening this can
+    // never make an already-stored value unreadable.
+    if (key === "supervised.hard_gate_actions") {
+      const stranded = (value as string[]).filter((v) => !EXECUTABLE_GATE_ACTIONS.includes(v));
+      if (stranded.length > 0) {
+        throw new SwitchyardError(
+          `"${stranded.join('", "')}" is not an affirmable action — a gated action needs an executor to run once a human affirms it. Valid: ${EXECUTABLE_GATE_ACTIONS.join(", ")}.`,
+        );
+      }
+    }
   }
 }
 
-export function getSetting<K extends SettingKey>(db: Db, key: K): SettingValue<K> {
+export function getSetting<K extends SettingKey>(db: DbOrTx, key: K): SettingValue<K> {
   requireKnownKey(key);
   const row = db.select().from(settings).where(eq(settings.key, key)).get();
   return (row ? row.value : REGISTRY[key].default) as SettingValue<K>;
