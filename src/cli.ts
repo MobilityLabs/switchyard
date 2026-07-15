@@ -71,7 +71,7 @@ try {
     if (!row) throw new SwitchyardError(`There is no actor named "${humanName}".`);
     if (row.type !== "human") {
       throw new SwitchyardError(
-        `"${humanName}" is a ${row.type}, not a human — supervised sessions root on a human actor.`,
+        `"${humanName}" is an actor of type "${row.type}", not a human — supervised sessions root on a human actor.`,
       );
     }
     const human: Actor = { id: row.id, name: row.name, type: row.type };
