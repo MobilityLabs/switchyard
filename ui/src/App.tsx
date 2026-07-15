@@ -11,6 +11,7 @@ import Review from "./views/Review";
 import NewIssue from "./views/NewIssue";
 import Search from "./views/Search";
 import Agents from "./views/Agents";
+import Approvals from "./views/Approvals";
 import Settings from "./views/settings/Settings";
 
 // Intercepts clicks on same-origin anchors that point at a known client
@@ -107,6 +108,7 @@ function ShellRouter({ me }: { me: Actor }) {
       {route.view === "new-issue" && <NewIssue />}
       {route.view === "search" && <Search query={route.query} />}
       {route.view === "agents" && <Agents />}
+      {route.view === "approvals" && <Approvals />}
       {route.view === "settings" && <Settings tab={route.tab} />}
     </Shell>
   );

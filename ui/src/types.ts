@@ -98,6 +98,24 @@ export type AgentSession = {
   lastNote: { note: string; createdAt: number } | null;
 };
 
+// Supervised-session hard-gate queue (SYD phase 1 task 8): a gated action
+// (currently only "done") parked for the session's accountable human to
+// affirm. Mirrors the pending_actions row shape returned by GET
+// /api/pending-actions (src/rest/pending-actions.ts).
+export const PENDING_ACTION_STATUSES = ["pending", "affirmed", "expired"] as const;
+export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
+export type PendingAction = {
+  id: number;
+  sessionId: number;
+  issueId: number;
+  actionType: string;
+  payload: Record<string, unknown>;
+  status: PendingActionStatus;
+  affirmedById: number | null;
+  affirmedAt: number | null;
+  createdAt: number;
+};
+
 export type WebhookView = {
   id: number;
   url: string;

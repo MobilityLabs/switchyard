@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Actor, Project } from "./types";
 import { getLastProject, href, isIssueRef, navigate, useRoute, type Route } from "./router";
-import { logout, listIssues, listAgentSessions } from "./api";
+import { logout, listIssues, listAgentSessions, listPendingActions } from "./api";
 import { usePoll } from "./usePoll";
 
 // Search box lives in the topbar so it's reachable from every view (SYD-86).
@@ -76,6 +76,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
     30000,
   );
   const liveSessions = usePoll(() => listAgentSessions({ active: true }), [], 15000);
+  const pendingApprovals = usePoll(() => listPendingActions("pending"), [], 15000);
 
   // Triage/Review tabs default to the last project you were looking at
   // (SYD-55) rather than always landing on "All projects" — but a bare
@@ -128,6 +129,15 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
             Agents
             {liveSessions.data && liveSessions.data.length > 0 && (
               <span className="badge">{liveSessions.data.length}</span>
+            )}
+          </a>
+          <a
+            href={href({ view: "approvals" })}
+            className={route.view === "approvals" ? "active" : ""}
+          >
+            Approvals
+            {pendingApprovals.data && pendingApprovals.data.length > 0 && (
+              <span className="badge warn">{pendingApprovals.data.length}</span>
             )}
           </a>
           {props.me.type === "human" && (

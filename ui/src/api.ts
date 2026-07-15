@@ -5,6 +5,8 @@ import type {
   Attachment,
   Issue,
   IssueDetail,
+  PendingAction,
+  PendingActionStatus,
   Priority,
   Project,
   Status,
@@ -172,6 +174,14 @@ export async function uploadAttachment(
   if (!res.ok) throw await toApiError(res);
   return (await res.json().catch(() => ({}))) as { id: number; url: string; markdown: string };
 }
+
+export const listPendingActions = (status: PendingActionStatus = "pending") =>
+  api<PendingAction[]>(`/api/pending-actions?status=${status}`);
+// Cookie-only by design (src/rest/pending-actions.ts): resolves the human from
+// the switchyard_session cookie a same-origin fetch sends automatically, not
+// from a bearer — never add an Authorization header here.
+export const affirmPendingAction = (id: number) =>
+  api<Issue>(`/api/pending-actions/${id}/affirm`, { method: "POST" });
 
 export const listWebhooks = () => api<WebhookView[]>("/api/webhooks");
 export const addWebhook = (input: { url: string; projectKey?: string; secret?: string }) =>
