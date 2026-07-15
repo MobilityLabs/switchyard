@@ -12,9 +12,13 @@
 
 The security of this feature rests on **one operational invariant that no code can enforce**, so it is stated here as a hard requirement:
 
-> **The supervised Claude process is provisioned with the `sup_` token and nothing else. It MUST NOT be given the accountable human's web session cookie (`switchyard_session`, `kind='plain'`) or the human's personal actor bearer (`syd_…`). If it is, the hard-gate and affirmation provide no protection.**
+> **The supervised Claude process is provisioned with the `sup_` token and nothing else. It MUST NOT be given *any* human's web-session cookie (`switchyard_session`, `kind='plain'`) or *any* human-principal actor bearer (`syd_…`) — not just the accountable human's. If it is, the hard-gate and affirmation provide no protection.**
+
+("Any human," not "the accountable human," is deliberate: `setSetting`'s `requireHuman` (`src/services/settings.ts:138-141`) accepts **any** human actor, so *any* human credential in the agent's environment can disable the gate. In practice the env is provisioned by its own accountable human, but the invariant must be stated at its true width.)
 
 Why: full absorption means `principal.actor` *is* the human, so every human-gated guard passes; only hard-gated statuses (`done`) divert to an affirmation. That containment holds **only** while the agent can't authenticate as the human on the REST surface. If the agent process also holds the human's cookie or `syd_` bearer, it can call `POST /pending-actions/:id/affirm` (owner tie passes — it *is* the human) and `PUT /settings/supervised.hard_gate_actions` (human passes `requireHuman`) directly, defeating both the affirmation and the policy. The credential-layer fixes below (Task 2 `getSessionActor`/`deleteSession` `kind` filters; Task 7 cookie-only affirm) close the paths a `sup_` token could take; this invariant closes the path a *leaked human credential* would take, and only operational discipline can do that. The CLI mint (Task 2) prints this warning; the honest scope of Phase 1's guarantee is **"provenance always; containment only under this invariant."**
+
+**Load-bearing corollary — do not add a settings-write MCP tool.** Under full absorption `principal.actor` *is* the human, so `setSetting`'s `requireHuman` would pass for a supervised session. The only reason a `sup_`-only agent cannot disable its own gate (`supervised.hard_gate_actions = []`) is that **the MCP tool registry exposes no settings-write tool** — `setSetting` is reachable only via `PUT /api/settings/:key`, which a `sup_` token cannot authenticate to. This is a real containment dependency, not an accident to rely on silently: any future PR adding a `set_setting`-style MCP tool **breaks containment** and must gate it on `principal.viaAgent == null` (or exclude supervised sessions explicitly).
 
 ## Revision history
 
@@ -29,6 +33,11 @@ Why: full absorption means `principal.actor` *is* the human, so every human-gate
   7. **`refOfIssueId` dropped** for the existing `issueRefById` (`src/services/issues.ts:111`) (Task 6).
   8. **Web approval-queue UI added** (Task 8) — v2 shipped only REST endpoints; the "web-board button" the model relies on now exists.
   9. Threat-model section added (above); plan-text fixes (`buildApiRoutes(db)`+`app.request` not `createApp`; REST error convention; "≤4 args"); added tests (supervised-`claimIssue` attribution, opt-out `[]`, rollback-leaves-pending).
+- **Round 3 debate → APPROVED** (4 APPROVED: gemini, pentester, fable, opus; 1 REVISE: codex, wanting only one more test). All round-2 findings verified resolved against source by three reviewers independently. The panel's residual nits are folded in here **after** the approving review — each is a one-liner or one test that the `tsc`/verify gate would catch anyway, none change reviewed behaviour:
+  - **codex:** the double-affirm exactly-once regression test (Task 6) — `done` authorizes delivery, so double-execution would double-authorize; and the REST test's "agent bearer" is clarified to mean *without* the owner cookie.
+  - **fable:** `EXECUTABLE_GATE_ACTIONS` typed `readonly string[]` (an `as const` makes `.includes(status)` a TS2345); the import-cycle fallback replaced with a **real** one (third module) — the v3 text prescribed a no-op refactor; TOCTOU comment on the divert.
+  - **opus:** `pendingActions.createdAt` needs `.default(now())` (its own Task-1 raw-insert test fails otherwise); `isHardGated`/`findOrCreatePendingAction`/`getPendingAction` typed `DbOrTx`; `buildMcpServer` call-site count corrected to 4.
+  - **pentester:** the invariant widened to *any* human's credential (`requireHuman` accepts any human); the "don't add a settings-write MCP tool" corollary made explicit; the `GET` queue leak logged at its true width (readable by any **agent** token).
 
 ## Global Constraints
 
@@ -107,7 +116,7 @@ describe("supervised-session schema", () => {
 ```
 
 - [ ] **Step 2: Run → FAIL** (`no such column`, no index).
-- [ ] **Step 3: Schema.** `sessions`: add `kind: text("kind",{enum:["plain","supervised"]}).notNull().default("plain")`, `viaAgentId: integer("via_agent_id").references(()=>actors.id)`, `closedAt: integer("closed_at")`. `events`: add `viaAgentId` + `sessionId` nullable FKs before `createdAt`. New `pendingActions` table (`id`, `sessionId`→sessions notNull, `issueId`→issues notNull, `actionType` text, `payload` json default `{}`, `status` enum `["pending","affirmed","expired"]` default `"pending"`, `affirmedById`→actors nullable, `affirmedAt` int nullable, `createdAt`). Declare the partial unique index in schema (`uniqueIndex("pending_actions_active_uniq").on(t.sessionId,t.issueId,t.actionType).where(sql\`status = 'pending'\`)`).
+- [ ] **Step 3: Schema.** `sessions`: add `kind: text("kind",{enum:["plain","supervised"]}).notNull().default("plain")`, `viaAgentId: integer("via_agent_id").references(()=>actors.id)`, `closedAt: integer("closed_at")`. `events`: add `viaAgentId` + `sessionId` nullable FKs before `createdAt`. New `pendingActions` table (`id`, `sessionId`→sessions notNull, `issueId`→issues notNull, `actionType` text, `payload` json default `{}`, `status` enum `["pending","affirmed","expired"]` default `"pending"`, `affirmedById`→actors nullable, `affirmedAt` int nullable, `createdAt: integer("created_at").notNull().default(now())` — **the `.default(now())` is required**, not optional polish: Step 1's raw insert omits `created_at`, so a bare `.notNull()` fails the test on a NOT NULL with no default (`now = () => sql\`(unixepoch())\``, `schema.ts:25`; the idiom is universal in this file)). Declare the partial unique index in schema (`uniqueIndex("pending_actions_active_uniq").on(t.sessionId,t.issueId,t.actionType).where(sql\`status = 'pending'\`)`).
 - [ ] **Step 4:** `npm run db:generate`; **verify the emitted SQL contains `WHERE status = 'pending'`** (drizzle-kit sometimes drops index predicates — if so, hand-add the `WHERE` to the generated file, which is the one time editing generated SQL is sanctioned, and note it in the commit).
 - [ ] **Step 5: Run → PASS** (2 tests).
 - [ ] **Step 6: Commit** (`git add src/db/schema.ts drizzle/ tests/db/supervised-schema.test.ts`).
@@ -192,7 +201,11 @@ describe("supervised token is not a web/REST credential", () => {
 
 **Files:** modify `settings.ts` (register + validate); create `hard-gate.ts`; test `tests/services/hard-gate.test.ts`.
 
-**Interfaces:** `isHardGated(db, actionType)`; `EXECUTABLE_GATE_ACTIONS = ["done"] as const`; `findOrCreatePendingAction(db, sessionId, issueId, actionType, payload)` — **conflict-aware & payload-refreshing**; `getPendingAction`; `listPendingActions(db, status)`; `affirmPendingAction(db, human, id)`.
+**Interfaces (Task 5):** `isHardGated(db: DbOrTx, actionType: string)`; `EXECUTABLE_GATE_ACTIONS: readonly string[] = ["done"]`; `findOrCreatePendingAction(db: DbOrTx, sessionId, issueId, actionType, payload)` — **conflict-aware & payload-refreshing**; `getPendingAction(db: DbOrTx, id)`; `listPendingActions(db, status)`; `affirmPendingAction(db: Db, human, id)`.
+
+**Typing notes (both are `tsc` errors if ignored — they surface at the Task 9 gate, so pin them here):**
+- `isHardGated`/`findOrCreatePendingAction`/`getPendingAction` must take **`DbOrTx`**, not `Db` — the Task-6 divert calls them with `updateIssue`'s now-widened `DbOrTx` handle, and the affirm executor calls `getPendingAction` inside a `Tx`.
+- Type `EXECUTABLE_GATE_ACTIONS` as **`readonly string[]`**, not `["done"] as const`. With `as const` the type is `readonly ["done"]`, whose `.includes()` only accepts `"done"` — passing the full `Status` union (Task 6) is TS2345. If you keep `as const`, the call site needs `(EXECUTABLE_GATE_ACTIONS as readonly string[]).includes(patch.status)`.
 
 **Design notes:** (1) owner tie — affirming `human.id` must equal the session's `actorId`. (2) tx-safe execute-then-mark: conditional claim `UPDATE … WHERE id=? AND status='pending'` (0 rows ⇒ throw), execute, rollback on throw leaves it `pending`. (3) executor guard — only `done`. (4) stale SHA — executor re-drives `updateIssue` as the human, no `attr`; a throw rolls back and leaves it re-affirmable *with the refreshed payload* (see dedup).
 
@@ -225,6 +238,13 @@ describe("supervised token is not a web/REST credential", () => {
   - divert: supervised `updateIssue({status:"done"})` **does not commit**, creates exactly one pending row, and a **retry dedups** (COUNT stays 1). Assert the throw text `/awaiting human affirmation/i`. Plain-human done-stamp is NOT diverted.
   - **rollback-leaves-pending:** create the pending action for a `done` over an open agent PR with a stale `expectedHeadSha` so the executor's `updateIssue` throws; assert the pending row is still `status='pending'` (re-affirmable), and the issue did not transition.
   - affirm-exec: the session's human affirms → issue is `done`.
+  - **double-affirm (idempotence / exactly-once):** affirm the same pending action a **second** time → it throws (`/already affirmed|already taken/i`), and assert **exactly one** `status_changed` event to `done` exists for that issue and the issue transitioned once. This is the regression guard for the conditional claim (`UPDATE … WHERE id=? AND status='pending'`) — it matters because a `done` stamp *authorizes delivery* and carries the SYD-208 head-SHA pin in its `status_changed` payload (`src/services/issues.ts:331,371`), so a double-execution would double-authorize. Assert the event count, not just the throw:
+    ```typescript
+    affirmPendingAction(db, h, pid);
+    expect(() => affirmPendingAction(db, h, pid)).toThrow(/already/i);
+    const n = db.get<{ c: number }>(sql`SELECT COUNT(*) c FROM events WHERE issue_id = ${issueId} AND type='status_changed' AND json_extract(payload,'$.to') = 'done'`);
+    expect(n!.c).toBe(1);
+    ```
 - [ ] **Step 2: Run → FAIL.**
 - [ ] **Step 3:** widen `updateIssue`'s first param `db: Db` → `db: DbOrTx` (import `DbOrTx` from `../db/index.js`); the compiler will surface `getSetting(db, …)` at `issues.ts:574` — widen `getSetting`'s first param to `DbOrTx` too (a plain select; safe). Add the divert **before** the mutation transaction:
   ```typescript
@@ -240,6 +260,11 @@ describe("supervised token is not a web/REST credential", () => {
       if (otherKeys.length > 0) {
         throw new SwitchyardError(`A hard-gated status change to "${patch.status}" must be its own call — move ${otherKeys.join(", ")} to a separate update.`);
       }
+      // TOCTOU note: this read + pend runs outside a transaction, so the issue can
+      // change between here and the human's later affirm. Harmless by construction —
+      // the executor re-drives updateIssue at affirm time, which re-validates every
+      // guard (incl. the SYD-208 head pin) against current state: it either no-ops
+      // (already done) or throws and rolls back, leaving the row pending.
       const pendingActionId = findOrCreatePendingAction(db, attr.sessionId, target.id, patch.status, {
         status: patch.status, ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
       });
@@ -247,7 +272,9 @@ describe("supervised token is not a web/REST credential", () => {
     }
   }
   ```
-  (`EXECUTABLE_GATE_ACTIONS` imported from `./hard-gate.js`; the setting validator in Task 5 already blocks non-executable values, so this branch is defense-in-depth. Import `isHardGated`/`findOrCreatePendingAction` from `./hard-gate.js`; if the two-way import between `issues.ts` and `hard-gate.ts` cycles at runtime, hoist the divert body into `hard-gate.ts` as `maybeDivert(db, ref, patch, attr)` and call it here. **Verify by running, not assuming.**) Use the existing **`issueRefById`** (`src/services/issues.ts:111`, `(db: DbOrTx, id) => string|null`) in the affirm executor with a null-check — do NOT add a new `refOfIssueId`.
+  (`EXECUTABLE_GATE_ACTIONS` imported from `./hard-gate.js`; the setting validator in Task 5 already blocks non-executable values, so this branch is defense-in-depth. Import `isHardGated`/`findOrCreatePendingAction` from `./hard-gate.js`.
+
+  **On the `issues.ts` ⇄ `hard-gate.ts` cycle:** it is real (issues imports the gate helpers; hard-gate imports `updateIssue`/`issueRefById` back) but **benign** — neither module touches the other's exports during module evaluation, only at call time, and the hot exports are hoisted function declarations that ESM live-bindings resolve before any request runs. `EXECUTABLE_GATE_ACTIONS` is only read inside `updateIssue`, so there's no TDZ exposure. Expect it to work. **If it does bite, the real fix is to move `affirmPendingAction` into a third module** (e.g. `src/services/hard-gate-affirm.ts`) that imports both `issues.ts` and `hard-gate.ts`, leaving `hard-gate.ts` as policy + pending-CRUD with **no** import of `issues.ts`. (Do *not* just hoist the divert body into `hard-gate.ts` — that keeps the identical two-way import and fixes nothing.)) Use the existing **`issueRefById`** (`src/services/issues.ts:111`, `(db: DbOrTx, id) => string|null`) in the affirm executor with a null-check — do NOT add a new `refOfIssueId`.
 - [ ] **Step 4: Run → PASS. Step 5: Commit.**
 
 ---
@@ -258,9 +285,9 @@ describe("supervised token is not a web/REST credential", () => {
 
 - [ ] **Step 1: Failing tests** —
   - `supervised-write.test.ts` (harness copied from `tests/mcp/write-tools.test.ts` — it builds via `buildMcpServer(db, actor, …)`): build with `buildMcpServer(db, prin.actor, dir, undefined, attributionOf(prin), prin.viaAgent)`. Assert (a) `update_issue`→`in_review` writes `status_changed` with `via_agent_id`/`session_id`; **(b) `update_issue`→`done` (gated) returns the `/awaiting human affirmation/i` error and creates exactly one `pending_actions` row** — the MCP-transport observation of the divert (this is the test v2 lacked); (c) `progress_note` succeeds (acts as `viaAgent`) and its event carries `session_id`.
-  - `pending-actions.test.ts` (harness: `const app = buildApiRoutes(db); app.request(…)` — there is no `createApp`): the **owner human's session cookie** affirms and the deferred `done` commits; the same call with an **agent bearer**, a **`sup_` token as cookie**, or a **different human** is 4xx; `GET /api/pending-actions?status=pending` lists it.
+  - `pending-actions.test.ts` (harness: `const app = buildApiRoutes(db); app.request(…)` — there is no `createApp`): the **owner human's session cookie** affirms and the deferred `done` commits; the same call is 4xx with (a) an **agent bearer and NO session cookie**, (b) a **`sup_` token presented as the cookie**, or (c) a **different human's** cookie (owner-tie → `/only the accountable human/i`). Note (a) is deliberately "bearer *without* the owner cookie" — the handler is cookie-only by design, so an agent bearer *plus* a valid owner cookie would legitimately succeed (that's a human present at the browser, which is exactly what the gate wants). `GET /api/pending-actions?status=pending` lists it.
 - [ ] **Step 2: Run → FAIL.**
-- [ ] **Step 3: `buildMcpServer`** — append optional params: `attribution: Attribution = {}, viaAgent?: Actor` (positions 5–6; the 3 existing callers pass ≤4 args — `lease-tools.test.ts:13` passes 4 (`connectionLeaseToken`), positions 1–4 unchanged — so none break). Write tools pass `attribution`; `progress_note` passes `recordProgressNote(db, viaAgent ?? actor, …, attribution)`. Do **not** register `open_supervised_session`.
+- [ ] **Step 3: `buildMcpServer`** — append optional params: `attribution: Attribution = {}, viaAgent?: Actor` (positions 5–6; all **4** existing call sites pass ≤4 args with positions 1–4 unchanged, so none break: `src/server.ts:82` (4), `tests/mcp/lease-tools.test.ts:13` (4, `connectionLeaseToken`), `write-tools.test.ts:21` (3), `read-tools.test.ts:16` (2)). Write tools pass `attribution`; `progress_note` passes `recordProgressNote(db, viaAgent ?? actor, …, attribution)`. Do **not** register `open_supervised_session`.
 - [ ] **Step 4: `/mcp`** — resolve `resolveSupervisedPrincipal(db, token)` first; if it resolves use `principal.actor` + `attributionOf` + `viaAgent`; else `authenticate` (plain, `attribution={}`, no viaAgent); 401 if neither. `buildMcpServer(db, actor, undefined, leaseToken, attribution, viaAgent)`.
 - [ ] **Step 5: REST (cookie-only affirm).** In `src/rest/pending-actions.ts`:
   ```typescript
@@ -277,7 +304,10 @@ describe("supervised token is not a web/REST credential", () => {
   });
   router.get("/pending-actions", (c) => c.json(listPendingActions(db, c.req.query("status") ?? "pending")));
   ```
-  (Confirm `SESSION_COOKIE`/`getCookie` import points against `src/rest/auth-routes.ts`. `GET` readable by any authed actor is an accepted Phase-1 simplification — metadata only; a human-only scope is a one-line follow-up.)
+  (Confirm `SESSION_COOKIE`/`getCookie` import points against `src/rest/auth-routes.ts`.)
+
+  **Accepted Phase-1 simplification, stated at its true width:** `GET /api/pending-actions` has no human/owner scoping, so it is readable by **any authed actor — including a plain agent bearer** (not merely "any authed actor," which reads as human-only; agents are authed actors). It leaks issue-ref/action-type/session/timestamp **metadata across all sessions** — no capability, no token. Accepted for Phase 1; the human-only scope is a one-line follow-up, logged in Deferred as *info-disclosure-to-any-agent-token* so it isn't forgotten.
+  **CSRF:** none needed beyond what exists — the session cookie is `httpOnly` + `SameSite=Lax` (`src/rest/auth-routes.ts:17-23`), so a cross-origin auto-POST to the affirm route won't carry it. This matches the existing `POST /auth/logout` posture; an `Origin`/`Sec-Fetch-Site` check would be an app-wide def-in-depth improvement, not a Phase-1 blocker.
 - [ ] **Step 6: Run → PASS. Step 7: Commit.**
 
 ---
@@ -307,10 +337,13 @@ describe("supervised token is not a web/REST credential", () => {
 - **`dependency.remove`** (and any non-status gated action): own divert in `removeDependency` + executor branch.
 - **Per-project** hard-gate lists (Phase 1 install-global).
 - **Provenance chips** in the UI ("✍️ claude-code · under Sean").
-- **Lifecycle:** wire `closeSupervisedSession` to a CLI/REST revocation, renewal, expiry sweep; human-only scope on `GET /api/pending-actions`.
+- **Lifecycle:** wire `closeSupervisedSession` to a CLI/REST revocation, renewal, expiry sweep.
+- **Info-disclosure-to-any-agent-token:** scope `GET /api/pending-actions` to humans (and ideally to the requesting human's own sessions). Today any authed actor — **including a plain agent bearer** — can enumerate the queue's metadata across all sessions. Metadata only, no capability; one-line fix.
+- **Pending-row hygiene:** no expiry sweep exists, so a `pending` row abandoned by a human who instead done-stamps via the board lingers in the queue. Pair with the lifecycle sweep above.
 
 ## Self-Review
 
 - **Spec coverage:** Pillar 1 → Task 2 (CLI mint + resolve) + Task 7 (/mcp). Pillar 2 → Tasks 1, 3, 4. Pillar 3 → human-`actor` absorption + hard-gate Tasks 5–6, default `["done"]`. Pillar 4 → pre-existing `scripts/worker-select.ts:415` + claim interlock. Pillar 5 → Tasks 5–8 (web surface now real). Pillar 6 + containment → threat-model section (docs) + Task 2/7 credential fixes.
 - **Round-2 findings → resolution:** mixed-patch → `!== undefined` filter + MCP gated-done test (Task 6/7). Bearer-affirm → cookie-only (Task 7). `Db`→`DbOrTx` → explicit widening step (Task 6). Dedup payload/concurrency → partial unique index (Task 1) + `onConflictDoUpdate` refresh (Task 5). Non-executable gate → setting validator + divert guard (Task 5/6). `deleteSession` → kind filter (Task 2). `refOfIssueId` → `issueRefById` (Task 6). No UI → Task 8. Threat-model → dedicated section. Plan-text → `buildApiRoutes`+`app.request`, onError-400, "≤4 args". Tests → supervised-claim attribution (Task 4), opt-out `[]` (Task 5), rollback-leaves-pending (Task 6).
-- **Residual known-simplifications (stated, not hidden):** `SwitchyardError` carries the pending id in the message string; `GET /api/pending-actions` readable by any authed actor; nested `updateIssue`-inside-`affirm` relies on better-sqlite3 savepoints — proven by the Task-5/6 affirm + rollback tests; the drizzle `onConflictDoUpdate` partial-target and the drizzle-kit partial-index-predicate emission are both flagged "verify by running," not assumed.
+- **Round-3 nits folded (post-approval, below re-review threshold):** double-affirm exactly-once test (Task 6); `EXECUTABLE_GATE_ACTIONS: readonly string[]` + `DbOrTx` on the hard-gate params (Task 5); `pendingActions.createdAt.default(now())` (Task 1); real import-cycle fallback + TOCTOU comment (Task 6); "agent bearer without owner cookie" test clarification + 4-call-site count + `GET`-leak/CSRF wording (Task 7); invariant widened to *any* human + settings-write-MCP-tool corollary (threat model).
+- **Residual known-simplifications (stated, not hidden):** `SwitchyardError` carries the pending id in the message string; `GET /api/pending-actions` is readable by any authed actor **including an agent bearer** (metadata only — logged in Deferred); nested `updateIssue`-inside-`affirm` relies on better-sqlite3 savepoints — proven by the Task-5/6 affirm + rollback tests; the drizzle `onConflictDoUpdate` partial-target and the drizzle-kit partial-index-predicate emission are both flagged "verify by running" (fable confirmed both are supported in the shipped `drizzle-orm`/`drizzle-kit` versions, but the runtime check stays); calling `.transaction()` on a `DbOrTx` union is a first in this codebase — the `tsc` gate is the backstop.
