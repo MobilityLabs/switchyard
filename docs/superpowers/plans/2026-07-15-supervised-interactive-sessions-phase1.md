@@ -4,41 +4,56 @@
 
 **Goal:** Give Switchyard a first-class *supervised interactive session* — one human driving one Claude, bound into a single principal — that preserves "an agent edited this, under a named human" provenance, relaxes the guardrails that only exist because dispatched workers are unattended, and coexists cleanly with headless dispatch.
 
-**Architecture:** A supervised session is a **session-kind that binds two actors** (human + agent), not a new actor type. The MCP `/mcp` endpoint resolves a supervised-session token to a **Principal** `{ actor: human, viaAgent: agent, sessionId }`. Every service guard keeps seeing the *human* `actor`, so full-absorption is free (no guard edits). The *agent* rides alongside as `viaAgent`, threaded only into the audit choke point (`recordEvent`) so provenance stays honest. A per-install **hard-gate** list names action-types that, even in a supervised session, divert to a `pending_actions` row and require a fresh human affirmation (Phase 1: web-board button carrying the human's own credential; the native/Touch-ID surface is Phase 2).
+**Architecture:** A supervised session is a **session-kind that binds two actors** (human + agent). The `/mcp` endpoint resolves a supervised-session token to a **Principal** `{ actor: human, viaAgent: agent, sessionId }`. **Human-gated guards keep reading the *human* `actor`** — so full-absorption needs no guard edits — while **agent-scoped tools read `principal.viaAgent`**. The agent identity is threaded into the audit choke point (`recordEvent`) as `Attribution`, so provenance stays honest. A hard-gate list names status transitions that, even in a supervised session, divert to a `pending_actions` row and require a fresh human affirmation by the session's own accountable human (Phase 1: web-board button; the native/Touch-ID surface is Phase 2).
 
 **Tech Stack:** TypeScript (ESM, `.js` import specifiers), Drizzle ORM + better-sqlite3, `@modelcontextprotocol/sdk`, Hono (REST), Zod v3 (app), Vitest.
+
+## Revision note (Round 1 debate → this plan)
+
+This plan was revised after a five-reviewer debate (codex, gemini, fable, opus, pentester — all REVISE). The structural changes vs. the first draft:
+
+1. **CRITICAL credential-boundary fix.** Supervised tokens live in the shared `sessions` table, and `getSessionActor` (`src/services/auth.ts:55`) resolves *any* session row with **no `kind` filter** — so a `sup_` token presented as the `switchyard_session` cookie authenticated as the full human across the whole REST surface (Task 2 hardens `getSessionActor` to `kind='plain'` + regression test).
+2. **Handshake moved out-of-band.** The `open_supervised_session` MCP tool is **removed**. The `sup_` token is minted by the **admin CLI** (like `mint-login`) and the human configures it as their MCP bearer. This fixes both transcript exposure of a high-power token *and* the fact that an MCP client cannot hot-swap its bearer from a tool result.
+3. **Affirm lifecycle made transaction-safe** (execute-then-mark, conditional `WHERE status='pending'`), **tied to the session's accountable human**, **deduped**, and **scoped to `done` only** — `dependency.remove` is dropped from Phase 1 entirely (it was advertised but no task implemented it).
+4. **`progress_note` (and every agent-scoped tool) reads `viaAgent`**, not the human `actor`, so full absorption doesn't break `requireAgent`.
+5. **Default `hard_gate_actions = ["done"]`** — the "agents can't stamp done" invariant stays enforced by default; empty (full absorption) is an explicit opt-in.
+6. **Plan-accuracy fixes:** the `Provenance` type is renamed `Attribution` (avoids colliding with the existing `Provenance` at `issues.ts:24`); `buildMcpServer`'s signature is kept backward-compatible (extra optional params, so the 3 existing `tests/mcp/*` don't break); the fabricated `resolveIssueByRef` is `getIssue`; the fabricated `tests/helpers/*` harness is replaced with the repo's real `openDb(":memory:")` idiom; drizzle raw reads use `sql\`…\``; `closeSupervisedSession` soft-closes (FK-safe) instead of deleting; **Task 9 (dispatch exclusion) is deleted** — it already ships at `scripts/worker-select.ts:414`.
 
 ## Global Constraints
 
 - **Node 24** — Node 25's WebStorage breaks jsdom tests (SYD-97). Do not bump.
-- **All business logic in `src/services/*`** — MCP/REST/UI are thin adapters over the same functions; no client has private powers.
-- **Services throw `SwitchyardError`** for user-facing failures (MCP `guard()` → `isError` result; REST → 4xx). Anything else is a real 500.
+- **All business logic in `src/services/*`** — MCP/REST/UI are thin adapters; no client has private powers.
+- **Services throw `SwitchyardError`** for user-facing failures (MCP `guard()` → `isError`; REST → 4xx). `SwitchyardError` carries **only a message** (`src/services/errors.ts:1` — `class SwitchyardError extends Error {}`); it has no structured payload, so any id a client must read goes **in the message string**.
 - **Mutate issues only through services** — `events` is a co-written append-only audit log; never write it out-of-band.
-- **Migrations are additive and generated** — after editing `src/db/schema.ts`, run `npm run db:generate` (drizzle-kit). Never hand-edit generated SQL.
-- **Zod v3** in the app (the SDK's zod@4 lives only under `worker-sdk/`).
-- **Import specifiers end in `.js`** even for `.ts` sources (ESM/NodeNext).
+- **Migrations are additive and generated** — after editing `src/db/schema.ts`, run `npm run db:generate`. Never hand-edit generated SQL.
+- **FKs are enforced at runtime** — `src/db/index.ts:45` runs `PRAGMA foreign_keys = ON` after migrate, in `:memory:` tests too. A row referenced by an FK **cannot be `DELETE`d**; use soft-close.
+- **Real test idiom** (no invented harness): `const db = openDb(":memory:")` then `createActor(db, {name,type})`, `createProject(db, human, {key,name})`, `createIssue(db, human, {projectKey,title})` — pattern lives in `tests/services/issues-update.test.ts:19-30`. Raw reads use drizzle `db.all(sql\`… ${x}\`)` / `db.get(sql\`…\`)` — **never** `db.all("SELECT …", [params])` (unsupported).
+- **Commit with explicit path lists** — never `git add -A` (stages unrelated worktree changes).
+- **Zod v3** in the app; import specifiers end in `.js` (ESM/NodeNext).
 - **Run `npm run verify` before done-stamping** (TZ=UTC-pinned typecheck/build:ui/test; mirrors CI).
 
 ## File Structure
 
-- `src/db/schema.ts` — add `sessions.kind` + `sessions.viaAgentId`; `events.viaAgentId` + `events.sessionId`; new `pendingActions` table (modify).
+- `src/db/schema.ts` — `sessions`: add `kind`, `viaAgentId`, `closedAt`; `events`: add `viaAgentId`, `sessionId`; new `pendingActions` table (modify).
 - `drizzle/00NN_*.sql` — generated migration (create).
-- `src/services/principal.ts` — the `Principal` type + `resolvePrincipal` (create).
+- `src/services/principal.ts` — the `Principal` type (create).
 - `src/services/supervised-sessions.ts` — `openSupervisedSession`, `resolveSupervisedPrincipal`, `closeSupervisedSession` (create).
+- `src/services/auth.ts` — `getSessionActor` filters `kind='plain'` (modify — the CRITICAL fix).
 - `src/services/events.ts` — `recordEvent` gains optional `viaAgentId`/`sessionId` (modify).
-- `src/services/provenance.ts` — the `Provenance` context type threaded into mutations (create; tiny, one type + helper).
-- `src/services/hard-gate.ts` — hard-gate policy read + pending-action create/list/affirm (create).
-- `src/services/issues.ts` — thread `Provenance` into `createIssue`/`updateIssue`/`claimIssue`; hard-gate pre-check on `done` (modify).
-- `src/services/dependencies.ts` — thread `Provenance`; hard-gate pre-check on `dependency.remove` (modify).
-- `src/services/comments.ts`, `src/services/needs-input.ts`, `src/services/agent-sessions.ts` — thread `Provenance` into their `recordEvent` calls (modify).
-- `src/mcp/server.ts` — `buildMcpServer` takes a `Principal`; register `open_supervised_session`; pass `Provenance` on write tools (modify).
-- `src/server.ts` — `/mcp` resolves supervised token → `Principal` (modify).
-- `src/rest/*` — `POST /api/pending-actions/:id/affirm`, `GET /api/pending-actions` (modify/create).
-- `src/services/dispatch selection` (in `settings.ts`/`stale-claims.ts` neighbours) — `workerPreference` positive-lane semantics (modify).
+- `src/services/attribution.ts` — the `Attribution` type + `attributionOf(principal)` (create).
+- `src/services/issues.ts` — thread `Attribution` into `createIssue`/`updateIssue`/`claimIssue` (+ its `updateIssue` delegation); hard-gate divert on `done`; add `refOfIssueId` (modify).
+- `src/services/comments.ts`, `needs-input.ts`, `dependencies.ts`, `attachments.ts` — thread `Attribution` into their `recordEvent` calls (modify).
+- `src/services/agent-sessions.ts` — `recordProgressNote` acts on the **agent** identity (`viaAgent`), threading attribution (modify).
+- `src/services/hard-gate.ts` — hard-gate policy + pending-action create/dedup/list/affirm-and-execute (create).
+- `src/services/settings.ts` — register `supervised.hard_gate_actions` (default `["done"]`) (modify).
+- `src/mcp/server.ts` — `buildMcpServer` gains optional `attribution` + `viaAgent` params; write tools forward attribution; agent-scoped tools use `viaAgent` (modify).
+- `src/server.ts` — `/mcp` resolves supervised token → `Principal`, passes actor+attribution+viaAgent (modify).
+- `src/rest/pending-actions.ts` — `POST /api/pending-actions/:id/affirm`, `GET /api/pending-actions` (create; wire into `buildApiRoutes`).
+- `src/cli.ts` — `mint-supervised-session <human> <agent>` subcommand (modify).
 
 ---
 
-## Task 1: Schema + migration for supervised sessions, event provenance, pending actions
+## Task 1: Schema + migration
 
 **Files:**
 - Modify: `src/db/schema.ts`
@@ -46,60 +61,48 @@
 - Test: `tests/db/supervised-schema.test.ts`
 
 **Interfaces:**
-- Produces: `sessions.kind` (`"plain" | "supervised"`, default `"plain"`), `sessions.viaAgentId` (nullable FK actors). `events.viaAgentId` (nullable FK actors), `events.sessionId` (nullable FK sessions). `pendingActions` table with columns below.
+- Produces: `sessions.kind` (`"plain"|"supervised"`, default `"plain"`), `sessions.viaAgentId` (nullable FK actors), `sessions.closedAt` (nullable int). `events.viaAgentId` (nullable FK actors), `events.sessionId` (nullable FK sessions). `pendingActions` table.
 
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
 // tests/db/supervised-schema.test.ts
 import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js"; // existing helper that migrates a fresh in-memory db
-import { sessions, events, pendingActions } from "../../src/db/schema.js";
+import { sql } from "drizzle-orm";
+import { openDb } from "../../src/db/index.js";
 
 describe("supervised-session schema", () => {
-  it("sessions has kind and via_agent_id columns", () => {
-    const db = makeTestDb();
-    // a raw insert exercising the new columns must not throw
-    db.run(
-      "INSERT INTO actors (name, type) VALUES ('h','human'),('a','agent')",
+  it("sessions has kind, via_agent_id, closed_at", () => {
+    const db = openDb(":memory:");
+    db.run(sql`INSERT INTO actors (name,type) VALUES ('h','human'),('a','agent')`);
+    db.run(sql`INSERT INTO sessions (token_hash,actor_id,via_agent_id,kind,expires_at)
+               VALUES ('th',1,2,'supervised',9999999999)`);
+    const row = db.get<{ kind: string; via_agent_id: number; closed_at: number | null }>(
+      sql`SELECT kind, via_agent_id, closed_at FROM sessions`,
     );
-    db.run(
-      "INSERT INTO sessions (token_hash, actor_id, via_agent_id, kind, expires_at) " +
-        "VALUES ('th', 1, 2, 'supervised', 9999999999)",
-    );
-    const row = db.all<{ kind: string; via_agent_id: number }>(
-      "SELECT kind, via_agent_id FROM sessions",
-    )[0];
-    expect(row.kind).toBe("supervised");
-    expect(row.via_agent_id).toBe(2);
+    expect(row!.kind).toBe("supervised");
+    expect(row!.via_agent_id).toBe(2);
+    expect(row!.closed_at).toBeNull();
   });
 
   it("pending_actions table exists with the expected shape", () => {
-    const db = makeTestDb();
-    db.run(
-      "INSERT INTO actors (name, type) VALUES ('h','human'),('a','agent')",
+    const db = openDb(":memory:");
+    db.run(sql`INSERT INTO actors (name,type) VALUES ('h','human'),('a','agent')`);
+    db.run(sql`INSERT INTO sessions (token_hash,actor_id,via_agent_id,kind,expires_at) VALUES ('th',1,2,'supervised',9999999999)`);
+    db.run(sql`INSERT INTO projects (key,name) VALUES ('SYD','Switchyard')`);
+    db.run(sql`INSERT INTO issues (project_id,number,title,status,creator_id) VALUES (1,1,'t','backlog',1)`);
+    db.run(sql`INSERT INTO pending_actions (session_id,issue_id,action_type,payload,status)
+               VALUES (1,1,'done','{}','pending')`);
+    const row = db.get<{ status: string; action_type: string }>(
+      sql`SELECT status, action_type FROM pending_actions`,
     );
-    db.run(
-      "INSERT INTO sessions (token_hash, actor_id, via_agent_id, kind, expires_at) VALUES ('th',1,2,'supervised',9999999999)",
-    );
-    db.run("INSERT INTO projects (key, name) VALUES ('SYD','Switchyard')");
-    db.run(
-      "INSERT INTO issues (project_id, number, title, status, creator_id) VALUES (1,1,'t','backlog',1)",
-    );
-    db.run(
-      "INSERT INTO pending_actions (session_id, issue_id, action_type, payload, status) " +
-        "VALUES (1, 1, 'done', '{}', 'pending')",
-    );
-    const row = db.all<{ status: string; action_type: string }>(
-      "SELECT status, action_type FROM pending_actions",
-    )[0];
-    expect(row.status).toBe("pending");
-    expect(row.action_type).toBe("done");
+    expect(row!.status).toBe("pending");
+    expect(row!.action_type).toBe("done");
   });
 });
 ```
 
-> If `tests/helpers/db.ts`/`makeTestDb` does not exist under that name, use the existing test-db bootstrap (grep `tests/` for how `services/*.test.ts` build a migrated db) and match it — do NOT invent a new harness.
+> Confirm `openDb` and `db.get(sql\`…\`)`/`db.run(sql\`…\`)` are the real API before running (grep `tests/services/issues-update.test.ts` and `src/services/events.ts:31`). If `openDb` isn't exported from `../../src/db/index.js`, use the exact import the existing service tests use.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -108,57 +111,38 @@ Expected: FAIL — `no such column: via_agent_id` / `no such table: pending_acti
 
 - [ ] **Step 3: Add columns and table to schema**
 
-In `src/db/schema.ts`, extend `sessions`:
+`sessions` — add after `actorId`:
 
 ```typescript
-export const sessions = sqliteTable("sessions", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  tokenHash: text("token_hash").notNull().unique(),
-  actorId: integer("actor_id")
-    .notNull()
-    .references(() => actors.id),
   // Supervised sessions (2026-07-15): a human+agent pair bound into one principal.
-  // kind="plain" is the pre-existing single-actor session; "supervised" also sets
-  // viaAgentId to the agent doing the editing.
-  kind: text("kind", { enum: ["plain", "supervised"] })
-    .notNull()
-    .default("plain"),
+  // kind="plain" is the pre-existing single-actor (web login / agent) session;
+  // "supervised" also sets viaAgentId. closedAt soft-closes (FKs forbid deleting
+  // a session once it has events — see closeSupervisedSession).
+  kind: text("kind", { enum: ["plain", "supervised"] }).notNull().default("plain"),
   viaAgentId: integer("via_agent_id").references(() => actors.id),
-  expiresAt: integer("expires_at").notNull(),
-  createdAt: integer("created_at").notNull().default(now()),
-});
+  closedAt: integer("closed_at"),
 ```
 
-Extend `events` (add the two nullable columns just before `createdAt`):
+`events` — add before `createdAt`:
 
 ```typescript
     // Dual attribution for supervised sessions (2026-07-15): actorId stays the
-    // accountable human; viaAgentId records the agent that did the editing;
-    // sessionId ties a run of edits to one supervised session. All null for
-    // ordinary single-actor events.
+    // accountable human; viaAgentId is the agent that did the editing; sessionId
+    // ties a run of edits to one supervised session. Null for plain events.
     viaAgentId: integer("via_agent_id").references(() => actors.id),
     sessionId: integer("session_id").references(() => sessions.id),
 ```
 
-Add the new table (after `sessions`, before `loginLinks`):
+New table (after `sessions`):
 
 ```typescript
 export const pendingActions = sqliteTable("pending_actions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  sessionId: integer("session_id")
-    .notNull()
-    .references(() => sessions.id),
-  issueId: integer("issue_id")
-    .notNull()
-    .references(() => issues.id),
-  actionType: text("action_type").notNull(), // "done" | "dependency.remove"
-  payload: text("payload", { mode: "json" })
-    .$type<Record<string, unknown>>()
-    .notNull()
-    .default({}),
-  status: text("status", { enum: ["pending", "affirmed", "expired"] })
-    .notNull()
-    .default("pending"),
+  sessionId: integer("session_id").notNull().references(() => sessions.id),
+  issueId: integer("issue_id").notNull().references(() => issues.id),
+  actionType: text("action_type").notNull(), // Phase 1: "done" only
+  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  status: text("status", { enum: ["pending", "affirmed", "expired"] }).notNull().default("pending"),
   affirmedById: integer("affirmed_by_id").references(() => actors.id),
   affirmedAt: integer("affirmed_at"),
   createdAt: integer("created_at").notNull().default(now()),
@@ -167,110 +151,125 @@ export const pendingActions = sqliteTable("pending_actions", {
 
 - [ ] **Step 4: Generate the migration**
 
-Run: `npm run db:generate`
-Expected: a new `drizzle/00NN_*.sql` adding the columns/table. Do not hand-edit it.
+Run: `npm run db:generate` → new `drizzle/00NN_*.sql`. Do not hand-edit.
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `npx vitest run tests/db/supervised-schema.test.ts`
-Expected: PASS (2 tests).
+Run: `npx vitest run tests/db/supervised-schema.test.ts` → PASS (2 tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add src/db/schema.ts drizzle/ tests/db/supervised-schema.test.ts
-git commit -m "feat: schema for supervised sessions, event provenance, pending actions (SYD supervised phase 1)"
+git commit -m "feat: schema for supervised sessions, event provenance, pending actions (supervised phase 1)"
 ```
 
 ---
 
-## Task 2: The Principal type and supervised-session service
+## Task 2: Supervised-session service + the credential-boundary fix
 
 **Files:**
-- Create: `src/services/principal.ts`
-- Create: `src/services/supervised-sessions.ts`
-- Test: `tests/services/supervised-sessions.test.ts`
+- Create: `src/services/principal.ts`, `src/services/supervised-sessions.ts`
+- Modify: `src/services/auth.ts` (`getSessionActor` → `kind='plain'` only), `src/cli.ts` (mint subcommand)
+- Test: `tests/services/supervised-sessions.test.ts`, `tests/services/auth-kind-isolation.test.ts`
 
 **Interfaces:**
-- Consumes: `Actor` (from `actors.ts`), `mintToken`/`hashToken` (`tokens.ts`), `getOrCreateActor` (`actors.ts`).
 - Produces:
   - `type Principal = { actor: Actor; viaAgent?: Actor; sessionId?: number }`
-  - `openSupervisedSession(db, human: Actor, agentName: string): { sessionToken: string; sessionId: number; agent: Actor }`
-  - `resolveSupervisedPrincipal(db, sessionToken: string): Principal | null`
-  - `closeSupervisedSession(db, sessionToken: string): void`
+  - `openSupervisedSession(db, human: Actor, agentName: string): { sessionToken: string; sessionId: number; agent: Actor }` — human-only root; resolves `agentName` and **requires it be an agent** (rejects a human/service collision); mints `sup_` token.
+  - `resolveSupervisedPrincipal(db, token): Principal | null` — resolves only `kind='supervised'`, not closed, not expired, `viaAgent.type==='agent'`.
+  - `closeSupervisedSession(db, token): void` — **soft-close** (`closedAt = now`), never `DELETE`.
+  - `getSessionActor` resolves **only `kind='plain'`** rows (the CRITICAL fix).
 
-- [ ] **Step 1: Write the failing test**
+**Design note (security):** `getSessionActor` is the web/REST cookie resolver (`src/rest/api-routes.ts:138`). Supervised tokens must be structurally unresolvable there — filtered by the `kind` **column**, not a token-prefix string check. `resolveSupervisedPrincipal` filters `kind='supervised'`; the two are mutually exclusive by column.
+
+- [ ] **Step 1: Write the failing tests**
 
 ```typescript
 // tests/services/supervised-sessions.test.ts
 import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js";
+import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
-import {
-  openSupervisedSession,
-  resolveSupervisedPrincipal,
-} from "../../src/services/supervised-sessions.js";
+import { openSupervisedSession, resolveSupervisedPrincipal, closeSupervisedSession } from "../../src/services/supervised-sessions.js";
 
-function human(db: any) {
-  return createActor(db, { name: "sean", type: "human" }).actor;
-}
+const human = (db: any) => createActor(db, { name: "sean", type: "human" }).actor;
 
 describe("supervised sessions", () => {
-  it("binds a human and a (declared) agent into one resolvable principal", () => {
-    const db = makeTestDb();
+  it("binds a human and an agent into one resolvable principal", () => {
+    const db = openDb(":memory:");
     const h = human(db);
     const { sessionToken, agent } = openSupervisedSession(db, h, "claude-code");
-    const p = resolveSupervisedPrincipal(db, sessionToken);
-    expect(p).not.toBeNull();
-    expect(p!.actor.id).toBe(h.id); // accountable actor is the human
-    expect(p!.actor.type).toBe("human");
-    expect(p!.viaAgent!.id).toBe(agent.id); // editor is the agent
-    expect(p!.viaAgent!.type).toBe("agent");
-    expect(typeof p!.sessionId).toBe("number");
+    const p = resolveSupervisedPrincipal(db, sessionToken)!;
+    expect(p.actor.id).toBe(h.id);
+    expect(p.actor.type).toBe("human");
+    expect(p.viaAgent!.id).toBe(agent.id);
+    expect(p.viaAgent!.type).toBe("agent");
+    expect(typeof p.sessionId).toBe("number");
   });
 
-  it("refuses to open a supervised session for a non-human root", () => {
-    const db = makeTestDb();
+  it("refuses a non-human root", () => {
+    const db = openDb(":memory:");
     const a = createActor(db, { name: "bot", type: "agent" }).actor;
-    expect(() => openSupervisedSession(db, a, "claude-code")).toThrow(
-      /only a human can open a supervised session/i,
-    );
+    expect(() => openSupervisedSession(db, a, "claude-code")).toThrow(/only a human can open/i);
   });
 
-  it("returns null for a plain (non-supervised) session token", () => {
-    const db = makeTestDb();
-    // a plain session token must not resolve as supervised
-    expect(resolveSupervisedPrincipal(db, "sys_not_a_supervised_token")).toBeNull();
+  it("refuses to bind a non-agent as the editor (name collision with a human)", () => {
+    const db = openDb(":memory:");
+    const h = human(db);
+    createActor(db, { name: "alice", type: "human" });
+    expect(() => openSupervisedSession(db, h, "alice")).toThrow(/must be an agent/i);
+  });
+
+  it("does not resolve a closed session", () => {
+    const db = openDb(":memory:");
+    const h = human(db);
+    const { sessionToken } = openSupervisedSession(db, h, "claude-code");
+    closeSupervisedSession(db, sessionToken);
+    expect(resolveSupervisedPrincipal(db, sessionToken)).toBeNull();
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+```typescript
+// tests/services/auth-kind-isolation.test.ts  — the CRITICAL regression
+import { describe, it, expect } from "vitest";
+import { openDb } from "../../src/db/index.js";
+import { createActor } from "../../src/services/actors.js";
+import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import { getSessionActor } from "../../src/services/auth.js";
 
-Run: `npx vitest run tests/services/supervised-sessions.test.ts`
-Expected: FAIL — cannot find module `supervised-sessions.js`.
+describe("supervised token is NOT a web/REST credential", () => {
+  it("getSessionActor refuses a supervised (sup_) token", () => {
+    const db = openDb(":memory:");
+    const h = createActor(db, { name: "sean", type: "human" }).actor;
+    const { sessionToken } = openSupervisedSession(db, h, "claude-code");
+    // presenting the supervised token on the web cookie path must NOT resolve as the human
+    expect(getSessionActor(db, sessionToken)).toBeNull();
+  });
+});
+```
 
-- [ ] **Step 3: Write `principal.ts`**
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npx vitest run tests/services/supervised-sessions.test.ts tests/services/auth-kind-isolation.test.ts`
+Expected: FAIL — module missing; and `getSessionActor` currently returns the human for the `sup_` token (the vulnerability).
+
+- [ ] **Step 3: `principal.ts`**
 
 ```typescript
 // src/services/principal.ts
 import type { Actor } from "./actors.js";
-
-/**
- * The identity behind a request. For ordinary sessions `viaAgent`/`sessionId`
- * are undefined and `actor` is the sole principal. For a supervised session
- * `actor` is the accountable human, `viaAgent` is the agent that did the
- * editing, and `sessionId` ties the run of edits together. Guards read
- * `actor` only; the audit log reads all three.
- */
+/** actor = accountable principal (guards read this). viaAgent = the agent that
+ *  did the editing (audit + agent-scoped tools read this). Both undefined for a
+ *  plain session. */
 export type Principal = { actor: Actor; viaAgent?: Actor; sessionId?: number };
 ```
 
-- [ ] **Step 4: Write `supervised-sessions.ts`**
+- [ ] **Step 4: `supervised-sessions.ts`**
 
 ```typescript
 // src/services/supervised-sessions.ts
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, sessions } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -279,7 +278,7 @@ import type { Principal } from "./principal.js";
 import { SwitchyardError } from "./errors.js";
 import { hashToken, mintToken } from "./tokens.js";
 
-const SUPERVISED_TTL = 12 * 3600; // a working day; renew by re-opening
+const SUPERVISED_TTL = 12 * 3600;
 const nowSec = () => Math.floor(Date.now() / 1000);
 
 export function openSupervisedSession(
@@ -288,69 +287,85 @@ export function openSupervisedSession(
   agentName: string,
 ): { sessionToken: string; sessionId: number; agent: Actor } {
   if (human.type !== "human") {
-    throw new SwitchyardError(
-      "Only a human can open a supervised session — the human is the root of trust and the accountable actor.",
-    );
+    throw new SwitchyardError("Only a human can open a supervised session — the human is the root of trust.");
   }
   const agent = getOrCreateActor(db, agentName, "agent");
+  if (agent.type !== "agent") {
+    throw new SwitchyardError(
+      `"${agentName}" is a ${agent.type} actor — the supervised editor must be an agent. Pick a distinct agent name.`,
+    );
+  }
   const sessionToken = mintToken("sup", 32);
   const row = db
     .insert(sessions)
-    .values({
-      tokenHash: hashToken(sessionToken),
-      actorId: human.id,
-      viaAgentId: agent.id,
-      kind: "supervised",
-      expiresAt: nowSec() + SUPERVISED_TTL,
-    })
+    .values({ tokenHash: hashToken(sessionToken), actorId: human.id, viaAgentId: agent.id, kind: "supervised", expiresAt: nowSec() + SUPERVISED_TTL })
     .returning({ id: sessions.id })
     .get();
-  // NB: no `events` row here — events are issue-scoped (issueId NOT NULL); the
-  // sessions row (with createdAt) IS the record that human opened this pairing.
   return { sessionToken, sessionId: row.id, agent };
 }
 
-export function resolveSupervisedPrincipal(
-  db: Db,
-  sessionToken: string,
-): Principal | null {
+export function resolveSupervisedPrincipal(db: Db, sessionToken: string): Principal | null {
   const row = db
     .select()
     .from(sessions)
-    .where(
-      and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "supervised")),
-    )
+    .where(and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "supervised"), isNull(sessions.closedAt)))
     .get();
   if (!row || row.viaAgentId === null || row.expiresAt < nowSec()) return null;
-  const human = db.select().from(actors).where(eq(actors.id, row.actorId)).get();
-  const agent = db.select().from(actors).where(eq(actors.id, row.viaAgentId)).get();
-  if (!human || !agent) return null;
+  const humanRow = db.select().from(actors).where(eq(actors.id, row.actorId)).get();
+  const agentRow = db.select().from(actors).where(eq(actors.id, row.viaAgentId)).get();
+  if (!humanRow || !agentRow || humanRow.type !== "human" || agentRow.type !== "agent") return null;
   return {
-    actor: { id: human.id, name: human.name, type: human.type },
-    viaAgent: { id: agent.id, name: agent.name, type: agent.type },
+    actor: { id: humanRow.id, name: humanRow.name, type: humanRow.type },
+    viaAgent: { id: agentRow.id, name: agentRow.name, type: agentRow.type },
     sessionId: row.id,
   };
 }
 
 export function closeSupervisedSession(db: Db, sessionToken: string): void {
-  db.delete(sessions)
-    .where(
-      and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "supervised")),
-    )
+  // Soft-close: FKs (events.session_id, pending_actions.session_id) forbid deleting
+  // a session that did work. closedAt makes resolveSupervisedPrincipal return null.
+  db.update(sessions).set({ closedAt: nowSec() })
+    .where(and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "supervised")))
     .run();
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [ ] **Step 5: Harden `getSessionActor` (the CRITICAL fix)**
 
-Run: `npx vitest run tests/services/supervised-sessions.test.ts`
-Expected: PASS (3 tests).
+In `src/services/auth.ts`, add a `kind='plain'` predicate to the `getSessionActor` query:
 
-- [ ] **Step 6: Commit**
+```typescript
+export function getSessionActor(db: Db, sessionToken: string): Actor | null {
+  const row = db
+    .select({ s: sessions, a: actors })
+    .from(sessions)
+    .innerJoin(actors, eq(sessions.actorId, actors.id))
+    .where(and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "plain")))
+    .get();
+  if (!row || row.s.expiresAt < nowSec()) return null;
+  return { id: row.a.id, name: row.a.name, type: row.a.type };
+}
+```
+
+(Add `and` to the `drizzle-orm` import in `auth.ts`.)
+
+- [ ] **Step 6: CLI mint subcommand**
+
+In `src/cli.ts`, register `mint-supervised-session <humanName> <agentName>` alongside the existing `mint-login` handler (match that command's shape). It calls `openSupervisedSession(db, human, agentName)` (resolve `human` via the actors table; assert `type==='human'`) and prints the `sup_` token with a note: *"Set this as your MCP client's bearer token. It authorizes supervised writes for <TTL>h; it is NOT a web login."*
+
+- [ ] **Step 7: Run tests to verify they pass**
+
+Run: `npx vitest run tests/services/supervised-sessions.test.ts tests/services/auth-kind-isolation.test.ts` → PASS (5 tests).
+
+- [ ] **Step 8: Full auth/session regression**
+
+Run: `npx vitest run tests/services/ tests/rest/` — confirm the `getSessionActor` change didn't break web login (login sessions are `kind='plain'` by default, so they still resolve).
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/services/principal.ts src/services/supervised-sessions.ts tests/services/supervised-sessions.test.ts
-git commit -m "feat: supervised-session principal + open/resolve/close (SYD supervised phase 1)"
+git add src/services/principal.ts src/services/supervised-sessions.ts src/services/auth.ts src/cli.ts tests/services/supervised-sessions.test.ts tests/services/auth-kind-isolation.test.ts
+git commit -m "feat: supervised-session service + CLI mint + kind-isolated getSessionActor (supervised phase 1)"
 ```
 
 ---
@@ -359,308 +374,263 @@ git commit -m "feat: supervised-session principal + open/resolve/close (SYD supe
 
 **Files:**
 - Modify: `src/services/events.ts`
-- Create: `src/services/provenance.ts`
-- Test: `tests/services/events-provenance.test.ts`
+- Create: `src/services/attribution.ts`
+- Test: `tests/services/events-attribution.test.ts`
 
 **Interfaces:**
-- Consumes: `Principal` (`principal.ts`).
-- Produces:
-  - `recordEvent(db, e)` where `e` gains optional `viaAgentId?: number` and `sessionId?: number`.
-  - `type Provenance = { viaAgentId?: number; sessionId?: number }`
-  - `provenanceOf(principal: Principal): Provenance` — pulls the two ids off a principal.
+- Produces: `recordEvent(db, e)` with optional `viaAgentId?: number`, `sessionId?: number`; `type Attribution = { viaAgentId?: number; sessionId?: number }`; `attributionOf(principal: Principal): Attribution`.
+
+**Naming note:** the type is `Attribution`, **not** `Provenance` — `src/services/issues.ts:24` already exports a `Provenance` type (issue source), and Task 4 imports into that file.
 
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
-// tests/services/events-provenance.test.ts
+// tests/services/events-attribution.test.ts
 import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js";
+import { sql } from "drizzle-orm";
+import { openDb } from "../../src/db/index.js";
 import { recordEvent } from "../../src/services/events.js";
 
 describe("recordEvent dual attribution", () => {
   it("persists viaAgentId and sessionId when supplied", () => {
-    const db = makeTestDb();
-    db.run("INSERT INTO actors (name,type) VALUES ('h','human'),('a','agent')");
-    db.run("INSERT INTO projects (key,name) VALUES ('SYD','Switchyard')");
-    db.run(
-      "INSERT INTO issues (project_id,number,title,status,creator_id) VALUES (1,1,'t','backlog',1)",
-    );
-    db.run(
-      "INSERT INTO sessions (token_hash,actor_id,via_agent_id,kind,expires_at) VALUES ('t',1,2,'supervised',9999999999)",
-    );
-    const id = recordEvent(db, {
-      issueId: 1,
-      actorId: 1,
-      type: "status_changed",
-      viaAgentId: 2,
-      sessionId: 1,
-    });
-    const row = db.all<{ via_agent_id: number; session_id: number }>(
-      "SELECT via_agent_id, session_id FROM events WHERE id = ?",
-      [id],
-    )[0];
-    expect(row.via_agent_id).toBe(2);
-    expect(row.session_id).toBe(1);
+    const db = openDb(":memory:");
+    db.run(sql`INSERT INTO actors (name,type) VALUES ('h','human'),('a','agent')`);
+    db.run(sql`INSERT INTO projects (key,name) VALUES ('SYD','Switchyard')`);
+    db.run(sql`INSERT INTO issues (project_id,number,title,status,creator_id) VALUES (1,1,'t','backlog',1)`);
+    db.run(sql`INSERT INTO sessions (token_hash,actor_id,via_agent_id,kind,expires_at) VALUES ('t',1,2,'supervised',9999999999)`);
+    const id = recordEvent(db, { issueId: 1, actorId: 1, type: "status_changed", viaAgentId: 2, sessionId: 1 });
+    const row = db.get<{ via_agent_id: number; session_id: number }>(sql`SELECT via_agent_id, session_id FROM events WHERE id = ${id}`);
+    expect(row!.via_agent_id).toBe(2);
+    expect(row!.session_id).toBe(1);
   });
 
-  it("leaves both null for a plain single-actor event", () => {
-    const db = makeTestDb();
-    db.run("INSERT INTO actors (name,type) VALUES ('h','human')");
-    db.run("INSERT INTO projects (key,name) VALUES ('SYD','Switchyard')");
-    db.run(
-      "INSERT INTO issues (project_id,number,title,status,creator_id) VALUES (1,1,'t','backlog',1)",
-    );
+  it("leaves both null for a plain event", () => {
+    const db = openDb(":memory:");
+    db.run(sql`INSERT INTO actors (name,type) VALUES ('h','human')`);
+    db.run(sql`INSERT INTO projects (key,name) VALUES ('SYD','Switchyard')`);
+    db.run(sql`INSERT INTO issues (project_id,number,title,status,creator_id) VALUES (1,1,'t','backlog',1)`);
     const id = recordEvent(db, { issueId: 1, actorId: 1, type: "status_changed" });
-    const row = db.all<{ via_agent_id: number | null; session_id: number | null }>(
-      "SELECT via_agent_id, session_id FROM events WHERE id = ?",
-      [id],
-    )[0];
-    expect(row.via_agent_id).toBeNull();
-    expect(row.session_id).toBeNull();
+    const row = db.get<{ via_agent_id: number | null; session_id: number | null }>(sql`SELECT via_agent_id, session_id FROM events WHERE id = ${id}`);
+    expect(row!.via_agent_id).toBeNull();
+    expect(row!.session_id).toBeNull();
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run tests/services/events-provenance.test.ts`
-Expected: FAIL — `recordEvent` ignores the new fields (or type error on unknown property).
+Run: `npx vitest run tests/services/events-attribution.test.ts` → FAIL.
 
 - [ ] **Step 3: Extend `recordEvent`**
-
-In `src/services/events.ts`, replace the `recordEvent` signature/body:
 
 ```typescript
 export function recordEvent(
   db: DbOrTx,
-  e: {
-    issueId: number;
-    actorId: number;
-    type: EventKind;
-    payload?: Record<string, unknown>;
-    viaAgentId?: number;
-    sessionId?: number;
-  },
+  e: { issueId: number; actorId: number; type: EventKind; payload?: Record<string, unknown>; viaAgentId?: number; sessionId?: number },
 ): number {
   return db
     .insert(events)
-    .values({
-      issueId: e.issueId,
-      actorId: e.actorId,
-      type: e.type,
-      payload: e.payload ?? {},
-      viaAgentId: e.viaAgentId ?? null,
-      sessionId: e.sessionId ?? null,
-    })
+    .values({ issueId: e.issueId, actorId: e.actorId, type: e.type, payload: e.payload ?? {}, viaAgentId: e.viaAgentId ?? null, sessionId: e.sessionId ?? null })
     .returning({ id: events.id })
     .get().id;
 }
 ```
 
-- [ ] **Step 4: Write `provenance.ts`**
+- [ ] **Step 4: `attribution.ts`**
 
 ```typescript
-// src/services/provenance.ts
+// src/services/attribution.ts
 import type { Principal } from "./principal.js";
-
-export type Provenance = { viaAgentId?: number; sessionId?: number };
-
-/** The provenance a supervised principal carries; empty for a plain principal. */
-export function provenanceOf(principal: Principal): Provenance {
+export type Attribution = { viaAgentId?: number; sessionId?: number };
+/** The attribution a supervised principal carries; empty for a plain principal. */
+export function attributionOf(principal: Principal): Attribution {
   return { viaAgentId: principal.viaAgent?.id, sessionId: principal.sessionId };
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
-
-Run: `npx vitest run tests/services/events-provenance.test.ts`
-Expected: PASS (2 tests).
+- [ ] **Step 5: Run test to verify it passes** → PASS (2 tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/services/events.ts src/services/provenance.ts tests/services/events-provenance.test.ts
-git commit -m "feat: dual attribution in recordEvent + Provenance context (SYD supervised phase 1)"
+git add src/services/events.ts src/services/attribution.ts tests/services/events-attribution.test.ts
+git commit -m "feat: dual attribution in recordEvent + Attribution context (supervised phase 1)"
 ```
 
 ---
 
-## Task 4: Thread provenance through issue mutations
+## Task 4: Thread attribution through every event-writing mutation
 
 **Files:**
-- Modify: `src/services/issues.ts` (`createIssue`, `updateIssue`, `claimIssue`)
-- Modify: `src/services/comments.ts` (`addComment`)
-- Test: `tests/services/supervised-provenance-e2e.test.ts`
+- Modify: `src/services/issues.ts` (`createIssue`, `updateIssue`, `claimIssue` — incl. the internal `updateIssue` delegation), `comments.ts` (`addComment`), `needs-input.ts` (`requestHumanInput`), `dependencies.ts` (`addDependency`), `attachments.ts` (`saveAttachment`)
+- Modify: `src/services/agent-sessions.ts` (`recordProgressNote` — see Design note)
+- Test: `tests/services/supervised-attribution-e2e.test.ts`
 
 **Interfaces:**
-- Consumes: `Provenance` (`provenance.ts`).
-- Produces: `createIssue`, `updateIssue`, `claimIssue`, `addComment` each accept an optional trailing `prov: Provenance = {}` and pass `prov.viaAgentId`/`prov.sessionId` into every `recordEvent` call they make.
+- Consumes: `Attribution`.
+- Produces: each event-writing service fn accepts a trailing `attr: Attribution = {}` and spreads `viaAgentId: attr.viaAgentId, sessionId: attr.sessionId` into **every** `recordEvent` call it makes — including through delegations.
 
-**Design note (do not skip):** the `actor` these functions receive stays the **human** for a supervised session — that is what makes all existing `actor.type` guards pass (full absorption). `prov` is *only* forwarded to `recordEvent`; it never influences a guard. Do not branch guard logic on `prov`.
+**Design note 1 (human-gated vs agent-scoped):** the `actor` passed to human-gated fns stays the **human** (guards pass — full absorption). But `recordProgressNote` requires `actor.type === "agent"` (`src/services/agent-sessions.ts:45-49`). Agent-scoped tools must therefore act on the **agent** identity, not the human. Do **not** pass the human `actor` to `recordProgressNote` for a supervised session — the MCP layer (Task 7) passes `viaAgent` as the actor. `recordProgressNote` still gains the `attr` param so its event carries `sessionId` (its `actorId` is already the agent).
+
+**Design note 2 (delegation):** `claimIssue`'s fresh-claim path delegates to `updateIssue` (`src/services/issues.ts:661`). Forward `attr` into that nested `updateIssue(...)` call, or the `assigned`/`status_changed` events of a supervised claim are unattributed.
 
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
-// tests/services/supervised-provenance-e2e.test.ts
+// tests/services/supervised-attribution-e2e.test.ts
 import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js";
+import { sql } from "drizzle-orm";
+import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
+import { createProject } from "../../src/services/projects.js";
 import { openSupervisedSession, resolveSupervisedPrincipal } from "../../src/services/supervised-sessions.js";
-import { provenanceOf } from "../../src/services/provenance.js";
+import { attributionOf } from "../../src/services/attribution.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
-import { seedProject } from "../helpers/seed.js"; // if absent, inline a project insert like other issue tests
 
-describe("supervised provenance end to end", () => {
-  it("a supervised human moving an issue to done records via_agent + session", () => {
-    const db = makeTestDb();
+describe("supervised attribution end to end", () => {
+  it("a supervised status change records via_agent + session", () => {
+    const db = openDb(":memory:");
     const h = createActor(db, { name: "sean", type: "human" }).actor;
-    seedProject(db, "SYD");
+    createProject(db, h, { key: "SYD", name: "Switchyard" });
     const { sessionToken } = openSupervisedSession(db, h, "claude-code");
     const prin = resolveSupervisedPrincipal(db, sessionToken)!;
-    const prov = provenanceOf(prin);
-
-    const issue = createIssue(db, prin.actor, { projectKey: "SYD", title: "t", description: "d" }, prov);
-    // human in a supervised session can stamp done (full absorption); provenance rides along
-    updateIssue(db, prin.actor, issue.ref, { status: "done" }, {}, prov);
-
-    const row = db.all<{ via_agent_id: number; session_id: number; type: string }>(
-      "SELECT via_agent_id, session_id, type FROM events WHERE type='status_changed' ORDER BY id DESC LIMIT 1",
-    )[0];
-    expect(row.via_agent_id).toBe(prin.viaAgent!.id);
-    expect(row.session_id).toBe(prin.sessionId);
+    const attr = attributionOf(prin);
+    const issue = createIssue(db, prin.actor, { projectKey: "SYD", title: "t", description: "d" }, attr);
+    updateIssue(db, prin.actor, issue.ref, { status: "in_review" }, {}, attr);
+    const row = db.get<{ via_agent_id: number; session_id: number }>(
+      sql`SELECT via_agent_id, session_id FROM events WHERE type='status_changed' ORDER BY id DESC LIMIT 1`,
+    );
+    expect(row!.via_agent_id).toBe(prin.viaAgent!.id);
+    expect(row!.session_id).toBe(prin.sessionId);
   });
 });
 ```
 
-> Match the *actual* `createIssue`/`updateIssue` argument order in `src/services/issues.ts` when wiring `prov` as the trailing param. `updateIssue`'s existing 4th param is `lease: LeaseChannel = {}`; add `prov` as the 5th.
+> Confirm the real `createProject` signature (`src/services/projects.ts`) and `createIssue`/`updateIssue` arg order before wiring. `updateIssue` is `(db, actor, ref, patch, lease, attr)` — `attr` is the **6th** param (after `lease`, the 5th).
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify it fails** → FAIL (attr arg not accepted / events lack ids).
 
-Run: `npx vitest run tests/services/supervised-provenance-e2e.test.ts`
-Expected: FAIL — `createIssue`/`updateIssue` don't accept a `prov` arg (type error) or events lack the ids.
+- [ ] **Step 3: Thread `attr`**
 
-- [ ] **Step 3: Thread `prov` into the mutation functions**
+For `createIssue`, `updateIssue`, `claimIssue` (`issues.ts`), `addComment` (`comments.ts`), `requestHumanInput` (`needs-input.ts`), `addDependency` (`dependencies.ts`), `saveAttachment` (`attachments.ts`), and `recordProgressNote` (`agent-sessions.ts`):
 
-For each of `createIssue`, `updateIssue`, `claimIssue` in `src/services/issues.ts` and `addComment` in `src/services/comments.ts`:
+1. Add a trailing `attr: Attribution = {}` (import from `./attribution.js`). For `updateIssue` add it as the **6th** parameter, after `lease`.
+2. Spread into every `recordEvent(...)` in the fn body:
+   ```typescript
+   recordEvent(tx, { issueId: current.id, actorId: actor.id, type: "status_changed",
+     payload: { from: current.status, to: patch.status },
+     viaAgentId: attr.viaAgentId, sessionId: attr.sessionId });
+   ```
+   (`updateIssue` funnels through one loop `for (const e of toRecord) recordEvent(tx, …)` at `src/services/issues.ts:581-582` — add the two fields there once. `createIssue` records at :189, `claimIssue` at :644.)
+3. `claimIssue`'s fresh-claim delegation to `updateIssue` (`issues.ts:661`) must pass `attr` through.
+4. Leave all guard logic untouched.
 
-1. Add a trailing parameter `prov: Provenance = {}` (import `Provenance` from `./provenance.js`).
-2. At **every** `recordEvent(...)` call inside that function, spread the ids:
+- [ ] **Step 4: Run test to verify it passes** → PASS.
 
-```typescript
-recordEvent(tx, {
-  issueId: current.id,
-  actorId: actor.id,
-  type: "status_changed",
-  payload: { from: current.status, to: patch.status },
-  viaAgentId: prov.viaAgentId,
-  sessionId: prov.sessionId,
-});
-```
+- [ ] **Step 5: Full service suite (no regressions from the new optional param)**
 
-Apply the same `viaAgentId: prov.viaAgentId, sessionId: prov.sessionId` addition to each `recordEvent` call in these functions (status_changed, assigned, commented, created, dependency events routed through here, etc.). Leave guard logic untouched.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npx vitest run tests/services/supervised-provenance-e2e.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Run the full issue-service suite (no regressions from the new optional param)**
-
-Run: `npx vitest run tests/services/`
-Expected: PASS — the new param defaults to `{}`, so existing single-actor callers are unaffected.
+Run: `npx vitest run tests/services/` → PASS (default `{}` keeps existing callers unaffected).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/services/issues.ts src/services/comments.ts tests/services/supervised-provenance-e2e.test.ts
-git commit -m "feat: thread supervised provenance through issue mutations (SYD supervised phase 1)"
+git add src/services/issues.ts src/services/comments.ts src/services/needs-input.ts src/services/dependencies.ts src/services/attachments.ts src/services/agent-sessions.ts tests/services/supervised-attribution-e2e.test.ts
+git commit -m "feat: thread supervised attribution through all event-writing mutations (supervised phase 1)"
 ```
 
 ---
 
-## Task 5: Hard-gate policy + pending-action service
+## Task 5: Hard-gate policy + pending-action service (done-scoped, transaction-safe)
 
 **Files:**
-- Modify: `src/services/settings.ts` (register `supervised.hard_gate_actions`)
+- Modify: `src/services/settings.ts` (register the setting, default `["done"]`)
 - Create: `src/services/hard-gate.ts`
 - Test: `tests/services/hard-gate.test.ts`
 
-**Design note / spec reconciliation:** the spec calls the hard-gate list *per-project*, but Switchyard's settings registry is install-global (typed key→value). Phase 1 implements it as **one install-global `string[]` setting**; per-project scoping is deferred (flagged in the design's open questions). This is a deliberate, documented narrowing — call it out in the PR.
+**Scope:** Phase 1 gates **status transitions only**, and ships `done` as the sole supported action-type. `dependency.remove` is explicitly **out** of Phase 1 (no schema/settings/File-Structure reference to it). `affirmPendingAction` refuses any action-type it has no executor for.
 
 **Interfaces:**
-- Consumes: `getSetting` (`settings.ts`), `Principal` (`principal.ts`).
 - Produces:
-  - setting `supervised.hard_gate_actions: string[]` (default `[]`).
-  - `isHardGated(db, actionType: string): boolean`
-  - `createPendingAction(db, sessionId: number, issueId: number, actionType: string, payload: Record<string, unknown>): number`
-  - `getPendingAction(db, id: number): PendingActionRow | null`
-  - `affirmPendingAction(db, human: Actor, id: number): PendingActionRow` — human-only; marks affirmed. (Execution of the deferred action is Task 7.)
+  - setting `supervised.hard_gate_actions: string[]` (default `["done"]`).
+  - `isHardGated(db, actionType): boolean`
+  - `findOrCreatePendingAction(db, sessionId, issueId, actionType, payload): number` — **deduped**: returns an existing `pending` row for the same `(sessionId, issueId, actionType)` instead of inserting a duplicate.
+  - `getPendingAction(db, id): PendingActionRow | null`
+  - `listPendingActions(db, status): PendingActionRow[]`
+  - `affirmPendingAction(db, human, id): PendingActionRow` — see Design note.
+
+**Design note (affirm must be correct):**
+1. **Owner tie:** the affirming `human.id` must equal the pending action's session `actorId` (the accountable human). A different human is refused.
+2. **Transaction-safe execute-then-mark:** run inside `db.transaction`; conditionally claim the row (`UPDATE … SET status='affirmed' … WHERE id=? AND status='pending'` — 0 rows changed ⇒ already taken ⇒ throw); then execute; if execution throws, the transaction rolls back the claim so the row stays `pending` and re-affirmable.
+3. **Executor guard:** only `actionType==='done'` (a status) has an executor in Phase 1; anything else throws (never silently no-ops).
+4. **Stale SHA:** the executor re-drives `updateIssue` **as the human, no session attr** (so the Task-6 divert is skipped). If `updateIssue` throws "head moved"/"pass expectedHeadSha", that propagates out and the rollback leaves the action re-affirmable — the human re-reviews and re-affirms.
 
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
 // tests/services/hard-gate.test.ts
 import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js";
+import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
+import { createProject } from "../../src/services/projects.js";
 import { setSetting } from "../../src/services/settings.js";
-import { isHardGated, createPendingAction, affirmPendingAction, getPendingAction } from "../../src/services/hard-gate.js";
-import { seedProject, seedIssue } from "../helpers/seed.js";
+import { openSupervisedSession, resolveSupervisedPrincipal } from "../../src/services/supervised-sessions.js";
+import { isHardGated, findOrCreatePendingAction, affirmPendingAction, getPendingAction } from "../../src/services/hard-gate.js";
+
+function setup() {
+  const db = openDb(":memory:");
+  const h = createActor(db, { name: "sean", type: "human" }).actor;
+  createProject(db, h, { key: "SYD", name: "Switchyard" });
+  const { sessionToken } = openSupervisedSession(db, h, "claude-code");
+  const prin = resolveSupervisedPrincipal(db, sessionToken)!;
+  return { db, h, prin };
+}
 
 describe("hard gate", () => {
-  it("defaults to no gated actions", () => {
-    const db = makeTestDb();
-    expect(isHardGated(db, "done")).toBe(false);
-  });
-
-  it("reports an action gated once configured", () => {
-    const db = makeTestDb();
-    const admin = createActor(db, { name: "sean", type: "human" }).actor;
-    setSetting(db, admin, "supervised.hard_gate_actions", ["done"]);
+  it("defaults to gating done", () => {
+    const { db } = setup();
     expect(isHardGated(db, "done")).toBe(true);
-    expect(isHardGated(db, "dependency.remove")).toBe(false);
   });
 
-  it("a human affirms a pending action; it flips to affirmed with the affirmer recorded", () => {
-    const db = makeTestDb();
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
-    seedProject(db, "SYD");
-    const issueId = seedIssue(db, "SYD");
-    db.run("INSERT INTO sessions (token_hash,actor_id,via_agent_id,kind,expires_at) VALUES ('t',1,1,'supervised',9999999999)");
-    const pid = createPendingAction(db, 1, issueId, "done", { status: "done" });
-    const affirmed = affirmPendingAction(db, human, pid);
-    expect(affirmed.status).toBe("affirmed");
-    expect(affirmed.affirmedById).toBe(human.id);
-    expect(getPendingAction(db, pid)!.status).toBe("affirmed");
+  it("dedups pending actions for the same (session, issue, action)", () => {
+    const { db, h, prin } = setup();
+    db.run(sqlInsertIssue()); // helper below, or inline a createIssue
+    const a = findOrCreatePendingAction(db, prin.sessionId!, 1, "done", { status: "done" });
+    const b = findOrCreatePendingAction(db, prin.sessionId!, 1, "done", { status: "done" });
+    expect(a).toBe(b);
   });
 
-  it("an agent cannot affirm a pending action", () => {
-    const db = makeTestDb();
+  it("a different human cannot affirm another human's action", () => {
+    const { db, prin } = setup();
+    db.run(sqlInsertIssue());
+    const other = createActor(db, { name: "mallory", type: "human" }).actor;
+    const pid = findOrCreatePendingAction(db, prin.sessionId!, 1, "done", { status: "done" });
+    expect(() => affirmPendingAction(db, other, pid)).toThrow(/only the accountable human/i);
+  });
+
+  it("an agent cannot affirm", () => {
+    const { db, prin } = setup();
+    db.run(sqlInsertIssue());
     const agent = createActor(db, { name: "bot", type: "agent" }).actor;
-    seedProject(db, "SYD");
-    const issueId = seedIssue(db, "SYD");
-    db.run("INSERT INTO sessions (token_hash,actor_id,via_agent_id,kind,expires_at) VALUES ('t',1,1,'supervised',9999999999)");
-    const pid = createPendingAction(db, 1, issueId, "done", {});
-    expect(() => affirmPendingAction(db, agent, pid)).toThrow(/only a human can affirm/i);
+    const pid = findOrCreatePendingAction(db, prin.sessionId!, 1, "done", { status: "done" });
+    expect(() => affirmPendingAction(db, agent, pid)).toThrow(/only .*human/i);
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+> Replace `sqlInsertIssue()` with a real `createIssue(db, h, { projectKey: "SYD", title: "t", description: "d" })` (issue id 1) — inline it; the placeholder is shorthand, not a helper to create.
 
-Run: `npx vitest run tests/services/hard-gate.test.ts`
-Expected: FAIL — module missing / setting key unknown.
+- [ ] **Step 2: Run test to verify it fails** → FAIL (module/setting missing).
 
-- [ ] **Step 3: Register the setting**
+- [ ] **Step 3: Register the setting (default `["done"]`)**
 
-In `src/services/settings.ts`, add to the `REGISTRY` object (match the existing entry shape — `type` + `default` + description):
+In `src/services/settings.ts` `REGISTRY`:
 
 ```typescript
   "supervised.hard_gate_actions": {
     type: "string[]",
-    default: [] as string[],
+    default: ["done"] as string[],
     description:
-      "Action-types that still require a fresh human affirmation even inside a supervised session (e.g. \"done\", \"dependency.remove\"). Empty = full absorption.",
+      "Status transitions that still require a fresh human affirmation inside a supervised session. Default [\"done\"] keeps the human-only done-stamp enforced; set [] for full absorption (opt-in).",
   },
 ```
 
@@ -668,238 +638,39 @@ In `src/services/settings.ts`, add to the `REGISTRY` object (match the existing 
 
 ```typescript
 // src/services/hard-gate.ts
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { pendingActions } from "../db/schema.js";
+import { pendingActions, sessions } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getSetting } from "./settings.js";
+import { updateIssue, refOfIssueId } from "./issues.js";
 
 const nowSec = () => Math.floor(Date.now() / 1000);
-
 export type PendingActionRow = typeof pendingActions.$inferSelect;
 
 export function isHardGated(db: Db, actionType: string): boolean {
   return getSetting(db, "supervised.hard_gate_actions").includes(actionType);
 }
 
-export function createPendingAction(
-  db: Db,
-  sessionId: number,
-  issueId: number,
-  actionType: string,
-  payload: Record<string, unknown>,
+export function findOrCreatePendingAction(
+  db: Db, sessionId: number, issueId: number, actionType: string, payload: Record<string, unknown>,
 ): number {
-  return db
-    .insert(pendingActions)
-    .values({ sessionId, issueId, actionType, payload, status: "pending" })
-    .returning({ id: pendingActions.id })
-    .get().id;
+  const existing = db.select({ id: pendingActions.id }).from(pendingActions)
+    .where(and(eq(pendingActions.sessionId, sessionId), eq(pendingActions.issueId, issueId), eq(pendingActions.actionType, actionType), eq(pendingActions.status, "pending")))
+    .get();
+  if (existing) return existing.id;
+  return db.insert(pendingActions).values({ sessionId, issueId, actionType, payload, status: "pending" }).returning({ id: pendingActions.id }).get().id;
 }
 
 export function getPendingAction(db: Db, id: number): PendingActionRow | null {
   return db.select().from(pendingActions).where(eq(pendingActions.id, id)).get() ?? null;
 }
 
-export function affirmPendingAction(db: Db, human: Actor, id: number): PendingActionRow {
-  if (human.type !== "human") {
-    throw new SwitchyardError(
-      "Only a human can affirm a gated action — this is the presence check the gate exists for.",
-    );
-  }
-  const row = getPendingAction(db, id);
-  if (!row) throw new SwitchyardError(`There is no pending action #${id}.`);
-  if (row.status !== "pending") {
-    throw new SwitchyardError(`Pending action #${id} is already ${row.status}.`);
-  }
-  db.update(pendingActions)
-    .set({ status: "affirmed", affirmedById: human.id, affirmedAt: nowSec() })
-    .where(eq(pendingActions.id, id))
-    .run();
-  return getPendingAction(db, id)!;
+export function listPendingActions(db: Db, status = "pending"): PendingActionRow[] {
+  return db.select().from(pendingActions).where(eq(pendingActions.status, status as PendingActionRow["status"])).all();
 }
-```
 
-- [ ] **Step 5: Run test to verify it passes**
-
-Run: `npx vitest run tests/services/hard-gate.test.ts`
-Expected: PASS (4 tests).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/services/settings.ts src/services/hard-gate.ts tests/services/hard-gate.test.ts
-git commit -m "feat: hard-gate policy + pending-action service (SYD supervised phase 1)"
-```
-
----
-
-## Task 6: Divert gated actions to pending instead of committing
-
-**Files:**
-- Modify: `src/services/issues.ts` (`updateIssue` — the `done` path)
-- Test: `tests/services/hard-gate-divert.test.ts`
-
-**Interfaces:**
-- Consumes: `isHardGated`, `createPendingAction` (`hard-gate.ts`); `Provenance` (`provenance.ts`).
-- Produces: a supervised (`prov.sessionId != null`) `updateIssue` to a hard-gated status creates a pending action and throws `SwitchyardError("Awaiting human affirmation …", { pendingActionId })` **before** entering the mutation transaction — nothing commits.
-
-- [ ] **Step 1: Write the failing test**
-
-```typescript
-// tests/services/hard-gate-divert.test.ts
-import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js";
-import { createActor } from "../../src/services/actors.js";
-import { setSetting } from "../../src/services/settings.js";
-import { openSupervisedSession, resolveSupervisedPrincipal } from "../../src/services/supervised-sessions.js";
-import { provenanceOf } from "../../src/services/provenance.js";
-import { createIssue, updateIssue, getIssue } from "../../src/services/issues.js";
-import { seedProject } from "../helpers/seed.js";
-
-describe("hard-gated done in a supervised session", () => {
-  it("does not commit and creates a pending action", () => {
-    const db = makeTestDb();
-    const h = createActor(db, { name: "sean", type: "human" }).actor;
-    seedProject(db, "SYD");
-    setSetting(db, h, "supervised.hard_gate_actions", ["done"]);
-    const { sessionToken } = openSupervisedSession(db, h, "claude-code");
-    const prin = resolveSupervisedPrincipal(db, sessionToken)!;
-    const prov = provenanceOf(prin);
-    const issue = createIssue(db, prin.actor, { projectKey: "SYD", title: "t", description: "d" }, prov);
-    updateIssue(db, prin.actor, issue.ref, { status: "in_review" }, {}, prov);
-
-    expect(() => updateIssue(db, prin.actor, issue.ref, { status: "done" }, {}, prov)).toThrow(
-      /awaiting human affirmation/i,
-    );
-    // status did NOT change to done
-    expect(getIssue(db, issue.ref).status).toBe("in_review");
-    // a pending action exists
-    const pending = db.all<{ c: number }>("SELECT COUNT(*) c FROM pending_actions WHERE status='pending'")[0];
-    expect(pending.c).toBe(1);
-  });
-
-  it("a plain (non-supervised) human done-stamp is NOT diverted even when 'done' is gated", () => {
-    const db = makeTestDb();
-    const h = createActor(db, { name: "sean", type: "human" }).actor;
-    seedProject(db, "SYD");
-    setSetting(db, h, "supervised.hard_gate_actions", ["done"]);
-    const issue = createIssue(db, h, { projectKey: "SYD", title: "t", description: "d" });
-    updateIssue(db, h, issue.ref, { status: "in_review" });
-    updateIssue(db, h, issue.ref, { status: "done" }); // plain human, no session → commits
-    expect(getIssue(db, issue.ref).status).toBe("done");
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npx vitest run tests/services/hard-gate-divert.test.ts`
-Expected: FAIL — the gated `done` currently commits.
-
-- [ ] **Step 3: Add the pre-transaction hard-gate check**
-
-In `src/services/issues.ts` `updateIssue`, **before** the mutation transaction opens, add:
-
-```typescript
-  // Supervised hard-gate (2026-07-15): if this is a supervised session
-  // (prov.sessionId set) and the target status is on the install's hard-gate
-  // list, don't mutate — record a pending action and stop. A human releases it
-  // out-of-band (affirm), which re-drives updateIssue with prov.sessionId
-  // cleared so this check is skipped on the second pass.
-  if (prov.sessionId != null && patch.status !== undefined && isHardGated(db, patch.status)) {
-    const target = resolveIssueByRef(db, ref); // existing helper used by updateIssue to load the issue
-    const pendingActionId = createPendingAction(db, prov.sessionId, target.id, patch.status, {
-      status: patch.status,
-      ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
-    });
-    throw new SwitchyardError(
-      `Awaiting human affirmation: ${ref} → ${patch.status} is hard-gated. A human must approve pending action #${pendingActionId} (board approval queue). Nothing was changed.`,
-    );
-  }
-```
-
-> Use whatever ref→issue resolver `updateIssue` already calls (grep the function top). Do not double-open the mutation transaction.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npx vitest run tests/services/hard-gate-divert.test.ts`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/services/issues.ts tests/services/hard-gate-divert.test.ts
-git commit -m "feat: divert hard-gated supervised actions to pending (SYD supervised phase 1)"
-```
-
----
-
-## Task 7: Affirm executes the deferred action (web-board fallback)
-
-**Files:**
-- Modify: `src/services/hard-gate.ts` (`affirmPendingAction` executes the action)
-- Modify: `src/services/issues.ts` (export a status-change that can bypass the gate on the affirmed pass)
-- Test: `tests/services/hard-gate-affirm-exec.test.ts`
-
-**Interfaces:**
-- Consumes: `updateIssue` (with `prov.sessionId` cleared so the gate is skipped).
-- Produces: `affirmPendingAction(db, human, id)` — after flipping to `affirmed`, executes the deferred action by calling `updateIssue(db, human, ref, { status }, {}, {})` (plain human, no session → not re-gated). Records `affirmed`.
-
-**Design note:** the affirmed pass runs *as the human* (their own credential released it) with **no** session provenance — this is exactly the plain-human done-stamp, so the existing Task-6 divert check is skipped (`prov.sessionId == null`). Provenance of the *editing* is already captured on the earlier `status_changed`/work events under the supervised session; the affirmation event is the human's own act.
-
-- [ ] **Step 1: Write the failing test**
-
-```typescript
-// tests/services/hard-gate-affirm-exec.test.ts
-import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js";
-import { createActor } from "../../src/services/actors.js";
-import { setSetting } from "../../src/services/settings.js";
-import { openSupervisedSession, resolveSupervisedPrincipal } from "../../src/services/supervised-sessions.js";
-import { provenanceOf } from "../../src/services/provenance.js";
-import { createIssue, updateIssue, getIssue } from "../../src/services/issues.js";
-import { affirmPendingAction } from "../../src/services/hard-gate.js";
-import { seedProject } from "../helpers/seed.js";
-
-describe("affirm executes the gated action", () => {
-  it("human affirmation commits the previously-blocked done", () => {
-    const db = makeTestDb();
-    const h = createActor(db, { name: "sean", type: "human" }).actor;
-    seedProject(db, "SYD");
-    setSetting(db, h, "supervised.hard_gate_actions", ["done"]);
-    const { sessionToken } = openSupervisedSession(db, h, "claude-code");
-    const prin = resolveSupervisedPrincipal(db, sessionToken)!;
-    const prov = provenanceOf(prin);
-    const issue = createIssue(db, prin.actor, { projectKey: "SYD", title: "t", description: "d" }, prov);
-    updateIssue(db, prin.actor, issue.ref, { status: "in_review" }, {}, prov);
-
-    let pid = 0;
-    try {
-      updateIssue(db, prin.actor, issue.ref, { status: "done" }, {}, prov);
-    } catch {
-      pid = db.all<{ id: number }>("SELECT id FROM pending_actions WHERE status='pending' ORDER BY id DESC LIMIT 1")[0].id;
-    }
-    expect(getIssue(db, issue.ref).status).toBe("in_review");
-
-    affirmPendingAction(db, h, pid);
-    expect(getIssue(db, issue.ref).status).toBe("done");
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npx vitest run tests/services/hard-gate-affirm-exec.test.ts`
-Expected: FAIL — affirm flips status of the pending row but never commits the issue change.
-
-- [ ] **Step 3: Make `affirmPendingAction` execute**
-
-In `src/services/hard-gate.ts`, after flipping to `affirmed`, dispatch by `actionType`. Import `updateIssue` and a ref resolver lazily to avoid a cycle, or accept an executor. Concrete approach — resolve the issue ref and call `updateIssue`:
-
-```typescript
-import { updateIssue, refOfIssueId } from "./issues.js"; // add refOfIssueId export: number -> "SYD-42"
-// ...
 export function affirmPendingAction(db: Db, human: Actor, id: number): PendingActionRow {
   if (human.type !== "human") {
     throw new SwitchyardError("Only a human can affirm a gated action — this is the presence check the gate exists for.");
@@ -907,257 +678,309 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): PendingAc
   const row = getPendingAction(db, id);
   if (!row) throw new SwitchyardError(`There is no pending action #${id}.`);
   if (row.status !== "pending") throw new SwitchyardError(`Pending action #${id} is already ${row.status}.`);
-
-  db.update(pendingActions)
-    .set({ status: "affirmed", affirmedById: human.id, affirmedAt: nowSec() })
-    .where(eq(pendingActions.id, id))
-    .run();
-
-  // Execute as the affirming human, with NO session provenance → not re-gated.
-  if (row.actionType === "done" || isStatus(row.actionType)) {
-    const ref = refOfIssueId(db, row.issueId);
-    const patch: Record<string, unknown> = { status: row.actionType };
-    if (row.payload.expectedHeadSha !== undefined) patch.expectedHeadSha = row.payload.expectedHeadSha;
-    updateIssue(db, human, ref, patch as never, {}, {});
+  const owner = db.select({ actorId: sessions.actorId }).from(sessions).where(eq(sessions.id, row.sessionId)).get();
+  if (!owner || owner.actorId !== human.id) {
+    throw new SwitchyardError("Only the accountable human who opened this supervised session can affirm its gated actions.");
   }
-  // (dependency.remove executes via removeDependency in Task 8's sibling wiring.)
+  if (row.actionType !== "done") {
+    throw new SwitchyardError(`Pending action #${id} has action-type "${row.actionType}", which has no executor in this version.`);
+  }
+  db.transaction((tx) => {
+    // Conditionally claim the row; 0 rows changed means a concurrent affirm won.
+    const claimed = tx.update(pendingActions).set({ status: "affirmed", affirmedById: human.id, affirmedAt: nowSec() })
+      .where(and(eq(pendingActions.id, id), eq(pendingActions.status, "pending"))).run();
+    if (claimed.changes === 0) throw new SwitchyardError(`Pending action #${id} was already taken.`);
+    // Execute as the human, NO session attribution → Task-6 divert is skipped.
+    const ref = refOfIssueId(tx, row.issueId);
+    const patch: Record<string, unknown> = { status: "done" };
+    if (row.payload.expectedHeadSha !== undefined) patch.expectedHeadSha = row.payload.expectedHeadSha;
+    updateIssue(tx, human, ref, patch as never, {}, {}); // throws here → tx rolls back the claim → still pending
+  });
   return getPendingAction(db, id)!;
 }
 ```
 
-Add to `src/services/issues.ts`:
+> `refOfIssueId` is added in Task 6 (Task 5 and 6 land together if the implementer prefers; the import is forward-declared here). `updateIssue` must accept a `DbOrTx` first arg — confirm it does (it opens its own `db.transaction`; nested better-sqlite3 transactions are savepoints, which is fine, but **verify** by running the affirm test, not by assumption).
+
+- [ ] **Step 5: Run test to verify it passes** → PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/services/settings.ts src/services/hard-gate.ts tests/services/hard-gate.test.ts
+git commit -m "feat: hard-gate policy + transaction-safe, owner-tied, deduped pending actions (supervised phase 1)"
+```
+
+---
+
+## Task 6: Divert a gated `done` to pending; add `refOfIssueId`; execute on affirm
+
+**Files:**
+- Modify: `src/services/issues.ts` (`updateIssue` pre-transaction divert; add `refOfIssueId`)
+- Test: `tests/services/hard-gate-divert.test.ts`, `tests/services/hard-gate-affirm-exec.test.ts`
+
+**Interfaces:**
+- Consumes: `isHardGated`, `findOrCreatePendingAction` (`hard-gate.ts`); `Attribution`.
+- Produces: `refOfIssueId(db: DbOrTx, issueId): string`; a supervised (`attr.sessionId != null`) `updateIssue` to a hard-gated status **that actually changes status** creates/reuses a pending action and throws, committing nothing.
+
+**Design note (avoid three sub-bugs the reviewers flagged):**
+- Fire only when `patch.status !== undefined && patch.status !== current.status && isHardGated(db, patch.status)` — never on a `done → done` no-op.
+- **Reject mixed patches:** if the patch also sets non-status fields (priority/labels/title/assignee/parent/description), throw "split the gated status change into its own call" — Phase 1 only defers `status`, so a mixed patch would silently drop the rest.
+- Load the issue with `getIssue(db, ref)` (there is no `resolveIssueByRef`).
+
+- [ ] **Step 1: Write the failing tests**
 
 ```typescript
-export function refOfIssueId(db: Db, issueId: number): string {
-  const row = db
-    .select({ key: projects.key, number: issues.number })
-    .from(issues)
-    .innerJoin(projects, eq(issues.projectId, projects.id))
-    .where(eq(issues.id, issueId))
-    .get();
+// tests/services/hard-gate-divert.test.ts
+import { describe, it, expect } from "vitest";
+import { openDb } from "../../src/db/index.js";
+import { createActor } from "../../src/services/actors.js";
+import { createProject } from "../../src/services/projects.js";
+import { openSupervisedSession, resolveSupervisedPrincipal } from "../../src/services/supervised-sessions.js";
+import { attributionOf } from "../../src/services/attribution.js";
+import { createIssue, updateIssue, getIssue } from "../../src/services/issues.js";
+import { sql } from "drizzle-orm";
+
+function supervised() {
+  const db = openDb(":memory:");
+  const h = createActor(db, { name: "sean", type: "human" }).actor;
+  createProject(db, h, { key: "SYD", name: "Switchyard" });
+  const { sessionToken } = openSupervisedSession(db, h, "claude-code");
+  const prin = resolveSupervisedPrincipal(db, sessionToken)!;
+  return { db, h, prin, attr: attributionOf(prin) };
+}
+
+describe("hard-gated done in a supervised session", () => {
+  it("does not commit; creates exactly one pending action; dedups on retry", () => {
+    const { db, prin, attr } = supervised();
+    const issue = createIssue(db, prin.actor, { projectKey: "SYD", title: "t", description: "d" }, attr);
+    updateIssue(db, prin.actor, issue.ref, { status: "in_review" }, {}, attr);
+    expect(() => updateIssue(db, prin.actor, issue.ref, { status: "done" }, {}, attr)).toThrow(/awaiting human affirmation/i);
+    expect(() => updateIssue(db, prin.actor, issue.ref, { status: "done" }, {}, attr)).toThrow(/awaiting human affirmation/i);
+    expect(getIssue(db, issue.ref).status).toBe("in_review");
+    const n = db.get<{ c: number }>(sql`SELECT COUNT(*) c FROM pending_actions WHERE status='pending'`);
+    expect(n!.c).toBe(1); // deduped
+  });
+
+  it("a plain human done-stamp is NOT diverted even when done is gated", () => {
+    const { db, h } = supervised();
+    const issue = createIssue(db, h, { projectKey: "SYD", title: "t", description: "d" });
+    updateIssue(db, h, issue.ref, { status: "in_review" });
+    updateIssue(db, h, issue.ref, { status: "done" });
+    expect(getIssue(db, issue.ref).status).toBe("done");
+  });
+});
+```
+
+```typescript
+// tests/services/hard-gate-affirm-exec.test.ts
+import { describe, it, expect } from "vitest";
+import { openDb } from "../../src/db/index.js";
+import { createActor } from "../../src/services/actors.js";
+import { createProject } from "../../src/services/projects.js";
+import { openSupervisedSession, resolveSupervisedPrincipal } from "../../src/services/supervised-sessions.js";
+import { attributionOf } from "../../src/services/attribution.js";
+import { createIssue, updateIssue, getIssue } from "../../src/services/issues.js";
+import { affirmPendingAction, listPendingActions } from "../../src/services/hard-gate.js";
+
+describe("affirm executes the gated done", () => {
+  it("the session's human affirmation commits the blocked done", () => {
+    const db = openDb(":memory:");
+    const h = createActor(db, { name: "sean", type: "human" }).actor;
+    createProject(db, h, { key: "SYD", name: "Switchyard" });
+    const { sessionToken } = openSupervisedSession(db, h, "claude-code");
+    const prin = resolveSupervisedPrincipal(db, sessionToken)!;
+    const attr = attributionOf(prin);
+    const issue = createIssue(db, prin.actor, { projectKey: "SYD", title: "t", description: "d" }, attr);
+    updateIssue(db, prin.actor, issue.ref, { status: "in_review" }, {}, attr);
+    try { updateIssue(db, prin.actor, issue.ref, { status: "done" }, {}, attr); } catch { /* diverted */ }
+    const pid = listPendingActions(db, "pending")[0].id;
+    affirmPendingAction(db, h, pid);
+    expect(getIssue(db, issue.ref).status).toBe("done");
+  });
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail** → FAIL.
+
+- [ ] **Step 3: Add `refOfIssueId` and the divert**
+
+Add to `issues.ts` (ensure `projects` is imported from `../db/schema.js`):
+
+```typescript
+export function refOfIssueId(db: DbOrTx, issueId: number): string {
+  const row = db.select({ key: projects.key, number: issues.number }).from(issues)
+    .innerJoin(projects, eq(issues.projectId, projects.id)).where(eq(issues.id, issueId)).get();
   if (!row) throw new SwitchyardError(`There is no issue with id ${issueId}.`);
   return `${row.key}-${row.number}`;
 }
 ```
 
-`isStatus` = a small guard: `STATUSES.includes(x as never)`.
+In `updateIssue`, **before** the mutation transaction opens:
 
-- [ ] **Step 4: Run test to verify it passes**
+```typescript
+  if (attr.sessionId != null && patch.status !== undefined && isHardGated(db, patch.status)) {
+    const target = getIssue(db, ref); // throws if missing; has .id, .status
+    if (patch.status !== target.status) {
+      const otherKeys = Object.keys(patch).filter((k) => k !== "status" && k !== "expectedHeadSha");
+      if (otherKeys.length > 0) {
+        throw new SwitchyardError(`A hard-gated status change to "${patch.status}" must be its own call — move ${otherKeys.join(", ")} to a separate update.`);
+      }
+      const pendingActionId = findOrCreatePendingAction(db, attr.sessionId, target.id, patch.status, {
+        status: patch.status, ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
+      });
+      throw new SwitchyardError(`Awaiting human affirmation: ${ref} → ${patch.status} is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`);
+    }
+  }
+```
 
-Run: `npx vitest run tests/services/hard-gate-affirm-exec.test.ts`
-Expected: PASS.
+(Import `isHardGated`, `findOrCreatePendingAction` from `./hard-gate.js` — a two-way import with hard-gate.ts; if the cycle bites at runtime, move `refOfIssueId` + the divert helpers into `hard-gate.ts` and have `updateIssue` call one `maybeDivert(db, ref, patch, attr)` helper. Verify by running the tests, not by assuming.)
+
+- [ ] **Step 4: Run tests to verify they pass** → PASS (3 tests across the two files).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/services/hard-gate.ts src/services/issues.ts tests/services/hard-gate-affirm-exec.test.ts
-git commit -m "feat: affirming a pending action commits the deferred change (SYD supervised phase 1)"
+git add src/services/issues.ts tests/services/hard-gate-divert.test.ts tests/services/hard-gate-affirm-exec.test.ts
+git commit -m "feat: divert gated done to pending (deduped, no-op-safe, mixed-patch-rejected) + affirm executes (supervised phase 1)"
 ```
 
 ---
 
-## Task 8: MCP + REST surface — open session, dual-attributed writes, affirm endpoint
+## Task 7: MCP + REST surface (no in-band handshake)
 
 **Files:**
-- Modify: `src/mcp/server.ts` (`buildMcpServer` takes `Principal`; register `open_supervised_session`; forward `Provenance` on write tools)
-- Modify: `src/server.ts` (`/mcp` resolves supervised token → `Principal`)
-- Modify/Create: `src/rest/pending-actions.ts` + wire into `buildApiRoutes`
-- Test: `tests/mcp/supervised-session.test.ts`, `tests/rest/pending-actions.test.ts`
+- Modify: `src/mcp/server.ts` (`buildMcpServer` optional `attribution` + `viaAgent`; write tools forward attribution; agent-scoped tools use `viaAgent`)
+- Modify: `src/server.ts` (`/mcp` resolves supervised token → Principal)
+- Create: `src/rest/pending-actions.ts` (+ wire into `buildApiRoutes`)
+- Test: `tests/mcp/supervised-write.test.ts`, `tests/rest/pending-actions.test.ts`
 
 **Interfaces:**
-- Consumes: `openSupervisedSession`, `resolveSupervisedPrincipal`, `provenanceOf`, `affirmPendingAction`, `getPendingAction`.
-- Produces:
-  - MCP tool `open_supervised_session({ agent_name }) -> { session_token, session_id, agent }` (callable by a human-authenticated connection).
-  - `/mcp` accepts a `sup_…` token: resolve via `resolveSupervisedPrincipal`; if it resolves, build the server with that `Principal` (guards see the human, writes carry provenance). Fall back to `authenticate` (plain actor → `Principal { actor }`) otherwise.
-  - `POST /api/pending-actions/:id/affirm` (human session only) → `affirmPendingAction`.
-  - `GET /api/pending-actions?status=pending` → the approval queue for the board.
+- `buildMcpServer(db, actor, attachmentsDir?, connectionLeaseToken?, attribution: Attribution = {}, viaAgent?: Actor)` — **backward-compatible**: the three existing callers (`tests/mcp/lease-tools.test.ts:13`, `read-tools.test.ts:16`, `write-tools.test.ts:21`) pass ≤3 args and are unaffected; the new params default.
+- `/mcp` resolves a `sup_` bearer via `resolveSupervisedPrincipal`; if it resolves, build with `actor = principal.actor`, `attribution = attributionOf(principal)`, `viaAgent = principal.viaAgent`. Else fall back to `authenticate` (plain actor, `attribution = {}`, no viaAgent).
+- `POST /api/pending-actions/:id/affirm` (human web session only) → `affirmPendingAction`.
+- `GET /api/pending-actions?status=pending` → the approval queue.
+- **No `open_supervised_session` MCP tool** — minting is CLI-only (Task 2).
+
+**Design note (agent-scoped tools):** in `buildMcpServer`, the write tools (`file_issue`→`createIssue`, `update_issue`→`updateIssue`, `claim_issue`→`claimIssue`, `comment`→`addComment`, `add_dependency`, `attach_file`, `request_human_input`) pass `attribution`. The **agent-scoped** `progress_note`→`recordProgressNote` must pass `viaAgent ?? actor` as its actor (a supervised session's editor is the agent; a plain agent session's actor is already the agent). If `viaAgent` is undefined and `actor.type !== 'agent'` (a plain human calling `progress_note`), the existing `requireAgent` error stands — unchanged behavior.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```typescript
-// tests/mcp/supervised-session.test.ts — via the in-process MCP harness used by other tests/mcp/*.test.ts
-// Assert: open_supervised_session returns a token; a subsequent status change made through the
-// supervised connection writes an event with via_agent_id + session_id set.
+// tests/mcp/supervised-write.test.ts — copy the harness from tests/mcp/write-tools.test.ts
+// Build the server with a supervised principal's parts:
+//   buildMcpServer(db, prin.actor, attachmentsDir, undefined, attributionOf(prin), prin.viaAgent)
+// Drive update_issue to in_review, assert the status_changed event row has via_agent_id === prin.viaAgent.id
+// and session_id === prin.sessionId. Also assert progress_note succeeds (acts as the agent) and its event
+// carries session_id.
 ```
 
 ```typescript
-// tests/rest/pending-actions.test.ts — via the REST test harness (Hono app + supertest-style fetch)
-// Assert: POST /api/pending-actions/:id/affirm with a human session commits the deferred done;
-// the same call authenticated as the supervised-session token (or an agent) is refused 4xx.
+// tests/rest/pending-actions.test.ts — copy the harness from a neighbouring tests/rest/*.test.ts
+// (createApp(db) + fetch). Assert:
+//  - POST /api/pending-actions/:id/affirm with the OWNER human's session cookie commits the deferred done.
+//  - the same POST with an agent bearer, or a different human, is 4xx.
+//  - GET /api/pending-actions?status=pending lists the queued action.
 ```
 
-> Fill these bodies by copying the exact bootstrap from a neighbouring `tests/mcp/*.test.ts` and `tests/rest/*.test.ts` — reuse their app/harness builders; do not invent new ones.
+> Fill both bodies from the exact bootstrap in the neighbouring `tests/mcp/*.test.ts` / `tests/rest/*.test.ts`; do not invent a harness. Grounding: `buildMcpServer` is called as `buildMcpServer(db, actor, …)` in those files today (confirmed at `tests/mcp/write-tools.test.ts:21`) — the extra params are appended, so those files keep compiling unchanged.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Run tests to verify they fail** → FAIL.
 
-Run: `npx vitest run tests/mcp/supervised-session.test.ts tests/rest/pending-actions.test.ts`
-Expected: FAIL — tool/endpoint/`Principal` param don't exist.
-
-- [ ] **Step 3: `buildMcpServer` takes a `Principal`**
-
-Change the signature and internal actor references:
+- [ ] **Step 3: `buildMcpServer` params + wiring**
 
 ```typescript
 export function buildMcpServer(
   db: Db,
-  principal: Principal,
+  actor: Actor,
   attachmentsDir: string = defaultAttachmentsDir(),
   connectionLeaseToken?: string,
+  attribution: Attribution = {},
+  viaAgent?: Actor,
 ): McpServer {
-  const actor = principal.actor;              // guards & whoami keep using this
-  const prov = provenanceOf(principal);       // forwarded to write services
-  // ... existing tool registrations ...
+  // ... existing tool registrations, with:
+  //   write tools:  <service>(db, actor, …, attribution)
+  //   progress_note: recordProgressNote(db, viaAgent ?? actor, …, attribution)
 ```
 
-For each **write** tool (`file_issue`→`createIssue`, `update_issue`→`updateIssue`, `claim_issue`→`claimIssue`, `comment`→`addComment`), pass `prov` as the trailing arg to the service call. Read tools are unchanged.
+Import `Attribution` from `../services/attribution.js`. Do **not** register `open_supervised_session`.
 
-Register the handshake tool (only meaningful for a human-authenticated connection):
+- [ ] **Step 4: `/mcp` resolution**
 
-```typescript
-server.registerTool(
-  "open_supervised_session",
-  {
-    description:
-      "Bind this human connection to an editing agent, returning a supervised-session token. " +
-      "Present that token as the bearer for subsequent calls so every write is attributed human-via-agent.",
-    inputSchema: { agent_name: z.string().default("claude-code") },
-  },
-  guard(({ agent_name }: { agent_name: string }) => {
-    if (actor.type !== "human") {
-      throw new SwitchyardError("Only a human connection can open a supervised session.");
-    }
-    const { sessionToken, sessionId, agent } = openSupervisedSession(db, actor, agent_name);
-    return { session_token: sessionToken, session_id: sessionId, agent };
-  }),
-);
-```
-
-- [ ] **Step 4: `/mcp` resolves a supervised token**
-
-In `src/server.ts` `/mcp` handler, before `buildMcpServer`:
+In `src/server.ts`, before `buildMcpServer`:
 
 ```typescript
   const supervised = token ? resolveSupervisedPrincipal(db, token) : null;
-  const principal: Principal | null = supervised
-    ? supervised
-    : actor
-      ? { actor }
-      : null;
-  if (!principal) {
+  const plainActor = supervised ? null : (token ? authenticate(db, token) : null);
+  if (!supervised && !plainActor) {
     return c.json({ error: "Missing or invalid bearer token — mint one with the switchyard CLI." }, 401);
   }
-  // note: `actor` above is authenticate(db, token) for the plain path; keep it for the fallback.
-  const server = buildMcpServer(db, principal, undefined, leaseToken);
+  const actor = supervised ? supervised.actor : plainActor!;
+  const attribution = supervised ? attributionOf(supervised) : {};
+  const viaAgent = supervised?.viaAgent;
+  const server = buildMcpServer(db, actor, undefined, leaseToken, attribution, viaAgent);
 ```
 
-(Resolve `supervised` first; only call `authenticate` for the plain fallback.)
+- [ ] **Step 5: REST affirm + queue**
 
-- [ ] **Step 5: REST affirm + queue endpoints**
-
-In `src/rest/pending-actions.ts` (wire into `buildApiRoutes`):
+`src/rest/pending-actions.ts`, wired into `buildApiRoutes`:
 
 ```typescript
-// POST /api/pending-actions/:id/affirm  — human session only
 router.post("/pending-actions/:id/affirm", (c) => {
-  const human = requireHumanSession(c); // existing REST helper resolving the session actor; must be human
-  const row = affirmPendingAction(db, human, Number(c.req.param("id")));
-  return c.json(row);
+  const actor = c.var.actor; // resolved by existing middleware; getSessionActor now rejects sup_ tokens (Task 2)
+  if (!actor || actor.type !== "human") return c.json({ error: "human session required" }, 403);
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid id" }, 400); // mirror parseActorId
+  try {
+    return c.json(affirmPendingAction(db, actor, id));
+  } catch (e) {
+    if (e instanceof SwitchyardError) return c.json({ error: e.message }, 403);
+    throw e;
+  }
 });
 
-// GET /api/pending-actions?status=pending — the approval queue
-router.get("/pending-actions", (c) => {
-  const status = c.req.query("status") ?? "pending";
-  return c.json(listPendingActions(db, status));
-});
+router.get("/pending-actions", (c) => c.json(listPendingActions(db, c.req.query("status") ?? "pending")));
 ```
 
-Add `listPendingActions(db, status)` to `hard-gate.ts` (simple select by status, newest-first).
+> Match the repo's actual REST error-mapping convention (grep how other routes turn `SwitchyardError` into a 4xx — there may be shared middleware). Validate `id` like `parseActorId` (`src/rest/api-routes.ts`) rather than hand-rolling if that helper is exported.
 
-> `requireHumanSession` must reject the supervised-session token and agent tokens — affirmation is structurally the human's own credential, never the session token. If no such REST helper exists, resolve via `getSessionActor` and assert `type === "human"` AND the token is not a `sup_…` supervised token.
-
-- [ ] **Step 6: Run tests to verify they pass**
-
-Run: `npx vitest run tests/mcp/supervised-session.test.ts tests/rest/pending-actions.test.ts`
-Expected: PASS.
+- [ ] **Step 6: Run tests to verify they pass** → PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/mcp/server.ts src/server.ts src/rest/ src/services/hard-gate.ts tests/mcp/supervised-session.test.ts tests/rest/pending-actions.test.ts
-git commit -m "feat: MCP open_supervised_session + provenance writes + REST affirm queue (SYD supervised phase 1)"
+git add src/mcp/server.ts src/server.ts src/rest/pending-actions.ts tests/mcp/supervised-write.test.ts tests/rest/pending-actions.test.ts
+git commit -m "feat: /mcp supervised principal resolution + attributed writes + REST affirm queue (supervised phase 1)"
 ```
 
 ---
 
-## Task 9: Dispatch coexistence — positive `workerPreference` lane
+## Task 8: Full verify
 
-**Files:**
-- Modify: the dispatch selection query (grep for `worker_preference`/`selectDispatchable` — SYD-201 lives near `src/services/` dispatch selection)
-- Test: `tests/services/dispatch-interactive-lane.test.ts`
-
-**Interfaces:**
-- Produces: an issue with `workerPreference === "interactive"` is **never** selected by headless dispatch (it's a lane marker, not a soft sort hint). All other `workerPreference` values keep their existing soft-sort behaviour.
-
-**Design note:** This is the one behavioural change to dispatch. Today `workerPreference` only *sorts*; `"interactive"` must become an *exclusion*. The claim-by-distinct-principal interlock already prevents double-work once claimed; this closes the window *before* a claim by keeping interactive-lane issues out of the headless queue entirely (they also never enter `todo` in normal flow, but the exclusion is the belt-and-braces).
-
-- [ ] **Step 1: Write the failing test**
-
-```typescript
-// tests/services/dispatch-interactive-lane.test.ts
-import { describe, it, expect } from "vitest";
-import { makeTestDb } from "../helpers/db.js";
-import { selectDispatchable } from "../../src/services/<dispatch-selection-module>.js"; // resolve exact path via grep
-import { seedProject, seedIssue } from "../helpers/seed.js";
-
-describe("interactive lane excluded from dispatch", () => {
-  it("does not return an issue marked workerPreference=interactive", () => {
-    const db = makeTestDb();
-    seedProject(db, "SYD");
-    const id = seedIssue(db, "SYD", { status: "todo", workerPreference: "interactive" });
-    const picks = selectDispatchable(db, /* worker classification args as the real fn takes */);
-    expect(picks.map((p: any) => p.id)).not.toContain(id);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `npx vitest run tests/services/dispatch-interactive-lane.test.ts`
-Expected: FAIL — the interactive-lane issue is still selected.
-
-- [ ] **Step 3: Exclude the interactive lane in selection**
-
-In the dispatch selection query, add a `WHERE worker_preference IS DISTINCT FROM 'interactive'` equivalent (SQLite: `WHERE (worker_preference IS NULL OR worker_preference != 'interactive')`). Keep the existing soft-sort for all other values.
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `npx vitest run tests/services/dispatch-interactive-lane.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Full verify**
+- [ ] **Step 1: Run the whole suite the way CI does**
 
 Run: `npm run verify`
-Expected: typecheck + build:ui + full test suite PASS (TZ=UTC).
+Expected: node-version check + TZ=UTC typecheck + build:ui + full test suite PASS. In particular confirm the three pre-existing `tests/mcp/*` still pass (the `buildMcpServer` params are additive) and web login (`tests/rest/*` auth) still works after the `getSessionActor` `kind='plain'` filter.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 2: Commit any lint/type fixups**
 
 ```bash
-git add -A
-git commit -m "feat: workerPreference=interactive excludes an issue from headless dispatch (SYD supervised phase 1)"
+git add -p   # stage reviewed hunks explicitly; no git add -A
+git commit -m "chore: verify green for supervised sessions phase 1"
 ```
 
 ---
 
-## Deferred to Phase 2 (separate plan)
+## Deferred to later phases (separate plans)
 
-- Native desktop **notification / menu-bar Approve button** and the **Touch-ID-gated keychain** release (the "try it and see if it feels smooth" slice). Phase 1 ships the already-secure web-board affirmation as the interim surface.
+- **Phase 2:** native desktop notification / menu-bar Approve button + Touch-ID-gated keychain release (the "try it and see if it feels smooth" slice). Phase 1 ships the web-board affirmation as the interim surface.
+- **`dependency.remove` gating** (and any non-status gated action): needs its own divert in `removeDependency` + an executor branch in `affirmPendingAction`. Out of Phase 1 by design.
 - **Per-project** hard-gate lists (Phase 1 is install-global).
-- **Provenance rendering** in the web UI beyond the raw event columns (e.g. "✍️ claude-code · under Sean" chips) — the data is captured in Phase 1; the visual treatment is UI polish.
-- Supervised-session **lifecycle niceties** (renewal, auto-close on client disconnect).
+- **Provenance rendering** in the web UI ("✍️ claude-code · under Sean" chips) — data captured in Phase 1; visual treatment is polish.
+- **Supervised-session lifecycle**: wiring `closeSupervisedSession` to a CLI/REST endpoint, renewal, expiry sweep.
 
 ## Self-Review
 
-- **Spec coverage:** Pillar 1 → Tasks 2, 8. Pillar 2 → Tasks 1, 3, 4. Pillar 3 (full absorption) → free via human-`actor` resolution (Task 8) + hard-gate list Tasks 5–7. Pillar 4 → Task 9 (+ claim interlock is pre-existing). Pillar 5 web-fallback → Tasks 5–8. Pillar 6 → no code (creds follow the human; documented). Native/Touch-ID (pillar 5 primary) → explicitly Phase 2.
-- **Reconciliations flagged:** `supervised_session_opened` is the `sessions` row, not an `events` row (events are issue-scoped) — Task 2. Hard-gate list is install-global, not per-project — Task 5. Both are called out at their tasks and in the design's open questions.
-- **Type consistency:** `Principal` (principal.ts) and `Provenance` (provenance.ts) are the two threaded types; `provenanceOf` is the sole bridge; `recordEvent`'s new fields match the schema columns `viaAgentId`/`sessionId`; `updateIssue` gains `prov` as its 5th param consistently in Tasks 4/6/7/8.
-- **Placeholder scan:** the only intentionally-unresolved references are exact neighbouring-test harness names (`makeTestDb`, `seedProject`, `requireHumanSession`, the dispatch-selection module path) — each is annotated "resolve via grep / copy the neighbour," because inventing a parallel harness would be the real error. Every new production symbol is fully specified.
+- **Spec coverage:** Pillar 1 → Task 2 (CLI mint + resolve) + Task 7 (/mcp). Pillar 2 → Tasks 1, 3, 4. Pillar 3 (full absorption) → free via human-`actor` resolution + hard-gate Tasks 5–6, default `["done"]`. Pillar 4 → **pre-existing** `scripts/worker-select.ts:414` exclusion + the claim interlock (Task 9 deleted — it was already implemented). Pillar 5 web-fallback → Tasks 5–7. Pillar 6 → creds follow the human (documented; no code). Native/Touch-ID → Phase 2.
+- **Round-1 CRITICAL/MAJOR/HIGH resolution:** credential boundary → Task 2 (getSessionActor kind filter + regression test). Out-of-band handshake → Task 2 CLI, no MCP tool, Task 7 removes it. Affirm lifecycle → Task 5 (tx-safe, owner-tied, executor-guarded). dependency.remove → dropped from Phase 1 scope. progress_note → Task 4/7 (viaAgent). Default gate `["done"]` → Task 5. Provenance name collision → `Attribution`. buildMcpServer breakage → additive params (Task 7). closeSupervisedSession FK → soft-close (Task 2). Task 9 already-shipped → deleted. Test harness → real `openDb(":memory:")` idiom throughout. drizzle raw-read API → `sql\`…\``. resolveIssueByRef → `getIssue`/`refOfIssueId`. Pending dedup + no-op guard + mixed-patch reject + validate → Task 6. Any-human-affirm → owner tie (Task 5). REST id NaN→500 → integer guard (Task 7). git add -A → explicit paths.
+- **Residual known-simplifications (called out, not hidden):** `SwitchyardError` carries the pending-action id in its **message string**, not a structured field (repo's error type has no payload); the affirm queue `GET` is readable by any authed actor (low impact; a human-only scope is a one-line follow-up); nested `updateIssue`-inside-`affirm` transaction relies on better-sqlite3 savepoints — **verified by the Task-5/6 affirm tests**, not by assumption.
