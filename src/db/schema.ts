@@ -4,6 +4,7 @@ import {
   integer,
   primaryKey,
   index,
+  uniqueIndex,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
@@ -163,6 +164,12 @@ export const events = sqliteTable(
       .$type<Record<string, unknown>>()
       .notNull()
       .default({}),
+    // Supervised-session provenance (dual attribution): viaAgentId names the
+    // agent acting on the human actor's behalf; sessionId ties the event back
+    // to the supervised session it was written under. Both null for ordinary
+    // (non-supervised) writes.
+    viaAgentId: integer("via_agent_id").references(() => actors.id),
+    sessionId: integer("session_id").references(() => sessions.id),
     createdAt: integer("created_at").notNull().default(now()),
   },
   (t) => [index("events_issue_id_idx").on(t.issueId)],
@@ -174,6 +181,15 @@ export const sessions = sqliteTable("sessions", {
   actorId: integer("actor_id")
     .notNull()
     .references(() => actors.id),
+  // Supervised interactive sessions (dual attribution): kind="supervised"
+  // binds the human actorId above to the acting agent in viaAgentId. Plain
+  // sessions leave viaAgentId null. closedAt marks when a supervised session
+  // ended (distinct from expiresAt, which is the credential's own TTL).
+  kind: text("kind", { enum: ["plain", "supervised"] })
+    .notNull()
+    .default("plain"),
+  viaAgentId: integer("via_agent_id").references(() => actors.id),
+  closedAt: integer("closed_at"),
   expiresAt: integer("expires_at").notNull(),
   createdAt: integer("created_at").notNull().default(now()),
 });
@@ -375,3 +391,40 @@ export const claimLeaseCutover = sqliteTable("claim_lease_cutover", {
   id: integer("id").primaryKey(),
   completedAt: integer("completed_at").notNull().default(now()),
 });
+
+export const PENDING_ACTION_STATUSES = ["pending", "affirmed", "expired"] as const;
+export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
+
+// Supervised interactive sessions (phase 1 design, docs/superpowers/): a
+// hard-gated action (e.g. moving an issue to done) proposed by the agent side
+// of a supervised session, awaiting the bound human's affirmation before it
+// executes. The partial unique index pending_actions_active_uniq allows only
+// one *pending* row per (session, issue, actionType) tuple at a time — once a
+// row is affirmed or expired it stops blocking a fresh pending proposal for
+// the same tuple, which is what onConflictDoUpdate dedup targets.
+export const pendingActions = sqliteTable(
+  "pending_actions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sessionId: integer("session_id")
+      .notNull()
+      .references(() => sessions.id),
+    issueId: integer("issue_id")
+      .notNull()
+      .references(() => issues.id),
+    actionType: text("action_type").notNull(),
+    payload: text("payload", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    status: text("status", { enum: PENDING_ACTION_STATUSES }).notNull().default("pending"),
+    affirmedById: integer("affirmed_by_id").references(() => actors.id),
+    affirmedAt: integer("affirmed_at"),
+    createdAt: integer("created_at").notNull().default(now()),
+  },
+  (t) => [
+    uniqueIndex("pending_actions_active_uniq")
+      .on(t.sessionId, t.issueId, t.actionType)
+      .where(sql`status = 'pending'`),
+  ],
+);
