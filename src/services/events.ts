@@ -4,11 +4,25 @@ import { events, actors, issues, projects, type EventKind } from "../db/schema.j
 
 export function recordEvent(
   db: DbOrTx,
-  e: { issueId: number; actorId: number; type: EventKind; payload?: Record<string, unknown> },
+  e: {
+    issueId: number;
+    actorId: number;
+    type: EventKind;
+    payload?: Record<string, unknown>;
+    viaAgentId?: number;
+    sessionId?: number;
+  },
 ): number {
   return db
     .insert(events)
-    .values({ issueId: e.issueId, actorId: e.actorId, type: e.type, payload: e.payload ?? {} })
+    .values({
+      issueId: e.issueId,
+      actorId: e.actorId,
+      type: e.type,
+      payload: e.payload ?? {},
+      viaAgentId: e.viaAgentId ?? null,
+      sessionId: e.sessionId ?? null,
+    })
     .returning({ id: events.id })
     .get().id;
 }
