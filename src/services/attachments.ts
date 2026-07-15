@@ -7,6 +7,7 @@ import createDOMPurify from "dompurify";
 import type { Db } from "../db/index.js";
 import { attachments, actors } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
@@ -98,6 +99,7 @@ export async function saveAttachment(
   filename: string,
   data: Buffer,
   attachmentsDir: string,
+  attr: Attribution = {},
 ): Promise<{ attachment: AttachmentRow; markdown: string }> {
   const sanitized = sanitizeFilename(filename);
   const ext = extensionOf(sanitized);
@@ -153,6 +155,8 @@ export async function saveAttachment(
         actorId: actor.id,
         type: "attachment_added",
         payload: { id: inserted.id, filename: sanitized, size: data.length, contentType },
+        viaAgentId: attr.viaAgentId,
+        sessionId: attr.sessionId,
       });
       renameSync(tmpPath, path.join(attachmentsDir, String(inserted.id)));
       return inserted;

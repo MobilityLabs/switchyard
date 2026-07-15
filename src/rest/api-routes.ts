@@ -74,6 +74,7 @@ import {
   type GithubRepo,
 } from "../services/github-repos.js";
 import { handleGithubWebhook } from "../services/github-webhook.js";
+import { buildPendingActionRoutes } from "./pending-actions.js";
 import { listPrState } from "../services/pr-state.js";
 import {
   getAllSettings,
@@ -599,6 +600,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     const outcome = handleGithubWebhook(db, event, payload, repo);
     return c.json({ ok: true, ...outcome });
   });
+
+  // Mounted under this app's auth middleware and onError, but kept in its own
+  // module: the affirm route resolves its human from the session cookie rather
+  // than c.var.actor, and that divergence deserves to be read in one place.
+  app.route("/", buildPendingActionRoutes(db));
 
   return app;
 }

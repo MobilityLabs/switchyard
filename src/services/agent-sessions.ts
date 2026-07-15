@@ -7,6 +7,7 @@ import { and, desc, eq, gt, gte, lt, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { agentSessions, events, issues, projects } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
@@ -194,7 +195,13 @@ export function sweepOrphanedAgentSessions(
   return swept.length;
 }
 
-export function recordProgressNote(db: Db, actor: Actor, ref: string, note: string): void {
+export function recordProgressNote(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  note: string,
+  attr: Attribution = {},
+): void {
   requireAgent(actor, "record progress notes");
   const trimmed = note.trim();
   if (!trimmed) throw new SwitchyardError("A progress note must not be empty.");
@@ -204,5 +211,7 @@ export function recordProgressNote(db: Db, actor: Actor, ref: string, note: stri
     actorId: actor.id,
     type: "progress_note",
     payload: { note: trimmed },
+    viaAgentId: attr.viaAgentId,
+    sessionId: attr.sessionId,
   });
 }

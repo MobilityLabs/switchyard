@@ -12,6 +12,7 @@ export type Route =
   | { view: "new-issue" }
   | { view: "search"; query: string }
   | { view: "agents" }
+  | { view: "approvals" }
   | { view: "settings"; tab: SettingsTab };
 
 // Matches a project key (e.g. "SYD"), as opposed to an issue ref like
@@ -88,6 +89,7 @@ function matchRoute(pathname: string, search: string): Route | null {
   }
   if (parts[0] === "new" && parts.length === 1) return { view: "new-issue" };
   if (parts[0] === "agents" && parts.length === 1) return { view: "agents" };
+  if (parts[0] === "approvals" && parts.length === 1) return { view: "approvals" };
   if (parts[0] === "settings") {
     if (parts.length === 1) return { view: "settings", tab: "projects" };
     if (parts.length === 2 && (SETTINGS_TABS as readonly string[]).includes(parts[1])) {
@@ -118,6 +120,7 @@ export function href(route: Route): string {
   if (route.view === "search")
     return route.query ? `/search?q=${encodeURIComponent(route.query)}` : "/search";
   if (route.view === "agents") return "/agents";
+  if (route.view === "approvals") return "/approvals";
   if (route.view === "settings") {
     return route.tab === "projects" ? "/settings" : `/settings/${route.tab}`;
   }

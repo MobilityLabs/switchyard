@@ -1,7 +1,10 @@
+import { eq } from "drizzle-orm";
 import { openDb } from "./db/index.js";
+import { actors } from "./db/schema.js";
 import { createActor, type Actor } from "./services/actors.js";
 import { createProject } from "./services/projects.js";
 import { createLoginLink } from "./services/auth.js";
+import { openSupervisedSession } from "./services/supervised-sessions.js";
 import { resolveBaseUrl } from "./services/settings.js";
 import { addWebhook, listWebhooks, removeWebhook } from "./services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo } from "./services/github-repos.js";
@@ -16,6 +19,9 @@ if (!dbPath || !cmd) {
   console.log("usage: tsx src/cli.ts <db-path> add-actor <name> <human|agent|service>");
   console.log("       tsx src/cli.ts <db-path> add-project <KEY> <name...>");
   console.log("       tsx src/cli.ts <db-path> mint-login <name>");
+  console.log(
+    "       tsx src/cli.ts <db-path> mint-supervised-session <humanName> <agentName>",
+  );
   console.log("       tsx src/cli.ts <db-path> add-webhook <url> [PROJECT_KEY] [secret]");
   console.log("       tsx src/cli.ts <db-path> list-webhooks");
   console.log("       tsx src/cli.ts <db-path> rm-webhook <id>");
@@ -55,6 +61,25 @@ try {
     const { path } = createLoginLink(db, name);
     console.log(`login link (valid 15 minutes, single use):`);
     console.log(resolveBaseUrl(db) + path);
+  } else if (cmd === "mint-supervised-session") {
+    const [humanName, agentName] = args;
+    if (!humanName || !agentName) {
+      console.error("mint-supervised-session needs: <humanName> <agentName>");
+      process.exit(1);
+    }
+    const row = db.select().from(actors).where(eq(actors.name, humanName)).get();
+    if (!row) throw new SwitchyardError(`There is no actor named "${humanName}".`);
+    if (row.type !== "human") {
+      throw new SwitchyardError(
+        `"${humanName}" is an actor of type "${row.type}", not a human — supervised sessions root on a human actor.`,
+      );
+    }
+    const human: Actor = { id: row.id, name: row.name, type: row.type };
+    const { sessionToken } = openSupervisedSession(db, human, agentName);
+    console.log(`supervised session token (shown once): ${sessionToken}`);
+    console.log(
+      "Set this as your MCP client's bearer. It authorizes supervised writes for 12h. It is NOT a web login. Do NOT run this session with your web cookie or personal syd_ bearer in its environment (see the plan's threat-model).",
+    );
   } else if (cmd === "add-webhook") {
     const [url, projectKey, secret] = args;
     if (!url) {
