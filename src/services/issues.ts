@@ -21,6 +21,7 @@ import { getOpenPr, getMergedPr } from "./pr-status.js";
 import { doneWithoutMergedPr } from "./deviation.js";
 import { getSetting } from "./settings.js";
 import { mintLease, validateLease, invalidateLease, getActiveLease, heartbeatLease } from "./leases.js";
+import { isHardGated, findOrCreatePendingAction, EXECUTABLE_GATE_ACTIONS } from "./hard-gate.js";
 
 export type Provenance = {
   sourceType: "session" | "todo" | "ci" | "manual";
@@ -283,6 +284,39 @@ export function updateIssue(
   attr: Attribution = {},
 ): IssueView {
   checkSummaryLength(patch.summary);
+  if (attr.sessionId != null && patch.status !== undefined) {
+    const target = getIssue(db, ref); // real resolver; has .id/.status
+    if (patch.status !== target.status && isHardGated(db, patch.status)) {
+      if (!EXECUTABLE_GATE_ACTIONS.includes(patch.status)) {
+        throw new SwitchyardError(
+          `"${patch.status}" is hard-gated but not an affirmable action in this version — remove it from supervised.hard_gate_actions.`,
+        );
+      }
+      const otherKeys = Object.keys(patch).filter(
+        (k) =>
+          k !== "status" &&
+          k !== "expectedHeadSha" &&
+          (patch as Record<string, unknown>)[k] !== undefined,
+      );
+      if (otherKeys.length > 0) {
+        throw new SwitchyardError(
+          `A hard-gated status change to "${patch.status}" must be its own call — move ${otherKeys.join(", ")} to a separate update.`,
+        );
+      }
+      // TOCTOU note: this read + pend runs outside a transaction, so the issue can
+      // change between here and the human's later affirm. Harmless by construction —
+      // the executor re-drives updateIssue at affirm time, which re-validates every
+      // guard (incl. the SYD-208 head pin) against current state: it either no-ops
+      // (already done) or throws and rolls back, leaving the row pending.
+      const pendingActionId = findOrCreatePendingAction(db, attr.sessionId, target.id, patch.status, {
+        status: patch.status,
+        ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
+      });
+      throw new SwitchyardError(
+        `Awaiting human affirmation: ${ref} → ${patch.status} is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`,
+      );
+    }
+  }
   return db.transaction((tx) => {
     const current = getIssue(tx, ref);
     // SYD-213: a `service` token posts PR/delivery events, reads, and comments —
