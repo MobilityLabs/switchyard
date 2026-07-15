@@ -2,6 +2,7 @@ import { and, eq, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
 import { dependencies, issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue, toView, type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
@@ -12,7 +13,13 @@ const CLOSED = ["done", "canceled"] as const;
 const PRIORITY_RANK = sql`CASE ${issues.priority}
   WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
 
-export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedRef: string): void {
+export function addDependency(
+  db: Db,
+  actor: Actor,
+  blockerRef: string,
+  blockedRef: string,
+  attr: Attribution = {},
+): void {
   db.transaction((tx) => {
     const blocker = getIssue(tx, blockerRef);
     const blocked = getIssue(tx, blockedRef);
@@ -36,6 +43,8 @@ export function addDependency(db: Db, actor: Actor, blockerRef: string, blockedR
         actorId: actor.id,
         type: "blocked_by_added",
         payload: { blocker: blocker.ref },
+        viaAgentId: attr.viaAgentId,
+        sessionId: attr.sessionId,
       });
     }
   });
@@ -50,6 +59,7 @@ export function removeDependency(
   actor: Actor,
   blockerRef: string,
   blockedRef: string,
+  attr: Attribution = {},
 ): void {
   if (actor.type !== "human") {
     throw new SwitchyardError(
@@ -70,6 +80,8 @@ export function removeDependency(
         actorId: actor.id,
         type: "blocked_by_removed",
         payload: { blocker: blocker.ref },
+        viaAgentId: attr.viaAgentId,
+        sessionId: attr.sessionId,
       });
     }
   });

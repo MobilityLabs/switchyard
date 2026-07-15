@@ -12,6 +12,7 @@ import {
   type EventKind,
 } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
@@ -136,7 +137,12 @@ export function childCountsByParent(db: DbOrTx): Map<number, number> {
   return map;
 }
 
-export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): IssueView {
+export function createIssue(
+  db: Db,
+  actor: Actor,
+  input: CreateIssueInput,
+  attr: Attribution = {},
+): IssueView {
   // SYD-213: a `service` token is trusted worker-host infra whose mandate is
   // posting PR/delivery events, reading, and commenting — never authoring board
   // work. Denied wholesale (fail-closed) rather than falling through to the
@@ -186,7 +192,13 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
       })
       .returning()
       .get();
-    recordEvent(tx, { issueId: row.id, actorId: actor.id, type: "created" });
+    recordEvent(tx, {
+      issueId: row.id,
+      actorId: actor.id,
+      type: "created",
+      viaAgentId: attr.viaAgentId,
+      sessionId: attr.sessionId,
+    });
     return toView(tx, row);
   });
 }
@@ -268,6 +280,7 @@ export function updateIssue(
   ref: string,
   patch: UpdateIssueInput,
   lease: LeaseChannel = {},
+  attr: Attribution = {},
 ): IssueView {
   checkSummaryLength(patch.summary);
   return db.transaction((tx) => {
@@ -579,7 +592,13 @@ export function updateIssue(
     changes.updatedAt = sql`(unixepoch())`;
     const row = tx.update(issues).set(changes).where(eq(issues.id, current.id)).returning().get();
     for (const e of toRecord) {
-      recordEvent(tx, { issueId: current.id, actorId: actor.id, ...e });
+      recordEvent(tx, {
+        issueId: current.id,
+        actorId: actor.id,
+        ...e,
+        viaAgentId: attr.viaAgentId,
+        sessionId: attr.sessionId,
+      });
     }
     return toView(tx, row);
   });
@@ -612,6 +631,7 @@ export function claimIssue(
   actor: Actor,
   ref: string,
   opts: { takeover?: boolean } = {},
+  attr: Attribution = {},
 ): ClaimResult {
   const current = getIssue(db, ref);
   const blockers = getOpenBlockers(db, current.id);
@@ -646,6 +666,8 @@ export function claimIssue(
           actorId: actor.id,
           type: "lease_taken_over",
           payload: {},
+          viaAgentId: attr.viaAgentId,
+          sessionId: attr.sessionId,
         });
       }
       return mintLease(tx, current.id, actor.id, getSetting(db, "claims.lease_ttl_seconds"));
@@ -658,7 +680,14 @@ export function claimIssue(
   // via the out-channel.
   assertClaimable(db, actor, current);
   const minted: { token: string | null } = { token: null };
-  const issue = updateIssue(db, actor, ref, { status: "in_progress", assigneeName: actor.name }, { minted });
+  const issue = updateIssue(
+    db,
+    actor,
+    ref,
+    { status: "in_progress", assigneeName: actor.name },
+    { minted },
+    attr,
+  );
   if (minted.token === null) {
     // Defensive: the auto-claim mint condition should always fire on a fresh
     // claim. If it didn't, the claim state is inconsistent — fail rather than
