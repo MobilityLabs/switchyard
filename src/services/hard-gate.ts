@@ -100,6 +100,11 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
         `Pending action ${id} belongs to another supervised session — only the accountable human of that session can affirm it.`,
       );
     }
+    if (session.closedAt !== null || session.expiresAt < nowSec()) {
+      throw new SwitchyardError(
+        `Pending action ${id}'s session has been closed or expired — its proposals are revoked. Re-propose from a live session to affirm.`,
+      );
+    }
     if (row.actionType !== "done") {
       throw new SwitchyardError(
         `Pending action ${id} is "${row.actionType}", which has no executor — only "done" can be affirmed.`,

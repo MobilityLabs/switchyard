@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import { openSupervisedSession, closeSupervisedSession } from "../../src/services/supervised-sessions.js";
 import { setSetting } from "../../src/services/settings.js";
 import { events, pendingActions } from "../../src/db/schema.js";
 import {
@@ -171,6 +171,30 @@ describe("affirmPendingAction", () => {
     const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
     affirmPendingAction(db, human, id);
     expect(() => affirmPendingAction(db, human, id)).toThrow(/no longer pending/i);
+  });
+
+  it("refuses affirmation once the parking session has been closed", () => {
+    const closed = openSupervisedSession(db, human, "claude-code-closed");
+    const id = findOrCreatePendingAction(db, closed.sessionId, issueId, "done", {});
+    closeSupervisedSession(db, closed.sessionToken);
+    expect(() => affirmPendingAction(db, human, id)).toThrow(/closed|expired/i);
+    expect(getIssue(db, "SYD-1").status).not.toBe("done");
+    expect(getPendingAction(db, id)!.status).toBe("pending");
+  });
+
+  it("refuses affirmation once the parking session has expired", () => {
+    const expired = openSupervisedSession(db, human, "claude-code-expired");
+    db.run(sql`UPDATE sessions SET expires_at = 1 WHERE id = ${expired.sessionId}`);
+    const id = findOrCreatePendingAction(db, expired.sessionId, issueId, "done", {});
+    expect(() => affirmPendingAction(db, human, id)).toThrow(/closed|expired/i);
+    expect(getIssue(db, "SYD-1").status).not.toBe("done");
+    expect(getPendingAction(db, id)!.status).toBe("pending");
+  });
+
+  it("still affirms a pending action from a live (open, unexpired) session", () => {
+    const live = openSupervisedSession(db, human, "claude-code-live");
+    const id = findOrCreatePendingAction(db, live.sessionId, issueId, "done", {});
+    expect(affirmPendingAction(db, human, id).status).toBe("done");
   });
 
   it("rolls back the claim when execution throws, leaving the row re-affirmable", () => {
