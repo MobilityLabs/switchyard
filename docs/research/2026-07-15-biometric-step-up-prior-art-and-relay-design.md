@@ -333,6 +333,29 @@ That second one is the prize: **the verifier can demand the UV bit.** A signatur
 made without the human verifying against the token is rejected by `ssh-keygen -Y
 verify` itself. We do not implement that check — OpenSSH does.
 
+> ### ❌ FALSE — this is the fabricated citation. Corrected 2026-07-16.
+>
+> **The quoted block above is NOT in ALLOWED SIGNERS.** It is real man-page text, but it
+> documents a **certificate critical-option** (`ssh-keygen -O verify-required` when signing
+> a certificate). ALLOWED SIGNERS supports exactly four options — `cert-authority`,
+> `namespaces=`, `valid-after=`, `valid-before=` — and they are comma-separated.
+>
+> Therefore **"the verifier can demand the UV bit" is false.** `ssh-keygen -Y verify` has no
+> user-verification flag; it checks signature validity, the `-I` principal, the `-n`
+> namespace, and an optional `-r` revocation list. Nothing else. An `allowed_signers` line
+> containing `verify-required` is rejected outright: `allowed_signers:1: invalid key`.
+>
+> User verification is enforced **by the token at signing time** — an `-O verify-required`
+> key refuses to sign without a PIN/biometric, and any sk key needs a touch by default. A
+> server can never prove it happened.
+>
+> The sketch below inherits two more errors: the `allowed_signers` line it shows is invalid,
+> and `ssh-ed25519-sk` is only the `ssh-keygen -t` argument — the real wire type in a `.pub`
+> file is `sk-ssh-ed25519@openssh.com` (`ssh -Q key`). The `ssh-keygen -t ed25519-sk -O
+> resident -O verify-required` **generation** command is correct.
+>
+> Corrected model: `docs/superpowers/specs/2026-07-16-affirmation-relay-design.md` §3.
+
 Sketch:
 
 ```bash
@@ -540,4 +563,7 @@ Open questions worth settling before any of this:
 - [Yubico: Securing SSH with FIDO2](https://developers.yubico.com/SSH/Securing_SSH_with_FIDO2.html) · [User Presence vs User Verification](https://developers.yubico.com/WebAuthn/WebAuthn_Developer_Guide/User_Presence_vs_User_Verification.html)
 - [Corbado: AI Agents Authentication](https://www.corbado.com/blog/ai-agents-passkeys) · [WebAuthn hybrid transport](https://www.corbado.com/blog/webauthn-passkey-qr-code)
 - [draft-bradleylundberg-cfrg-arkg](https://datatracker.ietf.org/doc/draft-bradleylundberg-cfrg-arkg/)
-- `man ssh-keygen` (OpenSSH_10.2p1) — `-Y sign` / `-Y verify`, ALLOWED SIGNERS `verify-required`
+- `man ssh-keygen` (OpenSSH_10.2p1) — `-Y sign` / `-Y verify`; ALLOWED SIGNERS
+  ~~`verify-required`~~ **❌ this citation is fabricated — `verify-required` is not an
+  ALLOWED SIGNERS option (only `cert-authority`, `namespaces=`, `valid-after=`,
+  `valid-before=` are). See the correction at the top of this document and §4.4.**
