@@ -182,4 +182,47 @@ describe("affirmation key enrollment", () => {
     expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring again")).not.toThrow();
     expect(listAffirmationKeys(db, human.id)).toHaveLength(1);
   });
+
+  // FINDING 1: isUniqueConstraintError used to match any err.code starting
+  // with "SQLITE_CONSTRAINT" — which also matches SQLITE_CONSTRAINT_FOREIGNKEY
+  // (affirmationKeys.actorId is a NOT-NULL FK and src/db/index.ts runs with
+  // foreign_keys=ON). A bug that inserted a bad actorId would then be
+  // misreported as "you already have this key enrolled" instead of a real
+  // 500. Prove the FK violation is NOT swallowed as a duplicate: it must
+  // propagate as a raw error (not the "already enrolled" SwitchyardError),
+  // and specifically must carry SQLITE_CONSTRAINT_FOREIGNKEY, confirming the
+  // two extended codes are genuinely distinct in this driver.
+  it("does not misreport a foreign-key violation as a duplicate enrollment", () => {
+    const db = freshDb();
+    const human = { id: 999999, name: "ghost", type: "human" } as Actor;
+    let caught: unknown;
+    try {
+      enrollAffirmationKey(db, human, human, KEY, "keyring");
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught).not.toBeInstanceOf(SwitchyardError);
+    expect((caught as { code?: string }).code).toBe("SQLITE_CONSTRAINT_FOREIGNKEY");
+  });
+});
+
+describe("enrollAffirmationKey principal validation", () => {
+  // FINDING 2: actors.ts places no restriction on actor names, so a human
+  // named e.g. "Sean Perkins" could enroll with no error today and only
+  // discover the break when they try to affirm and buildAllowedSigners
+  // throws deep in the affirm flow. Prove enrollment now fails early, at the
+  // moment the bad name is chosen, with a clear SwitchyardError.
+  it("rejects enrollment for an actor whose name contains whitespace", () => {
+    const db = freshDb();
+    const human = makeActor(db, "Sean Perkins", "human");
+    expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring")).toThrow(SwitchyardError);
+    expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring")).toThrow(/whitespace|comma/i);
+  });
+
+  it("rejects enrollment for an actor whose name contains a comma", () => {
+    const db = freshDb();
+    const human = makeActor(db, "sean,evil", "human");
+    expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring")).toThrow(SwitchyardError);
+  });
 });

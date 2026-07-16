@@ -24,6 +24,15 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 // ecdsa-sha2-nistp256) which can sign with no presence check at all.
 const KEY_LINE = /^(sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( .*)?$/;
 
+// allowed_signers principals are space-separated (see buildAllowedSigners
+// below), so a name with whitespace or a comma would corrupt the line. Shared
+// by enrollAffirmationKey (fail early, at the moment the actor is chosen) and
+// buildAllowedSigners (fail late, defense in depth in the function that
+// actually renders the line) — src/services/actors.ts places no restriction
+// on actor names, so a human named e.g. "Sean Perkins" must be caught here,
+// not discovered only when they try to affirm.
+const BAD_PRINCIPAL_CHARS = /[\s,]/;
+
 /**
  * Enrolls a public key that may sign `actor`'s affirmations.
  *
@@ -44,6 +53,13 @@ export function enrollAffirmationKey(
   if (target.type !== "human") {
     throw new SwitchyardError(
       `Affirmation keys belong to humans — "${target.name}" is a ${target.type}, and only a human affirms.`,
+    );
+  }
+  if (BAD_PRINCIPAL_CHARS.test(target.name)) {
+    throw new SwitchyardError(
+      `"${target.name}" cannot enroll an affirmation key — the actor's name contains whitespace or a ` +
+        "comma, and it becomes the allowed_signers principal, which is space-separated. Rename the " +
+        "actor to a name with no spaces or commas (e.g. a handle) before enrolling.",
     );
   }
   const line = publicKey.trim();
@@ -79,14 +95,21 @@ export function enrollAffirmationKey(
 // through the CLI for what is really a routine "you already did this"
 // operator mistake. We match by `code` (stable across better-sqlite3
 // versions) rather than parsing the message.
+//
+// Deliberately narrow to the two "same row already exists" extended codes —
+// NOT the whole SQLITE_CONSTRAINT family. `affirmationKeys.actorId` is a
+// NOT-NULL foreign key and src/db/index.ts runs with `foreign_keys=ON`, so a
+// bug that inserts a bad actorId would raise SQLITE_CONSTRAINT_FOREIGNKEY on
+// this same insert. Matching that too would misreport a real bug as "you
+// already have this key enrolled" — confusing and wrong. Verified against
+// the real better-sqlite3 driver: a duplicate-key insert surfaces
+// `err.code === "SQLITE_CONSTRAINT_UNIQUE"`, a bad-actorId insert surfaces
+// `err.code === "SQLITE_CONSTRAINT_FOREIGNKEY"`. Anything else propagates
+// uncaught, as it should — a genuine bug should be loud, not relabelled.
 function isUniqueConstraintError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    typeof (err as { code: unknown }).code === "string" &&
-    (err as { code: string }).code.startsWith("SQLITE_CONSTRAINT")
-  );
+  if (typeof err !== "object" || err === null || !("code" in err)) return false;
+  const code = (err as { code: unknown }).code;
+  return code === "SQLITE_CONSTRAINT_UNIQUE" || code === "SQLITE_CONSTRAINT_PRIMARYKEY";
 }
 
 export function listAffirmationKeys(db: DbOrTx, actorId: number): AffirmationKeyRow[] {
@@ -136,7 +159,7 @@ export function revokeAffirmationKey(db: Db, human: Actor, id: number): void {
  * claim the server verified it.
  */
 export function buildAllowedSigners(keys: AffirmationKeyRow[], principal: string): string {
-  if (/[\s,]/.test(principal)) {
+  if (BAD_PRINCIPAL_CHARS.test(principal)) {
     throw new SwitchyardError(
       `Actor name "${principal}" contains whitespace or a comma and cannot be used as an ` +
         "allowed_signers principal — that field is space-separated and would corrupt the line.",
