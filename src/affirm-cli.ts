@@ -38,6 +38,7 @@ async function main() {
   const queue = (await res.json()) as {
     id: number;
     issueRef: string | null;
+    issueStatus: string | null;
     actionType: string;
     canonical: string | null;
     viaAgentName: string | null;
@@ -57,8 +58,9 @@ async function main() {
   // action is shown in human terms — it is the sole mitigation for "a human who
   // approves without reading," a failure cryptography cannot fix.
   const action = JSON.parse(row.canonical) as { expectedHeadSha?: string };
+  const current = row.issueStatus ?? "unknown";
   console.log("");
-  console.log(`  ${row.issueRef}  ->  ${row.actionType.toUpperCase()}`);
+  console.log(`  ${row.issueRef}   ${current}  ->  ${row.actionType.toUpperCase()}`);
   console.log(`  proposed by : ${row.viaAgentName ?? "unknown agent"} (session #${row.sessionId})`);
   console.log(`  PR head     : ${action.expectedHeadSha ?? "(not pinned)"}`);
   console.log(`  expires in  : ${left}s`);

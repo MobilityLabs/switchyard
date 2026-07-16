@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { PENDING_ACTION_STATUSES, sessions, actors, type PendingActionStatus } from "../db/schema.js";
+import { PENDING_ACTION_STATUSES, sessions, actors, issues, type PendingActionStatus } from "../db/schema.js";
 import type { Actor } from "../services/actors.js";
 import { getSessionActor } from "../services/auth.js";
 import { canonicalizeAction, type CanonicalAction } from "../services/canonical-action.js";
@@ -76,9 +76,15 @@ export function buildPendingActionRoutes(db: Db) {
         const agent = session?.viaAgentId
           ? db.select().from(actors).where(eq(actors.id, session.viaAgentId)).get()
           : null;
+        // Current status, for the CLI's "current -> target" render (SYD-245 review
+        // finding). Volatile display data ONLY — it is NOT part of the signed
+        // canonical doc (canonicalizeAction's field allowlist would drop it anyway;
+        // see canonicalFor's comment on why nothing gets spread into that literal).
+        const issue = db.select().from(issues).where(eq(issues.id, row.issueId)).get();
         return {
           ...row,
           issueRef: action?.issueRef ?? null, // SYD-244
+          issueStatus: issue?.status ?? null,
           canonical: action ? canonicalizeAction(action) : null,
           viaAgentName: agent?.name ?? null,
         };

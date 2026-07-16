@@ -118,16 +118,24 @@ describe("GET /api/pending-actions (SYD-243/244)", () => {
     expect(res.status).toBe(403);
   });
 
-  it("returns only the requesting human's own sessions, with ref and canonical", async () => {
+  it("returns only the requesting human's own sessions, with ref, current status, and canonical", async () => {
     const { app, humanToken, otherHumanToken } = supervisedRest();
     const mineRes = await app.request("/api/pending-actions", {
       headers: { authorization: `Bearer ${humanToken}` },
     });
     expect(mineRes.status).toBe(200);
-    const mine = (await mineRes.json()) as Array<{ issueRef: string; canonical: string }>;
+    const mine = (await mineRes.json()) as Array<{ issueRef: string; issueStatus: string; canonical: string }>;
     expect(mine).toHaveLength(1);
     expect(mine[0].issueRef).toBe("SYD-1");
+    // The issue was moved to "todo" before the divert-to-done attempt in
+    // supervisedRest() — this pins the CURRENT status (pre-affirmation), the
+    // field the review finding required so `syd affirm` can render
+    // "current -> target" instead of only the destination.
+    expect(mine[0].issueStatus).toBe("todo");
     expect(JSON.parse(mine[0].canonical)).toMatchObject({ v: 1, issueRef: "SYD-1" });
+    // issueStatus must NEVER leak into the signed canonical doc — it's volatile
+    // display data, not part of the fixed signed field set.
+    expect(JSON.parse(mine[0].canonical)).not.toHaveProperty("issueStatus");
 
     const theirsRes = await app.request("/api/pending-actions", {
       headers: { authorization: `Bearer ${otherHumanToken}` },
