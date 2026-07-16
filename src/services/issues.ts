@@ -332,7 +332,7 @@ export function updateIssue(
         v: 1,
         pendingActionId,
         sessionId: attr.sessionId,
-        issueRef: ref,
+        issueRef: target.ref,
         actionType: patch.status,
         ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
         expiresAt,

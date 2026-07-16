@@ -137,6 +137,14 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
         `Pending action ${id}'s session has been closed or expired — its proposals are revoked. Re-propose from a live session to affirm.`,
       );
     }
+    // Defense in depth: the pre-transaction block already rejects expired rows,
+    // but ONLY for the owning human. This makes row-expiry independent of the
+    // ownership rule, so a future change loosening the owner-tie can't reach the
+    // claim with an expired row. Throw only — the pre-block owns the `expired`
+    // marking, so there is nothing to roll back here.
+    if (row.expiresAt < nowSec()) {
+      throw new SwitchyardError(`Pending action ${id} expired.`);
+    }
     if (row.actionType !== "done") {
       throw new SwitchyardError(
         `Pending action ${id} is "${row.actionType}", which has no executor — only "done" can be affirmed.`,

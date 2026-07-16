@@ -149,6 +149,31 @@ describe("a parked hard-gated done over the real /mcp endpoint", () => {
     await client.close();
   });
 
+  it("parks the CANONICAL ref, not the caller's raw spelling, so canonicalFor's re-derivation matches", async () => {
+    // issue.ref is the canonical "SYD-1" form. A zero-padded but equivalent
+    // spelling ("SYD-01") must still resolve to the same issue (parseRef's
+    // regex accepts leading zeros: Number("01") === 1) — but the divert must
+    // NOT echo that raw spelling into the canonical doc it parks, because
+    // src/rest/pending-actions.ts's canonicalFor() re-derives issueRef from the
+    // row via issueRefById(), which always yields the canonical form. A padded
+    // ref recorded verbatim here would make the two byte-identical documents
+    // diverge on issueRef alone.
+    const paddedRef = issue.ref.replace(/-(\d+)$/, (_m, n) => `-0${n}`);
+    expect(paddedRef).not.toBe(issue.ref);
+
+    const client = await connect(supToken);
+    const r = await client.callTool({
+      name: "update_issue",
+      arguments: { ref: paddedRef, status: "done" },
+    });
+    expect(r.isError).toBeUndefined();
+
+    const body = JSON.parse(text(r)) as { canonical: string; action: Record<string, unknown> };
+    expect(JSON.parse(body.canonical)).toMatchObject({ issueRef: issue.ref });
+    expect(body.action).toMatchObject({ issueRef: issue.ref });
+    await client.close();
+  });
+
   it("still reports a real rejection as isError (the signal did not swallow failures)", async () => {
     const client = await connect(supToken);
     // A mixed patch is rejected by the divert's own guard with a SwitchyardError
