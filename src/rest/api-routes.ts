@@ -3,7 +3,7 @@ import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/index.js";
-import { SwitchyardError } from "../services/errors.js";
+import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import {
   authenticate,
   createActor,
@@ -156,6 +156,14 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.onError((err, c) => {
+    // Unreachable today BY CONSTRUCTION: PendingAffirmation is only thrown by
+    // updateIssue's divert, which requires attr.sessionId, which only a
+    // supervised principal carries — and a sup_ token resolves ONLY at /mcp
+    // (src/server.ts:77). REST never calls resolveSupervisedPrincipal, and
+    // PATCH /issues/:ref passes no attr at all. Kept as a tripwire: this class
+    // extends Error, so if REST ever gains supervised attribution, without this
+    // arm the catch-all below turns a parked action into a 500 + stack trace.
+    if (err instanceof PendingAffirmation) return c.json(err.pending, 202);
     if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
     if (
       err instanceof SyntaxError ||

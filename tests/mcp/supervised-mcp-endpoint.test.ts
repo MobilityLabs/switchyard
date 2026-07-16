@@ -88,8 +88,11 @@ describe("/mcp resolves a supervised principal", () => {
       name: "update_issue",
       arguments: { ref: issue.ref, status: "done" },
     });
-    expect(r.isError).toBe(true);
-    expect(text(r)).toMatch(/awaiting human affirmation/i);
+    // Task 4: parking is a SUCCESS carrying the canonical doc, not an error.
+    // What this case pins is that the gate FIRES over the real endpoint — the
+    // shape of the parked result is covered in tests/mcp/pending-affirmation.test.ts.
+    expect(r.isError).toBeUndefined();
+    expect(JSON.parse(text(r)).pendingActionId).toBeGreaterThan(0);
 
     expect(
       db.all<{ id: number }>(sql`SELECT id FROM pending_actions WHERE status = 'pending'`),

@@ -34,6 +34,10 @@ export function isHardGated(db: DbOrTx, actionType: string): boolean {
  * whose execution failed on a stale SHA becomes affirmable again once the agent
  * re-proposes with the current one. `targetWhere` must match the index
  * predicate exactly, or SQLite won't resolve the conflict target.
+ *
+ * `expiresAt` is the caller's to compute (the divert derives it from
+ * supervised.affirm_ttl_seconds) and is refreshed on re-proposal alongside the
+ * payload — see the `set` below.
  */
 export function findOrCreatePendingAction(
   db: DbOrTx,
@@ -41,26 +45,17 @@ export function findOrCreatePendingAction(
   issueId: number,
   actionType: string,
   payload: Record<string, unknown>,
+  expiresAt: number,
 ): number {
   const row = db
     .insert(pendingActions)
-    .values({
-      sessionId,
-      issueId,
-      actionType,
-      payload,
-      status: "pending",
-      // DEVIATION (SYD-242 phase 2 task 2): expiresAt is now NOT NULL on the
-      // schema. Task 4 formally threads settings.getSetting's
-      // "supervised.affirm_ttl_seconds" through this function's signature;
-      // hardcoding its 300s default here is the minimal fix to keep the tree
-      // green without building that feature early.
-      expiresAt: nowSec() + 300,
-    })
+    .values({ sessionId, issueId, actionType, payload, status: "pending", expiresAt })
     .onConflictDoUpdate({
       target: [pendingActions.sessionId, pendingActions.issueId, pendingActions.actionType],
       targetWhere: sql`status = 'pending'`,
-      set: { payload },
+      // expiresAt is refreshed alongside payload: a re-proposal restarts the
+      // window, so a row can't be stranded past its TTL by an earlier attempt.
+      set: { payload, expiresAt },
     })
     .returning({ id: pendingActions.id })
     .get();
