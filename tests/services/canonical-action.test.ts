@@ -51,4 +51,28 @@ describe("canonicalizeAction", () => {
   it("pins the namespace", () => {
     expect(AFFIRM_NAMESPACE).toBe("switchyard-affirm");
   });
+
+  it("does not carry an extra property from a spread onto a wider-shaped source into the output", () => {
+    const withExtra = { ...base, secretColumn: "leak-me", id: 999 } as CanonicalAction & {
+      secretColumn: string;
+      id: number;
+    };
+    const out = canonicalizeAction(withExtra);
+    expect(out).not.toContain("secretColumn");
+    expect(out).not.toContain("leak-me");
+    expect(out).not.toMatch(/"id"/);
+    expect(out).toBe(canonicalizeAction(base));
+  });
+
+  it("throws rather than emitting null for a non-finite numeric field", () => {
+    expect(() => canonicalizeAction({ ...base, sessionId: NaN })).toThrow();
+    expect(() => canonicalizeAction({ ...base, pendingActionId: Infinity })).toThrow();
+    expect(() => canonicalizeAction({ ...base, expiresAt: -Infinity })).toThrow();
+  });
+
+  it("canonicalizes NFC and NFD forms of the same logical string identically", () => {
+    const nfc = { ...base, issueRef: "SYD-é" }; // precomposed é
+    const nfd = { ...base, issueRef: "SYD-é" }; // decomposed e + combining acute
+    expect(canonicalizeAction(nfc)).toBe(canonicalizeAction(nfd));
+  });
 });
