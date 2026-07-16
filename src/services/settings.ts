@@ -68,7 +68,7 @@ export const REGISTRY = {
     type: "boolean",
     default: false,
     description:
-      "Require a hardware-signed affirmation (ssh-keygen -Y sign, verify-required) to release a gated action. When true, the web Approve button is refused.",
+      "Require a hardware-signed affirmation (ssh-keygen -Y sign against an enrolled FIDO key) to release a gated action. When true, the web Approve button is refused.",
   },
   // Short by design: an affirmation that outlives the human's attention is a
   // bearer token with extra steps. Signed into the canonical doc, so it cannot
