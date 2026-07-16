@@ -237,4 +237,15 @@ describe("affirmPendingAction", () => {
     park(sessionId, issueId, "done", { expectedHeadSha: "current-sha" });
     expect(affirmPendingAction(db, human, id).status).toBe("done");
   });
+
+  it("refuses an expired pending action and marks it expired", () => {
+    const id = park(sessionId, issueId, "done", { status: "done" }, nowSec() - 1);
+    expect(() => affirmPendingAction(db, human, id)).toThrow(/expired/i);
+    expect(getPendingAction(db, id)?.status).toBe("expired");
+  });
+
+  it("still affirms an unexpired action", () => {
+    const id = park(sessionId, issueId, "done", { status: "done" }, nowSec() + 300);
+    expect(affirmPendingAction(db, human, id).status).toBe("done");
+  });
 });

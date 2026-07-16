@@ -93,6 +93,18 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
       "Only a human can affirm a gated action — that affirmation is the whole point of the gate.",
     );
   }
+  // Expiry is settled before the transaction opens: the `expired` marking must
+  // SURVIVE, and a throw inside db.transaction would roll its own writes back
+  // along with it. The in-transaction claim below (`WHERE status = 'pending'`)
+  // still guards the race if a concurrent affirm lands between this read and
+  // that claim.
+  const pre = getPendingAction(db, id);
+  if (pre && pre.status === "pending" && pre.expiresAt < nowSec()) {
+    db.update(pendingActions).set({ status: "expired" }).where(eq(pendingActions.id, id)).run();
+    throw new SwitchyardError(
+      `Pending action ${id} expired — an affirmation that outlives your attention is a bearer token with extra steps. Re-propose it from the session to affirm.`,
+    );
+  }
   return db.transaction((tx) => {
     // Read inside the transaction so the payload we execute is the one the
     // claim below locks — a concurrent re-proposal refreshing it can't slip
