@@ -166,35 +166,80 @@ representation per action, asserted by test.
 **Namespace:** `-n switchyard-affirm`. Not decoration — it is what stops a signature we
 solicit being replayable in another domain of use (e.g. a git commit signature).
 
-### 3. `verify-required` is the prize, and OpenSSH enforces it
+### 3. The token enforces presence — NOT the verifier. (Corrected 2026-07-16.)
 
-From `man ssh-keygen` (OpenSSH_10.2p1), ALLOWED SIGNERS:
+**An earlier draft of this section was wrong, and the error was load-bearing.** It
+claimed `verify-required` is an ALLOWED SIGNERS option and that therefore
+"the verifier can demand the UV bit, and we do not implement that check — OpenSSH does."
+That is false. It came from research §4.4, which quoted the man page's **certificate
+critical-option** `verify-required` and misattributed it to ALLOWED SIGNERS. The
+fabricated attribution survived a 3-round `/debate:all` review and reached this spec and
+its plan; it was caught only when a reviewer ran the actual binary and got
+`allowed_signers:1: invalid key`.
 
-```
-verify-required
-     Require signatures made using this key indicate that the user was first
-     verified, e.g. by PIN or on-token biometrics.
-```
+**Ground truth (`man ssh-keygen`, OpenSSH_10.2p1, verified by reading and by running):**
 
-**The verifier can demand the UV bit, and we do not implement that check — OpenSSH
-does.** A signature made without the human verifying against the token is rejected by
-`ssh-keygen -Y verify` itself. This is the entire reason to prefer this over a WebAuthn
-relying-party implementation.
+- ALLOWED SIGNERS supports exactly **four** options: `cert-authority`, `namespaces=`,
+  `valid-after=`, `valid-before=`. There is no `verify-required`. Options are
+  **comma-separated** ("No spaces are permitted, except within double quotes").
+- `verify-required` exists only as an `-O` flag in two other places: certificate signing,
+  and **key generation** — "Indicate that this private key should require user
+  verification for each signature."
+- `ssh-keygen -Y verify` takes no user-verification flag at all. It checks: the signature
+  is valid, the signer identity (`-I`) matches a principals pattern, the namespace (`-n`)
+  matches, and optionally a revocation list (`-r`). **It cannot check the UV bit.**
+- An `ed25519-sk` key requires a **touch** (user presence) for every signature by default;
+  only `-O no-touch-required` at generation removes that.
 
-**Describe the guarantee accurately.** Research §4.4's nuance: "biometric" here means
-*fingerprint where the hardware supports it (e.g. YubiKey Bio), PIN otherwise*. Both
-satisfy the UV bit; for our threat model they are the same guarantee — possession plus
-a verified holder. The spec, the CLI copy, and any write-up must say that rather than
-promising fingerprints.
+**So the guarantee is enforced by the token at signing time, not by the server at verify
+time.** Stated precisely:
+
+| Property | Enforced by | Can the server verify it? |
+|---|---|---|
+| Touch / user presence | the FIDO token (default for sk keys) | **No** |
+| PIN or fingerprint (UV) | the token, if the key was generated `-O verify-required` | **No** |
+| Signature is valid, from a key enrolled to this human, in the `switchyard-affirm` namespace | `ssh-keygen -Y verify` | **Yes** |
+| The key is hardware-backed | **enrollment** — we require an `sk-*@openssh.com` key type | **Yes** |
+
+**What survives, and it is the part that matters.** The spike's behavioral claim is
+untouched: Claude may run `syd affirm` all it likes and still cannot produce a signature,
+because it cannot touch the key or enter the PIN. That is exactly what §1's inversion
+rests on, and exactly what the manual run in Phase 2's plan actually tests.
+
+**What we lost** is the ability to *prove* server-side that UV occurred. The server trusts
+that an enrolled `sk-*` key was generated with `-O verify-required`. It can verify the key
+is hardware-backed (the key type is in the public key itself); it cannot verify the token's
+UV policy. A **malicious human** could enroll an sk key made without `-O verify-required`
+and get touch-only — but defending against a malicious human is already an explicit
+non-goal (§Security model, inherited from Phase 1): the human is trusted and present.
+
+**Consequences for the build, all simplifications:**
+1. `buildAllowedSigners` emits only `namespaces="switchyard-affirm"` — no options join, so
+   the comma-vs-space trap disappears. It takes **no** `verifyRequired` parameter; that
+   parameter existed solely to serve an option that does not exist.
+2. Enrollment enforces the key type is `sk-ssh-ed25519@openssh.com` or
+   `sk-ecdsa-sha2-nistp256@openssh.com` — the **real** wire spellings (`ssh -Q key`), not
+   the `-t ed25519-sk` argument spelling that research §4.4's sketch used.
+3. Tests get **better**, not worse: with no `verify-required` in the file, a software
+   `ed25519` key verifies through the real production path. Tests insert an
+   `affirmation_keys` row directly (bypassing enrollment's key-type check, which is tested
+   separately) and exercise `ssh-keygen -Y verify` for real. **No production seam and no
+   mocking** — which is what we wanted all along.
+
+**Copy rule (unchanged, and now more important).** Never promise "fingerprint" or
+"biometric" as guaranteed: per the man page, UV is satisfied "by PIN or on-token
+biometrics" depending on hardware. Say "PIN or fingerprint, depending on your key." And
+never claim the *server* verified it.
 
 ## Data model changes
 
 All additive except the one noted.
 
 - **New `affirmation_keys` table:** `id`, `actorId` → actors, `publicKey` (text, the
-  `ssh-ed25519-sk AAAA…` line), `comment` (text, e.g. "keyring"), `createdAt`,
-  `revokedAt` (nullable). A table because (c)'s recovery story is *multiple keys*, and
-  revocation needs a column. Unique on `(actorId, publicKey)` among non-revoked rows.
+  `sk-ssh-ed25519@openssh.com AAAA…` line — the real wire spelling, see §3), `comment`
+  (text, e.g. "keyring"), `createdAt`, `revokedAt` (nullable). A table because (c)'s
+  recovery story is *multiple keys*, and revocation needs a column. Unique on
+  `(actorId, publicKey)` among non-revoked rows.
 - **`pending_actions`: add `expiresAt` (integer, not null).** Today there is **no
   expiry column**. `expiresAt` must be inside the signed bytes or it is unenforceable.
   TTL default **5 minutes** — research §4.5 says minutes, and an affirmation that
@@ -292,11 +337,8 @@ above are therefore not optional, and a test asserts each.
 
 ```ts
 // src/services/affirmation-keys.ts
-export function buildAllowedSigners(
-  keys: AffirmationKeyRow[],
-  principal: string,
-  opts: { verifyRequired: boolean },
-): string;
+// No `verifyRequired` param — see §3. ALLOWED SIGNERS has no such option.
+export function buildAllowedSigners(keys: AffirmationKeyRow[], principal: string): string;
 
 // src/services/ssh-verify.ts
 export function verifySshSig(args: {
@@ -316,11 +358,15 @@ ssh-keygen -Y verify -f <allowed_signers> -I <principal> -n switchyard-affirm -s
 feeding `message` on stdin; exit 0 is the only success. Scratch files are removed in a
 `finally`. No custom crypto anywhere in this path — that is the entire point.
 
-An `allowed_signers` line, production shape:
+An `allowed_signers` line, production shape (corrected — see §3):
 
 ```
-sean namespaces="switchyard-affirm" verify-required ssh-ed25519-sk AAAA...
+sean namespaces="switchyard-affirm" sk-ssh-ed25519@openssh.com AAAA...
 ```
+
+Note both corrections: no `verify-required` (it is not an ALLOWED SIGNERS option), and the
+key type is the real wire spelling `sk-ssh-ed25519@openssh.com` — what actually appears in
+a `.pub` file — not `ssh-ed25519-sk`, which is only the `ssh-keygen -t` argument.
 
 **Deployment prerequisite:** `Dockerfile:2` is `FROM node:24-slim` with **no**
 `apt-get install` line, so `openssh-client` — and therefore `ssh-keygen` — **is not in
@@ -391,8 +437,9 @@ human's terminal:  syd affirm SYD-42
 
 server:
   └─► re-derive canonical(row) from the DB
-  └─► buildAllowedSigners(keys of this human, verifyRequired: true)
-  └─► ssh-keygen -Y verify   ◄── OpenSSH enforces the UV bit for us
+  └─► buildAllowedSigners(keys of this human)
+  └─► ssh-keygen -Y verify   ◄── valid sig? enrolled key? right namespace?
+                                 (it does NOT — cannot — check the UV bit; §3)
   └─► verified ─► affirmPendingAction(db, human, id)  [Phase 1 executor, unchanged]
        └─► recordEvent(actorId=human, viaAgentId=agent, sessionId, payload={sig ref})
 ```
@@ -419,23 +466,30 @@ is worse than no verifier.
 ## Testing
 
 The hard constraint: **`ssh-keygen -Y sign` against an `ed25519-sk` key needs physical
-hardware**, so CI cannot produce a real UV signature. The design accommodates this
-honestly rather than pretending otherwise.
+hardware**, so CI cannot produce a signature from a real security key. Per §3's
+correction this is now *less* limiting than first thought — because `allowed_signers`
+carries no `verify-required`, a software `ed25519` key verifies through the **real
+production path**, so CI exercises actual crypto rather than a mock.
 
 - **Canonicalization** — determinism under key reordering; optional fields omitted not
-  `null`; unicode stability. Pure function, no hardware.
-- **`verifySshSig` plumbing** — a **software** `ed25519` key generated in-test, with
-  `buildAllowedSigners(..., { verifyRequired: false })` passed directly. Exercises
-  verify, namespace enforcement, and — the important one — **replay rejection**: a
-  signature over SYD-42's doc must fail against SYD-43's row.
-- **`buildAllowedSigners`** — asserts the production call emits `verify-required` and
-  `namespaces="switchyard-affirm"`. This is what stops us silently accepting non-UV
-  signatures, and it is why `verifyRequired` is a parameter rather than a test-only
-  backdoor in production code: both halves are tested, and "production always passes
-  true" is a one-line assertion.
-- **Not unit-tested, deliberately:** that OpenSSH rejects a non-UV signature against a
-  `verify-required` line. That is OpenSSH's behavior, not ours; testing it would be
-  testing `ssh-keygen`.
+  `null`; unicode stability; extra properties on the input must not reach the output.
+  Pure function, no hardware.
+- **`verifySshSig` plumbing (real crypto, no mocks)** — a **software** `ed25519` key
+  generated in-test. Tests insert an `affirmation_keys` row **directly**, bypassing
+  `enrollAffirmationKey`'s hardware-key-type check (which is tested separately), then
+  call the production `buildAllowedSigners` and shell out to a real `ssh-keygen -Y
+  verify`. Covers verify, namespace enforcement, principal mismatch, and — the important
+  one — **replay rejection**: a signature over SYD-42's doc must fail against SYD-43's
+  row.
+- **`buildAllowedSigners`** — asserts the emitted line parses as valid OpenSSH. A
+  substring assertion is not enough: the earlier draft's `toContain("verify-required")`
+  test passed against a line real `ssh-keygen` rejects outright. **At least one test must
+  round-trip through the actual binary.**
+- **`enrollAffirmationKey` key-type check** — accepts the real wire spellings
+  (`sk-ssh-ed25519@openssh.com`, `sk-ecdsa-sha2-nistp256@openssh.com`); rejects software
+  keys and junk. This is the only server-side hardware guarantee, so it carries weight.
+- **Not testable, and stated plainly rather than papered over:** that the token demanded a
+  touch or a PIN. The server never sees it (§3). The only evidence is the manual run.
 - **`PendingAffirmation` translation** — one test that `guard()` returns a **success**
   (not `isError`), one that REST returns **202**. Both are load-bearing per the risk
   noted in Blocker #1.
@@ -448,8 +502,17 @@ honestly rather than pretending otherwise.
 
 1. **`ssh-keygen` in the container** — verified absent today. Mitigated by the
    Dockerfile change; the 500-on-missing rule ensures it fails loudly, not open.
-2. **Testing cannot cover the UV bit** — accepted and scoped above; the guarantee is
-   OpenSSH's.
+2. **The server cannot verify that UV occurred** (§3) — the token enforces presence at
+   signing time; `-Y verify` cannot check it. The server's guarantee is "a valid
+   signature from a key enrolled to this human, in this namespace," plus a hardware
+   key-type check at enrollment. Do not describe this as proving a fingerprint was given.
+6. **A fabricated man-page citation reached an approved spec.** Research §4.4's
+   `verify-required` quote was real text from the man page's *certificate* section,
+   misattributed to ALLOWED SIGNERS — plausible enough to survive a 3-round review, and
+   fatal because the whole "no RP to get wrong" argument rested on it. It died only when a
+   reviewer ran the binary. **Lesson for the write-up: for any claim that a tool enforces
+   something, run the tool.** Reading the man page was not enough; the wrong section reads
+   perfectly.
 3. **`PendingAffirmation` escaping as a 500** through an unconverted catch site — two
    tests pin the two translations.
 4. **The renderer is trusted** (§4.2) — the authenticator UI shows only the RP; our CLI

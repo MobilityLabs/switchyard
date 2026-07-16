@@ -440,9 +440,17 @@ export const pendingActions = sqliteTable(
 // Phase 2 (affirmation relay): the SSH public keys allowed to sign a human's
 // affirmations. A table, not a column, because the design has NO break-glass —
 // recovery is key redundancy (enroll two: one on the keyring, one in a drawer).
-// `publicKey` stores a full authorized-keys-style line ("ssh-ed25519-sk AAAA...
-// comment") exactly as ssh-keygen emits it; buildAllowedSigners wraps it with
-// the principal, namespace, and verify-required.
+// `publicKey` stores a full authorized-keys-style line, exactly as ssh-keygen
+// emits it: "sk-ssh-ed25519@openssh.com AAAA... comment". That is the real WIRE
+// spelling — "ssh-ed25519-sk" is only the `ssh-keygen -t` argument and never
+// appears in a .pub file. buildAllowedSigners wraps it with the principal and
+// namespace, and nothing else: `verify-required` is NOT an ALLOWED SIGNERS
+// option (only cert-authority, namespaces=, valid-after=, valid-before= are), so
+// the verifier cannot check the user-verification bit. Presence is enforced by
+// the FIDO token at signing time; the only server-side hardware guarantee is
+// enrollAffirmationKey's sk-* key-type check. See the 2026-07-16 affirmation
+// relay design §3 — an earlier draft got this wrong and real ssh-keygen rejected
+// the resulting line outright.
 export const affirmationKeys = sqliteTable(
   "affirmation_keys",
   {

@@ -1,5 +1,32 @@
 # Biometric / FIDO Step-Up for High-Risk Actions — Prior Art & Relay Design
 
+> **⚠️ CORRECTION 2026-07-16 — §4.4 contains a fabricated man-page citation. Read this first.**
+>
+> This document's §4.4 quotes a `verify-required` block and attributes it to
+> `man ssh-keygen`'s **ALLOWED SIGNERS** section, then builds its central recommendation on
+> it: *"the verifier can demand the UV bit... We do not implement that check — OpenSSH
+> does."* **That is false.**
+>
+> ALLOWED SIGNERS (OpenSSH_10.2p1) supports exactly four options — `cert-authority`,
+> `namespaces=`, `valid-after=`, `valid-before=`. There is no `verify-required`. The quoted
+> text is real, but it comes from the man page's **certificate critical-option** section;
+> `verify-required` otherwise exists only as an `-O` flag at **key generation**. And
+> `ssh-keygen -Y verify` takes no user-verification flag at all.
+>
+> Consequence: **user verification is enforced by the token at signing time, never by the
+> verifier.** A server cannot prove UV occurred. §4.4's "Pros: hardware-verified UV enforced
+> by OpenSSH" is wrong, and §4.4's `ssh-ed25519-sk` key spelling is wrong too (the real wire
+> type is `sk-ssh-ed25519@openssh.com`; `ed25519-sk` is only the `-t` argument).
+>
+> This error survived a 3-round `/debate:all` and reached an approved spec and plan. It was
+> caught only when a code reviewer **ran the binary** and got `allowed_signers:1: invalid key`.
+> The corrected model is in
+> `docs/superpowers/specs/2026-07-16-affirmation-relay-design.md` §3.
+>
+> The rest of the document — the prior-art scan (§2), the structural
+> agent-cannot-perform-UV argument (§3), the relay shape (§4.1), challenge-binding (§4.2),
+> and the npm cautionary tale (§7) — is unaffected and still holds.
+
 > 2026-07-15 — prior-art scan plus a design sketch, prompted by the idea of gating
 > Switchyard's human-only actions behind a biometric rather than a bearer token.
 > Evidence: a web/GitHub sweep for existing implementations (Claude Code plugins,

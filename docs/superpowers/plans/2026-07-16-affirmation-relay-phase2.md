@@ -4,7 +4,7 @@
 
 **Goal:** Make a supervised session's `done`-stamp releasable only by a hardware-verified human signature over the exact action, instead of an authenticated click.
 
-**Architecture:** Phase 1's spine is unchanged — `updateIssue` still diverts a gated `done` into a `pending_actions` row, and `affirmPendingAction` is still the only executor. Phase 2 changes *what it takes to release the row*: the divert now throws a `PendingAffirmation` signal carrying a canonical action document; the human signs those exact bytes with a FIDO key via `ssh-keygen -Y sign`; the server re-derives the same bytes from the DB row and verifies with `ssh-keygen -Y verify` against an `allowed_signers` line carrying `verify-required`, which makes OpenSSH — not us — enforce the user-verification bit.
+**Architecture:** Phase 1's spine is unchanged — `updateIssue` still diverts a gated `done` into a `pending_actions` row, and `affirmPendingAction` is still the only executor. Phase 2 changes *what it takes to release the row*: the divert now throws a `PendingAffirmation` signal carrying a canonical action document; the human signs those exact bytes with a FIDO key via `ssh-keygen -Y sign`; the server re-derives the same bytes from the DB row and verifies with `ssh-keygen -Y verify` against an `allowed_signers` line naming the enrolled key and namespace. Presence (touch/PIN) is enforced by the FIDO token at signing time — NOT by the verifier (corrected 2026-07-16, spec §3); the server's hardware guarantee comes from an `sk-*` key-type check at enrollment.
 
 **Tech Stack:** TypeScript, Hono (REST), MCP SDK, drizzle-orm + better-sqlite3, vitest, React (ui/), OpenSSH `ssh-keygen` (≥8.4) shelled out via `node:child_process`.
 
@@ -21,6 +21,9 @@
 - **Node 24.** Node 25 breaks jsdom tests.
 - **Services throw `SwitchyardError` for user-facing failures**; anything else is a real 500.
 - **Signature namespace is exactly `switchyard-affirm`** everywhere — signer, verifier, and `allowed_signers`.
+- **`verify-required` is NOT an ALLOWED SIGNERS option** (corrected 2026-07-16 — spec §3). ALLOWED SIGNERS supports exactly four: `cert-authority`, `namespaces=`, `valid-after=`, `valid-before=`, comma-separated. `ssh-keygen -Y verify` cannot check the UV bit. The token enforces presence at signing time; the server verifies only "valid signature, enrolled key, right namespace" — plus a hardware key-type check at **enrollment**. Never claim the server verified a touch or PIN.
+- **Real key wire spellings** (`ssh -Q key`): `sk-ssh-ed25519@openssh.com`, `sk-ecdsa-sha2-nistp256@openssh.com`. **`ssh-ed25519-sk` is only the `ssh-keygen -t` argument and never appears in a `.pub` file.**
+- **Any claim that a tool enforces something must be proven by running the tool.** A fabricated man-page citation reached this plan and survived review because the wrong section reads perfectly. Substring assertions on generated config are not evidence.
 - **Canonical doc version is `1`.** Field set, verbatim: `v`, `pendingActionId`, `sessionId`, `issueRef`, `actionType`, `expectedHeadSha` (optional), `expiresAt`.
 - **Copy rule (from the spec, non-negotiable):** never promise "fingerprint" or "biometric" in user-facing text. The UV bit is satisfied by **PIN or on-token biometrics depending on hardware**. Say "PIN or fingerprint, depending on your key."
 - **A verifier that fails open is worse than no verifier.** Missing `ssh-keygen` is a **500**, never a soft-allow.
@@ -118,7 +121,7 @@ Add to `REGISTRY` (after `supervised.hard_gate_actions`, line 53):
     type: "boolean",
     default: false,
     description:
-      "Require a hardware-signed affirmation (ssh-keygen -Y sign, verify-required) to release a gated action. When true, the web Approve button is refused.",
+      "Require a hardware-signed affirmation (ssh-keygen -Y sign against an enrolled FIDO key) to release a gated action. When true, the web Approve button is refused.",
   },
   // Short by design: an affirmation that outlives the human's attention is a
   // bearer token with extra steps. Signed into the canonical doc, so it cannot
@@ -187,9 +190,12 @@ Append after the `pendingActions` block (line 430):
 // Phase 2 (affirmation relay): the SSH public keys allowed to sign a human's
 // affirmations. A table, not a column, because the design has NO break-glass —
 // recovery is key redundancy (enroll two: one on the keyring, one in a drawer).
-// `publicKey` stores a full authorized-keys-style line ("ssh-ed25519-sk AAAA...
-// comment") exactly as ssh-keygen emits it; buildAllowedSigners wraps it with
-// the principal, namespace, and verify-required.
+// `publicKey` stores a full authorized-keys-style line
+// ("sk-ssh-ed25519@openssh.com AAAA... comment") exactly as ssh-keygen emits it
+// -- note that is the real WIRE spelling; "ssh-ed25519-sk" is only the -t
+// argument and never appears in a .pub file. buildAllowedSigners wraps it with
+// the principal and namespace. There is no verify-required option in ALLOWED
+// SIGNERS (spec §3); the token enforces presence at signing time.
 export const affirmationKeys = sqliteTable(
   "affirmation_keys",
   {
@@ -620,9 +626,24 @@ git commit -m "feat: PendingAffirmation signal — parked is a success, not an e
   - `enrollAffirmationKey(db, human: Actor, target: Actor, publicKey: string, comment?: string): AffirmationKeyRow`
   - `listAffirmationKeys(db, actorId: number): AffirmationKeyRow[]` — live keys only
   - `revokeAffirmationKey(db, human: Actor, id: number): void`
-  - `buildAllowedSigners(keys: AffirmationKeyRow[], principal: string, opts: { verifyRequired: boolean }): string`
+  - `buildAllowedSigners(keys: AffirmationKeyRow[], principal: string): string`
 
-**Context:** `verifyRequired` is a **parameter, not a constant**, specifically so the plumbing test (Task 6) can exercise `verifySshSig` with a software key while production always passes `true`. That keeps both halves tested with no test-only backdoor in production code — "production always passes true" becomes a one-line assertion.
+**⚠️ CORRECTED 2026-07-16 — this task's original text was built on a false premise.** It said
+`verifyRequired` must be a parameter so Task 6 could test with a software key while
+production passed `true`. **There is no `verify-required` ALLOWED SIGNERS option at all**
+(spec §3): the earlier draft's line was rejected by real `ssh-keygen` with
+`allowed_signers:1: invalid key`. The parameter existed solely to serve an option that
+does not exist — so it is **deleted**, and with it the whole awkward seam.
+
+The corrected model:
+- `buildAllowedSigners` emits only `namespaces="switchyard-affirm"`. One option, so the
+  comma-vs-space rule never bites. No `opts` parameter.
+- **The hardware guarantee moves to enrollment:** `enrollAffirmationKey` requires an
+  `sk-*@openssh.com` key type. That is the only server-side hardware check that exists.
+- Tests get better: with no `verify-required` in the file, a software `ed25519` key
+  verifies through the **real production path**. Task 6 inserts an `affirmation_keys` row
+  directly (bypassing the enrollment type-check, tested separately) and runs real
+  `ssh-keygen`. No mocks, no production seam.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -631,31 +652,27 @@ import { describe, expect, it } from "vitest";
 import { buildAllowedSigners, enrollAffirmationKey, listAffirmationKeys, revokeAffirmationKey } from "../../src/services/affirmation-keys.js";
 // reuse freshDb/makeActor from the sibling service tests
 
-const KEY = "ssh-ed25519-sk AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAA keyring";
+const KEY = "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAA keyring";
 
 describe("buildAllowedSigners", () => {
-  it("emits verify-required and the namespace in production shape", () => {
-    const out = buildAllowedSigners(
-      [{ publicKey: KEY } as never],
-      "sean",
-      { verifyRequired: true },
-    );
+  it("emits the namespace in production shape", () => {
+    const out = buildAllowedSigners([{ publicKey: KEY } as never], "sean");
     expect(out).toContain('namespaces="switchyard-affirm"');
-    expect(out).toContain("verify-required");
     expect(out.startsWith("sean ")).toBe(true);
     expect(out.endsWith("\n")).toBe(true);
   });
 
-  it("omits verify-required when not required (test-path only)", () => {
-    expect(buildAllowedSigners([{ publicKey: KEY } as never], "sean", { verifyRequired: false }))
-      .not.toContain("verify-required");
-  });
+  // A substring assertion is NOT evidence the file is valid: the earlier draft
+  // emitted a line containing "verify-required" that real ssh-keygen rejected
+  // outright with `allowed_signers:1: invalid key`. The only trustworthy test of
+  // generated config is to feed it to the actual binary — see
+  // tests/services/ssh-verify.test.ts, which round-trips this function's output
+  // through a real `ssh-keygen -Y verify`.
 
   it("emits one line per key — the recovery story is redundancy", () => {
     const out = buildAllowedSigners(
       [{ publicKey: KEY } as never, { publicKey: `${KEY}2` } as never],
       "sean",
-      { verifyRequired: true },
     );
     expect(out.trimEnd().split("\n")).toHaveLength(2);
   });
@@ -743,7 +760,7 @@ export function enrollAffirmationKey(
   const line = publicKey.trim();
   if (!KEY_LINE.test(line)) {
     throw new SwitchyardError(
-      'That is not an SSH public key line — paste the contents of a .pub file, e.g. "ssh-ed25519-sk AAAA... comment".',
+      'That is not a FIDO/security-key public key line — paste the contents of a .pub file from `ssh-keygen -t ed25519-sk`, e.g. "sk-ssh-ed25519@openssh.com AAAA... comment".',
     );
   }
   return db
@@ -778,24 +795,26 @@ export function revokeAffirmationKey(db: Db, human: Actor, id: number): void {
 /**
  * Renders an OpenSSH allowed_signers file.
  *
- * `verify-required` is the prize: it makes ssh-keygen -Y verify reject any
- * signature whose UV bit is unset. We do not implement that check — OpenSSH
- * does. Per `man ssh-keygen` ALLOWED SIGNERS, UV is satisfied "by PIN or
- * on-token biometrics" depending on hardware; both are the same guarantee for
- * this threat model (possession + a verified holder).
+ * Format (man ssh-keygen, ALLOWED SIGNERS): space-separated fields
+ *   principals options keytype base64-key
+ * where `options` is a COMMA-separated list. Only four options exist:
+ * cert-authority, namespaces=, valid-after=, valid-before=. We emit exactly one
+ * (`namespaces=`), so the comma rule never bites here — but do not add a second
+ * option with a space.
  *
- * `verifyRequired` is a parameter rather than a hardcoded true so the verify
- * plumbing can be tested with a software key (CI has no FIDO hardware) without
- * a test-only branch in production code. Production always passes true, and a
- * test asserts that shape.
+ * There is deliberately NO `verify-required`: it is not an ALLOWED SIGNERS
+ * option (an earlier draft of this design wrongly thought it was, and real
+ * ssh-keygen rejected the line with `allowed_signers:1: invalid key`). The
+ * verifier CANNOT check the user-verification bit. Presence is enforced by the
+ * FIDO token at signing time — an sk key requires a touch by default, and a PIN
+ * or fingerprint too if it was generated with `-O verify-required`. The only
+ * server-side hardware guarantee is enrollAffirmationKey's sk-* key-type check.
+ * Never claim the server verified a touch or a PIN.
  */
-export function buildAllowedSigners(
-  keys: AffirmationKeyRow[],
-  principal: string,
-  opts: { verifyRequired: boolean },
-): string {
-  const flags = opts.verifyRequired ? " verify-required" : "";
-  return keys.map((k) => `${principal} namespaces="${AFFIRM_NAMESPACE}"${flags} ${k.publicKey}`).join("\n") + "\n";
+export function buildAllowedSigners(keys: AffirmationKeyRow[], principal: string): string {
+  return keys
+    .map((k) => `${principal} namespaces="${AFFIRM_NAMESPACE}" ${k.publicKey}`)
+    .join("\n") + "\n";
 }
 ```
 
@@ -863,6 +882,8 @@ git commit -m "feat: affirmation-keys service + buildAllowedSigners + admin CLI 
 
 **Context:** `Dockerfile:2` is `FROM node:24-slim` with **no** `apt-get install` line, so `openssh-client` — and therefore `ssh-keygen` — is **not in the deployed tracker image**. This task adds it. The fail-loud rule is the npm lesson applied in code: a verifier that fails open is worse than no verifier, so a missing binary must throw a 500, never return `false` (which a caller could mistake for a bad signature and handle gracefully).
 
+**⚠️ CORRECTED 2026-07-16 (spec §3):** `buildAllowedSigners` no longer takes `opts` — call it as `buildAllowedSigners(keys, "sean")`. There is no `verify-required` and no `verifyRequired: false` test path, because there is no such ALLOWED SIGNERS option. This makes the test **stronger**: a software `ed25519` key now verifies through the exact production code path, so these tests exercise real crypto with no seam and no mock. Build the key rows as plain objects (`{ publicKey: pub } as never`) or insert them directly — do not route through `enrollAffirmationKey`, which requires a hardware `sk-*` key type.
+
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
@@ -875,17 +896,19 @@ import { buildAllowedSigners } from "../../src/services/affirmation-keys.js";
 import { AFFIRM_NAMESPACE } from "../../src/services/canonical-action.js";
 import { verifySshSig } from "../../src/services/ssh-verify.js";
 
-// CI has no FIDO hardware, so these tests use a SOFTWARE ed25519 key and pass
-// verifyRequired:false. That is deliberate and the split is explained in
-// affirmation-keys.ts: this file proves our plumbing (namespace, replay,
-// principal); tests/services/affirmation-keys.test.ts proves production emits
-// verify-required. That OpenSSH honours verify-required is OpenSSH's behaviour,
-// not ours — testing it would be testing ssh-keygen.
+// CI has no FIDO hardware, so these tests sign with a SOFTWARE ed25519 key.
+// That costs us nothing: allowed_signers carries no verify-required (there is no
+// such option — spec §3), so a software key verifies through the EXACT production
+// path. These tests therefore exercise real ssh-keygen crypto with no mock and no
+// production seam, and they are the only place that proves buildAllowedSigners'
+// output is actually parseable by the binary.
+// What they cannot cover: that the token demanded a touch/PIN. The server never
+// sees that (spec §3) — the manual hardware run is the only evidence.
 const dir = mkdtempSync(join(tmpdir(), "syd-sshverify-"));
 const keyPath = join(dir, "k");
 execFileSync("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", keyPath, "-C", "test"]);
 const pub = readFileSync(`${keyPath}.pub`, "utf8").trim();
-const signers = buildAllowedSigners([{ publicKey: pub } as never], "sean", { verifyRequired: false });
+const signers = buildAllowedSigners([{ publicKey: pub } as never], "sean");
 
 const sign = (msg: string, namespace = AFFIRM_NAMESPACE) =>
   execFileSync("ssh-keygen", ["-Y", "sign", "-f", keyPath, "-n", namespace, "-"], {
@@ -1213,7 +1236,11 @@ it("affirm-signed refuses a human with no enrolled keys", async () => {
 });
 ```
 
-The `supervisedRest()` fixture must enroll a **software** ed25519 key (as in Task 6) for the owning human and expose `signCanonical()` / `signOther()` helpers that shell out to `ssh-keygen -Y sign -n switchyard-affirm`. Because CI has no FIDO hardware, the fixture builds `allowed_signers` through the production path — so the route must accept a `verifyRequired` override for tests **only if** it can be done without a production branch. It cannot; therefore **the route calls `buildAllowedSigners(..., { verifyRequired: true })` always**, and this test's software key would be rejected. Resolve by having the fixture stub `ssh-verify`'s module via `vi.mock` for the two happy-path assertions, and keep the *real* crypto coverage in `tests/services/ssh-verify.test.ts` (Task 6), which already proves the plumbing end to end. Assert separately (Task 5) that production emits `verify-required`.
+**⚠️ CORRECTED 2026-07-16 (spec §3) — the `vi.mock` workaround is deleted; use real crypto.**
+
+The original text here said the route must always call `buildAllowedSigners(..., { verifyRequired: true })`, so a software-key fixture would be rejected, so the happy-path route tests had to `vi.mock` the verifier. **All of that rested on an ALLOWED SIGNERS option that does not exist.** With `verify-required` gone from the file, a software `ed25519` key verifies through the exact production path.
+
+So: the `supervisedRest()` fixture generates a software `ed25519` key, **inserts an `affirmation_keys` row directly** for the owning human (bypassing `enrollAffirmationKey`'s hardware `sk-*` key-type check, which Task 5 tests separately), and exposes `signCanonical()` / `signOther()` helpers shelling out to `ssh-keygen -Y sign -n switchyard-affirm`. **No mocking.** These route tests now exercise real signature verification end to end — including replay rejection through the real HTTP surface, which is strictly better coverage than the mocked version could ever give.
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -1354,7 +1381,7 @@ export function buildPendingActionRoutes(db: Db) {
     const verified = verifySshSig({
       message: canonicalizeAction(action),
       armoredSignature: body.signature,
-      allowedSigners: buildAllowedSigners(keys, human.name, { verifyRequired: true }),
+      allowedSigners: buildAllowedSigners(keys, human.name),
       principal: human.name,
     });
     if (!verified) {
@@ -1663,7 +1690,7 @@ Per `CLAUDE.md`: `npm run verify` first (Step 1), then a human stamps `done`. At
 | (d) `affirm_requires_signature` gates the click | Task 1 (setting), Task 8 (403), Task 10 (button) |
 | §1 terminal inversion | Task 9 |
 | §2 sign canonical doc, verify by re-deriving | Task 3, Task 8 (`canonicalFor`) |
-| §3 `verify-required` / accurate copy | Task 5 (`buildAllowedSigners`), Global Constraints |
+| §3 token-enforces-presence / hardware key-type check at enrollment / accurate copy | Task 5 (`buildAllowedSigners` + `enrollAffirmationKey`), Global Constraints |
 | Data model: `expiresAt`, `affirmation_keys`, settings | Tasks 1, 2 |
 | Blocker #1: `PendingAffirmation` + 2 translations | Task 4 |
 | Verification + Dockerfile | Task 6 |
@@ -1679,5 +1706,5 @@ Per `CLAUDE.md`: `npm run verify` first (Step 1), then a human stamps `done`. At
 **Known sharp edges, flagged for the implementer rather than hidden:**
 1. **Task 2 Step 4** — drizzle-kit may emit a bare `NOT NULL` add that SQLite rejects on a non-empty table. Read the generated SQL; hand-edit. Also confirm the partial-index predicate was emitted.
 2. **Task 7 Step 3** — the `expired` marking must happen **outside** `db.transaction`, or the throw rolls it back. The plan restructures for this; do not "simplify" it back inside.
-3. **Task 8 Step 1** — production always passes `verifyRequired: true`, so a software-key fixture cannot verify through the route. The happy-path route tests mock `ssh-verify`; the real crypto is proven in Task 6. Do not add a production branch to make the fixture work — that is precisely the bypass this design refuses.
+3. **Task 8 Step 1** — SUPERSEDED by the 2026-07-16 correction (spec §3). There is no `verify-required`, so no mock is needed: a software key verifies through the real production path. Route tests insert an `affirmation_keys` row directly and use real crypto.
 4. **Task 4 Step 8** — Phase 1 hard-gate tests asserting the old `SwitchyardError` message will fail. Updating them is intended, not a regression.
