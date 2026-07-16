@@ -244,6 +244,15 @@ describe("affirmPendingAction", () => {
     expect(getPendingAction(db, id)?.status).toBe("expired");
   });
 
+  it("a non-owner affirming an expired row gets the owner-tie error, not the expired one, and causes no write", () => {
+    const other = createActor(db, { name: "other", type: "human" }).actor;
+    const id = park(sessionId, issueId, "done", {}, nowSec() - 1);
+    expect(() => affirmPendingAction(db, other, id)).toThrow(/only the accountable human/i);
+    // Not the expiry message, and — the actual proof — the row was never
+    // touched: a non-owner can't force a write on someone else's session.
+    expect(getPendingAction(db, id)?.status).toBe("pending");
+  });
+
   it("still affirms an unexpired action", () => {
     const id = park(sessionId, issueId, "done", { status: "done" }, nowSec() + 300);
     expect(affirmPendingAction(db, human, id).status).toBe("done");

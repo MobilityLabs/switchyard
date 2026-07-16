@@ -98,12 +98,25 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
   // along with it. The in-transaction claim below (`WHERE status = 'pending'`)
   // still guards the race if a concurrent affirm lands between this read and
   // that claim.
+  //
+  // But this pre-block is a write, and it must not run before the owner tie is
+  // checked — otherwise any authenticated human could flip a stranger's overdue
+  // row to `expired` before authorization ever runs. So the ownership check is
+  // duplicated here (cheaply: it's a read) rather than moved. A non-owner falls
+  // through unchanged into the transaction, which throws the usual owner-tie
+  // error with no write having happened.
   const pre = getPendingAction(db, id);
   if (pre && pre.status === "pending" && pre.expiresAt < nowSec()) {
-    db.update(pendingActions).set({ status: "expired" }).where(eq(pendingActions.id, id)).run();
-    throw new SwitchyardError(
-      `Pending action ${id} expired — an affirmation that outlives your attention is a bearer token with extra steps. Re-propose it from the session to affirm.`,
-    );
+    const preSession = db.select().from(sessions).where(eq(sessions.id, pre.sessionId)).get();
+    if (preSession && preSession.actorId === human.id) {
+      db.update(pendingActions)
+        .set({ status: "expired" })
+        .where(and(eq(pendingActions.id, id), eq(pendingActions.status, "pending")))
+        .run();
+      throw new SwitchyardError(
+        `Pending action ${id} expired — an affirmation that outlives your attention is a bearer token with extra steps. Re-propose it from the session to affirm.`,
+      );
+    }
   }
   return db.transaction((tx) => {
     // Read inside the transaction so the payload we execute is the one the

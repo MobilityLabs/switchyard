@@ -426,8 +426,10 @@ export const pendingActions = sqliteTable(
     createdAt: integer("created_at").notNull().default(now()),
     // Phase 2: signed into the canonical action doc, so it cannot be extended
     // after the fact. Not nullable — an unbounded affirmation is a bearer token
-    // with extra steps. Enforced in affirmPendingAction (inside its transaction,
-    // so BOTH the cookie and signed paths are covered by one check).
+    // with extra steps. Enforced in affirmPendingAction, in a block BEFORE its
+    // transaction opens (so the `expired` marking survives its own throw
+    // instead of being rolled back with it) — but still in the one executor, so
+    // BOTH the cookie and signed paths are covered by one check.
     expiresAt: integer("expires_at").notNull(),
   },
   (t) => [
