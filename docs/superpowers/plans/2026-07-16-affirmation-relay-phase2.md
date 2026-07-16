@@ -416,19 +416,22 @@ it("returns a SUCCESS result (not isError) carrying the canonical doc when a gat
 });
 ```
 
-```typescript
-// tests/rest/affirm-signed.test.ts (first test; file grows in Task 8)
-it("returns 202 — not 4xx — when a supervised REST update parks a gated done", async () => {
-  const { app, supToken } = await supervisedRest(); // existing helper pattern
-  const res = await app.request("/api/issues/SYD-1", {
-    method: "PATCH",
-    headers: { authorization: `Bearer ${supToken}`, "content-type": "application/json" },
-    body: JSON.stringify({ status: "done" }),
-  });
-  expect(res.status).toBe(202);
-  expect((await res.json()).pendingActionId).toBeGreaterThan(0);
-});
-```
+**CORRECTED DURING IMPLEMENTATION — there is no REST test for this task.** An earlier
+draft of this plan had a `tests/rest/affirm-signed.test.ts` test asserting a `sup_` Bearer
+`PATCH /api/issues/SYD-1` returns 202. **That is impossible, and the design guarantees it:**
+
+- `resolveSupervisedPrincipal` has exactly one caller — `src/server.ts:77`, inside `/mcp`.
+  REST's auth middleware only tries `authenticate()` (reads `actors.tokenHash`; a `sup_`
+  hash lives only in `sessions.tokenHash`) or a plain cookie (`getSessionActor` filters
+  `kind='plain'`). A `sup_` Bearer cannot authenticate to REST at all.
+- Independently, `PATCH /issues/:ref` (`src/rest/api-routes.ts:262-265`) passes no `attr`
+  to `updateIssue`, so `attr.sessionId` is always `undefined` and the divert cannot fire.
+- This is the *same fact* the spec's §Scope uses to drop `dependency.remove` (SYD-246).
+
+Building it would have meant weakening a documented security boundary. **The MCP test
+below is this task's only behavioral test** — make it count. `tests/rest/affirm-signed.test.ts`
+is created later, by Task 8, for routes that genuinely are reachable (human/agent bearers
+and cookies, never `sup_`).
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -566,17 +569,28 @@ Import `PendingAffirmation` alongside the existing `SwitchyardError` import (lin
 
 - [ ] **Step 7: Translate in REST `onError`**
 
-In `src/rest/api-routes.ts`, add **before** the `SwitchyardError` arm at line 159:
+In `src/rest/api-routes.ts`, add **before** the `SwitchyardError` arm at line 159.
+
+**This arm is unreachable today and is a tripwire, not live behavior** (see Step 1).
+Write the comment honestly — a future reader must not mistake it for a working path:
 
 ```typescript
   app.onError((err, c) => {
-    // 202 Accepted, not 4xx: nothing went wrong. The action is parked and the
-    // body carries the bytes a human must sign.
+    // Unreachable today BY CONSTRUCTION: PendingAffirmation is only thrown by
+    // updateIssue's divert, which requires attr.sessionId, which only a
+    // supervised principal carries — and a sup_ token resolves ONLY at /mcp
+    // (src/server.ts:77). REST never calls resolveSupervisedPrincipal, and
+    // PATCH /issues/:ref passes no attr at all. Kept as a tripwire: this class
+    // extends Error, so if REST ever gains supervised attribution, without this
+    // arm the catch-all below turns a parked action into a 500 + stack trace.
     if (err instanceof PendingAffirmation) return c.json(err.pending, 202);
     if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
 ```
 
 Import `PendingAffirmation` alongside `SwitchyardError`.
+
+**Do NOT write a test for this arm.** There is no honest way to exercise it through the
+real auth path, and a test that faked reachability would be worse than no test.
 
 - [ ] **Step 8: Run tests**
 

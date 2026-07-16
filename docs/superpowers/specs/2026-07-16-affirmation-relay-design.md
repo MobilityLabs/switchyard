@@ -247,8 +247,30 @@ Two translations, exactly as research §6 names:
 
 - `guard()` catches `PendingAffirmation` **before** `SwitchyardError` and returns
   `ok(err.pending)` — a **success** result carrying the canonical doc and instructions.
+  **This is the only live translation**, and the only one with a behavioral test.
 - REST `app.onError` maps it to **202 Accepted** with the same body. Not a 4xx: nothing
-  went wrong.
+  went wrong. **This arm is unreachable today, by construction, and is kept as a
+  tripwire rather than as live behavior** — see below.
+
+**Why the REST arm is unreachable (corrected during implementation).** An earlier draft
+of this spec implied a supervised session could park an action over REST. It cannot, and
+the same fact is what lets §Scope drop `dependency.remove`:
+
+- `PendingAffirmation` is thrown only by `updateIssue`'s divert, which requires
+  `attr.sessionId`.
+- Only a supervised principal carries `attr`, and a `sup_` token resolves **only** at
+  `/mcp` — `resolveSupervisedPrincipal` has exactly one caller (`src/server.ts:77`).
+  REST's auth middleware only tries `authenticate()` (which reads `actors.tokenHash`,
+  where a `sup_` hash never lives) or a plain session cookie (`getSessionActor` filters
+  `kind='plain'`).
+- Independently, `PATCH /issues/:ref` (`src/rest/api-routes.ts:262-265`) passes no `attr`
+  to `updateIssue` at all.
+
+So the arm is kept because `PendingAffirmation extends Error`: if REST ever gains
+supervised attribution, its absence turns a parked action into a 500 with a stack trace
+instead of a 202. One line now prevents a confusing failure later. It is deliberately
+**not** tested — there is no honest way to exercise it through the real auth path, and a
+test that faked reachability would be worse than no test.
 
 **Why not the alternatives** (recorded so this is not relitigated):
 
