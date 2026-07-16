@@ -1055,22 +1055,12 @@ Expected: FAIL — the expired row is affirmed and stamps `done`.
 
 - [ ] **Step 3: Implement**
 
-In `affirmPendingAction`, after the session-expiry check (line 107) and before the `actionType` check:
-
-```typescript
-    // Row expiry, enforced HERE rather than in the route so both affirm paths —
-    // the Phase 1 cookie click and the Phase 2 signed POST — are covered by one
-    // check. `expiresAt` is inside the signed canonical doc, so a signature can
-    // never extend its own window.
-    if (row.expiresAt < nowSec()) {
-      tx.update(pendingActions).set({ status: "expired" }).where(eq(pendingActions.id, id)).run();
-      throw new SwitchyardError(
-        `Pending action ${id} expired — an affirmation that outlives your attention is a bearer token with extra steps. Re-propose it from the session to affirm.`,
-      );
-    }
-```
-
-**Note the transaction interaction:** this `UPDATE` then `throw` would normally roll back — but the throw propagates out of `db.transaction`, rolling the status write back with it. To persist the `expired` marking, the write must happen **outside** the transaction. Restructure: check expiry with a read inside, and on the expired branch, throw a distinct internal marker caught outside the transaction which then performs the `expired` UPDATE and rethrows as `SwitchyardError`. Simpler and preferred: perform the expiry check and the `expired` UPDATE **before** `db.transaction(...)` opens, using a plain read:
+**Read this before writing code — the obvious placement is wrong.** The natural
+instinct is to put the check inside `db.transaction`, next to the session-expiry check
+at line 103. **Do not.** Marking the row `expired` and then throwing from inside the
+transaction rolls the marking back with the throw, so the row stays `pending` forever
+and every later affirm re-does the same doomed work. The `expired` marking must
+**survive**, so it happens *before* the transaction opens, via a plain read:
 
 ```typescript
 export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView {
