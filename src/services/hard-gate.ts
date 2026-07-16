@@ -44,7 +44,19 @@ export function findOrCreatePendingAction(
 ): number {
   const row = db
     .insert(pendingActions)
-    .values({ sessionId, issueId, actionType, payload, status: "pending" })
+    .values({
+      sessionId,
+      issueId,
+      actionType,
+      payload,
+      status: "pending",
+      // DEVIATION (SYD-242 phase 2 task 2): expiresAt is now NOT NULL on the
+      // schema. Task 4 formally threads settings.getSetting's
+      // "supervised.affirm_ttl_seconds" through this function's signature;
+      // hardcoding its 300s default here is the minimal fix to keep the tree
+      // green without building that feature early.
+      expiresAt: nowSec() + 300,
+    })
     .onConflictDoUpdate({
       target: [pendingActions.sessionId, pendingActions.issueId, pendingActions.actionType],
       targetWhere: sql`status = 'pending'`,

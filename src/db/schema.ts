@@ -424,10 +424,42 @@ export const pendingActions = sqliteTable(
     affirmedById: integer("affirmed_by_id").references(() => actors.id),
     affirmedAt: integer("affirmed_at"),
     createdAt: integer("created_at").notNull().default(now()),
+    // Phase 2: signed into the canonical action doc, so it cannot be extended
+    // after the fact. Not nullable — an unbounded affirmation is a bearer token
+    // with extra steps. Enforced in affirmPendingAction (inside its transaction,
+    // so BOTH the cookie and signed paths are covered by one check).
+    expiresAt: integer("expires_at").notNull(),
   },
   (t) => [
     uniqueIndex("pending_actions_active_uniq")
       .on(t.sessionId, t.issueId, t.actionType)
       .where(sql`status = 'pending'`),
+  ],
+);
+
+// Phase 2 (affirmation relay): the SSH public keys allowed to sign a human's
+// affirmations. A table, not a column, because the design has NO break-glass —
+// recovery is key redundancy (enroll two: one on the keyring, one in a drawer).
+// `publicKey` stores a full authorized-keys-style line ("ssh-ed25519-sk AAAA...
+// comment") exactly as ssh-keygen emits it; buildAllowedSigners wraps it with
+// the principal, namespace, and verify-required.
+export const affirmationKeys = sqliteTable(
+  "affirmation_keys",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    actorId: integer("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    publicKey: text("public_key").notNull(),
+    comment: text("comment"),
+    createdAt: integer("created_at").notNull().default(now()),
+    revokedAt: integer("revoked_at"),
+  },
+  (t) => [
+    // Partial: a revoked key may be re-enrolled, but the same key can't be live
+    // twice for one actor. Mirrors pending_actions_active_uniq's shape.
+    uniqueIndex("affirmation_keys_active_uniq")
+      .on(t.actorId, t.publicKey)
+      .where(sql`revoked_at is null`),
   ],
 );
