@@ -50,7 +50,7 @@ Merge the branch (canonical-action, key enrollment, `/affirm-signed`, `syd affir
 New verb on the `cc-touch-id` CLI (working name: `cc-touch-id affirm`):
 
 - **Input**: the pending-action document as structured JSON on stdin — *not* opaque bytes. The broker only signs what it can render (WYSIWYS invariant preserved).
-- **Flow**: client → broker socket → broker canonicalizes the document per the shared contract (§4), produces the human rendering with the existing confusable/bidi-escaping machinery (`Canonical.swift`), shows it in the `LAContext` Touch ID sheet, signs the domain-tagged canonical bytes with the Secure Enclave key (`.biometryCurrentSet`, `SecureEnclave.swift`), returns the DER signature.
+- **Flow**: the verb runs **standalone in the entitled `.app`** as the login user — no broker round-trip. (Correction over an earlier draft: in cc-presence-gate the broker only *verifies*; signing is always client-side, since the daemon has no UI session for a biometric sheet and only the provisioned app may touch the Secure Enclave key.) The verb canonicalizes the document per the shared contract (§4), produces the human rendering with the existing confusable/bidi-escaping machinery (`Canonical.swift`), shows it in the `LAContext` Touch ID sheet, signs the domain-tagged canonical bytes with the Secure Enclave key (`.biometryCurrentSet`, `SecureEnclave.swift`), and prints the DER signature. Interface details pinned in that repo's `docs/superpowers/specs/2026-07-21-switchyard-affirm-verb-design.md`.
 - **Output**: JSON `{ "signature": "<base64 DER>", "publicKey": "<SPKI PEM>", "algo": "ecdsa-p256-sha256" }` on stdout; nonzero exit on decline/cancel/error (fail closed).
 - **Enrollment export**: a `cc-touch-id export-pubkey` verb (or existing status output) prints the SPKI PEM for pasting into Switchyard enrollment.
 - Tracked and specced in the cc-presence-gate repo's own SDD flow; this spec only fixes the interface.
@@ -66,12 +66,12 @@ New verb on the `cc-touch-id` CLI (working name: `cc-touch-id affirm`):
 ### 5. Client flow (`syd affirm`)
 
 1. Fetch the pending action, render it in the terminal (unchanged from the relay branch).
-2. Signer selection: if the human has a `p256` key enrolled **and** the cc-presence-gate broker is reachable, pipe the document to `cc-touch-id affirm`; otherwise fall back to `ssh-keygen -Y sign` with the FIDO key. `--signer touchid|fido` overrides.
+2. Signer selection: if the human has a `p256` key enrolled **and** the cc-touch-id entitled app is installed (its known `/opt` path, per that repo's two-binaries constraint), pipe the document to `cc-touch-id affirm`; otherwise fall back to `ssh-keygen -Y sign` with the FIDO key. `--signer touchid|fido` overrides.
 3. POST signature + key id to `/affirm-signed`; server verifies per key type and executes.
 
 ### Error handling
 
-- Broker unreachable / verb missing / user cancels the Touch ID sheet → clear message and offer of the FIDO fallback; never silent success.
+- Entitled app missing / verb missing / user cancels the Touch ID sheet → clear message and offer of the FIDO fallback; never silent success.
 - Signature verify failure server-side → 403 `SwitchyardError`, pending action untouched (still affirmable).
 - Biometric set changed (`.biometryCurrentSet` invalidates the SE key) → signing fails on-device; remedy is re-enrolling, message says so.
 - Expired/closed session or expired pending action → existing relay-branch rejection semantics, unchanged.
