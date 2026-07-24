@@ -231,6 +231,87 @@ describe("Shell nav scope consistency", () => {
   });
 });
 
+// SYD-254: the scope switcher replaces the old board/triage/review-only
+// project selector — it renders on every view except settings, and on views
+// that need a concrete project (board, issue) it hides the All option.
+describe("Shell scope switcher coverage", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    history.replaceState(null, "", "/");
+  });
+
+  const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+
+  async function pick(select: HTMLSelectElement, value: string): Promise<void> {
+    await act(async () => {
+      nativeSetter.call(select, value);
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  it("renders the switcher on agents/approvals/search, but not on settings", async () => {
+    await act(async () => {
+      navigate({ view: "agents", scope: "all" });
+    });
+    expect(projectSelect(await renderShell())).not.toBeNull();
+
+    await act(async () => {
+      navigate({ view: "approvals", scope: "SYD" });
+    });
+    expect(projectSelect(await renderShell())).not.toBeNull();
+
+    await act(async () => {
+      navigate({ view: "search", scope: "all", query: "x" });
+    });
+    expect(projectSelect(await renderShell())).not.toBeNull();
+
+    await act(async () => {
+      navigate({ view: "settings", tab: "projects" });
+    });
+    expect(projectSelect(await renderShell())).toBeNull();
+  });
+
+  it("picking a project on an all-scope view keeps the view under the new scope", async () => {
+    await act(async () => {
+      navigate({ view: "agents", scope: "all" });
+    });
+    const container = await renderShell();
+    await pick(projectSelect(container)!, "SYD");
+    expect(location.pathname).toBe("/SYD/agents");
+  });
+
+  it("keeps the query when switching scope on the search view", async () => {
+    await act(async () => {
+      navigate({ view: "search", scope: "all", query: "auth bug" });
+    });
+    const container = await renderShell();
+    await pick(projectSelect(container)!, "SYD");
+    expect(location.pathname).toBe("/SYD/search");
+    expect(location.search).toBe("?q=auth%20bug");
+  });
+
+  it("on an issue view the switcher shows the ref's project, hides All, and jumps to the picked project's board", async () => {
+    await act(async () => {
+      navigate({ view: "issue", scope: "SYD", ref: "SYD-5" });
+    });
+    const container = await renderShell();
+    const select = projectSelect(container)!;
+    expect(select.value).toBe("SYD");
+    expect([...select.options].some((o) => o.value === "")).toBe(false);
+    await pick(select, "ACME");
+    expect(location.pathname).toBe("/ACME/board");
+  });
+
+  it("review drops the selected ref when switching scope", async () => {
+    await act(async () => {
+      navigate({ view: "review", scope: "SYD", ref: "SYD-9" });
+    });
+    const container = await renderShell();
+    await pick(projectSelect(container)!, "ACME");
+    expect(location.pathname).toBe("/ACME/review");
+  });
+});
+
 // SYD-214: the header's own "+ Project" popover was redundant with the
 // Settings → Projects "New project" form, and was removed as part of the
 // header collapse. Guard against it silently reappearing.
