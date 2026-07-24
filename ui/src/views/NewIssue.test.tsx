@@ -13,7 +13,10 @@ vi.mock("../api", () => ({
   updateIssue: vi.fn(),
   uploadAttachment: vi.fn(),
 }));
-vi.mock("../router", () => ({ navigate: vi.fn() }));
+vi.mock("../router", () => ({
+  navigate: vi.fn(),
+  issueRoute: (ref: string) => ({ view: "issue", scope: ref.split("-")[0], ref }),
+}));
 
 import { createIssue, listProjects, updateIssue, uploadAttachment } from "../api";
 import { navigate } from "../router";
@@ -70,7 +73,7 @@ async function render(): Promise<HTMLElement> {
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<NewIssue />);
+    root.render(<NewIssue defaultProject={null} />);
   });
   await act(async () => {}); // flush listProjects()
   return container;
@@ -141,7 +144,7 @@ describe("NewIssue", () => {
       parentRef: undefined,
     });
     expect(updateIssue).not.toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
+    expect(navigate).toHaveBeenCalledWith({ view: "issue", scope: "SYD", ref: "SYD-9" });
   });
 
   it("patches labels and startInTodo status after creation, then navigates", async () => {
@@ -169,7 +172,7 @@ describe("NewIssue", () => {
     await submitForm(container);
 
     expect(updateIssue).toHaveBeenCalledWith("SYD-9", { labels: ["bug", "ui"], status: "todo" });
-    expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
+    expect(navigate).toHaveBeenCalledWith({ view: "issue", scope: "SYD", ref: "SYD-9" });
   });
 
   it("buffers pasted files, then uploads and replaces their placeholders after creation", async () => {

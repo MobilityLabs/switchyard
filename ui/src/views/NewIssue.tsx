@@ -3,11 +3,11 @@ import { createIssue, listProjects, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { useDeferredPasteUpload } from "../usePasteUpload";
 import { Composer } from "../Composer";
-import { navigate } from "../router";
+import { issueRoute, navigate } from "../router";
 import { PRIORITIES, SUMMARY_MAX_LENGTH, WORKER_PREFERENCES, type Priority } from "../types";
 import { parseLabels } from "../labels";
 
-export default function NewIssue() {
+export default function NewIssue(_props: { defaultProject: string | null }) {
   const projects = usePoll(listProjects, []);
   const availableProjects = projects.data ?? [];
 
@@ -67,7 +67,7 @@ export default function NewIssue() {
         return issue;
       })
       .then(
-        (issue) => navigate({ view: "issue", ref: issue.ref }),
+        (issue) => navigate(issueRoute(issue.ref)),
         (e) => {
           setSubmitting(false);
           setError(e instanceof Error ? e.message : String(e));

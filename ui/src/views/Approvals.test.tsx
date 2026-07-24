@@ -69,7 +69,7 @@ async function renderApprovals(): Promise<HTMLElement> {
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Approvals />);
+    root.render(<Approvals project={null} />);
   });
   return container;
 }
@@ -109,7 +109,7 @@ describe("Approvals view", () => {
     vi.mocked(affirmPendingAction).mockResolvedValue({} as Issue);
     const container = await renderApprovals();
 
-    expect(container.querySelector('a[href="/issue/SYD-42"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/SYD/issue/SYD-42"]')).not.toBeNull();
     expect(container.textContent).toContain("done");
     expect(container.textContent).toContain("session #5");
     expect(listIssues).not.toHaveBeenCalled();
@@ -142,7 +142,7 @@ describe("Approvals view", () => {
 
     expect(container.textContent).toContain("re-review");
     // The row itself is still there — a failed affirm must not look approved.
-    expect(container.querySelector('a[href="/issue/SYD-42"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/SYD/issue/SYD-42"]')).not.toBeNull();
   });
 
   it("shows which agent proposed the action", async () => {

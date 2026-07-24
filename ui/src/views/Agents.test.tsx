@@ -37,7 +37,7 @@ async function renderAgents(): Promise<HTMLElement> {
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Agents />);
+    root.render(<Agents project={null} />);
   });
   return container;
 }
@@ -82,7 +82,7 @@ describe("Agents view", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("writing tests");
     expect(text).toContain("SYD-9");
-    expect(container.querySelector('a[href="/issue/SYD-1"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/SYD/issue/SYD-1"]')).not.toBeNull();
     const sections = [...container.querySelectorAll("h2")].map((h) => h.textContent);
     expect(sections).toEqual(["Active sessions", "Recent"]);
   });

@@ -11,7 +11,7 @@ import { safeHref } from "../safeHref";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
 import { useActorNames } from "../useActorNames";
-import { navigate, redirect } from "../router";
+import { ALL_SCOPE, navigate, redirect } from "../router";
 import { countNewArrivals, firstRef, pickAdjacentRef } from "./reviewQueue";
 import { attentionChip } from "../attention";
 
@@ -64,7 +64,7 @@ export default function Review({
   // Bare `/review` or `/review/:project` redirects to the first queued issue.
   useEffect(() => {
     if (currentRef === null && queue.length > 0)
-      redirect({ view: "review", project, ref: firstRef(queue) });
+      redirect({ view: "review", scope: project ?? ALL_SCOPE, ref: firstRef(queue) });
   }, [currentRef, project, queue]);
 
   const list = data ?? [];
@@ -94,7 +94,7 @@ export default function Review({
   function moveTo(ref: string | null) {
     if (data) setQueue(data);
     setDraft("");
-    navigate({ view: "review", project, ref });
+    navigate({ view: "review", scope: project ?? ALL_SCOPE, ref });
   }
   function next() {
     moveTo(pickAdjacentRef(queue, currentRef, 1));

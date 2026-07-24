@@ -2,7 +2,7 @@ import { useState } from "react";
 import { affirmPendingAction, listPendingActions, listSettings } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
-import { href } from "../router";
+import { href, issueRoute } from "../router";
 import type { PendingAction } from "../types";
 
 // "42m ago" / "3h ago" / "2d ago" — same granularity as Triage's row-age
@@ -48,7 +48,7 @@ function ApprovalRow({
   return (
     <li className="session-row panel">
       {action.issueRef ? (
-        <a className="ref" href={href({ view: "issue", ref: action.issueRef })}>
+        <a className="ref" href={href(issueRoute(action.issueRef))}>
           {action.issueRef}
         </a>
       ) : (
@@ -85,7 +85,7 @@ function ApprovalRow({
 // /api/pending-actions/:id/affirm, authenticated by the browser's session
 // cookie (never a bearer — see api.ts). No policy lives here: this view
 // renders what the endpoint returns and posts the affirm, nothing else.
-export default function Approvals() {
+export default function Approvals(_props: { project: string | null }) {
   const queue = usePoll(() => listPendingActions("pending"), []);
   // Whether supervised.affirm_requires_signature is on (phase 2): when it is,
   // POST /api/pending-actions/:id/affirm always 403s, so the click must not

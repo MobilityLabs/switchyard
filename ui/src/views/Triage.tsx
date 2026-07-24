@@ -13,7 +13,7 @@ import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { Composer } from "../Composer";
 import { ConfirmModal, PromptModal } from "../Modal";
-import { href } from "../router";
+import { href, issueRoute } from "../router";
 import { PRIORITIES, type Issue, type IssueDetail, type Priority } from "../types";
 import { Markdown } from "../Markdown";
 import { DesignEmbeds } from "../DesignEmbeds";
@@ -87,7 +87,7 @@ export default function Triage({ project }: { project: string | null }) {
             <a
               key={issue.ref}
               className="needs-input-row"
-              href={href({ view: "issue", ref: issue.ref })}
+              href={href(issueRoute(issue.ref))}
             >
               <span className="ref">{issue.ref}</span>
               <span className="title">{issue.title}</span>
@@ -198,7 +198,7 @@ export function TriageRow({
       }}
     >
       <div className="triage-main">
-        <a className="ref" href={href({ view: "issue", ref: issue.ref })}>
+        <a className="ref" href={href(issueRoute(issue.ref))}>
           {issue.ref}
         </a>
         <span className="title">{issue.title}</span>

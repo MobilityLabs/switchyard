@@ -13,7 +13,7 @@ import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { PromptModal } from "../Modal";
-import { href } from "../router";
+import { href, issueRoute } from "../router";
 import {
   PRIORITIES,
   STATUSES,
@@ -618,7 +618,7 @@ function Hierarchy({
       <div className="parent-row">
         <span>Parent</span>
         {parentRef && (
-          <a className="ref" href={href({ view: "issue", ref: parentRef })}>
+          <a className="ref" href={href(issueRoute(parentRef))}>
             {parentRef}
           </a>
         )}
@@ -647,7 +647,7 @@ function Hierarchy({
           <ul className="dep-list">
             {stories.map((s) => (
               <li key={s.ref}>
-                <a className="ref" href={href({ view: "issue", ref: s.ref })}>
+                <a className="ref" href={href(issueRoute(s.ref))}>
                   {s.ref}
                 </a>{" "}
                 {s.title}{" "}
@@ -690,7 +690,7 @@ function Dependencies({
 
   const row = (d: DependencyRef, dir: "blocked-by" | "blocks") => (
     <li key={`${dir}-${d.ref}`}>
-      <a className="ref" href={href({ view: "issue", ref: d.ref })}>
+      <a className="ref" href={href(issueRoute(d.ref))}>
         {d.ref}
       </a>{" "}
       {d.title}{" "}

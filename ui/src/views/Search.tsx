@@ -2,7 +2,7 @@ import { useState } from "react";
 import { listIssues, listProjects } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
-import { href } from "../router";
+import { href, issueRoute } from "../router";
 import { STATUSES, type Status } from "../types";
 import { projectKeyFromRef } from "../refs";
 
@@ -10,7 +10,7 @@ function formatUpdatedAt(unixSeconds: number): string {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-export default function Search({ query }: { query: string }) {
+export default function Search({ query }: { query: string; project: string | null }) {
   const [project, setProject] = useState("");
   const [status, setStatus] = useState<Status | "">("");
   const [label, setLabel] = useState("");
@@ -65,7 +65,7 @@ export default function Search({ query }: { query: string }) {
             <a
               key={issue.ref}
               className="search-row"
-              href={href({ view: "issue", ref: issue.ref })}
+              href={href(issueRoute(issue.ref))}
             >
               <span className="ref">{issue.ref}</span>
               <span className="title">{issue.title}</span>

@@ -49,7 +49,7 @@ async function renderSearch(query: string): Promise<HTMLElement> {
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Search query={query} />);
+    root.render(<Search query={query} project={null} />);
   });
   await act(async () => {}); // flush the usePoll effect
   return container;
@@ -75,7 +75,7 @@ describe("Search view", () => {
     expect(listIssues).toHaveBeenCalledWith(expect.objectContaining({ text: "widget" }));
     const row = container.querySelector(".search-row") as HTMLAnchorElement;
     expect(row).not.toBeNull();
-    expect(row.getAttribute("href")).toBe("/issue/SYD-42");
+    expect(row.getAttribute("href")).toBe("/SYD/issue/SYD-42");
     expect(row.textContent).toContain("SYD-42");
     expect(row.textContent).toContain("Fix the widget");
     expect(row.textContent).toContain("in progress");
