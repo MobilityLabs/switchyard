@@ -779,6 +779,16 @@ function LabelInput({ onAdd }: { onAdd: (value: string) => void }) {
   );
 }
 
+/** Supervised-session provenance (SYD-240): "Sean ✍️ via claude-code" when a delegate agent made the edit. */
+function ActorLine({ ev }: { ev: Activity }) {
+  return (
+    <>
+      <strong>{ev.actorName}</strong>
+      {ev.viaAgentName && <span className="via-agent-chip">✍️ via {ev.viaAgentName}</span>}
+    </>
+  );
+}
+
 export function Event({
   ev,
   projectKey,
@@ -793,7 +803,7 @@ export function Event({
     return (
       <article className="comment panel">
         <header>
-          <strong>{ev.actorName}</strong> <time>{when}</time>
+          <ActorLine ev={ev} /> <time>{when}</time>
         </header>
         <Markdown
           text={String(ev.payload.body ?? "")}
@@ -807,7 +817,7 @@ export function Event({
     const url = String(ev.payload.url ?? "");
     return (
       <p className="event">
-        <strong>{ev.actorName}</strong> opened{" "}
+        <ActorLine ev={ev} /> opened{" "}
         {url ? (
           <a href={safeHref(url)} target="_blank" rel="noreferrer">
             PR #{String(ev.payload.prNumber)}
@@ -829,7 +839,7 @@ export function Event({
         : "deploy FAILED";
     return (
       <p className="event">
-        <strong>{ev.actorName}</strong> delivered PR #{String(ev.payload.prNumber)} at{" "}
+        <ActorLine ev={ev} /> delivered PR #{String(ev.payload.prNumber)} at{" "}
         <code>{sha.slice(0, 7)}</code> · {deployText} <time>{when}</time>
       </p>
     );
@@ -837,7 +847,7 @@ export function Event({
   if (ev.type === "delivery_failed") {
     return (
       <p className="event delivery-failed">
-        <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")}{" "}
+        <ActorLine ev={ev} /> delivery failed: {String(ev.payload.message ?? "")}{" "}
         <time>{when}</time>
       </p>
     );
@@ -845,7 +855,7 @@ export function Event({
   if (ev.type === "delivery_resolved") {
     return (
       <p className="event delivery-resolved">
-        <strong>{ev.actorName}</strong> marked the delivery resolved:{" "}
+        <ActorLine ev={ev} /> marked the delivery resolved:{" "}
         {String(ev.payload.note ?? "")} <time>{when}</time>
       </p>
     );
@@ -920,7 +930,7 @@ export function Event({
   if (ev.type === "progress_note") {
     return (
       <p className="event progress-note">
-        <strong>{ev.actorName}</strong> ⏱ {String(ev.payload.note ?? "")} <time>{when}</time>
+        <ActorLine ev={ev} /> ⏱ {String(ev.payload.note ?? "")} <time>{when}</time>
       </p>
     );
   }
@@ -933,14 +943,14 @@ export function Event({
       // to backfill from (e.g. the row was deleted). Don't break the row.
       return (
         <p className="event">
-          <strong>{ev.actorName}</strong> attached {filename || "a file"} <time>{when}</time>
+          <ActorLine ev={ev} /> attached {filename || "a file"} <time>{when}</time>
         </p>
       );
     }
     const url = attachmentUrl(id, filename);
     return (
       <p className="event attachment-event">
-        <strong>{ev.actorName}</strong> attached{" "}
+        <ActorLine ev={ev} /> attached{" "}
         {contentType.startsWith("image/") ? (
           <a href={url} target="_blank" rel="noreferrer">
             <img src={url} alt={filename} className="attachment-thumb" />
@@ -962,7 +972,7 @@ export function Event({
         : "";
   return (
     <p className="event">
-      <strong>{ev.actorName}</strong> {ev.type.replace(/_/g, " ")}
+      <ActorLine ev={ev} /> {ev.type.replace(/_/g, " ")}
       {fromTo} <time>{when}</time>
     </p>
   );

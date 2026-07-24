@@ -4,6 +4,8 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { addComment, getActivity } from "../../src/services/comments.js";
+import { attributionOf } from "../../src/services/attribution.js";
+import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
 
 describe("comments and activity", () => {
   it("appends comments and returns the attributed stream", () => {
@@ -67,5 +69,24 @@ describe("comments and activity", () => {
 
     addComment(db, agentActor, "AIPI-1", "@agent can someone else confirm?");
     expect(getActivity(db, "AIPI-1").map((a) => a.type)).toEqual(["created", "comment"]);
+  });
+
+  it("surfaces supervised-session provenance (viaAgentName) only on the delegated event (SYD-240)", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
+    createProject(db, human, { key: "AIPI", name: "aipi" });
+    createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" }); // plain "created" event
+
+    const { sessionId } = openSupervisedSession(db, human, agent.name);
+    const attr = attributionOf({ actor: human, viaAgent: agent, sessionId });
+    addComment(db, human, "AIPI-1", "written on Sean's behalf", attr);
+
+    const activity = getActivity(db, "AIPI-1");
+    expect(activity.map((a) => a.type)).toEqual(["created", "comment"]);
+    expect(activity[0].actorName).toBe("sean");
+    expect(activity[0].viaAgentName).toBeNull();
+    expect(activity[1].actorName).toBe("sean");
+    expect(activity[1].viaAgentName).toBe("claude-code");
   });
 });

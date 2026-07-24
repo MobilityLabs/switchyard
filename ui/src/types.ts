@@ -57,6 +57,8 @@ export type Issue = {
 export type Activity = {
   type: string;
   actorName: string;
+  /** Supervised-session provenance (SYD-240): the agent that made the edit on the actor's behalf, or null for plain events. */
+  viaAgentName: string | null;
   payload: Record<string, unknown>;
   createdAt: number;
 };

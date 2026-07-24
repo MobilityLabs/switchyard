@@ -52,6 +52,7 @@ import { createRoot } from "react-dom/client";
 const ev = (o: Partial<Activity>): Activity => ({
   type: "comment",
   actorName: "claude/worker",
+  viaAgentName: null,
   payload: {},
   createdAt: 1000,
   ...o,
@@ -498,6 +499,27 @@ describe("Event rendering for delivery events", () => {
     expect(container.textContent).toContain("PR #9");
     expect(container.textContent).toContain("abcdef1");
     expect(container.textContent).toContain("deploy FAILED");
+  });
+
+  it("shows a via-agent provenance chip for a supervised-session event (SYD-240)", async () => {
+    const container = await render(
+      ev({
+        type: "comment",
+        actorName: "sean",
+        viaAgentName: "claude-code",
+        payload: { body: "edited on Sean's behalf" },
+      }),
+    );
+    expect(container.textContent).toContain("sean");
+    expect(container.textContent).toContain("via claude-code");
+    expect(container.querySelector(".via-agent-chip")).not.toBeNull();
+  });
+
+  it("omits the via-agent chip for a plain, non-supervised event", async () => {
+    const container = await render(
+      ev({ type: "comment", actorName: "sean", viaAgentName: null, payload: { body: "hi" } }),
+    );
+    expect(container.querySelector(".via-agent-chip")).toBeNull();
   });
 
   it("renders a delivery_resolved event with its note (SYD-178)", async () => {
