@@ -775,11 +775,23 @@ export function dispatch(
       child = spawn("docker", dockerArgs, {
         detached: true,
         stdio: ["ignore", fd, fd],
-        // SYD-210 Layer B: hand the lease to the container via the spawn env
-        // (bare -e SWITCHYARD_LEASE in dockerArgs reads it here) so it never
-        // appears in argv. Per-spawn env avoids collisions across concurrent
-        // containers.
-        env: opts.leaseToken ? { ...process.env, SWITCHYARD_LEASE: opts.leaseToken } : process.env,
+        // Secrets ride the spawn env (bare -e passthroughs in dockerArgs), so
+        // they never appear in argv. Per-spawn env avoids collisions across
+        // concurrent containers.
+        //
+        // SYD-258: SWITCHYARD_TOKEN must be the token THIS worker resolved
+        // (config.token names the env var — SWITCHYARD_GEMINI_TOKEN etc.),
+        // not whatever the shared .env's SWITCHYARD_TOKEN holds. Otherwise
+        // the claim actor (the worker's token) and the in-container actor
+        // diverge, and the assignee guard strands the finished session at
+        // its in_review hand-off.
+        //
+        // SYD-210 Layer B: the session-scoped lease rides the same way.
+        env: {
+          ...process.env,
+          SWITCHYARD_TOKEN: token,
+          ...(opts.leaseToken ? { SWITCHYARD_LEASE: opts.leaseToken } : {}),
+        },
       });
     } else {
       // Headless sessions can't answer permission prompts — grant the tools the
