@@ -34,14 +34,24 @@ describe("verifySshSig", () => {
 
   it("accepts a signature over the exact bytes", () => {
     expect(
-      verifySshSig({ message, armoredSignature: sign(message), allowedSigners: signers, principal: "sean" }),
+      verifySshSig({
+        message,
+        armoredSignature: sign(message),
+        allowedSigners: signers,
+        principal: "sean",
+      }),
     ).toBe(true);
   });
 
   it("rejects the same signature against different bytes — the replay property", () => {
     const other = '{"actionType":"done","issueRef":"SYD-43","v":1}';
     expect(
-      verifySshSig({ message: other, armoredSignature: sign(message), allowedSigners: signers, principal: "sean" }),
+      verifySshSig({
+        message: other,
+        armoredSignature: sign(message),
+        allowedSigners: signers,
+        principal: "sean",
+      }),
     ).toBe(false);
   });
 
@@ -58,13 +68,23 @@ describe("verifySshSig", () => {
 
   it("rejects an unknown principal", () => {
     expect(
-      verifySshSig({ message, armoredSignature: sign(message), allowedSigners: signers, principal: "mallory" }),
+      verifySshSig({
+        message,
+        armoredSignature: sign(message),
+        allowedSigners: signers,
+        principal: "mallory",
+      }),
     ).toBe(false);
   });
 
   it("rejects a garbage signature blob", () => {
     expect(
-      verifySshSig({ message, armoredSignature: "not a signature", allowedSigners: signers, principal: "sean" }),
+      verifySshSig({
+        message,
+        armoredSignature: "not a signature",
+        allowedSigners: signers,
+        principal: "sean",
+      }),
     ).toBe(false);
   });
 });

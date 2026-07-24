@@ -107,8 +107,8 @@ export default function Approvals() {
       </h2>
       {requiresSignature && (
         <p className="empty">
-          These need a signed affirmation — run <code>npm run affirm -- &lt;REF&gt;</code> and
-          touch your key. It will ask for a PIN or fingerprint, depending on your key.
+          These need a signed affirmation — run <code>npm run affirm -- &lt;REF&gt;</code> and touch
+          your key. It will ask for a PIN or fingerprint, depending on your key.
         </p>
       )}
       {queue.data.length === 0 ? (

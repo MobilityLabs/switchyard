@@ -23,7 +23,13 @@ vi.mock("../api", async (importOriginal) => {
   };
 });
 
-import { listPendingActions, listIssues, affirmPendingAction, listSettings, ApiError } from "../api";
+import {
+  listPendingActions,
+  listIssues,
+  affirmPendingAction,
+  listSettings,
+  ApiError,
+} from "../api";
 import Approvals from "./Approvals";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -117,7 +123,9 @@ describe("Approvals view", () => {
   });
 
   it("falls back to the honest issue id when the endpoint returns no ref, never fabricating one", async () => {
-    vi.mocked(listPendingActions).mockResolvedValue([pendingAction({ issueId: 999, issueRef: null })]);
+    vi.mocked(listPendingActions).mockResolvedValue([
+      pendingAction({ issueId: 999, issueRef: null }),
+    ]);
     const container = await renderApprovals();
     expect(container.textContent).toContain("issue #999");
     expect(container.querySelector("a.ref")).toBeNull();
@@ -138,7 +146,9 @@ describe("Approvals view", () => {
   });
 
   it("shows which agent proposed the action", async () => {
-    vi.mocked(listPendingActions).mockResolvedValue([pendingAction({ viaAgentName: "claude/dev" })]);
+    vi.mocked(listPendingActions).mockResolvedValue([
+      pendingAction({ viaAgentName: "claude/dev" }),
+    ]);
     const container = await renderApprovals();
     expect(container.textContent).toContain("claude/dev");
   });

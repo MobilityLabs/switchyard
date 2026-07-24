@@ -93,7 +93,15 @@ describe("buildAllowedSigners", () => {
       writeFileSync(signersPath, allowedSigners);
 
       writeFileSync(msgPath, message);
-      const sign = spawnSync("ssh-keygen", ["-Y", "sign", "-f", keyPath, "-n", "switchyard-affirm", msgPath]);
+      const sign = spawnSync("ssh-keygen", [
+        "-Y",
+        "sign",
+        "-f",
+        keyPath,
+        "-n",
+        "switchyard-affirm",
+        msgPath,
+      ]);
       expect(sign.status, sign.stderr?.toString()).toBe(0);
 
       const verify = spawnSync(
@@ -152,7 +160,8 @@ describe("affirmation key enrollment", () => {
   it("rejects a software key that cannot enforce presence, with an explanatory message", () => {
     const db = freshDb();
     const human = makeActor(db, "sean", "human");
-    const softwareKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ0Y2YwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw laptop";
+    const softwareKey =
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ0Y2YwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw laptop";
     expect(() => enrollAffirmationKey(db, human, human, softwareKey)).toThrow(SwitchyardError);
     expect(() => enrollAffirmationKey(db, human, human, softwareKey)).toThrow(/security key/i);
   });
@@ -168,7 +177,9 @@ describe("affirmation key enrollment", () => {
     const db = freshDb();
     const human = makeActor(db, "sean", "human");
     enrollAffirmationKey(db, human, human, KEY, "keyring");
-    expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring again")).toThrow(SwitchyardError);
+    expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring again")).toThrow(
+      SwitchyardError,
+    );
     expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring again")).toThrow(
       /already has this key enrolled/i,
     );
@@ -217,7 +228,9 @@ describe("enrollAffirmationKey principal validation", () => {
     const db = freshDb();
     const human = makeActor(db, "Sean Perkins", "human");
     expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring")).toThrow(SwitchyardError);
-    expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring")).toThrow(/whitespace|comma/i);
+    expect(() => enrollAffirmationKey(db, human, human, KEY, "keyring")).toThrow(
+      /whitespace|comma/i,
+    );
   });
 
   it("rejects enrollment for an actor whose name contains a comma", () => {

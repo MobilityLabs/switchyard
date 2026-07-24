@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { canonicalizeAction, AFFIRM_NAMESPACE, type CanonicalAction } from "../../src/services/canonical-action.js";
+import {
+  canonicalizeAction,
+  AFFIRM_NAMESPACE,
+  type CanonicalAction,
+} from "../../src/services/canonical-action.js";
 
 const base: CanonicalAction = {
   v: 1,

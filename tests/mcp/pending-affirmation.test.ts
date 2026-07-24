@@ -123,7 +123,10 @@ describe("a parked hard-gated done over the real /mcp endpoint", () => {
     const client = await connect(supToken);
     const first = JSON.parse(
       text(
-        await client.callTool({ name: "update_issue", arguments: { ref: issue.ref, status: "done" } }),
+        await client.callTool({
+          name: "update_issue",
+          arguments: { ref: issue.ref, status: "done" },
+        }),
       ),
     ) as { pendingActionId: number };
 
@@ -132,7 +135,10 @@ describe("a parked hard-gated done over the real /mcp endpoint", () => {
     db.run(sql`UPDATE pending_actions SET expires_at = 1 WHERE id = ${first.pendingActionId}`);
     const second = JSON.parse(
       text(
-        await client.callTool({ name: "update_issue", arguments: { ref: issue.ref, status: "done" } }),
+        await client.callTool({
+          name: "update_issue",
+          arguments: { ref: issue.ref, status: "done" },
+        }),
       ),
     ) as { pendingActionId: number };
 

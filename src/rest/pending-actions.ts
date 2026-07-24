@@ -2,12 +2,22 @@ import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { PENDING_ACTION_STATUSES, sessions, actors, issues, type PendingActionStatus } from "../db/schema.js";
+import {
+  PENDING_ACTION_STATUSES,
+  sessions,
+  actors,
+  issues,
+  type PendingActionStatus,
+} from "../db/schema.js";
 import type { Actor } from "../services/actors.js";
 import { getSessionActor } from "../services/auth.js";
 import { canonicalizeAction, type CanonicalAction } from "../services/canonical-action.js";
 import { SwitchyardError } from "../services/errors.js";
-import { affirmPendingAction, getPendingAction, listPendingActions } from "../services/hard-gate.js";
+import {
+  affirmPendingAction,
+  getPendingAction,
+  listPendingActions,
+} from "../services/hard-gate.js";
 import { buildAllowedSigners, listAffirmationKeys } from "../services/affirmation-keys.js";
 import { issueRefById } from "../services/issues.js";
 import { getSetting } from "../services/settings.js";
@@ -66,9 +76,16 @@ export function buildPendingActionRoutes(db: Db) {
       );
     }
     const mine = new Set(
-      db.select().from(sessions).where(eq(sessions.actorId, human.id)).all().map((s) => s.id),
+      db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.actorId, human.id))
+        .all()
+        .map((s) => s.id),
     );
-    const rows = listPendingActions(db, status as PendingActionStatus).filter((r) => mine.has(r.sessionId));
+    const rows = listPendingActions(db, status as PendingActionStatus).filter((r) =>
+      mine.has(r.sessionId),
+    );
     return c.json(
       rows.map((row) => {
         const action = canonicalFor(row);
@@ -136,7 +153,8 @@ export function buildPendingActionRoutes(db: Db) {
       );
     }
     const action = canonicalFor(row);
-    if (!action) throw new SwitchyardError(`Pending action ${id} points at an issue that no longer exists.`);
+    if (!action)
+      throw new SwitchyardError(`Pending action ${id} points at an issue that no longer exists.`);
 
     const verified = verifySshSig({
       message: canonicalizeAction(action),
@@ -159,6 +177,7 @@ export function buildPendingActionRoutes(db: Db) {
 
 function parsePendingId(raw: string): number {
   const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) throw new SwitchyardError(`There is no pending action ${raw}.`);
+  if (!Number.isInteger(id) || id <= 0)
+    throw new SwitchyardError(`There is no pending action ${raw}.`);
   return id;
 }

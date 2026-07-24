@@ -159,7 +159,9 @@ try {
     const key = readFileSync(keyPath, "utf8").trim();
     const row = enrollAffirmationKey(db, human, human, key, comment);
     console.log(`Enrolled affirmation key ${row.id} for ${name}${comment ? ` (${comment})` : ""}.`);
-    console.log("Enroll a second key now — there is no break-glass; redundancy is the recovery story.");
+    console.log(
+      "Enroll a second key now — there is no break-glass; redundancy is the recovery story.",
+    );
   } else if (cmd === "list-affirm-keys") {
     const [name] = args;
     if (!name) {

@@ -57,7 +57,8 @@ async function main() {
 
   const row = queue.find((r) => r.issueRef === ref.toUpperCase());
   if (!row) die(`Nothing is awaiting affirmation for ${ref}.`);
-  if (!row.canonical) die(`Pending action ${row.id} is not renderable — its issue may have been deleted.`);
+  if (!row.canonical)
+    die(`Pending action ${row.id} is not renderable — its issue may have been deleted.`);
 
   const left = row.expiresAt - Math.floor(Date.now() / 1000);
   if (left <= 0) die(`That action expired ${-left}s ago. Ask the session to re-propose it.`);

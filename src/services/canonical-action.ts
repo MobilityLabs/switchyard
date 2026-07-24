@@ -51,7 +51,11 @@ const CANONICAL_KEYS: readonly (keyof CanonicalAction)[] = [
 // silently turns NaN/Infinity into `null` regardless of the replacer, so an
 // upstream coercion bug would otherwise produce a document whose binding field
 // is `null` — a silently weaker signature. Caught here instead.
-const NUMERIC_KEYS: readonly (keyof CanonicalAction)[] = ["pendingActionId", "sessionId", "expiresAt"];
+const NUMERIC_KEYS: readonly (keyof CanonicalAction)[] = [
+  "pendingActionId",
+  "sessionId",
+  "expiresAt",
+];
 
 /**
  * Deterministic serialization. Keys are sorted explicitly rather than trusted to
@@ -65,7 +69,9 @@ export function canonicalizeAction(a: CanonicalAction): string {
   for (const k of NUMERIC_KEYS) {
     const v = a[k];
     if (typeof v === "number" && !Number.isFinite(v)) {
-      throw new SwitchyardError(`canonicalizeAction: ${String(k)} must be a finite number, got ${v}`);
+      throw new SwitchyardError(
+        `canonicalizeAction: ${String(k)} must be a finite number, got ${v}`,
+      );
     }
   }
 

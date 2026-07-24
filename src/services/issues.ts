@@ -324,7 +324,9 @@ export function updateIssue(
         patch.status,
         {
           status: patch.status,
-          ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
+          ...(patch.expectedHeadSha !== undefined
+            ? { expectedHeadSha: patch.expectedHeadSha }
+            : {}),
         },
         expiresAt,
       );

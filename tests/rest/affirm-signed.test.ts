@@ -13,7 +13,11 @@ import { attributionOf } from "../../src/services/attribution.js";
 import { setSetting } from "../../src/services/settings.js";
 import { PendingAffirmation } from "../../src/services/errors.js";
 import { affirmationKeys } from "../../src/db/schema.js";
-import { AFFIRM_NAMESPACE, canonicalizeAction, type CanonicalAction } from "../../src/services/canonical-action.js";
+import {
+  AFFIRM_NAMESPACE,
+  canonicalizeAction,
+  type CanonicalAction,
+} from "../../src/services/canonical-action.js";
 import { createApp } from "../../src/server.js";
 
 // CI has no FIDO hardware, so this generates a SOFTWARE ed25519 key and
@@ -63,7 +67,10 @@ function supervisedRest() {
     name: "kelly",
     type: "human",
   });
-  const { actor: agent, token: agentToken } = createActor(db, { name: "claude-code", type: "agent" });
+  const { actor: agent, token: agentToken } = createActor(db, {
+    name: "claude-code",
+    type: "agent",
+  });
 
   createProject(db, human, { key: "SYD", name: "switchyard" });
   const issue: IssueView = createIssue(db, human, { projectKey: "SYD", title: "Ship the gate" });
@@ -105,7 +112,9 @@ function supervisedRest() {
     pendingId,
     signCanonical: () => signRaw(canonical),
     signOther: () =>
-      signRaw(canonicalizeAction({ ...action, issueRef: `${action.issueRef}-OTHER` } as CanonicalAction)),
+      signRaw(
+        canonicalizeAction({ ...action, issueRef: `${action.issueRef}-OTHER` } as CanonicalAction),
+      ),
   };
 }
 
@@ -124,7 +133,11 @@ describe("GET /api/pending-actions (SYD-243/244)", () => {
       headers: { authorization: `Bearer ${humanToken}` },
     });
     expect(mineRes.status).toBe(200);
-    const mine = (await mineRes.json()) as Array<{ issueRef: string; issueStatus: string; canonical: string }>;
+    const mine = (await mineRes.json()) as Array<{
+      issueRef: string;
+      issueStatus: string;
+      canonical: string;
+    }>;
     expect(mine).toHaveLength(1);
     expect(mine[0].issueRef).toBe("SYD-1");
     // The issue was moved to "todo" before the divert-to-done attempt in
@@ -155,7 +168,9 @@ describe("POST /api/pending-actions/:id/affirm — cookie gating (SYD-242 phase 
       headers: { cookie },
     });
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { error: string }).error).toMatch(/signed affirmation is required/i);
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /signed affirmation is required/i,
+    );
   });
 
   it("still works when the setting is off — Phase 1 unregressed", async () => {

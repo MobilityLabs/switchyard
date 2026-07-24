@@ -42,7 +42,18 @@ export function verifySshSig(args: {
     try {
       execFileSync(
         "ssh-keygen",
-        ["-Y", "verify", "-f", signersPath, "-I", args.principal, "-n", AFFIRM_NAMESPACE, "-s", sigPath],
+        [
+          "-Y",
+          "verify",
+          "-f",
+          signersPath,
+          "-I",
+          args.principal,
+          "-n",
+          AFFIRM_NAMESPACE,
+          "-s",
+          sigPath,
+        ],
         { input: args.message, stdio: ["pipe", "pipe", "pipe"] },
       );
       return true;

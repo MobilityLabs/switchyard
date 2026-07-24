@@ -22,7 +22,8 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 // flag. The ONLY server-side hardware guarantee left is this key-type check
 // at enrollment, so it must reject plain software keys (ssh-ed25519, ssh-rsa,
 // ecdsa-sha2-nistp256) which can sign with no presence check at all.
-const KEY_LINE = /^(sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( .*)?$/;
+const KEY_LINE =
+  /^(sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z0-9+/]+={0,3}( .*)?$/;
 
 // allowed_signers principals are space-separated (see buildAllowedSigners
 // below), so a name with whitespace or a comma would corrupt the line. Shared
@@ -68,7 +69,7 @@ export function enrollAffirmationKey(
       "That is not a hardware security-key public key. Affirmation keys must be a " +
         "FIDO/U2F security key (sk-ssh-ed25519@openssh.com or " +
         "sk-ecdsa-sha2-nistp256@openssh.com) — generate one with e.g. " +
-        '`ssh-keygen -t ed25519-sk -f ~/.ssh/affirm_key`. A plain software key ' +
+        "`ssh-keygen -t ed25519-sk -f ~/.ssh/affirm_key`. A plain software key " +
         "(ssh-ed25519, ssh-rsa, ecdsa-sha2-nistp256) can sign with no PIN, fingerprint, " +
         "or touch, so it cannot stand in for a human — enroll a security key instead.",
     );
@@ -165,5 +166,8 @@ export function buildAllowedSigners(keys: AffirmationKeyRow[], principal: string
         "allowed_signers principal — that field is space-separated and would corrupt the line.",
     );
   }
-  return keys.map((k) => `${principal} namespaces="${AFFIRM_NAMESPACE}" ${k.publicKey}`).join("\n") + "\n";
+  return (
+    keys.map((k) => `${principal} namespaces="${AFFIRM_NAMESPACE}" ${k.publicKey}`).join("\n") +
+    "\n"
+  );
 }
