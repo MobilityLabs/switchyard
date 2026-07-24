@@ -117,6 +117,13 @@ describe("npm-ci-guard.mjs", () => {
     expect(stderr).not.toContain("WARNING");
   });
 
+  // SYD-259: the guard logs the failing tool's `--version` output, or
+  // "unknown" when even that fails (tool absent, or — with a corepack shim —
+  // the workspace's broken package.json corrupting the probe itself). The CI
+  // runner has yarn and no pnpm; a dev Mac may have the opposite. Assert the
+  // version slot is populated with a version-or-unknown, not one specific
+  // machine's toolset, so `npm run verify` is green everywhere the guard
+  // itself behaves correctly.
   it("logs node/yarn version when yarn install fails", () => {
     const workspace = tmpWorkspace();
     writeFileSync(path.join(workspace, "package.json"), "invalid-json");
@@ -126,7 +133,7 @@ describe("npm-ci-guard.mjs", () => {
 
     expect(stderr).toContain("yarn install failed");
     expect(stderr).toContain(`node ${process.version}`);
-    expect(stderr).toContain("yarn 1.");
+    expect(stderr).toMatch(/yarn (\d[\w.-]*|unknown)\)/);
   });
 
   it("logs node/pnpm version when pnpm install fails", () => {
@@ -141,7 +148,7 @@ describe("npm-ci-guard.mjs", () => {
 
     expect(stderr).toContain("pnpm install failed");
     expect(stderr).toContain(`node ${process.version}`);
-    expect(stderr).toContain("pnpm unknown");
+    expect(stderr).toMatch(/pnpm (\d[\w.-]*|unknown)\)/);
   });
 
   it("requires a workspace argument", () => {
