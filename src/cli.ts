@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import { readFileSync } from "node:fs";
 import { openDb } from "./db/index.js";
 import { actors } from "./db/schema.js";
 import { createActor, type Actor } from "./services/actors.js";
@@ -8,11 +9,30 @@ import { openSupervisedSession } from "./services/supervised-sessions.js";
 import { resolveBaseUrl } from "./services/settings.js";
 import { addWebhook, listWebhooks, removeWebhook } from "./services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo } from "./services/github-repos.js";
+import {
+  enrollAffirmationKey,
+  listAffirmationKeys,
+  revokeAffirmationKey,
+} from "./services/affirmation-keys.js";
 import { SwitchyardError } from "./services/errors.js";
 
 // The CLI operates directly on the db file with no HTTP auth, so it stands
 // in for a human operator when calling human-only service functions.
 const cliActor: Actor = { id: 0, name: "cli", type: "human" };
+
+// Resolves a human actor by name, matching mint-supervised-session's inline
+// lookup below — factored out because the affirm-key commands need it three
+// times.
+function requireHumanActor(db: ReturnType<typeof openDb>, name: string): Actor {
+  const row = db.select().from(actors).where(eq(actors.name, name)).get();
+  if (!row) throw new SwitchyardError(`There is no actor named "${name}".`);
+  if (row.type !== "human") {
+    throw new SwitchyardError(
+      `"${name}" is an actor of type "${row.type}", not a human — affirmation keys belong to humans.`,
+    );
+  }
+  return { id: row.id, name: row.name, type: row.type };
+}
 
 const [dbPath, cmd, ...args] = process.argv.slice(2);
 if (!dbPath || !cmd) {
@@ -28,6 +48,11 @@ if (!dbPath || !cmd) {
   );
   console.log("       tsx src/cli.ts <db-path> list-github-repos");
   console.log("       tsx src/cli.ts <db-path> rm-github-repo <id>");
+  console.log(
+    "       tsx src/cli.ts <db-path> add-affirm-key <humanName> <path-to-pubkey> [comment]",
+  );
+  console.log("       tsx src/cli.ts <db-path> list-affirm-keys <humanName>");
+  console.log("       tsx src/cli.ts <db-path> rm-affirm-key <humanName> <id>");
   process.exit(1);
 }
 const db = openDb(dbPath);
@@ -124,6 +149,38 @@ try {
     }
     removeGithubRepo(db, cliActor, Number(id));
     console.log("removed");
+  } else if (cmd === "add-affirm-key") {
+    const [name, keyPath, comment] = args;
+    if (!name || !keyPath) {
+      console.error("add-affirm-key needs: <humanName> <path-to-pubkey> [comment]");
+      process.exit(1);
+    }
+    const human = requireHumanActor(db, name);
+    const key = readFileSync(keyPath, "utf8").trim();
+    const row = enrollAffirmationKey(db, human, human, key, comment);
+    console.log(`Enrolled affirmation key ${row.id} for ${name}${comment ? ` (${comment})` : ""}.`);
+    console.log(
+      "Enroll a second key now — there is no break-glass; redundancy is the recovery story.",
+    );
+  } else if (cmd === "list-affirm-keys") {
+    const [name] = args;
+    if (!name) {
+      console.error("list-affirm-keys needs: <humanName>");
+      process.exit(1);
+    }
+    const human = requireHumanActor(db, name);
+    for (const k of listAffirmationKeys(db, human.id)) {
+      console.log(`${k.id}\t${k.comment ?? "-"}\t${k.publicKey.slice(0, 40)}...`);
+    }
+  } else if (cmd === "rm-affirm-key") {
+    const [name, id] = args;
+    if (!name || !id) {
+      console.error("rm-affirm-key needs: <humanName> <id>");
+      process.exit(1);
+    }
+    const human = requireHumanActor(db, name);
+    revokeAffirmationKey(db, human, Number(id));
+    console.log(`Revoked affirmation key ${id}.`);
   } else {
     console.error(`unknown command "${cmd}"`);
     process.exit(1);

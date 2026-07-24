@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "tsx src/server.ts",
+    "affirm": "tsx src/affirm-cli.ts",
     "build:ui": "vite build --config ui/vite.config.ts",
     "dev:ui": "vite --config ui/vite.config.ts",
     "test": "vitest run",

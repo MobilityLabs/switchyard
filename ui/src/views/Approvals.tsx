@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { affirmPendingAction, listIssues, listPendingActions } from "../api";
+import { affirmPendingAction, listPendingActions, listSettings } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { href } from "../router";
@@ -20,11 +20,11 @@ function age(unixSeconds: number): string {
 
 function ApprovalRow({
   action,
-  issueRef,
+  requiresSignature,
   onAffirmed,
 }: {
   action: PendingAction;
-  issueRef: string | null;
+  requiresSignature: boolean;
   onAffirmed: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -47,19 +47,28 @@ function ApprovalRow({
 
   return (
     <li className="session-row panel">
-      {issueRef ? (
-        <a className="ref" href={href({ view: "issue", ref: issueRef })}>
-          {issueRef}
+      {action.issueRef ? (
+        <a className="ref" href={href({ view: "issue", ref: action.issueRef })}>
+          {action.issueRef}
         </a>
       ) : (
         <span className="ref">issue #{action.issueId}</span>
       )}
       <span className="badge">→ {action.actionType}</span>
       <span className="badge">session #{action.sessionId}</span>
+      {action.viaAgentName && <span className="badge">via {action.viaAgentName}</span>}
       <span className="age">{age(action.createdAt)}</span>
-      <button className="primary" onClick={approve} disabled={affirming}>
-        {affirming ? "Approving…" : "Approve"}
-      </button>
+      {requiresSignature ? (
+        // A click here would 403 (supervised.affirm_requires_signature is on
+        // — see src/rest/pending-actions.ts) — offering a button that 403s is
+        // worse than offering none, so the row explains the CLI path instead
+        // (see the panel-level notice below).
+        <span className="badge">signature required</span>
+      ) : (
+        <button className="primary" onClick={approve} disabled={affirming}>
+          {affirming ? "Approving…" : "Approve"}
+        </button>
+      )}
       {error && (
         <span className="error-bar">
           {error} <button onClick={() => setError(null)}>×</button>
@@ -78,16 +87,17 @@ function ApprovalRow({
 // renders what the endpoint returns and posts the affirm, nothing else.
 export default function Approvals() {
   const queue = usePoll(() => listPendingActions("pending"), []);
-  // Unfiltered issue list, polled at a slower cadence than the queue itself —
-  // used only to resolve issueId -> ref for display. If this fails or an id
-  // isn't found, the row falls back to the honest "issue #<id>" rather than
-  // fabricating a ref.
-  const issues = usePoll(() => listIssues({}), [], 60000);
+  // Whether supervised.affirm_requires_signature is on (phase 2): when it is,
+  // POST /api/pending-actions/:id/affirm always 403s, so the click must not
+  // be offered at all — see ApprovalRow. Polled at the same cadence as the
+  // Config tab's settings poll.
+  const settings = usePoll(listSettings, [], 30000);
 
   if (queue.error && !queue.data) return <p className="error-bar">{queue.error}</p>;
   if (!queue.data) return <p>Loading…</p>;
 
-  const refById = new Map((issues.data ?? []).map((i) => [i.id, i.ref]));
+  const requiresSignature =
+    settings.data?.find((s) => s.key === "supervised.affirm_requires_signature")?.value === true;
 
   return (
     <section className="approvals">
@@ -95,6 +105,12 @@ export default function Approvals() {
       <h2>
         Pending approvals <span className="badge">{queue.data.length}</span>
       </h2>
+      {requiresSignature && (
+        <p className="empty">
+          These need a signed affirmation — run <code>npm run affirm -- &lt;REF&gt;</code> and touch
+          your key. It will ask for a PIN or fingerprint, depending on your key.
+        </p>
+      )}
       {queue.data.length === 0 ? (
         <p className="empty">Nothing waiting on a human.</p>
       ) : (
@@ -103,7 +119,7 @@ export default function Approvals() {
             <ApprovalRow
               key={action.id}
               action={action}
-              issueRef={refById.get(action.issueId) ?? null}
+              requiresSignature={requiresSignature}
               onAffirmed={() => queue.reload()}
             />
           ))}

@@ -34,6 +34,10 @@ export function isHardGated(db: DbOrTx, actionType: string): boolean {
  * whose execution failed on a stale SHA becomes affirmable again once the agent
  * re-proposes with the current one. `targetWhere` must match the index
  * predicate exactly, or SQLite won't resolve the conflict target.
+ *
+ * `expiresAt` is the caller's to compute (the divert derives it from
+ * supervised.affirm_ttl_seconds) and is refreshed on re-proposal alongside the
+ * payload — see the `set` below.
  */
 export function findOrCreatePendingAction(
   db: DbOrTx,
@@ -41,14 +45,17 @@ export function findOrCreatePendingAction(
   issueId: number,
   actionType: string,
   payload: Record<string, unknown>,
+  expiresAt: number,
 ): number {
   const row = db
     .insert(pendingActions)
-    .values({ sessionId, issueId, actionType, payload, status: "pending" })
+    .values({ sessionId, issueId, actionType, payload, status: "pending", expiresAt })
     .onConflictDoUpdate({
       target: [pendingActions.sessionId, pendingActions.issueId, pendingActions.actionType],
       targetWhere: sql`status = 'pending'`,
-      set: { payload },
+      // expiresAt is refreshed alongside payload: a re-proposal restarts the
+      // window, so a row can't be stranded past its TTL by an earlier attempt.
+      set: { payload, expiresAt },
     })
     .returning({ id: pendingActions.id })
     .get();
@@ -86,6 +93,31 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
       "Only a human can affirm a gated action — that affirmation is the whole point of the gate.",
     );
   }
+  // Expiry is settled before the transaction opens: the `expired` marking must
+  // SURVIVE, and a throw inside db.transaction would roll its own writes back
+  // along with it. The in-transaction claim below (`WHERE status = 'pending'`)
+  // still guards the race if a concurrent affirm lands between this read and
+  // that claim.
+  //
+  // But this pre-block is a write, and it must not run before the owner tie is
+  // checked — otherwise any authenticated human could flip a stranger's overdue
+  // row to `expired` before authorization ever runs. So the ownership check is
+  // duplicated here (cheaply: it's a read) rather than moved. A non-owner falls
+  // through unchanged into the transaction, which throws the usual owner-tie
+  // error with no write having happened.
+  const pre = getPendingAction(db, id);
+  if (pre && pre.status === "pending" && pre.expiresAt < nowSec()) {
+    const preSession = db.select().from(sessions).where(eq(sessions.id, pre.sessionId)).get();
+    if (preSession && preSession.actorId === human.id) {
+      db.update(pendingActions)
+        .set({ status: "expired" })
+        .where(and(eq(pendingActions.id, id), eq(pendingActions.status, "pending")))
+        .run();
+      throw new SwitchyardError(
+        `Pending action ${id} expired — an affirmation that outlives your attention is a bearer token with extra steps. Re-propose it from the session to affirm.`,
+      );
+    }
+  }
   return db.transaction((tx) => {
     // Read inside the transaction so the payload we execute is the one the
     // claim below locks — a concurrent re-proposal refreshing it can't slip
@@ -104,6 +136,14 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
       throw new SwitchyardError(
         `Pending action ${id}'s session has been closed or expired — its proposals are revoked. Re-propose from a live session to affirm.`,
       );
+    }
+    // Defense in depth: the pre-transaction block already rejects expired rows,
+    // but ONLY for the owning human. This makes row-expiry independent of the
+    // ownership rule, so a future change loosening the owner-tie can't reach the
+    // claim with an expired row. Throw only — the pre-block owns the `expired`
+    // marking, so there is nothing to roll back here.
+    if (row.expiresAt < nowSec()) {
+      throw new SwitchyardError(`Pending action ${id} expired.`);
     }
     if (row.actionType !== "done") {
       throw new SwitchyardError(

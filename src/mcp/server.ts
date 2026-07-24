@@ -4,7 +4,7 @@ import type { Db } from "../db/index.js";
 import { STATUSES, PRIORITIES } from "../db/schema.js";
 import type { Actor } from "../services/actors.js";
 import type { Attribution } from "../services/attribution.js";
-import { SwitchyardError } from "../services/errors.js";
+import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import { listProjects } from "../services/projects.js";
 import {
   createIssue,
@@ -41,6 +41,10 @@ function guard<A>(fn: (args: A) => unknown): (args: A) => Promise<ToolResult> {
     try {
       return ok(await fn(args));
     } catch (err) {
+      // Parked is a SUCCESS: the agent's job now is to tell its human what to
+      // affirm, not to retry or report a failure. Returning isError here would
+      // invite exactly the retry loop the dedup upsert exists to absorb.
+      if (err instanceof PendingAffirmation) return ok(err.pending);
       if (err instanceof SwitchyardError) {
         return { content: [{ type: "text", text: err.message }], isError: true };
       }

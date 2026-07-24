@@ -13,7 +13,8 @@ import {
 } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
-import { SwitchyardError } from "./errors.js";
+import { SwitchyardError, PendingAffirmation } from "./errors.js";
+import { canonicalizeAction, type CanonicalAction } from "./canonical-action.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { getOpenBlockers } from "./dependencies.js";
@@ -314,6 +315,8 @@ export function updateIssue(
       // the executor re-drives updateIssue at affirm time, which re-validates every
       // guard (incl. the SYD-208 head pin) against current state: it either no-ops
       // (already done) or throws and rolls back, leaving the row pending.
+      const expiresAt =
+        Math.floor(Date.now() / 1000) + getSetting(db, "supervised.affirm_ttl_seconds");
       const pendingActionId = findOrCreatePendingAction(
         db,
         attr.sessionId,
@@ -325,10 +328,23 @@ export function updateIssue(
             ? { expectedHeadSha: patch.expectedHeadSha }
             : {}),
         },
+        expiresAt,
       );
-      throw new SwitchyardError(
-        `Awaiting human affirmation: ${ref} → ${patch.status} is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`,
-      );
+      const action: CanonicalAction = {
+        v: 1,
+        pendingActionId,
+        sessionId: attr.sessionId,
+        issueRef: target.ref,
+        actionType: patch.status,
+        ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
+        expiresAt,
+      };
+      throw new PendingAffirmation({
+        pendingActionId,
+        canonical: canonicalizeAction(action),
+        action,
+        instructions: `${ref} -> ${patch.status} is hard-gated. Nothing was changed. A human must run: syd affirm ${ref}`,
+      });
     }
   }
   return db.transaction((tx) => {

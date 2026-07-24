@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 //
-// SYD phase 1 task 8: the approval-queue panel is the human-presence surface
-// for supervised sessions' hard-gate — a click on a surface Claude cannot
-// drive. Covers the happy path (Approve removes the row) and a 4xx affirm
-// failure staying visible inline rather than silently vanishing.
+// SYD phase 1 task 8 / phase 2 task 10: the approval-queue panel is the
+// human-presence surface for supervised sessions' hard-gate — a click on a
+// surface Claude cannot drive. Covers the happy path (Approve removes the
+// row), a 4xx affirm failure staying visible inline rather than silently
+// vanishing, and (phase 2) that the panel never offers a button that would
+// 403 when supervised.affirm_requires_signature is on (SYD-242), and that it
+// no longer polls the whole issue list to resolve a ref (SYD-244).
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { Issue, PendingAction } from "../types";
+import type { Issue, PendingAction, SettingView } from "../types";
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
@@ -16,10 +19,17 @@ vi.mock("../api", async (importOriginal) => {
     listPendingActions: vi.fn(() => Promise.resolve([] as PendingAction[])),
     listIssues: vi.fn(() => Promise.resolve([] as Issue[])),
     affirmPendingAction: vi.fn(),
+    listSettings: vi.fn(() => Promise.resolve([] as SettingView[])),
   };
 });
 
-import { listPendingActions, listIssues, affirmPendingAction, ApiError } from "../api";
+import {
+  listPendingActions,
+  listIssues,
+  affirmPendingAction,
+  listSettings,
+  ApiError,
+} from "../api";
 import Approvals from "./Approvals";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -35,33 +45,24 @@ function pendingAction(overrides: Partial<PendingAction> = {}): PendingAction {
     affirmedById: null,
     affirmedAt: null,
     createdAt: Math.floor(Date.now() / 1000) - 120,
+    expiresAt: Math.floor(Date.now() / 1000) + 300,
+    issueRef: "SYD-42",
+    issueStatus: "in_progress",
+    canonical: '{"v":1}',
+    viaAgentName: null,
     ...overrides,
   };
 }
 
-const ISSUE: Issue = {
-  id: 42,
-  ref: "SYD-42",
-  title: "Ship the thing",
-  description: "",
-  summary: null,
-  status: "in_progress",
-  priority: "medium",
-  assigneeId: null,
-  creatorId: 1,
-  labels: [],
-  workerPreference: null,
-  parentId: null,
-  sourceType: null,
-  sourceDetail: null,
-  sourceUrl: null,
-  needsInput: false,
-  snoozedUntil: null,
-  createdAt: 1,
-  updatedAt: 1,
-  attention: null,
-  openPr: null,
-};
+function signatureSetting(required: boolean): SettingView {
+  return {
+    key: "supervised.affirm_requires_signature",
+    value: required,
+    default: false,
+    isDefault: !required,
+    description: "Require a hardware-signed affirmation to release a gated action.",
+  };
+}
 
 async function renderApprovals(): Promise<HTMLElement> {
   const container = document.createElement("div");
@@ -85,29 +86,33 @@ function buttonIn(scope: Element, label: string): HTMLButtonElement {
   return b;
 }
 
+function findButton(scope: Element, label: string): HTMLButtonElement | undefined {
+  return [...scope.querySelectorAll("button")].find((x) => x.textContent === label);
+}
+
 afterEach(() => {
   vi.mocked(listPendingActions).mockReset();
   vi.mocked(listIssues).mockReset();
   vi.mocked(affirmPendingAction).mockReset();
+  vi.mocked(listSettings).mockReset();
 });
 
 describe("Approvals view", () => {
   it("shows the empty state when nothing is pending", async () => {
     vi.mocked(listPendingActions).mockResolvedValue([]);
-    vi.mocked(listIssues).mockResolvedValue([]);
     const container = await renderApprovals();
     expect(container.textContent).toContain("Nothing waiting on a human");
   });
 
-  it("renders a queued row with its resolved issue ref, then removes it on Approve", async () => {
+  it("renders a queued row's ref straight from the endpoint, then removes it on Approve, without polling the issue list", async () => {
     vi.mocked(listPendingActions).mockResolvedValue([pendingAction()]);
-    vi.mocked(listIssues).mockResolvedValue([ISSUE]);
-    vi.mocked(affirmPendingAction).mockResolvedValue(ISSUE);
+    vi.mocked(affirmPendingAction).mockResolvedValue({} as Issue);
     const container = await renderApprovals();
 
     expect(container.querySelector('a[href="/issue/SYD-42"]')).not.toBeNull();
     expect(container.textContent).toContain("done");
     expect(container.textContent).toContain("session #5");
+    expect(listIssues).not.toHaveBeenCalled();
 
     // Approve re-polls the queue; simulate the row disappearing server-side.
     vi.mocked(listPendingActions).mockResolvedValue([]);
@@ -117,9 +122,10 @@ describe("Approvals view", () => {
     expect(container.textContent).toContain("Nothing waiting on a human");
   });
 
-  it("falls back to the honest issue id when the ref can't be resolved, never fabricating one", async () => {
-    vi.mocked(listPendingActions).mockResolvedValue([pendingAction({ issueId: 999 })]);
-    vi.mocked(listIssues).mockResolvedValue([]);
+  it("falls back to the honest issue id when the endpoint returns no ref, never fabricating one", async () => {
+    vi.mocked(listPendingActions).mockResolvedValue([
+      pendingAction({ issueId: 999, issueRef: null }),
+    ]);
     const container = await renderApprovals();
     expect(container.textContent).toContain("issue #999");
     expect(container.querySelector("a.ref")).toBeNull();
@@ -127,7 +133,6 @@ describe("Approvals view", () => {
 
   it("keeps the row and surfaces the error message inline when affirm 400s (e.g. head moved)", async () => {
     vi.mocked(listPendingActions).mockResolvedValue([pendingAction()]);
-    vi.mocked(listIssues).mockResolvedValue([ISSUE]);
     vi.mocked(affirmPendingAction).mockRejectedValue(
       new ApiError(400, "Pending action 1 is no longer pending — re-review."),
     );
@@ -138,5 +143,31 @@ describe("Approvals view", () => {
     expect(container.textContent).toContain("re-review");
     // The row itself is still there — a failed affirm must not look approved.
     expect(container.querySelector('a[href="/issue/SYD-42"]')).not.toBeNull();
+  });
+
+  it("shows which agent proposed the action", async () => {
+    vi.mocked(listPendingActions).mockResolvedValue([
+      pendingAction({ viaAgentName: "claude/dev" }),
+    ]);
+    const container = await renderApprovals();
+    expect(container.textContent).toContain("claude/dev");
+  });
+
+  it("still shows Approve when signatures are not required", async () => {
+    vi.mocked(listPendingActions).mockResolvedValue([pendingAction()]);
+    vi.mocked(listSettings).mockResolvedValue([signatureSetting(false)]);
+    const container = await renderApprovals();
+    expect(findButton(container, "Approve")).not.toBeUndefined();
+  });
+
+  it("hides Approve and explains why when signatures are required", async () => {
+    vi.mocked(listPendingActions).mockResolvedValue([pendingAction()]);
+    vi.mocked(listSettings).mockResolvedValue([signatureSetting(true)]);
+    const container = await renderApprovals();
+
+    expect(container.querySelector('a[href="/issue/SYD-42"]')).not.toBeNull();
+    expect(findButton(container, "Approve")).toBeUndefined();
+    expect(container.textContent).toContain("npm run affirm -- <REF>");
+    expect(container.textContent).toContain("PIN or fingerprint, depending on your key");
   });
 });

@@ -6,13 +6,15 @@ import { boardColumnCounts, type BoardColumnCounts } from "./board-column-counts
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 
-type SettingType = "string" | "number" | "string[]";
+type SettingType = "string" | "number" | "string[]" | "boolean";
 
 type ValueOfType<T extends SettingType> = T extends "number"
   ? number
-  : T extends "string[]"
-    ? string[]
-    : string;
+  : T extends "boolean"
+    ? boolean
+    : T extends "string[]"
+      ? string[]
+      : string;
 
 type RegistryEntry<T extends SettingType = SettingType> = {
   type: T;
@@ -57,6 +59,25 @@ export const REGISTRY = {
   "wip.limit.todo": { type: "number", default: 0 },
   "wip.limit.in_progress": { type: "number", default: 0 },
   "wip.limit.in_review": { type: "number", default: 5 },
+  // Phase 2 (affirmation relay). When true, POST /api/pending-actions/:id/affirm
+  // (the Phase 1 cookie click) is refused and only a signed affirmation releases
+  // a gated action. Default false: merging Phase 2 changes nothing until this is
+  // deliberately switched on. Leaving the click enabled alongside signatures
+  // would BE the break-glass the design rejected — one gate, one strength.
+  "supervised.affirm_requires_signature": {
+    type: "boolean",
+    default: false,
+    description:
+      "Require a hardware-signed affirmation (ssh-keygen -Y sign against an enrolled FIDO key) to release a gated action. When true, the web Approve button is refused.",
+  },
+  // Short by design: an affirmation that outlives the human's attention is a
+  // bearer token with extra steps. Signed into the canonical doc, so it cannot
+  // be extended after the fact.
+  "supervised.affirm_ttl_seconds": {
+    type: "number",
+    default: 300,
+    description: "How long a parked action stays affirmable before it expires.",
+  },
 } satisfies Record<string, RegistryEntry>;
 
 // The gated actions an affirmation can actually carry out. Gating anything else
@@ -112,6 +133,10 @@ function validateValue(key: SettingKey, value: unknown): void {
       throw new SwitchyardError(
         `Setting "${key}" must be ${key.startsWith("wip.limit.") ? "a non-negative" : "a positive"} integer.`,
       );
+    }
+  } else if (entry.type === "boolean") {
+    if (typeof value !== "boolean") {
+      throw new SwitchyardError(`Setting "${key}" must be true or false.`);
     }
   } else {
     if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
