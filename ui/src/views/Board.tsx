@@ -2,7 +2,7 @@ import { useState } from "react";
 import { listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
-import { href, navigate } from "../router";
+import { href, issueRoute, navigate } from "../router";
 import type { Issue, Status } from "../types";
 import { attentionChip } from "../attention";
 
@@ -165,7 +165,7 @@ export function Card({
   issue: Issue;
   onMove?: (ref: string, status: Status) => void;
 }) {
-  const open = () => navigate({ view: "issue", ref: issue.ref });
+  const open = () => navigate(issueRoute(issue.ref));
   return (
     <article
       className="card"
@@ -188,7 +188,7 @@ export function Card({
         }
       }}
     >
-      <a className="ref" href={href({ view: "issue", ref: issue.ref })}>
+      <a className="ref" href={href(issueRoute(issue.ref))}>
         {issue.ref}
       </a>
       <p>{issue.title}</p>

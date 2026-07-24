@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 //
-// SYD-55: leaving the board (e.g. for triage) and clicking "Board" again
-// should return to the same project, not silently fall back to whatever
-// project happens to be first in the list.
+// SYD-254: scope-first routing — the first path segment of every route
+// except /settings is the scope (a project key, or the reserved lowercase
+// "all" for cross-project views). Legacy view-first paths still parse (old
+// bookmarks, refs in markdown comments) and useRoute canonicalizes the
+// address bar to the scope-first form via replaceState.
 import { describe, expect, it, beforeEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -11,9 +13,11 @@ import {
   href,
   isIssueRef,
   isKnownPath,
+  issueRoute,
   navigate,
   parsePath,
   redirect,
+  scopeProject,
   useRoute,
 } from "./router";
 
@@ -33,45 +37,186 @@ async function mountRoute(): Promise<void> {
   });
 }
 
+describe("scope-first routes", () => {
+  it("parses every scoped view", () => {
+    expect(parsePath("/SYD/triage")).toEqual({ view: "triage", scope: "SYD" });
+    expect(parsePath("/all/triage")).toEqual({ view: "triage", scope: "all" });
+    expect(parsePath("/SYD/board")).toEqual({ view: "board", scope: "SYD" });
+    expect(parsePath("/SYD/issue/SYD-66")).toEqual({ view: "issue", scope: "SYD", ref: "SYD-66" });
+    expect(parsePath("/SYD/review")).toEqual({ view: "review", scope: "SYD", ref: null });
+    expect(parsePath("/all/review")).toEqual({ view: "review", scope: "all", ref: null });
+    expect(parsePath("/all/review/SYD-66")).toEqual({
+      view: "review",
+      scope: "all",
+      ref: "SYD-66",
+    });
+    expect(parsePath("/SYD/new")).toEqual({ view: "new-issue", scope: "SYD" });
+    expect(parsePath("/SYD/search", "?q=auth%20bug")).toEqual({
+      view: "search",
+      scope: "SYD",
+      query: "auth bug",
+    });
+    expect(parsePath("/all/agents")).toEqual({ view: "agents", scope: "all" });
+    expect(parsePath("/all/approvals")).toEqual({ view: "approvals", scope: "all" });
+  });
+
+  it("round-trips href for every scoped view", () => {
+    expect(href({ view: "triage", scope: "all" })).toBe("/all/triage");
+    expect(href({ view: "triage", scope: "SYD" })).toBe("/SYD/triage");
+    expect(href({ view: "board", scope: "SYD" })).toBe("/SYD/board");
+    expect(href({ view: "issue", scope: "SYD", ref: "SYD-66" })).toBe("/SYD/issue/SYD-66");
+    expect(href({ view: "review", scope: "SYD", ref: null })).toBe("/SYD/review");
+    expect(href({ view: "review", scope: "all", ref: "SYD-66" })).toBe("/all/review/SYD-66");
+    expect(href({ view: "new-issue", scope: "all" })).toBe("/all/new");
+    expect(href({ view: "search", scope: "SYD", query: "auth bug" })).toBe(
+      "/SYD/search?q=auth%20bug",
+    );
+    expect(href({ view: "search", scope: "SYD", query: "" })).toBe("/SYD/search");
+    expect(href({ view: "agents", scope: "HEX" })).toBe("/HEX/agents");
+    expect(href({ view: "approvals", scope: "all" })).toBe("/all/approvals");
+  });
+
+  it("board needs a concrete project key — /all/board is not a route", () => {
+    expect(isKnownPath("/all/board")).toBe(false);
+  });
+
+  it("/all/issue/:ref is known — the ref supplies the concrete scope", () => {
+    expect(parsePath("/all/issue/SYD-66")).toEqual({ view: "issue", scope: "SYD", ref: "SYD-66" });
+  });
+
+  it("the ref wins a ref-vs-scope mismatch", () => {
+    expect(parsePath("/SYD/issue/HEX-3")).toEqual({ view: "issue", scope: "HEX", ref: "HEX-3" });
+  });
+
+  it("rejects malformed scope segments", () => {
+    expect(isKnownPath("/syd/board")).toBe(false);
+    expect(isKnownPath("/TOOLONGPROJECTKEY/board")).toBe(false);
+    expect(isKnownPath("/SYD/bogus")).toBe(false);
+  });
+
+  it("scopeProject maps 'all' to null and a key to itself", () => {
+    expect(scopeProject("all")).toBeNull();
+    expect(scopeProject("SYD")).toBe("SYD");
+  });
+
+  it("issueRoute derives the scope from the ref", () => {
+    expect(issueRoute("HEX-3")).toEqual({ view: "issue", scope: "HEX", ref: "HEX-3" });
+  });
+});
+
+describe("legacy redirects (old shape parses to the new Route)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("maps every legacy row from the spec table", () => {
+    expect(parsePath("/triage")).toEqual({ view: "triage", scope: "all" });
+    expect(parsePath("/triage/SYD")).toEqual({ view: "triage", scope: "SYD" });
+    expect(parsePath("/board/SYD")).toEqual({ view: "board", scope: "SYD" });
+    expect(parsePath("/issue/SYD-66")).toEqual({ view: "issue", scope: "SYD", ref: "SYD-66" });
+    expect(parsePath("/review")).toEqual({ view: "review", scope: "all", ref: null });
+    expect(parsePath("/review/SYD")).toEqual({ view: "review", scope: "SYD", ref: null });
+    expect(parsePath("/review/SYD-66")).toEqual({ view: "review", scope: "SYD", ref: "SYD-66" });
+    expect(parsePath("/new")).toEqual({ view: "new-issue", scope: "all" });
+    expect(parsePath("/agents")).toEqual({ view: "agents", scope: "all" });
+    expect(parsePath("/approvals")).toEqual({ view: "approvals", scope: "all" });
+    expect(parsePath("/search", "?q=x")).toEqual({ view: "search", scope: "all", query: "x" });
+  });
+
+  it("legacy paths stay known paths so the anchor interceptor catches markdown links", () => {
+    expect(isKnownPath("/issue/SYD-66")).toBe(true);
+    expect(isKnownPath("/board/SYD")).toBe(true);
+    expect(isKnownPath("/triage")).toBe(true);
+    expect(isKnownPath("/review/SYD-66")).toBe(true);
+  });
+
+  it("bare / lands on the last concrete scope's triage, else all", () => {
+    expect(parsePath("/")).toEqual({ view: "triage", scope: "all" });
+    localStorage.setItem("switchyard:last-project", "SYD");
+    expect(parsePath("/")).toEqual({ view: "triage", scope: "SYD" });
+  });
+});
+
+describe("useRoute canonicalization", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.body.innerHTML = "";
+  });
+
+  it("replaces a legacy URL with its canonical scope-first form", async () => {
+    history.replaceState(null, "", "/issue/SYD-66");
+    await mountRoute();
+    expect(location.pathname).toBe("/SYD/issue/SYD-66");
+  });
+
+  it("rewrites a mismatched issue scope to the ref's project", async () => {
+    history.replaceState(null, "", "/SYD/issue/HEX-3");
+    await mountRoute();
+    expect(location.pathname).toBe("/HEX/issue/HEX-3");
+  });
+
+  it("leaves an already-canonical URL alone", async () => {
+    history.replaceState(null, "", "/SYD/board");
+    await mountRoute();
+    expect(location.pathname).toBe("/SYD/board");
+  });
+
+  it("carries the search query through canonicalization", async () => {
+    history.replaceState(null, "", "/search?q=auth%20bug");
+    await mountRoute();
+    expect(location.pathname).toBe("/all/search");
+    expect(location.search).toBe("?q=auth%20bug");
+  });
+});
+
+// SYD-55, generalized by SYD-254: the last *concrete* project scope seen on
+// any scoped view is remembered, so bare "/" and the Board link from an
+// all-scope view return to the project you were working in.
 describe("last-project memory", () => {
   beforeEach(() => {
     localStorage.clear();
-    history.replaceState(null, "", "/");
+    history.replaceState(null, "", "/all/triage");
+    document.body.innerHTML = "";
   });
 
-  it("has no remembered project before any board visit", () => {
+  it("has no remembered project before any scoped visit", () => {
     expect(getLastProject()).toBeNull();
   });
 
   it("remembers the project after useRoute observes a board route", async () => {
     await mountRoute();
     await act(async () => {
-      navigate({ view: "board", project: "SYD" });
+      navigate({ view: "board", scope: "SYD" });
     });
     expect(getLastProject()).toBe("SYD");
   });
 
-  it("keeps the last board project after navigating away to triage", async () => {
+  it("remembers the project from any scoped view, not just board", async () => {
     await mountRoute();
     await act(async () => {
-      navigate({ view: "board", project: "ACME" });
+      navigate({ view: "agents", scope: "HEX" });
     });
-    expect(getLastProject()).toBe("ACME");
+    expect(getLastProject()).toBe("HEX");
+  });
 
+  it("keeps the memory when moving to an all-scope view", async () => {
+    await mountRoute();
     await act(async () => {
-      navigate({ view: "triage", project: null });
+      navigate({ view: "board", scope: "ACME" });
     });
-    // Still ACME: triage isn't a board route, so it must not clear the memory.
+    await act(async () => {
+      navigate({ view: "triage", scope: "all" });
+    });
     expect(getLastProject()).toBe("ACME");
   });
 
-  it("updates the memory when switching to a different project's board", async () => {
+  it("updates the memory when switching to a different project", async () => {
     await mountRoute();
     await act(async () => {
-      navigate({ view: "board", project: "SYD" });
+      navigate({ view: "board", scope: "SYD" });
     });
     await act(async () => {
-      navigate({ view: "board", project: "ACME" });
+      navigate({ view: "board", scope: "ACME" });
     });
     expect(getLastProject()).toBe("ACME");
   });
@@ -79,109 +224,59 @@ describe("last-project memory", () => {
 
 // SYD-75: the ref lives in the URL so reload/back/forward preserve the item
 // being reviewed instead of it drifting with the polled list's order.
-describe("review route", () => {
+describe("review navigation history semantics", () => {
   beforeEach(() => {
-    history.replaceState(null, "", "/");
-  });
-
-  it("parses bare /review with no ref", () => {
-    expect(parsePath("/review")).toEqual({ view: "review", project: null, ref: null });
-  });
-
-  it("parses /review/:ref, implying the ref's own project as the scope", () => {
-    expect(parsePath("/review/SYD-66")).toEqual({ view: "review", project: "SYD", ref: "SYD-66" });
-  });
-
-  it("builds hrefs with and without a ref", () => {
-    expect(href({ view: "review", project: null, ref: null })).toBe("/review");
-    expect(href({ view: "review", project: "SYD", ref: "SYD-66" })).toBe("/review/SYD-66");
+    localStorage.clear();
+    history.replaceState(null, "", "/all/triage");
+    document.body.innerHTML = "";
   });
 
   it("navigate pushes a new history entry per ref, so each is its own back-button stop", async () => {
     await mountRoute();
     const before = history.length;
     await act(async () => {
-      navigate({ view: "review", project: "SYD", ref: "SYD-1" });
+      navigate({ view: "review", scope: "SYD", ref: "SYD-1" });
     });
-    expect(location.pathname).toBe("/review/SYD-1");
+    expect(location.pathname).toBe("/SYD/review/SYD-1");
     expect(history.length).toBe(before + 1);
     await act(async () => {
-      navigate({ view: "review", project: "SYD", ref: "SYD-2" });
+      navigate({ view: "review", scope: "SYD", ref: "SYD-2" });
     });
-    expect(location.pathname).toBe("/review/SYD-2");
+    expect(location.pathname).toBe("/SYD/review/SYD-2");
     expect(history.length).toBe(before + 2);
   });
 
   it("redirect replaces the current entry instead of pushing a new one", async () => {
     await mountRoute();
     await act(async () => {
-      navigate({ view: "review", project: null, ref: null });
+      navigate({ view: "review", scope: "SYD", ref: null });
     });
-    expect(location.pathname).toBe("/review");
+    expect(location.pathname).toBe("/SYD/review");
     const before = history.length;
     await act(async () => {
-      redirect({ view: "review", project: "SYD", ref: "SYD-1" });
+      redirect({ view: "review", scope: "SYD", ref: "SYD-1" });
     });
-    expect(location.pathname).toBe("/review/SYD-1");
-    // Bare /review never became its own back-button stop.
+    expect(location.pathname).toBe("/SYD/review/SYD-1");
+    // Bare /SYD/review never became its own back-button stop.
     expect(history.length).toBe(before);
   });
 });
 
-// SYD-77: Triage and Review are project-scoped like Board, but a bare path
-// means "All projects" so existing links/bookmarks keep working.
-describe("triage/review project scoping", () => {
-  it("parses bare paths as All projects", () => {
-    expect(parsePath("/")).toEqual({ view: "triage", project: null });
-    expect(parsePath("/triage")).toEqual({ view: "triage", project: null });
-    expect(parsePath("/review")).toEqual({ view: "review", project: null, ref: null });
-  });
-
-  it("parses a project-scoped triage/review path", () => {
-    expect(parsePath("/triage/SYD")).toEqual({ view: "triage", project: "SYD" });
-    expect(parsePath("/review/SYD")).toEqual({ view: "review", project: "SYD", ref: null });
-  });
-
-  it("round-trips href for both bare and project-scoped routes", () => {
-    expect(href({ view: "triage", project: null })).toBe("/");
-    expect(href({ view: "triage", project: "SYD" })).toBe("/triage/SYD");
-    expect(href({ view: "review", project: null, ref: null })).toBe("/review");
-    expect(href({ view: "review", project: "SYD", ref: null })).toBe("/review/SYD");
-  });
-
-  it("treats an issue ref (with a -NUMBER suffix) as a specific selection, not a project key", () => {
-    // "SYD-66" isn't a bare project key (2-10 uppercase letters), so /review
-    // reads it as a ref and scopes to its project. Triage has no per-ref
-    // concept, so the same segment there falls through to the default.
-    expect(parsePath("/review/SYD-66")).toEqual({ view: "review", project: "SYD", ref: "SYD-66" });
-    expect(parsePath("/triage/SYD-66")).toEqual({ view: "triage", project: null });
-  });
-});
-
-// SYD-86: /search?q=… is the shareable/back-navigable results route; the
-// query lives in the search string, not the path, so parsePath needs both.
+// SYD-86: /:scope/search?q=… is the shareable results route; the query lives
+// in the search string, not the path, so parsePath needs both.
 describe("search route", () => {
-  it("parses /search with no query as an empty search", () => {
-    expect(parsePath("/search")).toEqual({ view: "search", query: "" });
-  });
-
-  it("parses /search?q=… into the query", () => {
-    expect(parsePath("/search", "?q=auth%20bug")).toEqual({ view: "search", query: "auth bug" });
-  });
-
-  it("builds hrefs with and without a query, encoding special characters", () => {
-    expect(href({ view: "search", query: "" })).toBe("/search");
-    expect(href({ view: "search", query: "auth bug" })).toBe("/search?q=auth%20bug");
+  it("parses a scoped /search with no query as an empty search", () => {
+    expect(parsePath("/all/search")).toEqual({ view: "search", scope: "all", query: "" });
   });
 
   it("round-trips a query through href and parsePath", () => {
-    const route = { view: "search" as const, query: "SYD-1 & friends" };
+    const route = { view: "search" as const, scope: "SYD", query: "SYD-1 & friends" };
     const url = new URL(href(route), "http://localhost");
     expect(parsePath(url.pathname, url.search)).toEqual(route);
   });
 
   it("is a known path so the anchor interceptor and popstate handling pick it up", () => {
-    expect(isKnownPath("/search")).toBe(true);
+    expect(isKnownPath("/all/search")).toBe(true);
   });
 });
 
@@ -202,16 +297,9 @@ describe("issue ref fast-path", () => {
   });
 });
 
-describe("agents route (SYD-43)", () => {
-  it("parses /agents", () => {
-    expect(parsePath("/agents")).toEqual({ view: "agents" });
-  });
-  it("round-trips through href", () => {
-    expect(href({ view: "agents" })).toBe("/agents");
-  });
-});
-
-describe("settings route (SYD-158)", () => {
+// SYD-158, unchanged by SYD-254: settings is global, so it keeps its
+// unprefixed path — the one route family with no scope segment.
+describe("settings route", () => {
   it("parses /settings to the default projects tab", () => {
     expect(parsePath("/settings")).toEqual({ view: "settings", tab: "projects" });
   });
@@ -220,9 +308,10 @@ describe("settings route (SYD-158)", () => {
       expect(parsePath(`/settings/${tab}`)).toEqual({ view: "settings", tab });
     }
   });
-  it("treats unknown tabs as an unknown path (falls back to triage)", () => {
+  it("treats unknown tabs as an unknown path (falls back to the default route)", () => {
+    localStorage.clear();
     expect(isKnownPath("/settings/bogus")).toBe(false);
-    expect(parsePath("/settings/bogus")).toEqual({ view: "triage", project: null });
+    expect(parsePath("/settings/bogus")).toEqual({ view: "triage", scope: "all" });
   });
   it("round-trips through href", () => {
     expect(href({ view: "settings", tab: "projects" })).toBe("/settings");
