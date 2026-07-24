@@ -232,6 +232,154 @@ function checkProjectStack(
 }
 
 /**
+ * Fetches actually-reporting check-runs and statuses for the latest commit
+ * on the specified ref (branch/commit/etc.) using the `gh api` CLI.
+ */
+function discoverRequiredChecks(owner: string, repo: string, ref: string): string[] {
+  const checkRunsRes = spawnSync(
+    "gh",
+    ["api", `repos/${owner}/${repo}/commits/${ref}/check-runs`],
+    { encoding: "utf8" }
+  );
+  const checkRuns: string[] = [];
+  if (checkRunsRes.status === 0) {
+    try {
+      const parsed = JSON.parse(checkRunsRes.stdout);
+      if (parsed && Array.isArray(parsed.check_runs)) {
+        for (const run of parsed.check_runs) {
+          if (run && typeof run.name === "string" && run.name.trim() !== "") {
+            checkRuns.push(run.name.trim());
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const statusesRes = spawnSync(
+    "gh",
+    ["api", `repos/${owner}/${repo}/commits/${ref}/statuses`],
+    { encoding: "utf8" }
+  );
+  const statuses: string[] = [];
+  if (statusesRes.status === 0) {
+    try {
+      const parsed = JSON.parse(statusesRes.stdout);
+      if (Array.isArray(parsed)) {
+        for (const status of parsed) {
+          if (status && typeof status.context === "string" && status.context.trim() !== "") {
+            statuses.push(status.context.trim());
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return Array.from(new Set([...checkRuns, ...statuses]));
+}
+
+/**
+ * Doctor check (SYD-252): verifies that the branch protection required checks for
+ * the integration branch (e.g., `main` or project.baseBranch) are actually reporting
+ * on the latest commit. If they aren't, the branch is permanently unmergeable!
+ * Also flags mismatch if switchyard-worker.json `requiredChecks` does not match the
+ * required checks on GitHub.
+ */
+function checkRequiredChecks(
+  key: string,
+  project: WorkerProject,
+): CheckResult[] {
+  const results: CheckResult[] = [];
+  const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], {
+    encoding: "utf8",
+  });
+  if (remote.status !== 0) {
+    return results;
+  }
+  const parsed = parseGithubRemote(remote.stdout.trim());
+  if (!parsed) {
+    return results;
+  }
+
+  const baseBranch = project.baseBranch || "main";
+
+  const auth = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
+  if (auth.status !== 0) {
+    return results;
+  }
+
+  const protectionRes = spawnSync(
+    "gh",
+    ["api", `repos/${parsed.owner}/${parsed.repo}/branches/${baseBranch}/protection`],
+    { encoding: "utf8" }
+  );
+
+  let githubRequired: string[] = [];
+  let isProtected = false;
+
+  if (protectionRes.status === 0) {
+    isProtected = true;
+    try {
+      const protection = JSON.parse(protectionRes.stdout);
+      const rsc = protection?.required_status_checks;
+      if (rsc) {
+        const contexts = Array.isArray(rsc.contexts) ? rsc.contexts : [];
+        const checks = Array.isArray(rsc.checks)
+          ? rsc.checks
+              .map((c: { context?: string }) => c?.context)
+              .filter((ctx: unknown): ctx is string => typeof ctx === "string" && ctx !== "")
+          : [];
+        githubRequired = Array.from(new Set([...contexts, ...checks]));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const reporting = discoverRequiredChecks(parsed.owner, parsed.repo, baseBranch);
+  const configRequired = project.requiredChecks || [];
+
+  if (isProtected && configRequired.length > 0) {
+    const missingOnGithub = configRequired.filter((c) => !githubRequired.includes(c));
+    const extraOnGithub = githubRequired.filter((c) => !configRequired.includes(c));
+    if (missingOnGithub.length > 0 || extraOnGithub.length > 0) {
+      results.push({
+        name: `projects.${key} branch protection required checks sync`,
+        ok: false,
+        note: `switchyard-worker.json requiredChecks and GitHub branch protection required checks are out of sync. ` +
+          `switchyard-worker.json has: [${configRequired.join(", ")}]. GitHub has: [${githubRequired.join(", ")}]. ` +
+          `Run \`npm run init-worker -- --protect-main ${key}\` to sync them.`,
+      });
+    }
+  }
+
+  const checksToValidate = configRequired.length > 0 ? configRequired : githubRequired;
+  if (checksToValidate.length > 0) {
+    const nonReporting = checksToValidate.filter((c) => !reporting.includes(c));
+    if (nonReporting.length > 0) {
+      results.push({
+        name: `projects.${key} required checks health`,
+        ok: true,
+        warn: true,
+        note: `The following required check(s) are configured but not reporting on the latest commit of ${baseBranch}: ` +
+          `[${nonReporting.join(", ")}]. Actually reporting: [${reporting.join(", ")}]. This will make PRs unmergeable.`,
+      });
+    } else {
+      results.push({
+        name: `projects.${key} required checks health`,
+        ok: true,
+        note: `All required checks [${checksToValidate.join(", ")}] are actively reporting on ${baseBranch}.`,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
  * Best-effort capture of what the operating human's own environment expects
  * (SYD-82): CLIs referenced by known per-user config files, enabled Claude
  * Code plugins, and configured MCP servers. Each source is read
@@ -348,6 +496,9 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
       });
       if (project.stack) {
         results.push(...checkProjectStack(key, project, config));
+      }
+      if (isRepo) {
+        results.push(...checkRequiredChecks(key, project));
       }
     }
 
@@ -800,15 +951,32 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
       failures++;
       continue;
     }
-    const { args, input } = buildProtectMainArgs(parsed.owner, parsed.repo);
+
+    let checksToRequire: string | string[] = "test";
+    if (project.requiredChecks && project.requiredChecks.length > 0) {
+      checksToRequire = project.requiredChecks;
+      console.log(`using required checks from switchyard-worker.json: [${project.requiredChecks.join(", ")}]`);
+    } else {
+      const baseBranch = project.baseBranch || "main";
+      const discovered = discoverRequiredChecks(parsed.owner, parsed.repo, baseBranch);
+      if (discovered.length > 0) {
+        checksToRequire = discovered;
+        console.log(`discovered required checks from latest commit on ${baseBranch}: [${discovered.join(", ")}]`);
+      } else {
+        console.log(`no checks discovered on ${baseBranch} — falling back to default required check: "test"`);
+      }
+    }
+
+    const { args, input } = buildProtectMainArgs(parsed.owner, parsed.repo, checksToRequire);
     const res = spawnSync("gh", args, { input, encoding: "utf8" });
     if (res.status !== 0) {
       console.error(`✗ ${key}: gh api failed — ${(res.stderr || res.stdout || "").trim()}`);
       failures++;
       continue;
     }
+    const checksStr = Array.isArray(checksToRequire) ? checksToRequire.join(", ") : checksToRequire;
     console.log(
-      `✓ ${key}: main branch protected on ${parsed.owner}/${parsed.repo} (force-push + deletion blocked)`,
+      `✓ ${key}: main branch protected on ${parsed.owner}/${parsed.repo} (force-push + deletion blocked; checks required: [${checksStr}])`,
     );
   }
   if (failures > 0) process.exit(1);

@@ -115,6 +115,11 @@ export function validateWorkerConfig(raw: unknown): string[] {
       ) {
         problems.push(`projects.${key}.baseBranch must be a non-empty string when set`);
       }
+      if (project?.requiredChecks !== undefined) {
+        if (!Array.isArray(project.requiredChecks) || project.requiredChecks.some((c) => typeof c !== "string" || c.trim() === "")) {
+          problems.push(`projects.${key}.requiredChecks must be an array of non-empty strings`);
+        }
+      }
     }
   }
   if (
@@ -833,14 +838,18 @@ export function formatDockerfileStackGuidance(
 export function buildProtectMainArgs(
   owner: string,
   repo: string,
-  ciCheckContext = "test",
+  ciCheckContexts: string | string[] = "test",
 ): { args: string[]; input: string } {
+  const contexts = Array.isArray(ciCheckContexts) ? ciCheckContexts : [ciCheckContexts];
   return {
     args: ["api", "-X", "PUT", `repos/${owner}/${repo}/branches/main/protection`, "--input", "-"],
     input:
       JSON.stringify(
         {
-          required_status_checks: { strict: false, checks: [{ context: ciCheckContext }] },
+          required_status_checks: {
+            strict: false,
+            checks: contexts.map((c) => ({ context: c })),
+          },
           enforce_admins: true,
           required_pull_request_reviews: null,
           restrictions: null,
