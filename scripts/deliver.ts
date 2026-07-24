@@ -42,6 +42,7 @@ import {
   shouldRetryQueueRebase,
   MAX_QUEUE_MERGE_ATTEMPTS,
   queueRebaseConflictComment,
+  noBranchBounceComment,
   queueDeliveredNote,
   checksFailedComment,
   checksTimeoutComment,
@@ -68,6 +69,7 @@ import {
   pollUntilMergeable,
   waitForChecks,
   checkBranchProtection,
+  closeDeadAgentPr,
   originOwnerRepo,
   prFreshness,
   prLiveState,
@@ -376,7 +378,22 @@ export async function deliverQueue(
   for (let attempt = 1; ; attempt++) {
     const rebase = await attemptAutoRebase(project.repo, cloneDir, ref, accepted);
     if (rebase.status === "no-branch") {
-      throw new Error(`no ${agentBranch(ref)} branch found to rebase for PR #${prNumber}`);
+      // SYD-165: agent/<ref> is dead by definition here (nothing to rebase,
+      // verify, or merge) — bounce, and close the now-pointless open PR
+      // automatically so re-dispatch (the only remediation) isn't blocked on
+      // a human closing it by hand.
+      console.log(`${ref}: no ${agentBranch(ref)} branch found to rebase for PR #${prNumber} — bouncing`);
+      await postComment(config, token, ref, noBranchBounceComment(ref, prNumber));
+      await postDeliveryEvent(config, token, ref, {
+        type: "delivery_failed",
+        message: `no ${agentBranch(ref)} branch exists to rebase for PR #${prNumber}`,
+      }).catch((e: Error) =>
+        console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      await closeDeadAgentPr(project.repo, prNumber, { deleteBranch: false }).catch((e: Error) =>
+        console.error(`could not close dead PR #${prNumber} for ${ref}: ${e.message}`),
+      );
+      return { outcome: "merge_failed" };
     }
     if (rebase.status === "head-moved") {
       console.log(
@@ -393,12 +410,18 @@ export async function deliverQueue(
     }
     if (rebase.status === "conflict") {
       console.log(`${ref}: rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`);
-      await postComment(config, token, ref, queueRebaseConflictComment(ref, rebase.files));
+      await postComment(config, token, ref, queueRebaseConflictComment(ref, prNumber, rebase.files));
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
         message: `rebase onto main hit real conflicts`,
       }).catch((e: Error) =>
         console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      // SYD-165: agent/<ref> is dead by definition once it's conflicted with
+      // main — close the PR and delete the branch automatically so re-dispatch
+      // (the only remediation) isn't blocked on a human closing it by hand.
+      await closeDeadAgentPr(project.repo, prNumber, { deleteBranch: true }).catch((e: Error) =>
+        console.error(`could not close dead PR #${prNumber} for ${ref}: ${e.message}`),
       );
       return { outcome: "conflict_bounced" };
     }

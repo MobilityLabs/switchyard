@@ -14,6 +14,7 @@ import {
   buildPrListArgs,
   buildPrCreateArgs,
   buildPrMergeArgs,
+  buildPrCloseArgs,
   buildPrViewMergeShaArgs,
   buildPrViewUrlArgs,
   parseOwnerRepo,
@@ -222,6 +223,26 @@ export async function mergeAgentPr(
     );
     return matchHeadSha ?? "unknown";
   }
+}
+
+/**
+ * Closes a dead agent PR after a conflict/no-branch bounce (SYD-165):
+ * `agent/<ref>` is dead by definition in both cases, so the recommended
+ * remediation is re-dispatch, not hand-fixing the same branch — but the
+ * server's duplicate-work guards (nextTask exclusion, dispatch-worker skip,
+ * claim refusal) all treat an OPEN agent PR as "still being worked" and block
+ * re-dispatch until a human closes it by hand. Closing it here removes that
+ * manual step. Best-effort from the caller's point of view (the bounce
+ * comment/event already recorded the failure) — a close failure must never
+ * turn a successful bounce into a crashed attempt.
+ */
+export async function closeDeadAgentPr(
+  repo: string,
+  prNumber: number,
+  opts: { deleteBranch: boolean },
+): Promise<void> {
+  const ownerRepo = await originOwnerRepo(repo);
+  await run("gh", buildPrCloseArgs(prNumber, ownerRepo, opts), { cwd: GH_CWD });
 }
 
 /** GitHub's live required-check rollup for a PR's current head (SYD-209). Read
