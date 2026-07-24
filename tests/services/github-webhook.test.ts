@@ -416,11 +416,7 @@ describe("handleGithubWebhook / ingestion groundwork (SYD-205)", () => {
 
   it("records repo, headSha, and ghUpdatedAt from a full webhook payload", () => {
     const db = setup();
-    handleGithubWebhook(
-      db,
-      "pull_request",
-      opened({ repository: { full_name: "acme/widgets" } }),
-    );
+    handleGithubWebhook(db, "pull_request", opened({ repository: { full_name: "acme/widgets" } }));
     const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
     expect(ev.payload).toEqual({
       prNumber: 12,

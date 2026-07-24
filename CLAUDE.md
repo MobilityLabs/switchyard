@@ -17,7 +17,8 @@ npm run dev            # server on :3300 (tsx src/server.ts); SWITCHYARD_DB / PO
 npm test               # vitest run (all tests)
 npx vitest run tests/services/issues-update.test.ts   # single test file
 npm run typecheck      # checks BOTH tsconfigs: app (tsc --noEmit) and ui (tsc -p ui)
-npm run verify         # "verify like the delivery worker": node-version + TZ=UTC-pinned typecheck/build/test, mirrors CI — run before done-stamping (SYD-166)
+npm run lint           # eslint .
+npm run format:check   # prettier --check . (npm run format to fix)
 npm run build:ui       # vite build → dist/ui (server 404s SPA routes until this exists)
 npm run dev:ui         # vite dev server for UI work
 npm run db:generate    # drizzle-kit generate — run after editing src/db/schema.ts
@@ -25,6 +26,8 @@ npm run deploy         # ship working tree to the NAS + rebuild container (scrip
 npm run init-worker    # doctor for the auto-dispatch worker (--self-test, --install-launchd)
 npm run build:worker-image   # docker image for containerized dispatch
 ```
+
+Before opening a PR, run `npm run lint && npm run format:check && npm run typecheck && npm test` — CI (`.github/workflows/ci.yml`) runs the same checks and fails the build on any of them.
 
 Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-project|add-actor|mint-login|add-webhook ...`
 
@@ -42,8 +45,6 @@ Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-proj
 - `claim_issue` (and a direct PATCH to `in_progress`) refuses an issue already claimed by someone else, or sitting behind an open agent PR from a prior claim.
 
 **Claim before you touch code.** For any board-tracked issue, call `claim_issue` before editing files — even in an interactive/coordinating session, not just dispatched workers. This is what lets the server (and the dispatch worker) see your claim and refuse to double-work the same issue; skipping it is exactly how SYD-93 got fixed twice in parallel (worker PR #41 vs a coordinating session's PR #42, opened without ever claiming).
-
-**Run `npm run verify` before you done-stamp** (move an issue to `in_review`, or done-checklist equivalent). It mirrors `.github/workflows/ci.yml` — same node-version check, TZ pinned to UTC, then typecheck/build:ui/test — so environment-sensitive failures (wrong node major per SYD-97; a session's local TZ leaking into date-dependent tests per SYD-162) surface inside your session instead of bouncing a completed delivery after the fact.
 
 **Mutate issues only through services** — core issue state lives in mutable columns on the `issues` table, with `events` a co-written append-only audit log (not a fold/replay source — see `src/services/issues.ts`); a direct DB write would skip that log. Only the auxiliary attention/open-PR/unanswered-questions signals are actually derived by querying `events` (see `src/services/attention.ts`, `pr-status.ts`, `events.ts`), so those can't drift from what happened.
 

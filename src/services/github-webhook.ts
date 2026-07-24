@@ -174,7 +174,12 @@ function record(
     return { handled: true, ref, type, duplicate: true };
   }
   const actor = getOrCreateActor(db, GITHUB_ACTOR_NAME, "agent");
-  recordEvent(db, { issueId: issue.id, actorId: actor.id, type, payload: { ...payload, repo: resolvedRepo } });
+  recordEvent(db, {
+    issueId: issue.id,
+    actorId: actor.id,
+    type,
+    payload: { ...payload, repo: resolvedRepo },
+  });
   return { handled: true, ref, type };
 }
 
@@ -214,8 +219,7 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
   // write here, so one physical transition never appears twice. Everything
   // else (free-text matches, cross-repo agent branches) records display/audit
   // events only and never touches pr_state.
-  const attributed =
-    resolvedRepo !== null && attributedRef(db, resolvedRepo, branch) === ref;
+  const attributed = resolvedRepo !== null && attributedRef(db, resolvedRepo, branch) === ref;
   if (attributed) {
     const actor = getOrCreateActor(db, GITHUB_ACTOR_NAME, "agent");
     const base = {

@@ -100,7 +100,7 @@ describe("Board Card keyboard accessibility", () => {
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
     });
-    expect(location.pathname).toBe("/issue/SYD-7");
+    expect(location.pathname).toBe("/SYD/issue/SYD-7");
   });
 
   it("opens the issue on Space", async () => {
@@ -111,7 +111,7 @@ describe("Board Card keyboard accessibility", () => {
         new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
       );
     });
-    expect(location.pathname).toBe("/issue/SYD-8");
+    expect(location.pathname).toBe("/SYD/issue/SYD-8");
   });
 
   it("ignores Enter/Space originating from the ref link or move select", async () => {

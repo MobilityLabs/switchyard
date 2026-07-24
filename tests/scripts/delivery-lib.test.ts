@@ -40,10 +40,15 @@ import {
   shouldRetryQueueRebase,
   MAX_QUEUE_MERGE_ATTEMPTS,
   queueRebaseConflictComment,
+  noBranchBounceComment,
   queueDeliveredNote,
   buildBranchProtectionArgs,
   evaluateBranchProtection,
   shouldRefuseUnprotectedMain,
+  buildPrListMergedArgs,
+  closedPrAlreadyDeliveredComment,
+  closedPrDeadEndComment,
+  buildPrCloseArgs,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
 
@@ -57,7 +62,9 @@ describe("resolveInfraToken (SYD-213)", () => {
     expect(resolveInfraToken({ SWITCHYARD_TOKEN: "gen" })).toBe("gen");
   });
   it("falls through a blank service token to the general token (|| not ??)", () => {
-    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe("gen");
+    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe(
+      "gen",
+    );
   });
   it("is undefined when neither is set", () => {
     expect(resolveInfraToken({})).toBeUndefined();
@@ -547,6 +554,41 @@ describe("comment bodies", () => {
   });
 });
 
+describe("closed-unmerged-pin redeliver dead end (SYD-232)", () => {
+  it("buildPrListMergedArgs carries -R and filters to the merged state for the issue's branch", () => {
+    expect(buildPrListMergedArgs("SYD-9", "MobilityLabs/switchyard")).toEqual([
+      "pr",
+      "list",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--head",
+      "agent/SYD-9",
+      "--state",
+      "merged",
+      "--json",
+      "number,mergeCommit",
+      "--limit",
+      "10",
+    ]);
+  });
+
+  it("closedPrAlreadyDeliveredComment names both PRs and the merge SHA, distinct from a failure", () => {
+    const body = closedPrAlreadyDeliveredComment("SYD-9", 61, 124, "abc1234");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("PR #61");
+    expect(body).toContain("PR #124");
+    expect(body).toContain("abc1234");
+    expect(body).not.toContain("Delivery FAILED");
+  });
+
+  it("closedPrDeadEndComment gives an actionable next step instead of a generic bounce", () => {
+    const body = closedPrDeadEndComment("SYD-9", 61);
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("PR #61");
+    expect(body).toMatch(/re-open|re-run the agent/i);
+  });
+});
+
 describe("branch-protection health check (SYD-209)", () => {
   it("buildBranchProtectionArgs targets the repo's main protection API", () => {
     expect(buildBranchProtectionArgs("MobilityLabs/switchyard")).toEqual([
@@ -665,22 +707,64 @@ describe("merge orchestrator (SYD-209, formerly queue mode SYD-164)", () => {
 
   describe("queueRebaseConflictComment", () => {
     it("names the ref, branch, conflicted files, and says main was never touched", () => {
-      const body = queueRebaseConflictComment("SYD-9", ["src/a.ts", "src/b.ts"]);
+      const body = queueRebaseConflictComment("SYD-9", 41, ["src/a.ts", "src/b.ts"]);
       expect(body).toContain("SYD-9");
       expect(body).toContain("agent/SYD-9");
       expect(body).toContain("- src/a.ts");
       expect(body).toContain("- src/b.ts");
       expect(body).toContain("never touched");
-      expect(body).toContain("Retry delivery");
     });
 
     it("never mentions dispatching a conflict-resolution session", () => {
-      const body = queueRebaseConflictComment("SYD-9", ["src/a.ts"]);
+      const body = queueRebaseConflictComment("SYD-9", 41, ["src/a.ts"]);
       expect(body).not.toContain("conflict-resolution worker session");
     });
 
     it("handles an empty file list", () => {
-      expect(queueRebaseConflictComment("SYD-9", [])).toContain("no conflicted files reported");
+      expect(queueRebaseConflictComment("SYD-9", 41, [])).toContain("no conflicted files reported");
+    });
+
+    it("names the closed PR and says re-dispatch is the path (SYD-165)", () => {
+      const body = queueRebaseConflictComment("SYD-9", 41, ["src/a.ts"]);
+      expect(body).toContain("PR #41");
+      expect(body).toContain("Closing PR #41");
+      expect(body).toContain("re-dispatch");
+    });
+  });
+
+  describe("noBranchBounceComment (SYD-165)", () => {
+    it("names the ref, PR, and says re-dispatch is the path", () => {
+      const body = noBranchBounceComment("SYD-9", 41);
+      expect(body).toContain("SYD-9");
+      expect(body).toContain("PR #41");
+      expect(body).toContain("agent/SYD-9");
+      expect(body).toContain("no longer exists");
+      expect(body).toContain("never touched");
+      expect(body).toContain("Closing PR #41");
+      expect(body).toContain("re-dispatch");
+    });
+  });
+
+  describe("buildPrCloseArgs (SYD-165)", () => {
+    it("closes without deleting the branch by default", () => {
+      expect(buildPrCloseArgs(41, "MobilityLabs/switchyard")).toEqual([
+        "pr",
+        "close",
+        "41",
+        "-R",
+        "MobilityLabs/switchyard",
+      ]);
+    });
+
+    it("adds --delete-branch when asked", () => {
+      expect(buildPrCloseArgs(41, "MobilityLabs/switchyard", { deleteBranch: true })).toEqual([
+        "pr",
+        "close",
+        "41",
+        "-R",
+        "MobilityLabs/switchyard",
+        "--delete-branch",
+      ]);
     });
   });
 

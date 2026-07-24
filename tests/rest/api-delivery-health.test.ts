@@ -8,7 +8,11 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue, updateIssue } from "../../src/services/issues.js";
 import { recordEvent } from "../../src/services/events.js";
-import { listPendingDeliveryAuthorizations, startDeliveryAttempt, finishDeliveryAttempt } from "../../src/services/delivery-attempts.js";
+import {
+  listPendingDeliveryAuthorizations,
+  startDeliveryAttempt,
+  finishDeliveryAttempt,
+} from "../../src/services/delivery-attempts.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;

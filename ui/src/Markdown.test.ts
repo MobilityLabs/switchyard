@@ -194,7 +194,9 @@ describe("autolinker", () => {
   });
 
   it("links the #N even when written as 'PR #20'", () => {
-    const a = toDom("Fixed in consolidation PR #20 (commit b3084f4)").querySelector("a[href$='/pull/20']")!;
+    const a = toDom("Fixed in consolidation PR #20 (commit b3084f4)").querySelector(
+      "a[href$='/pull/20']",
+    )!;
     expect(a).not.toBeNull();
     expect(a.textContent).toBe("#20");
   });
