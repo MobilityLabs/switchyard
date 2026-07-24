@@ -224,7 +224,7 @@ describe("App internal link interceptor", () => {
 
     const event = await act(async () => clickAnchor(container, { href: "/new" }));
     expect(event.defaultPrevented).toBe(true);
-    expect(location.pathname).toBe("/new");
+    expect(location.pathname).toBe("/all/new");
     expect(container.textContent).toContain("New issue");
   });
 

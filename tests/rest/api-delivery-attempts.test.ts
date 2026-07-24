@@ -215,7 +215,11 @@ describe("PATCH /api/delivery-attempts/:id/derived-head (SYD-209)", () => {
       body: JSON.stringify({ derivedHeadSha: s1 }),
     });
     expect(res.status).toBe(200);
-    const row = await body<{ derivedHeadSha: string; outcome: string | null; finishedAt: number | null }>(res);
+    const row = await body<{
+      derivedHeadSha: string;
+      outcome: string | null;
+      finishedAt: number | null;
+    }>(res);
     expect(row.derivedHeadSha).toBe(s1);
     expect(row.outcome).toBeNull();
     expect(row.finishedAt).toBeNull();

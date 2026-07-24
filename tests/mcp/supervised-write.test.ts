@@ -83,8 +83,10 @@ describe("MCP write tools in a supervised session", () => {
       arguments: { ref: issue.ref, status: "done" },
     });
 
-    expect(r.isError).toBe(true);
-    expect(text(r)).toMatch(/awaiting human affirmation/i);
+    // Task 4: parked is a SUCCESS, not an error — guard() translates the
+    // PendingAffirmation signal into an ok() result carrying the canonical doc.
+    expect(r.isError).toBeUndefined();
+    expect(JSON.parse(text(r)).pendingActionId).toBeGreaterThan(0);
 
     const rows = db.all<{ id: number; session_id: number; issue_id: number; action_type: string }>(
       sql`SELECT id, session_id, issue_id, action_type FROM pending_actions WHERE status = 'pending'`,

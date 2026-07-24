@@ -11,9 +11,7 @@ describe.each([
   ["Dockerfile.worker.gemini", "../../Dockerfile.worker.gemini"],
 ])("%s native module toolchain (SYD-224)", (_name, relPath) => {
   const raw = readFileSync(path.join(__dirname, relPath), "utf8");
-  const aptInstallLine = raw
-    .split("\n")
-    .find((l) => l.includes("apt-get install"));
+  const aptInstallLine = raw.split("\n").find((l) => l.includes("apt-get install"));
 
   it("installs python3, make, and g++ alongside git/ca-certificates", () => {
     expect(aptInstallLine).toBeDefined();

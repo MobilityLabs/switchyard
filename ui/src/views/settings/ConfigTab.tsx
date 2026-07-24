@@ -73,9 +73,7 @@ function SettingField({ setting, onChanged }: { setting: SettingView; onChanged:
         <input value={text} onChange={(e) => setText(e.target.value)} />
       </label>
       {setting.description && <p className="hint">{setting.description}</p>}
-      {kind === "number" && dirty && parsed === null && (
-        <p className="hint">Must be a number.</p>
-      )}
+      {kind === "number" && dirty && parsed === null && <p className="hint">Must be a number.</p>}
       {error && <p className="error-bar">{error}</p>}
       <button
         className="primary"

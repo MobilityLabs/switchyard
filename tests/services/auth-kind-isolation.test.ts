@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import { sql } from "drizzle-orm";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
-import { openSupervisedSession, closeSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  closeSupervisedSession,
+} from "../../src/services/supervised-sessions.js";
 import { getSessionActor, deleteSession } from "../../src/services/auth.js";
 
 describe("supervised token is not a web/REST credential", () => {

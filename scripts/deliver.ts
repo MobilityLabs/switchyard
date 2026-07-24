@@ -42,10 +42,13 @@ import {
   shouldRetryQueueRebase,
   MAX_QUEUE_MERGE_ATTEMPTS,
   queueRebaseConflictComment,
+  noBranchBounceComment,
   queueDeliveredNote,
   checksFailedComment,
   checksTimeoutComment,
   shaChainDisarmedComment,
+  closedPrAlreadyDeliveredComment,
+  closedPrDeadEndComment,
   filterWorkToProjects,
   resumeActionFor,
   agentBranch,
@@ -66,9 +69,11 @@ import {
   pollUntilMergeable,
   waitForChecks,
   checkBranchProtection,
+  closeDeadAgentPr,
   originOwnerRepo,
   prFreshness,
   prLiveState,
+  findMergedAgentPr,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
@@ -293,7 +298,9 @@ async function finishDelivery(
   try {
     freshness = await prFreshness(project.repo, prNumber);
   } catch (err) {
-    console.error(`could not fetch PR freshness for ${ref} #${prNumber}: ${(err as Error).message}`);
+    console.error(
+      `could not fetch PR freshness for ${ref} #${prNumber}: ${(err as Error).message}`,
+    );
   }
   await postDeliveryEvent(config, token, ref, {
     type: "delivered",
@@ -373,13 +380,35 @@ export async function deliverQueue(
   for (let attempt = 1; ; attempt++) {
     const rebase = await attemptAutoRebase(project.repo, cloneDir, ref, accepted);
     if (rebase.status === "no-branch") {
-      throw new Error(`no ${agentBranch(ref)} branch found to rebase for PR #${prNumber}`);
+      // SYD-165: agent/<ref> is dead by definition here (nothing to rebase,
+      // verify, or merge) — bounce, and close the now-pointless open PR
+      // automatically so re-dispatch (the only remediation) isn't blocked on
+      // a human closing it by hand.
+      console.log(
+        `${ref}: no ${agentBranch(ref)} branch found to rebase for PR #${prNumber} — bouncing`,
+      );
+      await postComment(config, token, ref, noBranchBounceComment(ref, prNumber));
+      await postDeliveryEvent(config, token, ref, {
+        type: "delivery_failed",
+        message: `no ${agentBranch(ref)} branch exists to rebase for PR #${prNumber}`,
+      }).catch((e: Error) =>
+        console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      await closeDeadAgentPr(project.repo, prNumber, { deleteBranch: false }).catch((e: Error) =>
+        console.error(`could not close dead PR #${prNumber} for ${ref}: ${e.message}`),
+      );
+      return { outcome: "merge_failed" };
     }
     if (rebase.status === "head-moved") {
       console.log(
         `${ref}: SHA chain broken — branch head ${rebase.observed} is not an authorized head`,
       );
-      await postComment(config, token, ref, shaChainDisarmedComment(ref, accepted[0], rebase.observed));
+      await postComment(
+        config,
+        token,
+        ref,
+        shaChainDisarmedComment(ref, accepted[0], rebase.observed),
+      );
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
         message: `a commit landed on ${agentBranch(ref)} after the delivery was authorized — disarmed`,
@@ -389,13 +418,26 @@ export async function deliverQueue(
       return { outcome: "sha_chain_disarmed" };
     }
     if (rebase.status === "conflict") {
-      console.log(`${ref}: rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`);
-      await postComment(config, token, ref, queueRebaseConflictComment(ref, rebase.files));
+      console.log(
+        `${ref}: rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`,
+      );
+      await postComment(
+        config,
+        token,
+        ref,
+        queueRebaseConflictComment(ref, prNumber, rebase.files),
+      );
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
         message: `rebase onto main hit real conflicts`,
       }).catch((e: Error) =>
         console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+      // SYD-165: agent/<ref> is dead by definition once it's conflicted with
+      // main — close the PR and delete the branch automatically so re-dispatch
+      // (the only remediation) isn't blocked on a human closing it by hand.
+      await closeDeadAgentPr(project.repo, prNumber, { deleteBranch: true }).catch((e: Error) =>
+        console.error(`could not close dead PR #${prNumber} for ${ref}: ${e.message}`),
       );
       return { outcome: "conflict_bounced" };
     }
@@ -564,12 +606,39 @@ async function deliverPending(
     }
 
     if (live.state === "CLOSED") {
+      // SYD-232: a closed-unmerged pin dead-ends every retry with an
+      // identical failure unless we check whether a replacement PR on the
+      // same branch already delivered the work (e.g. SYD-108's #61 → #124).
+      const merged = await findMergedAgentPr(project.repo, ref).catch((e: Error) => {
+        console.error(`could not check for a merged replacement PR on ${ref}: ${e.message}`);
+        return null;
+      });
       const id = attemptId;
       attemptId = null;
+      if (merged) {
+        await finishAttempt(config, token, id, { outcome: "merged_deployed" });
+        await postComment(
+          config,
+          token,
+          ref,
+          closedPrAlreadyDeliveredComment(ref, auth.pin.prNumber, merged.prNumber, merged.mergeSha),
+        ).catch((e: Error) =>
+          console.error(`could not comment the reconcile on ${ref}: ${e.message}`),
+        );
+        await postDeliveryEvent(config, token, ref, {
+          type: "delivered",
+          prNumber: merged.prNumber,
+          mergeSha: merged.mergeSha,
+          deploy: { ran: false },
+        }).catch((e: Error) =>
+          console.error(`could not record delivered event on ${ref}: ${e.message}`),
+        );
+        return;
+      }
       await finishAttempt(config, token, id, { outcome: "merge_failed" });
-      const message = `PR #${auth.pin.prNumber} was closed unmerged`;
-      await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
-        console.error(`could not comment the failure on ${ref}: ${e.message}`),
+      const message = `PR #${auth.pin.prNumber} is closed unmerged, with no later merged PR on ${agentBranch(ref)}`;
+      await postComment(config, token, ref, closedPrDeadEndComment(ref, auth.pin.prNumber)).catch(
+        (e: Error) => console.error(`could not comment the failure on ${ref}: ${e.message}`),
       );
       await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
         (e: Error) =>
@@ -594,7 +663,8 @@ async function deliverPending(
         shaChainDisarmedComment(ref, "(none recorded)", live.headRefOid),
       ).catch((e: Error) => console.error(`could not comment the disarm on ${ref}: ${e.message}`));
       await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
-        (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+        (e: Error) =>
+          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
       );
       return;
     }
@@ -633,12 +703,36 @@ async function deliverPending(
         console.error(`could not finish delivery attempt for ${ref}: ${e.message}`),
       );
     }
-    await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
-      console.error(`could not comment the failure on ${ref}: ${e.message}`),
-    );
-    await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
-      (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
-    );
+
+    let isMerged = false;
+    if (auth.pin !== null) {
+      try {
+        const live = await prLiveState(project.repo, auth.pin.prNumber);
+        if (live.state === "MERGED") {
+          isMerged = true;
+        }
+      } catch (liveErr) {
+        console.error(
+          `could not fetch live PR state in outer catch for ${ref}: ${(liveErr as Error).message}`,
+        );
+      }
+    }
+
+    if (isMerged) {
+      console.log(
+        `${ref}: delivery failed but live PR #${auth.pin?.prNumber} is MERGED. ` +
+          `Treating as a post-merge/finalization failure; skipping spurious delivery_failed comment/event. ` +
+          `Attempt will be left unfinished for resumeAttempt.`,
+      );
+    } else {
+      await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch(
+        (e: Error) => console.error(`could not comment the failure on ${ref}: ${e.message}`),
+      );
+      await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
+        (e: Error) =>
+          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+    }
   }
 }
 
@@ -689,7 +783,9 @@ async function resumeAttempt(
 
     const live = await prLiveState(project.repo, attempt.prNumber);
     if (resumeActionFor(live.state) === "finish-delivery") {
-      console.log(`${ref}: resuming crashed attempt ${attempt.id} — PR #${attempt.prNumber} is MERGED`);
+      console.log(
+        `${ref}: resuming crashed attempt ${attempt.id} — PR #${attempt.prNumber} is MERGED`,
+      );
       const outcome = await runDeliveryTail(
         ref,
         project,
@@ -839,7 +935,8 @@ async function tick(
   await runGated(gate, async () => {
     const url = `${apiBase(config)}/api/delivery-work`;
     const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error(`GET /api/delivery-work failed: ${res.status} ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`GET /api/delivery-work failed: ${res.status} ${await res.text()}`);
     const work = filterWorkToProjects(
       (await res.json()) as DeliveryWork,
       Object.keys(config.projects),

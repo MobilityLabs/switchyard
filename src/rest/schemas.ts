@@ -92,7 +92,10 @@ const deployResult = z.union([
 // pr_opened) stay OPTIONAL until the worker host go-live — making them
 // required now would 400 the un-upgraded worker and silently drop its
 // pr_opened publish (the deploy-skew rule in the sync-simplification spec).
-const repoField = z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"').optional();
+const repoField = z
+  .string()
+  .regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"')
+  .optional();
 export const deliveryEventBody = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("pr_opened"),
@@ -146,7 +149,10 @@ export const githubEventBody = z.object({
   payload: z.unknown(),
   // Optional-first per the SYD-205 deploy-skew rule; the server infers a sole
   // bound repo when absent.
-  repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"').optional(),
+  repo: z
+    .string()
+    .regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"')
+    .optional(),
 });
 export const settingPutBody = z.object({ value: z.any() });
 

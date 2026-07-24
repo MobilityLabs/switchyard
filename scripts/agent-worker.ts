@@ -219,7 +219,9 @@ async function postComment(
       },
     );
   } catch (err) {
-    console.error(`giving up on ${label} after retries: ${(err as Error).message}\n  body: ${body}`);
+    console.error(
+      `giving up on ${label} after retries: ${(err as Error).message}\n  body: ${body}`,
+    );
     throw err;
   }
 }
@@ -492,7 +494,8 @@ async function releaseClaimHost(
       body: JSON.stringify({ status: "todo" }),
       signal: AbortSignal.timeout(HEARTBEAT_FETCH_TIMEOUT_MS),
     });
-    if (!res.ok) console.error(`could not release ${ref} after a dispatch failure: HTTP ${res.status}`);
+    if (!res.ok)
+      console.error(`could not release ${ref} after a dispatch failure: HTTP ${res.status}`);
   } catch (err) {
     console.error(`could not release ${ref} after a dispatch failure: ${(err as Error).message}`);
   }
@@ -837,13 +840,23 @@ export function dispatch(
       child = spawn("docker", dockerArgs, {
         detached: true,
         stdio: ["ignore", fd, fd],
-        // SYD-210 Layer B: hand the lease to the container via the spawn env
-        // (bare -e SWITCHYARD_LEASE in dockerArgs reads it here) so it never
-        // appears in argv. Per-spawn env avoids collisions across concurrent
-        // containers.
-        env: opts.leaseToken
-          ? { ...process.env, SWITCHYARD_LEASE: opts.leaseToken }
-          : process.env,
+        // Secrets ride the spawn env (bare -e passthroughs in dockerArgs), so
+        // they never appear in argv. Per-spawn env avoids collisions across
+        // concurrent containers.
+        //
+        // SYD-258: SWITCHYARD_TOKEN must be the token THIS worker resolved
+        // (config.token names the env var — SWITCHYARD_GEMINI_TOKEN etc.),
+        // not whatever the shared .env's SWITCHYARD_TOKEN holds. Otherwise
+        // the claim actor (the worker's token) and the in-container actor
+        // diverge, and the assignee guard strands the finished session at
+        // its in_review hand-off.
+        //
+        // SYD-210 Layer B: the session-scoped lease rides the same way.
+        env: {
+          ...process.env,
+          SWITCHYARD_TOKEN: token,
+          ...(opts.leaseToken ? { SWITCHYARD_LEASE: opts.leaseToken } : {}),
+        },
       });
     } else {
       // Headless sessions can't answer permission prompts — grant the tools the
@@ -915,9 +928,14 @@ export function dispatch(
   // renewals, kill it (honest liveness — a dead/wedged session loses its claim
   // within the window instead of holding it out to the 8h TTL).
   const stopHeartbeat = opts.leaseToken
-    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () =>
-        killSession(child, config.containerized ? `syd-${issue.ref}` : null),
-      logLine)
+    ? startLeaseHeartbeat(
+        config,
+        token,
+        opts.leaseToken,
+        issue.ref,
+        () => killSession(child, config.containerized ? `syd-${issue.ref}` : null),
+        logLine,
+      )
     : () => {};
 
   // Watchdog (SYD-115): a hung `claude -p` or stuck `docker run` would
@@ -1026,8 +1044,13 @@ function dispatchSdk(
   // re-dispatch. Stopped when the session settles (finally, below).
   const sdkAbort = new AbortController();
   const stopHeartbeat = opts.leaseToken
-    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () => sdkAbort.abort(), (m) =>
-        safeAppend(m),
+    ? startLeaseHeartbeat(
+        config,
+        token,
+        opts.leaseToken,
+        issue.ref,
+        () => sdkAbort.abort(),
+        (m) => safeAppend(m),
       )
     : () => {};
 
@@ -1500,9 +1523,14 @@ export function adoptContainerSession(
   // exists (pre-upgrade container, or non-lease dispatch), skip — same as today.
   const leaseToken = readPersistedLeaseToken(project.repo, session.ref);
   const stopHeartbeat = leaseToken
-    ? startLeaseHeartbeat(config, token, leaseToken, session.ref, () =>
-        killSession(child, containerNameFor(session.ref)),
-      logLine)
+    ? startLeaseHeartbeat(
+        config,
+        token,
+        leaseToken,
+        session.ref,
+        () => killSession(child, containerNameFor(session.ref)),
+        logLine,
+      )
     : () => {};
 
   let output = "";
@@ -1660,7 +1688,7 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error(
         `FATAL: could not set up the egress guard (SYD-110): ${(err as Error).message}\n` +
-          "Build the proxy image with `npm run build:worker-image`, or set egress: \"open\" " +
+          'Build the proxy image with `npm run build:worker-image`, or set egress: "open" ' +
           "in switchyard-worker.json to explicitly opt out of the allowlist.",
       );
       process.exit(1);
