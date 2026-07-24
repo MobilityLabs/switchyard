@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
+import { STATUSES, type Status } from "../db/schema.js";
 import { settings } from "../db/schema.js";
+import { boardColumnCounts, type BoardColumnCounts } from "./board-column-counts.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 
@@ -51,6 +53,10 @@ export const REGISTRY = {
     description:
       "Status transitions requiring fresh human affirmation in a supervised session. Only affirmable statuses are allowed (Phase 1: done). Empty = full absorption.",
   },
+  "wip.limit.backlog": { type: "number", default: 0 },
+  "wip.limit.todo": { type: "number", default: 0 },
+  "wip.limit.in_progress": { type: "number", default: 0 },
+  "wip.limit.in_review": { type: "number", default: 5 },
 } satisfies Record<string, RegistryEntry>;
 
 // The gated actions an affirmation can actually carry out. Gating anything else
@@ -100,9 +106,12 @@ function validateValue(key: SettingKey, value: unknown): void {
       typeof value !== "number" ||
       !Number.isFinite(value) ||
       !Number.isInteger(value) ||
-      value <= 0
+      value < 0 ||
+      (value === 0 && !key.startsWith("wip.limit."))
     ) {
-      throw new SwitchyardError(`Setting "${key}" must be a positive integer.`);
+      throw new SwitchyardError(
+        `Setting "${key}" must be ${key.startsWith("wip.limit.") ? "a non-negative" : "a positive"} integer.`,
+      );
     }
   } else {
     if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
@@ -203,6 +212,8 @@ export type DispatchPolicy = {
   // its cancellation cadence (misses × interval) from the SAME value the server
   // expires and grace-gates on — they can't drift if an operator retunes it.
   heartbeatWindowSeconds: number;
+  wipLimits: Partial<Record<Status, number>>;
+  columnCounts: BoardColumnCounts;
 };
 
 // Worker-facing subset of the registry (GET /api/dispatch-policy) — the only
@@ -210,11 +221,19 @@ export type DispatchPolicy = {
 // fields (scripts/worker-select.ts) directly so a worker can overlay this
 // response onto its config with no translation.
 export function getDispatchPolicy(db: Db): DispatchPolicy {
+  const wipLimits = Object.fromEntries(
+    STATUSES.flatMap((status) => {
+      const key = `wip.limit.${status}`;
+      return key in REGISTRY ? [[status, getSetting(db, key as SettingKey)]] : [];
+    }),
+  ) as Partial<Record<Status, number>>;
   return {
     maxConcurrent: getSetting(db, "dispatch.max_concurrent"),
     maxAnswerConcurrent: getSetting(db, "dispatch.max_answer_concurrent"),
     intervalSeconds: getSetting(db, "dispatch.poll_seconds"),
     eventPollSeconds: getSetting(db, "dispatch.event_poll_seconds"),
     heartbeatWindowSeconds: getSetting(db, "claims.heartbeat_window_seconds"),
+    wipLimits,
+    columnCounts: boardColumnCounts(db),
   };
 }

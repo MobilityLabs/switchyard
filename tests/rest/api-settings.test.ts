@@ -136,6 +136,8 @@ describe("settings routes", () => {
       intervalSeconds: 300,
       eventPollSeconds: 15,
       heartbeatWindowSeconds: 600,
+      wipLimits: { backlog: 0, todo: 0, in_progress: 0, in_review: 5 },
+      columnCounts: {},
     });
   });
 });
