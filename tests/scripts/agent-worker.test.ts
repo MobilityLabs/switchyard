@@ -252,6 +252,40 @@ describe("session watchdog (SYD-115)", () => {
     vi.unstubAllEnvs();
   });
 
+  // SYD-258: buildDockerArgs passes SWITCHYARD_TOKEN into the container as a
+  // bare -e passthrough from the spawn env. An engine lane (codex/gemini)
+  // resolves its own token from config.token (e.g. SWITCHYARD_GEMINI_TOKEN),
+  // so the spawn env must carry THAT token as SWITCHYARD_TOKEN — otherwise the
+  // container acts as whatever actor the shared .env's SWITCHYARD_TOKEN
+  // belongs to, the claim actor and in-container actor diverge, and the
+  // assignee guard strands the finished session at the in_review hand-off.
+  it("hands the container the worker's own resolved token, not the shared SWITCHYARD_TOKEN (SYD-258)", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const containerizedConfig: WorkerConfig = {
+      ...config,
+      containerized: true,
+      token: "SWITCHYARD_GEMINI_TOKEN",
+      projects: { SYD: { repo: "/repo/syd" } },
+    };
+    vi.stubEnv("ANTHROPIC_API_KEY", "test-key");
+    vi.stubEnv("SWITCHYARD_TOKEN", "claude-dev-token");
+    vi.stubEnv("SWITCHYARD_GEMINI_TOKEN", "gemini-dev-token");
+
+    dispatch(issue, containerizedConfig, "gemini-dev-token", "code");
+    child.pid = 111;
+    child.emit("spawn");
+
+    const dockerRun = spawnMock.mock.calls.find(
+      (c) => c[0] === "docker" && Array.isArray(c[1]) && c[1][0] === "run",
+    );
+    expect(dockerRun).toBeDefined();
+    const spawnEnv = (dockerRun![2] as { env: Record<string, string> }).env;
+    expect(spawnEnv.SWITCHYARD_TOKEN).toBe("gemini-dev-token");
+
+    vi.unstubAllEnvs();
+  });
+
   it("clears the watchdog on a normal exit so a slow-but-finished session is never killed", () => {
     const child = new FakeChildProcess();
     spawnMock.mockReturnValue(child);
