@@ -324,9 +324,9 @@ describe("Shell header (SYD-214)", () => {
   it("no longer renders the header's own new-project popover or its toggle", async () => {
     const container = await renderShell();
     expect(container.querySelector(".new-project-popover")).toBeNull();
-    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "+ Project")).toBe(
-      false,
-    );
+    expect(
+      [...container.querySelectorAll("button")].some((b) => b.textContent === "+ Project"),
+    ).toBe(false);
   });
 
   it("always shows + New issue, the actor badge, and Log out", async () => {

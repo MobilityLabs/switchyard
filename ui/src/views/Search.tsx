@@ -55,11 +55,7 @@ export default function Search({ query, project }: { query: string; project: str
       ) : (
         <div className="search-results">
           {data.map((issue) => (
-            <a
-              key={issue.ref}
-              className="search-row"
-              href={href(issueRoute(issue.ref))}
-            >
+            <a key={issue.ref} className="search-row" href={href(issueRoute(issue.ref))}>
               <span className="ref">{issue.ref}</span>
               <span className="title">{issue.title}</span>
               <span className={`badge status-chip status-${issue.status}`}>

@@ -84,11 +84,7 @@ export default function Triage({ project }: { project: string | null }) {
             Waiting on humans <span className="badge warn">{needsInput.data.length}</span>
           </h2>
           {needsInput.data.map((issue) => (
-            <a
-              key={issue.ref}
-              className="needs-input-row"
-              href={href(issueRoute(issue.ref))}
-            >
+            <a key={issue.ref} className="needs-input-row" href={href(issueRoute(issue.ref))}>
               <span className="ref">{issue.ref}</span>
               <span className="title">{issue.title}</span>
               <span className="hint">has a question — open to answer</span>

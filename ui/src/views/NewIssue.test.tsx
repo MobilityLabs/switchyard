@@ -236,7 +236,7 @@ describe("NewIssue", () => {
     expect(updateIssue).toHaveBeenCalledWith("SYD-9", {
       description: "See ![diagram.png](/attachments/1)",
     });
-    expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
+    expect(navigate).toHaveBeenCalledWith({ view: "issue", scope: "SYD", ref: "SYD-9" });
   });
 
   it("retries a failed deferred upload without creating a duplicate issue", async () => {
@@ -270,7 +270,7 @@ describe("NewIssue", () => {
     expect(createIssue).toHaveBeenCalledTimes(1);
     expect(uploadAttachment).toHaveBeenCalledTimes(2);
     expect(updateIssue).toHaveBeenCalledWith("SYD-9", { description: "![image](/a)" });
-    expect(navigate).toHaveBeenCalledWith({ view: "issue", ref: "SYD-9" });
+    expect(navigate).toHaveBeenCalledWith({ view: "issue", scope: "SYD", ref: "SYD-9" });
   });
 
   it("shows the error bar and re-enables the form when createIssue rejects", async () => {
