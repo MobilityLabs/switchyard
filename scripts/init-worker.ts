@@ -330,7 +330,7 @@ function checkRequiredChecks(
         const checks = Array.isArray(rsc.checks)
           ? rsc.checks
               .map((c: { context?: string }) => c?.context)
-              .filter((ctx): ctx is string => typeof ctx === "string" && ctx !== "")
+              .filter((ctx: unknown): ctx is string => typeof ctx === "string" && ctx !== "")
           : [];
         githubRequired = Array.from(new Set([...contexts, ...checks]));
       }
