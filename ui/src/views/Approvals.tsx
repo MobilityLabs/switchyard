@@ -2,7 +2,8 @@ import { useState } from "react";
 import { affirmPendingAction, listPendingActions, listSettings } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
-import { href } from "../router";
+import { href, issueRoute } from "../router";
+import { projectKeyFromRef } from "../refs";
 import type { PendingAction } from "../types";
 
 // "42m ago" / "3h ago" / "2d ago" — same granularity as Triage's row-age
@@ -48,7 +49,7 @@ function ApprovalRow({
   return (
     <li className="session-row panel">
       {action.issueRef ? (
-        <a className="ref" href={href({ view: "issue", ref: action.issueRef })}>
+        <a className="ref" href={href(issueRoute(action.issueRef))}>
           {action.issueRef}
         </a>
       ) : (
@@ -85,7 +86,7 @@ function ApprovalRow({
 // /api/pending-actions/:id/affirm, authenticated by the browser's session
 // cookie (never a bearer — see api.ts). No policy lives here: this view
 // renders what the endpoint returns and posts the affirm, nothing else.
-export default function Approvals() {
+export default function Approvals({ project }: { project: string | null }) {
   const queue = usePoll(() => listPendingActions("pending"), []);
   // Whether supervised.affirm_requires_signature is on (phase 2): when it is,
   // POST /api/pending-actions/:id/affirm always 403s, so the click must not
@@ -99,11 +100,20 @@ export default function Approvals() {
   const requiresSignature =
     settings.data?.find((s) => s.key === "supervised.affirm_requires_signature")?.value === true;
 
+  // Project scope (SYD-254) filters by the row's issueRef (served directly
+  // since SYD-244) — but a row with no resolvable ref stays visible in every
+  // scope: an approval blocks work, so a missing ref must never silently
+  // hide one.
+  const visible = queue.data.filter((action) => {
+    if (!project) return true;
+    return !action.issueRef || projectKeyFromRef(action.issueRef) === project;
+  });
+
   return (
     <section className="approvals">
       <PollErrorBar error={queue.error} />
       <h2>
-        Pending approvals <span className="badge">{queue.data.length}</span>
+        Pending approvals <span className="badge">{visible.length}</span>
       </h2>
       {requiresSignature && (
         <p className="empty">
@@ -111,11 +121,11 @@ export default function Approvals() {
           your key. It will ask for a PIN or fingerprint, depending on your key.
         </p>
       )}
-      {queue.data.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="empty">Nothing waiting on a human.</p>
       ) : (
         <ul className="session-list">
-          {queue.data.map((action) => (
+          {visible.map((action) => (
             <ApprovalRow
               key={action.id}
               action={action}

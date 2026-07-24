@@ -3,6 +3,8 @@
 // SYD-55: the "Board" nav link must point at the project the user was last
 // looking at, not always the first project in the list — and must fall
 // back gracefully if that remembered project no longer exists.
+// SYD-254: routes are scope-first (/SYD/board, /all/triage) and the topbar
+// selector is the scope switcher for every view except settings.
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -40,7 +42,7 @@ function boardHref(container: HTMLElement): string | null {
 
 function navLink(container: HTMLElement, label: string): HTMLAnchorElement {
   const links = [...container.querySelectorAll<HTMLAnchorElement>("nav a")];
-  // Counted nav labels have a badge appended as a text node sibling.
+  // Review's label has a count badge appended as a text node sibling.
   const link = links.find((a) => a.textContent?.startsWith(label));
   if (!link) throw new Error(`no nav link labeled "${label}"`);
   return link;
@@ -78,76 +80,76 @@ describe("Shell board link", () => {
 
   it("falls back to the first project when nothing has been visited yet", async () => {
     const container = await renderShell();
-    expect(boardHref(container)).toBe("/board/ACME");
+    expect(boardHref(container)).toBe("/ACME/board");
   });
 
   it("points at the last-visited board project after navigating to triage", async () => {
     await act(async () => {
-      navigate({ view: "board", project: "SYD" });
+      navigate({ view: "board", scope: "SYD" });
     });
     const container = await renderShell();
-    expect(boardHref(container)).toBe("/board/SYD");
+    expect(boardHref(container)).toBe("/SYD/board");
 
     await act(async () => {
-      navigate({ view: "triage", project: null });
+      navigate({ view: "triage", scope: "all" });
     });
     await act(async () => {}); // flush effects from the route change
-    expect(boardHref(container)).toBe("/board/SYD");
+    expect(boardHref(container)).toBe("/SYD/board");
   });
 
   it("ignores a remembered project that no longer exists", async () => {
     await act(async () => {
-      navigate({ view: "board", project: "GONE" });
+      navigate({ view: "board", scope: "GONE" });
     });
     await act(async () => {
-      navigate({ view: "triage", project: null });
+      navigate({ view: "triage", scope: "all" });
     });
     const container = await renderShell();
-    expect(boardHref(container)).toBe("/board/ACME");
+    expect(boardHref(container)).toBe("/ACME/board");
   });
 });
 
-// SYD-77: Triage and Review are project-scoped like Board, with an "All
-// projects" option, and the Board nav-link pattern (default to the SYD-55
-// remembered project) is mirrored for the Triage/Review tabs too.
-describe("Shell triage/review project scoping", () => {
+// SYD-254: every nav link renders under the current URL scope, so switching
+// scope moves the whole chrome with it instead of each tab keeping its own
+// per-tab project memory.
+describe("Shell nav scope consistency", () => {
   beforeEach(() => {
     localStorage.clear();
     history.replaceState(null, "", "/");
   });
 
-  it("Triage/Review tabs point at All projects when nothing has been visited yet", async () => {
+  it("Triage/Review tabs point at the all scope when nothing has been visited yet", async () => {
     const container = await renderShell();
-    expect(navLink(container, "Triage").getAttribute("href")).toBe("/");
-    expect(navLink(container, "Review").getAttribute("href")).toBe("/review");
+    expect(navLink(container, "Triage").getAttribute("href")).toBe("/all/triage");
+    expect(navLink(container, "Review").getAttribute("href")).toBe("/all/review");
   });
 
-  it("Triage/Review tabs point at the last-visited board project once one is remembered", async () => {
+  it("every nav link carries the current concrete scope", async () => {
     await act(async () => {
-      navigate({ view: "board", project: "SYD" });
+      navigate({ view: "board", scope: "SYD" });
     });
     const container = await renderShell();
-    expect(navLink(container, "Triage").getAttribute("href")).toBe("/triage/SYD");
-    expect(navLink(container, "Review").getAttribute("href")).toBe("/review/SYD");
+    expect(navLink(container, "Triage").getAttribute("href")).toBe("/SYD/triage");
+    expect(navLink(container, "Review").getAttribute("href")).toBe("/SYD/review");
+    expect(navLink(container, "Agents").getAttribute("href")).toBe("/SYD/agents");
+    expect(navLink(container, "Approvals").getAttribute("href")).toBe("/SYD/approvals");
   });
 
-  it("the active tab keeps its own project selection instead of the remembered one", async () => {
+  it("moving to a different project's scope moves every nav link with it", async () => {
     await act(async () => {
-      navigate({ view: "board", project: "SYD" });
+      navigate({ view: "board", scope: "SYD" });
     });
     await act(async () => {
-      navigate({ view: "triage", project: "ACME" });
+      navigate({ view: "triage", scope: "ACME" });
     });
     const container = await renderShell();
-    // Triage is active on ACME (its own URL), Review is inactive and falls
-    // back to the last-remembered board project (SYD).
-    expect(navLink(container, "Triage").getAttribute("href")).toBe("/triage/ACME");
-    expect(navLink(container, "Review").getAttribute("href")).toBe("/review/SYD");
+    expect(navLink(container, "Triage").getAttribute("href")).toBe("/ACME/triage");
+    expect(navLink(container, "Review").getAttribute("href")).toBe("/ACME/review");
   });
 
-  it("shows a project selector with an All projects option on Triage and Review, but not on Board", async () => {
+  it("shows the scope selector with an All projects option everywhere except Board", async () => {
     await act(async () => {
-      navigate({ view: "board", project: "SYD" });
+      navigate({ view: "board", scope: "SYD" });
     });
     const boardContainer = await renderShell();
     const boardSelect = projectSelect(boardContainer);
@@ -155,7 +157,7 @@ describe("Shell triage/review project scoping", () => {
     expect([...boardSelect!.options].some((o) => o.value === "")).toBe(false);
 
     await act(async () => {
-      navigate({ view: "triage", project: null });
+      navigate({ view: "triage", scope: "all" });
     });
     const triageContainer = await renderShell();
     const triageSelect = projectSelect(triageContainer);
@@ -164,7 +166,7 @@ describe("Shell triage/review project scoping", () => {
     expect([...triageSelect!.options].map((o) => o.textContent)).toContain("All projects");
 
     await act(async () => {
-      navigate({ view: "review", project: "SYD", ref: null });
+      navigate({ view: "review", scope: "SYD", ref: null });
     });
     const reviewContainer = await renderShell();
     const reviewSelect = projectSelect(reviewContainer);
@@ -172,9 +174,9 @@ describe("Shell triage/review project scoping", () => {
     expect(reviewSelect!.value).toBe("SYD");
   });
 
-  it("choosing a project in the selector navigates to that project scope on the current view", async () => {
+  it("choosing a project in the selector navigates to that scope on the current view", async () => {
     await act(async () => {
-      navigate({ view: "triage", project: null });
+      navigate({ view: "triage", scope: "all" });
     });
     const container = await renderShell();
     const select = projectSelect(container)!;
@@ -186,12 +188,12 @@ describe("Shell triage/review project scoping", () => {
       nativeSetter.call(select, "SYD");
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(location.pathname).toBe("/triage/SYD");
+    expect(location.pathname).toBe("/SYD/triage");
   });
 
-  it("choosing All projects in the selector navigates back to the bare route", async () => {
+  it("choosing All projects in the selector navigates to the all scope", async () => {
     await act(async () => {
-      navigate({ view: "review", project: "SYD", ref: null });
+      navigate({ view: "review", scope: "SYD", ref: null });
     });
     const container = await renderShell();
     const select = projectSelect(container)!;
@@ -203,10 +205,10 @@ describe("Shell triage/review project scoping", () => {
       nativeSetter.call(select, "");
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(location.pathname).toBe("/review");
+    expect(location.pathname).toBe("/all/review");
   });
 
-  it("scopes the Triage and Review nav badge queries to the active project selection", async () => {
+  it("scopes the Review nav badge query to the active scope", async () => {
     const calls: string[] = [];
     const fetchMock = vi.fn(async (url: string) => {
       calls.push(url);
@@ -215,19 +217,11 @@ describe("Shell triage/review project scoping", () => {
     vi.stubGlobal("fetch", fetchMock);
     try {
       await act(async () => {
-        navigate({ view: "triage", project: "SYD" });
+        navigate({ view: "triage", scope: "SYD" });
       });
       await renderShell();
       await act(async () => {});
       const issuesCalls = calls.filter((u) => u.startsWith("/api/issues?"));
-      expect(
-        issuesCalls.some(
-          (u) =>
-            u.includes("status=triage") &&
-            u.includes("project=SYD") &&
-            u.includes("exclude_snoozed=true"),
-        ),
-      ).toBe(true);
       expect(
         issuesCalls.some((u) => u.includes("status=in_review") && u.includes("project=SYD")),
       ).toBe(true);
@@ -235,24 +229,86 @@ describe("Shell triage/review project scoping", () => {
       vi.unstubAllGlobals();
     }
   });
+});
 
-  it("shows non-zero Triage and Review counts and hides zero counts", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        const body = url.includes("status=triage") ? [{ ref: "SYD-1" }, { ref: "SYD-2" }] : [];
-        return { ok: true, json: async () => body } as Response;
-      }),
-    );
-    try {
-      const container = await renderShell();
-      await act(async () => {});
+// SYD-254: the scope switcher replaces the old board/triage/review-only
+// project selector — it renders on every view except settings, and on views
+// that need a concrete project (board, issue) it hides the All option.
+describe("Shell scope switcher coverage", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    history.replaceState(null, "", "/");
+  });
 
-      expect(navLink(container, "Triage").querySelector(".badge")?.textContent).toBe("2");
-      expect(navLink(container, "Review").querySelector(".badge")).toBeNull();
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!;
+
+  async function pick(select: HTMLSelectElement, value: string): Promise<void> {
+    await act(async () => {
+      nativeSetter.call(select, value);
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+
+  it("renders the switcher on agents/approvals/search, but not on settings", async () => {
+    await act(async () => {
+      navigate({ view: "agents", scope: "all" });
+    });
+    expect(projectSelect(await renderShell())).not.toBeNull();
+
+    await act(async () => {
+      navigate({ view: "approvals", scope: "SYD" });
+    });
+    expect(projectSelect(await renderShell())).not.toBeNull();
+
+    await act(async () => {
+      navigate({ view: "search", scope: "all", query: "x" });
+    });
+    expect(projectSelect(await renderShell())).not.toBeNull();
+
+    await act(async () => {
+      navigate({ view: "settings", tab: "projects" });
+    });
+    expect(projectSelect(await renderShell())).toBeNull();
+  });
+
+  it("picking a project on an all-scope view keeps the view under the new scope", async () => {
+    await act(async () => {
+      navigate({ view: "agents", scope: "all" });
+    });
+    const container = await renderShell();
+    await pick(projectSelect(container)!, "SYD");
+    expect(location.pathname).toBe("/SYD/agents");
+  });
+
+  it("keeps the query when switching scope on the search view", async () => {
+    await act(async () => {
+      navigate({ view: "search", scope: "all", query: "auth bug" });
+    });
+    const container = await renderShell();
+    await pick(projectSelect(container)!, "SYD");
+    expect(location.pathname).toBe("/SYD/search");
+    expect(location.search).toBe("?q=auth%20bug");
+  });
+
+  it("on an issue view the switcher shows the ref's project, hides All, and jumps to the picked project's board", async () => {
+    await act(async () => {
+      navigate({ view: "issue", scope: "SYD", ref: "SYD-5" });
+    });
+    const container = await renderShell();
+    const select = projectSelect(container)!;
+    expect(select.value).toBe("SYD");
+    expect([...select.options].some((o) => o.value === "")).toBe(false);
+    await pick(select, "ACME");
+    expect(location.pathname).toBe("/ACME/board");
+  });
+
+  it("review drops the selected ref when switching scope", async () => {
+    await act(async () => {
+      navigate({ view: "review", scope: "SYD", ref: "SYD-9" });
+    });
+    const container = await renderShell();
+    await pick(projectSelect(container)!, "ACME");
+    expect(location.pathname).toBe("/ACME/review");
   });
 });
 
@@ -334,8 +390,8 @@ describe("Shell nav disclosure menu (SYD-214)", () => {
 });
 
 // SYD-86: the topbar search box is reachable from every view. Enter either
-// jumps straight to a well-formed issue ref or opens the /search results
-// route; "/" focuses the box unless the user is already typing elsewhere.
+// jumps straight to a well-formed issue ref or opens the current scope's
+// /search results route; "/" focuses the box unless already typing elsewhere.
 describe("Shell search box", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -355,17 +411,20 @@ describe("Shell search box", () => {
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
-    expect(location.pathname).toBe("/issue/SYD-52");
+    expect(location.pathname).toBe("/SYD/issue/SYD-52");
   });
 
-  it("opens /search?q=… for a plain-text query", async () => {
+  it("opens the current scope's search for a plain-text query", async () => {
+    await act(async () => {
+      navigate({ view: "triage", scope: "SYD" });
+    });
     const container = await renderShell();
     const input = searchInput(container);
     await type(input, "auth bug");
     await act(async () => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
-    expect(location.pathname).toBe("/search");
+    expect(location.pathname).toBe("/SYD/search");
     expect(location.search).toBe("?q=auth%20bug");
   });
 
@@ -390,7 +449,7 @@ describe("Shell search box", () => {
 
   it("keeps the search box in sync with the URL's query on the /search route", async () => {
     await act(async () => {
-      navigate({ view: "search", query: "widgets" });
+      navigate({ view: "search", scope: "all", query: "widgets" });
     });
     const container = await renderShell();
     expect(searchInput(container).value).toBe("widgets");
@@ -403,7 +462,7 @@ describe("Shell agents nav (SYD-43)", () => {
     history.replaceState(null, "", "/");
   });
 
-  it("links to /agents and polls the active session count", async () => {
+  it("links to the current scope's agents view and polls the active session count", async () => {
     const calls: string[] = [];
     const fetchMock = vi.fn(async (url: string) => {
       calls.push(url);
@@ -413,7 +472,7 @@ describe("Shell agents nav (SYD-43)", () => {
     try {
       const container = await renderShell();
       await act(async () => {});
-      expect(navLink(container, "Agents").getAttribute("href")).toBe("/agents");
+      expect(navLink(container, "Agents").getAttribute("href")).toBe("/all/agents");
       expect(calls.some((u) => u.startsWith("/api/agent-sessions?active=true"))).toBe(true);
     } finally {
       vi.unstubAllGlobals();

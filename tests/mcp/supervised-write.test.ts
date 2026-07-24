@@ -9,7 +9,7 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, type IssueView } from "../../src/services/issues.js";
-import { addDependency } from "../../src/services/dependencies.js";
+import { addDependency, listDependencies } from "../../src/services/dependencies.js";
 import { setSetting } from "../../src/services/settings.js";
 import {
   openSupervisedSession,
@@ -171,12 +171,7 @@ describe("MCP write tools in a supervised session", () => {
     expect(rows[0].action_type).toBe(`dependency.remove:${blocker.ref}`);
 
     // Edge still exists (nothing was changed)
-    const edgeBefore = db
-      .select()
-      .from(sql`dependencies`)
-      .where(sql`blocker_id = ${blocker.id} AND blocked_id = ${issue.id}`)
-      .all();
-    expect(edgeBefore).toHaveLength(1);
+    expect(listDependencies(db, issue.ref).blockedBy.map((d) => d.ref)).toEqual([blocker.ref]);
 
     // 4. Supervised session with full absorption (no hard-gate) executes immediately
     setSetting(db, human, "supervised.hard_gate_actions", []);
@@ -187,11 +182,6 @@ describe("MCP write tools in a supervised session", () => {
     expect(rAbsorb.isError).toBeUndefined();
 
     // Edge is gone!
-    const edgeAfter = db
-      .select()
-      .from(sql`dependencies`)
-      .where(sql`blocker_id = ${blocker.id} AND blocked_id = ${issue.id}`)
-      .all();
-    expect(edgeAfter).toHaveLength(0);
+    expect(listDependencies(db, issue.ref).blockedBy).toEqual([]);
   });
 });

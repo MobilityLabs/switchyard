@@ -156,11 +156,12 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.onError((err, c) => {
-    // Unreachable today BY CONSTRUCTION: PendingAffirmation is only thrown by
-    // updateIssue's divert, which requires attr.sessionId, which only a
-    // supervised principal carries — and a sup_ token resolves ONLY at /mcp
-    // (src/server.ts:77). REST never calls resolveSupervisedPrincipal, and
-    // PATCH /issues/:ref passes no attr at all. Kept as a tripwire: this class
+    // Unreachable today BY CONSTRUCTION: PendingAffirmation is thrown only by
+    // the diverts in updateIssue and removeDependency (SYD-260), both of which
+    // require attr.sessionId, which only a supervised principal carries — and a
+    // sup_ token resolves ONLY at /mcp (src/server.ts:77). REST never calls
+    // resolveSupervisedPrincipal; PATCH /issues/:ref and DELETE /dependencies
+    // both pass no attr at all. Kept as a tripwire: this class
     // extends Error, so if REST ever gains supervised attribution, without this
     // arm the catch-all below turns a parked action into a 500 + stack trace.
     if (err instanceof PendingAffirmation) return c.json(err.pending, 202);

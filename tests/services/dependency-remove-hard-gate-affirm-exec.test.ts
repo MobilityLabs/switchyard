@@ -8,7 +8,7 @@ import { and, eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, claimIssue } from "../../src/services/issues.js";
+import { createIssue, claimIssue, updateIssue } from "../../src/services/issues.js";
 import {
   addDependency,
   listDependencies,
@@ -54,7 +54,10 @@ describe("removeDependency divert -> affirm end to end", () => {
 
     const removed = listIssueEvents(db, blockedId).filter((e) => e.type === "blocked_by_removed");
     expect(removed).toHaveLength(1);
-    // The now-unblocked issue is claimable.
+    // The now-unblocked issue is claimable. It has to be queued first: issues a
+    // human files land in "backlog", and AGENT_STATUS_TRANSITIONS only lets an
+    // agent take "todo" -> "in_progress".
+    updateIssue(db, human, "SYD-2", { status: "todo" });
     expect(claimIssue(db, agent, "SYD-2").issue.status).toBe("in_progress");
   });
 
@@ -99,6 +102,8 @@ describe("removeDependency divert -> affirm end to end", () => {
         issueId: blockedId,
         actionType: "dependency.remove",
         payload: {},
+        // Comfortably in the future: affirmPendingAction checks expiry before
+        // the payload, and this test is about the payload error.
         expiresAt: Math.floor(Date.now() / 1000) + 3600,
       })
       .returning({ id: pendingActions.id })
