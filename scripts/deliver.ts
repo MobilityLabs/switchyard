@@ -46,6 +46,8 @@ import {
   checksFailedComment,
   checksTimeoutComment,
   shaChainDisarmedComment,
+  closedPrAlreadyDeliveredComment,
+  closedPrDeadEndComment,
   filterWorkToProjects,
   resumeActionFor,
   agentBranch,
@@ -69,6 +71,7 @@ import {
   originOwnerRepo,
   prFreshness,
   prLiveState,
+  findMergedAgentPr,
 } from "./delivery-exec.js";
 import { acquirePidLock } from "./pidfile.js";
 
@@ -564,12 +567,37 @@ async function deliverPending(
     }
 
     if (live.state === "CLOSED") {
+      // SYD-232: a closed-unmerged pin dead-ends every retry with an
+      // identical failure unless we check whether a replacement PR on the
+      // same branch already delivered the work (e.g. SYD-108's #61 → #124).
+      const merged = await findMergedAgentPr(project.repo, ref).catch((e: Error) => {
+        console.error(`could not check for a merged replacement PR on ${ref}: ${e.message}`);
+        return null;
+      });
       const id = attemptId;
       attemptId = null;
+      if (merged) {
+        await finishAttempt(config, token, id, { outcome: "merged_deployed" });
+        await postComment(
+          config,
+          token,
+          ref,
+          closedPrAlreadyDeliveredComment(ref, auth.pin.prNumber, merged.prNumber, merged.mergeSha),
+        ).catch((e: Error) => console.error(`could not comment the reconcile on ${ref}: ${e.message}`));
+        await postDeliveryEvent(config, token, ref, {
+          type: "delivered",
+          prNumber: merged.prNumber,
+          mergeSha: merged.mergeSha,
+          deploy: { ran: false },
+        }).catch((e: Error) =>
+          console.error(`could not record delivered event on ${ref}: ${e.message}`),
+        );
+        return;
+      }
       await finishAttempt(config, token, id, { outcome: "merge_failed" });
-      const message = `PR #${auth.pin.prNumber} was closed unmerged`;
-      await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
-        console.error(`could not comment the failure on ${ref}: ${e.message}`),
+      const message = `PR #${auth.pin.prNumber} is closed unmerged, with no later merged PR on ${agentBranch(ref)}`;
+      await postComment(config, token, ref, closedPrDeadEndComment(ref, auth.pin.prNumber)).catch(
+        (e: Error) => console.error(`could not comment the failure on ${ref}: ${e.message}`),
       );
       await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
         (e: Error) =>

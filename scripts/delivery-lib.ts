@@ -198,6 +198,27 @@ export function buildPrListArgs(ref: string, ownerRepo: string): string[] {
   ];
 }
 
+/** SYD-232: looks for a PR on this same agent/<ref> branch that already
+ * MERGED — checked before bouncing a pinned PR that's CLOSED unmerged, since
+ * a fresh dispatch can reuse the branch name and open a replacement PR that
+ * delivers the same work under a different number. */
+export function buildPrListMergedArgs(ref: string, ownerRepo: string): string[] {
+  return [
+    "pr",
+    "list",
+    "-R",
+    ownerRepo,
+    "--head",
+    agentBranch(ref),
+    "--state",
+    "merged",
+    "--json",
+    "number,mergeCommit",
+    "--limit",
+    "10",
+  ];
+}
+
 export function buildPrCreateArgs(
   ref: string,
   issueTitle: string,
@@ -604,6 +625,40 @@ export function deliveryFailureComment(ref: string, message: string): string {
     `Delivery FAILED for ${ref}: ${message}\n` +
     `The agent PR was not delivered — check scripts/deliver.ts logs, resolve, ` +
     `and click Retry delivery on the attention banner (or merge manually).`
+  );
+}
+
+/**
+ * SYD-232: the pinned PR is closed unmerged, but a later PR on the same
+ * agent/<ref> branch already merged — the closed pin is a ghost, not a real
+ * failure. Reconciles the redeliver instead of bouncing with the same
+ * "closed unmerged" failure on every retry.
+ */
+export function closedPrAlreadyDeliveredComment(
+  ref: string,
+  closedPrNumber: number,
+  mergedPrNumber: number,
+  mergeSha: string,
+): string {
+  return (
+    `Redeliver reconciled for ${ref}: PR #${closedPrNumber} was closed unmerged, but ${agentBranch(ref)} was ` +
+    `already delivered via PR #${mergedPrNumber} (merged at \`${mergeSha}\`) — treating this as delivered, no ` +
+    `merge needed.`
+  );
+}
+
+/**
+ * SYD-232: the pinned PR is closed unmerged AND no later PR on the same
+ * branch merged either — a genuine dead pin. Distinct from
+ * deliveryFailureComment so a human gets a concrete next step instead of the
+ * same generic "closed unmerged" bounce on every retry.
+ */
+export function closedPrDeadEndComment(ref: string, prNumber: number): string {
+  return (
+    `Delivery FAILED for ${ref}: PR #${prNumber} is closed unmerged, and no later PR on ${agentBranch(ref)} has ` +
+    `merged the work either — this pin is a dead end.\n` +
+    `Re-open PR #${prNumber}, or re-run the agent to produce a fresh PR from ${agentBranch(ref)}, then click Retry ` +
+    `delivery on the attention banner.`
   );
 }
 

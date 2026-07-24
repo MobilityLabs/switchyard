@@ -10,6 +10,7 @@ const waitForChecks = vi.fn();
 const ensureCleanClone = vi.fn();
 const runDeploy = vi.fn();
 const findOpenAgentPr = vi.fn();
+const findMergedAgentPr = vi.fn();
 const originOwnerRepo = vi.fn();
 const prFreshness = vi.fn();
 const prLiveState = vi.fn();
@@ -23,6 +24,7 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   ensureCleanClone: (...args: unknown[]) => ensureCleanClone(...args),
   runDeploy: (...args: unknown[]) => runDeploy(...args),
   findOpenAgentPr: (...args: unknown[]) => findOpenAgentPr(...args),
+  findMergedAgentPr: (...args: unknown[]) => findMergedAgentPr(...args),
   originOwnerRepo: (...args: unknown[]) => originOwnerRepo(...args),
   prFreshness: (...args: unknown[]) => prFreshness(...args),
   prLiveState: (...args: unknown[]) => prLiveState(...args),
@@ -102,6 +104,7 @@ function resetExecMocks(): void {
     waitForChecks,
     ensureCleanClone,
     runDeploy,
+    findMergedAgentPr,
     originOwnerRepo,
     prFreshness,
     prLiveState,
@@ -113,6 +116,7 @@ function resetExecMocks(): void {
   waitForChecks.mockResolvedValue("passing");
   ensureCleanClone.mockResolvedValue(undefined);
   runDeploy.mockResolvedValue({ ran: true, ok: true, tail: "" });
+  findMergedAgentPr.mockResolvedValue(null);
   originOwnerRepo.mockResolvedValue("acme/widgets");
   prFreshness.mockRejectedValue(new Error("gh unavailable in tests"));
 }
@@ -258,15 +262,47 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merged_deployed" });
   });
 
-  it("a pending CLOSED-unmerged pin finishes merge_failed with a delivery_failed event, never merging", async () => {
+  it("a pending CLOSED-unmerged pin with no replacement PR finishes merge_failed with an actionable delivery_failed event, never merging (SYD-232)", async () => {
     installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
     prLiveState.mockResolvedValue({ state: "CLOSED", headRefOid: "s0abc", mergeCommit: null });
+    findMergedAgentPr.mockResolvedValue(null);
 
     await tick(config, token, newTickGate(), false);
 
+    expect(findMergedAgentPr).toHaveBeenCalledWith("/repo/syd", "SYD-9");
     expect(mergeAgentPr).not.toHaveBeenCalled();
     expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merge_failed" });
-    expect(bodyOf(deliveryEventCalls("SYD-9")[0])).toMatchObject({ type: "delivery_failed" });
+    const event = bodyOf(deliveryEventCalls("SYD-9")[0]);
+    expect(event).toMatchObject({ type: "delivery_failed" });
+    expect(String(event.message)).toContain("no later merged PR");
+    const comments = fetchMock().mock.calls.filter(([u]) => String(u).endsWith("/comments"));
+    const commentBody = bodyOf(comments[0]).body as string;
+    expect(commentBody).toContain("Re-open PR #42");
+    expect(commentBody).toContain("re-run the agent");
+  });
+
+  it("a pending CLOSED-unmerged pin whose branch already delivered via a replacement PR reconciles to merged_deployed instead of failing (SYD-232)", async () => {
+    installFetch(pendingWork({ repo: "acme/widgets", prNumber: 61, headSha: "s0abc" }));
+    prLiveState.mockResolvedValue({ state: "CLOSED", headRefOid: "s0abc", mergeCommit: null });
+    findMergedAgentPr.mockResolvedValue({ prNumber: 124, mergeSha: "replacement-sha" });
+
+    await tick(config, token, newTickGate(), false);
+
+    expect(findMergedAgentPr).toHaveBeenCalledWith("/repo/syd", "SYD-9");
+    expect(mergeAgentPr).not.toHaveBeenCalled();
+    expect(attemptAutoRebase).not.toHaveBeenCalled();
+    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "merged_deployed" });
+    const event = bodyOf(deliveryEventCalls("SYD-9")[0]);
+    expect(event).toMatchObject({
+      type: "delivered",
+      prNumber: 124,
+      mergeSha: "replacement-sha",
+    });
+    const comments = fetchMock().mock.calls.filter(([u]) => String(u).endsWith("/comments"));
+    const commentBody = bodyOf(comments[0]).body as string;
+    expect(commentBody).toContain("PR #61");
+    expect(commentBody).toContain("PR #124");
+    expect(commentBody).toContain("replacement-sha");
   });
 
   it("a pending authorization with no pin is a quiet no-op skip (interactive work, defensive only)", async () => {
