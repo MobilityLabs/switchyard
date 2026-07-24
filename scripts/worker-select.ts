@@ -784,7 +784,19 @@ export function buildContainerizedPrompt(
     // holds its lease — do NOT call claim_issue (a re-claim would fail); your
     // claim-scoped writes are authorized automatically. Call get_issue to read it.
     `This issue is already claimed for your session — do not call claim_issue; call get_issue to read it. ` +
-    `Implement the work with tests. Comment verification ` +
+    `Implement the work with tests. ` +
+    // SYD-239: SYD-183 asks agents to attach a screenshot for UI work, but the
+    // worker images (Dockerfile.worker/.codex/.gemini) ship switchyard-attach
+    // and no browser — there is nothing here to render the app with. Say that
+    // outright so a session doesn't burn a turn discovering it, and name the
+    // evidence it CAN produce. UI issues now default to workerPreference
+    // "interactive" (defaultWorkerPreference in src/services/issues.ts) so the
+    // visual check happens in a session that actually has a browser. A Mermaid
+    // diagram still works here — that renders without one.
+    `This container has no browser, so you cannot take a screenshot: describe any visual ` +
+    `change in words in your verification comment instead. A diagram (e.g. Mermaid rendered ` +
+    `to PNG) can still be attached with switchyard-attach. ` +
+    `Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +

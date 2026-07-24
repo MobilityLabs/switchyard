@@ -1256,6 +1256,17 @@ describe("buildContainerizedPrompt", () => {
     expect(prompt).toContain("origin/develop");
     expect(prompt).not.toContain("origin/main");
   });
+
+  // SYD-239: the worker images ship switchyard-attach but no browser, so a
+  // container cannot satisfy the SYD-183 "attach a screenshot" norm. Say so,
+  // rather than leaving the session to discover it by failing — and point at
+  // the evidence it CAN produce.
+  it("tells the session it has no browser and asks for a written visual description", () => {
+    const prompt = buildContainerizedPrompt("SYD-7");
+    expect(prompt).toMatch(/no browser/i);
+    expect(prompt).not.toMatch(/attach a screenshot/i);
+    expect(prompt).toMatch(/describe/i);
+  });
 });
 
 describe("buildDockerArgs resumed threading", () => {
