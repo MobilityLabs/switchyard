@@ -413,6 +413,39 @@ describe("poller-down done-stamp then recovery (SYD-228)", () => {
   });
 });
 
+describe("stamp-before-PR-registration ordering (SYD-261)", () => {
+  it("enqueues delivery when an open PR is registered for a done-stamped issue with no prior pin", () => {
+    const { db, human, agent } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship late PR" });
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
+    updateIssue(db, human, issue.ref, { status: "todo" });
+    claimIssue(db, agent, issue.ref);
+    updateIssue(db, human, issue.ref, { status: "in_review" });
+
+    // 1. Human stamps the issue done BEFORE the PR is registered in the database (due to poller lag/webhook down)
+    updateIssue(db, human, issue.ref, { status: "done" });
+
+    // Since the PR was not registered yet, there is no pin on the status_changed event.
+    // Thus, nothing is pending authorization yet.
+    expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
+
+    // 2. The GitHub poller/webhook catches up and registers the open PR in the DB (gh_pr_opened/upsertPrState)
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 304,
+      status: "open",
+      branch: `agent/${issue.ref}`,
+      url: `https://github.com/${REPO}/pull/304`,
+      headSha: "sha-late-pr",
+    });
+
+    // 3. Now, listPendingDeliveryAuthorizations MUST automatically pick it up as pending authorization!
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].pin).toEqual({ repo: REPO, prNumber: 304, headSha: "sha-late-pr" });
+  });
+});
+
 describe("startDeliveryAttempt / finishDeliveryAttempt", () => {
   it("refuses agent actors", () => {
     const { db, human, agent } = setup();
