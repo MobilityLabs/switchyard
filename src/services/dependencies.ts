@@ -3,7 +3,8 @@ import type { Db, DbOrTx } from "../db/index.js";
 import { dependencies, issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
-import { SwitchyardError } from "./errors.js";
+import { PendingAffirmation, SwitchyardError } from "./errors.js";
+import { canonicalizeAction, type CanonicalAction } from "./canonical-action.js";
 import { getIssue, toView, type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
 import { recordEvent } from "./events.js";
@@ -103,9 +104,25 @@ export function removeDependency(
         { blockerRef: blocker.ref, blockedRef: blocked.ref },
         expiresAt,
       );
-      throw new SwitchyardError(
-        `Awaiting human affirmation: removing the ${blocker.ref} → ${blocked.ref} dependency is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`,
-      );
+      // PendingAffirmation, not SwitchyardError: guard() in src/mcp/server.ts
+      // translates the former into a SUCCESS result carrying the canonical
+      // bytes, so the proposing session can hand them to `syd affirm`. Throwing
+      // SwitchyardError here would surface as isError with nothing to relay —
+      // the divert would park a row the agent couldn't route a human to.
+      const action: CanonicalAction = {
+        v: 1,
+        pendingActionId,
+        sessionId: attr.sessionId,
+        issueRef: blocked.ref,
+        actionType: `dependency.remove:${blocker.ref}`,
+        expiresAt,
+      };
+      throw new PendingAffirmation({
+        pendingActionId,
+        canonical: canonicalizeAction(action),
+        action,
+        instructions: `Removing the ${blocker.ref} → ${blocked.ref} dependency is hard-gated. Nothing was changed. A human must run: syd affirm ${blocked.ref}`,
+      });
     }
   }
   if (actor.type !== "human") {
