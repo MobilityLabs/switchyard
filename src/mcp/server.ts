@@ -14,7 +14,7 @@ import {
   heartbeatClaim,
   SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
-import { nextTask, addDependency } from "../services/dependencies.js";
+import { nextTask, addDependency, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
@@ -475,6 +475,21 @@ export function buildMcpServer(
     },
     guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
       addDependency(db, actor, blocker_ref, blocked_ref, attribution);
+      return { ok: true };
+    }),
+  );
+
+  server.registerTool(
+    "remove_dependency",
+    {
+      description:
+        "Declare that one issue no longer blocks another (removes a dependency edge). " +
+        "Only humans may remove dependencies directly — if you are an agent, " +
+        "this will propose dependency removal through the hard-gate if configured.",
+      inputSchema: { blocker_ref: z.string(), blocked_ref: z.string() },
+    },
+    guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
+      removeDependency(db, actor, blocker_ref, blocked_ref, attribution);
       return { ok: true };
     }),
   );

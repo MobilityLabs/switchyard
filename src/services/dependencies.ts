@@ -9,6 +9,7 @@ import { getProjectByKey } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { listOpenPrByIssueId } from "./pr-status.js";
 import { EXECUTABLE_GATE_ACTIONS, findOrCreatePendingAction, isHardGated } from "./hard-gate.js";
+import { getSetting } from "./settings.js";
 
 const CLOSED = ["done", "canceled"] as const;
 const PRIORITY_RANK = sql`CASE ${issues.priority}
@@ -90,12 +91,15 @@ export function removeDependency(
       // a still-pending first one (remove A) on the same blocked issue instead
       // of parking its own row. affirmPendingAction splits back to the base
       // kind on ":" to route execution and the executor check.
+      const expiresAt =
+        Math.floor(Date.now() / 1000) + getSetting(db, "supervised.affirm_ttl_seconds");
       const pendingActionId = findOrCreatePendingAction(
         db,
         attr.sessionId,
         blocked.id,
         `dependency.remove:${blocker.ref}`,
         { blockerRef: blocker.ref, blockedRef: blocked.ref },
+        expiresAt,
       );
       throw new SwitchyardError(
         `Awaiting human affirmation: removing the ${blocker.ref} → ${blocked.ref} dependency is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`,

@@ -94,7 +94,13 @@ describe("removeDependency divert -> affirm end to end", () => {
     // guards a malformed row from silently no-opping instead of executing.
     const id = db
       .insert(pendingActions)
-      .values({ sessionId, issueId: blockedId, actionType: "dependency.remove", payload: {} })
+      .values({
+        sessionId,
+        issueId: blockedId,
+        actionType: "dependency.remove",
+        payload: {},
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      })
       .returning({ id: pendingActions.id })
       .get().id;
     expect(() => affirmPendingAction(db, human, id)).toThrow(/missing blocker\/blocked refs/i);
