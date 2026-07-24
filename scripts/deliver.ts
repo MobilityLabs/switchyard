@@ -661,12 +661,36 @@ async function deliverPending(
         console.error(`could not finish delivery attempt for ${ref}: ${e.message}`),
       );
     }
-    await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
-      console.error(`could not comment the failure on ${ref}: ${e.message}`),
-    );
-    await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
-      (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
-    );
+
+    let isMerged = false;
+    if (auth.pin !== null) {
+      try {
+        const live = await prLiveState(project.repo, auth.pin.prNumber);
+        if (live.state === "MERGED") {
+          isMerged = true;
+        }
+      } catch (liveErr) {
+        console.error(
+          `could not fetch live PR state in outer catch for ${ref}: ${(liveErr as Error).message}`,
+        );
+      }
+    }
+
+    if (isMerged) {
+      console.log(
+        `${ref}: delivery failed but live PR #${auth.pin?.prNumber} is MERGED. ` +
+          `Treating as a post-merge/finalization failure; skipping spurious delivery_failed comment/event. ` +
+          `Attempt will be left unfinished for resumeAttempt.`,
+      );
+    } else {
+      await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
+        console.error(`could not comment the failure on ${ref}: ${e.message}`),
+      );
+      await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
+        (e: Error) =>
+          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+      );
+    }
   }
 }
 
