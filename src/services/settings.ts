@@ -51,6 +51,11 @@ export const REGISTRY = {
     description:
       "Status transitions requiring fresh human affirmation in a supervised session. Only affirmable statuses are allowed (Phase 1: done). Empty = full absorption.",
   },
+  "supervised.pending_action_ttl_seconds": {
+    type: "number",
+    default: 600,
+    description: "Time-to-live in seconds for pending human affirmations.",
+  },
 } satisfies Record<string, RegistryEntry>;
 
 // The gated actions an affirmation can actually carry out. Gating anything else

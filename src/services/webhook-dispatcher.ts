@@ -5,6 +5,7 @@ import { actors, events, issues, projects, webhooks, webhookCursor } from "../db
 import { releaseStaleClaims } from "./stale-claims.js";
 import { expireLeases } from "./leases.js";
 import { sweepOrphanedAgentSessions } from "./agent-sessions.js";
+import { expirePendingActions } from "./hard-gate.js";
 import { getSetting } from "./settings.js";
 import { emitProcessDeviations } from "./deviation.js";
 
@@ -108,6 +109,11 @@ export function startWebhookDispatcher(db: Db, intervalMs = 2000): () => void {
       sweepOrphanedAgentSessions(db);
     } catch (err) {
       console.error("orphaned agent session sweep:", err);
+    }
+    try {
+      expirePendingActions(db, Math.floor(Date.now() / 1000));
+    } catch (err) {
+      console.error("pending action expiry sweep:", err);
     }
   }, intervalMs);
   timer.unref?.();

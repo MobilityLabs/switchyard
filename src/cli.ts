@@ -4,7 +4,7 @@ import { actors } from "./db/schema.js";
 import { createActor, type Actor } from "./services/actors.js";
 import { createProject } from "./services/projects.js";
 import { createLoginLink } from "./services/auth.js";
-import { openSupervisedSession } from "./services/supervised-sessions.js";
+import { openSupervisedSession, closeSupervisedSession } from "./services/supervised-sessions.js";
 import { resolveBaseUrl } from "./services/settings.js";
 import { addWebhook, listWebhooks, removeWebhook } from "./services/webhooks.js";
 import { addGithubRepo, listGithubRepos, removeGithubRepo } from "./services/github-repos.js";
@@ -19,9 +19,8 @@ if (!dbPath || !cmd) {
   console.log("usage: tsx src/cli.ts <db-path> add-actor <name> <human|agent|service>");
   console.log("       tsx src/cli.ts <db-path> add-project <KEY> <name...>");
   console.log("       tsx src/cli.ts <db-path> mint-login <name>");
-  console.log(
-    "       tsx src/cli.ts <db-path> mint-supervised-session <humanName> <agentName>",
-  );
+  console.log("       tsx src/cli.ts <db-path> mint-supervised-session <humanName> <agentName>");
+  console.log("       tsx src/cli.ts <db-path> close-supervised-session <token>");
   console.log("       tsx src/cli.ts <db-path> add-webhook <url> [PROJECT_KEY] [secret]");
   console.log("       tsx src/cli.ts <db-path> list-webhooks");
   console.log("       tsx src/cli.ts <db-path> rm-webhook <id>");
@@ -80,6 +79,14 @@ try {
     console.log(
       "Set this as your MCP client's bearer. It authorizes supervised writes for 12h. It is NOT a web login. Do NOT run this session with your web cookie or personal syd_ bearer in its environment (see the plan's threat-model).",
     );
+  } else if (cmd === "close-supervised-session") {
+    const [token] = args;
+    if (!token) {
+      console.error("close-supervised-session needs: <token>");
+      process.exit(1);
+    }
+    closeSupervisedSession(db, token);
+    console.log("supervised session closed successfully");
   } else if (cmd === "add-webhook") {
     const [url, projectKey, secret] = args;
     if (!url) {

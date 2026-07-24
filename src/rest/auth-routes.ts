@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Db } from "../db/index.js";
 import { SwitchyardError } from "../services/errors.js";
-import { createLoginLink, redeemLoginLink, deleteSession } from "../services/auth.js";
+import { redeemLoginLink, deleteSession } from "../services/auth.js";
+import { closeSupervisedSession } from "../services/supervised-sessions.js";
 
 export const SESSION_COOKIE = "switchyard_session";
 
@@ -37,6 +38,33 @@ export function buildAuthRoutes(db: Db) {
     if (st) deleteSession(db, st);
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
     return c.json({ ok: true });
+  });
+
+  app.post("/auth/close-supervised-session", async (c) => {
+    let token = "";
+    const authz = c.req.header("authorization") ?? "";
+    if (authz.startsWith("Bearer ")) {
+      token = authz.slice(7);
+    } else {
+      try {
+        const body = await c.req.json();
+        token = body.token ?? "";
+      } catch {
+        // Optional JSON body
+      }
+    }
+
+    if (!token) {
+      return c.json({ error: "Missing supervised session token." }, 400);
+    }
+
+    try {
+      closeSupervisedSession(db, token);
+      return c.json({ ok: true });
+    } catch (err) {
+      if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
+      throw err;
+    }
   });
 
   return app;

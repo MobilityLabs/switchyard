@@ -3,6 +3,10 @@ import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createLoginLink, getSessionActor } from "../../src/services/auth.js";
 import { buildAuthRoutes } from "../../src/rest/auth-routes.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
 
 describe("auth routes", () => {
   it("login sets a session cookie; logout clears it", async () => {
@@ -65,5 +69,48 @@ describe("auth routes", () => {
     } finally {
       delete process.env.SWITCHYARD_COOKIE_SECURE;
     }
+  });
+
+  it("closes/revokes a supervised session via POST /auth/close-supervised-session", async () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const app = buildAuthRoutes(db);
+    const { sessionToken } = openSupervisedSession(db, human, "claude-code");
+
+    // Initially resolves correctly
+    expect(resolveSupervisedPrincipal(db, sessionToken)).not.toBeNull();
+
+    // Close it via authorization bearer header
+    const res = await app.request("/auth/close-supervised-session", {
+      method: "POST",
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { ok: boolean }).toEqual({ ok: true });
+
+    // Now it should not resolve
+    expect(resolveSupervisedPrincipal(db, sessionToken)).toBeNull();
+  });
+
+  it("closes/revokes a supervised session via POST /auth/close-supervised-session using JSON body", async () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const app = buildAuthRoutes(db);
+    const { sessionToken } = openSupervisedSession(db, human, "claude-code");
+
+    // Initially resolves correctly
+    expect(resolveSupervisedPrincipal(db, sessionToken)).not.toBeNull();
+
+    // Close it via JSON body
+    const res = await app.request("/auth/close-supervised-session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: sessionToken }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { ok: boolean }).toEqual({ ok: true });
+
+    // Now it should not resolve
+    expect(resolveSupervisedPrincipal(db, sessionToken)).toBeNull();
   });
 });
