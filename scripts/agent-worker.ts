@@ -112,7 +112,12 @@ import {
 } from "./worker-select.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
 import { publishAgentBranch, prFreshness, originOwnerRepo } from "./delivery-exec.js";
-import { agentBranch, formatPublishOutcome, type DeliveryEventInput } from "./delivery-lib.js";
+import {
+  agentBranch,
+  formatPublishOutcome,
+  publishFailureComment,
+  type DeliveryEventInput,
+} from "./delivery-lib.js";
 
 type ApiIssue = WorkerIssue & { title: string };
 
@@ -178,6 +183,45 @@ function loadConfig(configPath: string): WorkerConfig {
     throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
   }
   return raw as WorkerConfig;
+}
+
+/** Posts a prose comment on an issue (SYD-257) — same retry/logging shape as
+ * postDeliveryEvent below, for callers (currently: the publish-failure
+ * handler in finishSessionExit) that need actor-visible provenance text
+ * alongside a structured event. */
+async function postComment(
+  config: WorkerConfig,
+  token: string,
+  ref: string,
+  body: string,
+): Promise<void> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/comments`;
+  const label = `POST comment on ${ref}`;
+  try {
+    await withRetry(
+      async () => {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ body }),
+        });
+        if (!res.ok)
+          throw new HttpStatusError(
+            res.status,
+            `${label} failed: ${res.status} ${await res.text()}`,
+          );
+      },
+      {
+        onRetry: (attempt, err, delayMs) =>
+          console.error(
+            `retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`,
+          ),
+      },
+    );
+  } catch (err) {
+    console.error(`giving up on ${label} after retries: ${(err as Error).message}\n  body: ${body}`);
+    throw err;
+  }
 }
 
 /** Records a structured delivery event (SYD-54) so the issue UI can render a
@@ -707,6 +751,25 @@ function finishSessionExit(
       .catch((err: Error) => {
         console.error(`publish failed for ${ref}: ${err.message}`);
         logLine(`[worker] publish failed: ${err.message}\n`);
+        // SYD-257: previously this failure lived only in the local worker
+        // log — the issue itself, already moved to in_review by the session,
+        // showed no sign anything was wrong. Post actor-visible provenance
+        // (the git/gh stderr) and a delivery_failed event so the attention
+        // banner lights up instead of deliver.ts (and any human) waiting on
+        // a PR that was never opened.
+        postComment(config, token, ref, publishFailureComment(ref, err.message)).catch(
+          (e: Error) => {
+            console.error(`could not comment publish failure for ${ref}: ${e.message}`);
+            logLine(`[worker] could not comment publish failure: ${e.message}\n`);
+          },
+        );
+        postDeliveryEvent(config, token, ref, {
+          type: "delivery_failed",
+          message: `publish failed: ${err.message}`,
+        }).catch((e: Error) => {
+          console.error(`could not record delivery_failed event for ${ref}: ${e.message}`);
+          logLine(`[worker] could not record delivery_failed event: ${e.message}\n`);
+        });
       });
   }
 }

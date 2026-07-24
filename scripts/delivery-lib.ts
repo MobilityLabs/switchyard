@@ -607,6 +607,25 @@ export function deliveryFailureComment(ref: string, message: string): string {
   );
 }
 
+/**
+ * Posted when the host-side publish step (SYD-49: `git push` + `gh pr
+ * create`, run by agent-worker.ts right after a containerized session exits)
+ * fails (SYD-257). Distinct from deliveryFailureComment (a merge-time
+ * failure once a PR already exists) — here the session's work is committed
+ * on `agent/<ref>` in the host repo but never reached GitHub, so there is no
+ * PR yet for "Retry delivery" to re-authorize; a human has to fix the
+ * publish problem (e.g. host git/gh auth) and push/open the PR by hand, or
+ * re-dispatch the issue.
+ */
+export function publishFailureComment(ref: string, message: string): string {
+  return (
+    `Publish FAILED for ${ref}: ${message}\n` +
+    `The session's work is committed on ${agentBranch(ref)} in the host repo, but \`git push\` / ` +
+    `\`gh pr create\` did not reach GitHub — there is no PR yet. Check the worker log, fix the ` +
+    `underlying problem, then push ${agentBranch(ref)} and open the PR by hand (or re-dispatch the issue).`
+  );
+}
+
 // SYD-209 merge orchestrator (formerly "queue mode", SYD-164): rebase
 // agent/<ref> onto current main, force-push, wait for GitHub's required checks
 // to go green on the rebased head (CI is the sole check authority — no

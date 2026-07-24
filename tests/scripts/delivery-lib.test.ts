@@ -31,6 +31,7 @@ import {
   CHECKS_WAIT_TIMEOUT_MS,
   deliveryComment,
   deliveryFailureComment,
+  publishFailureComment,
   checksFailedComment,
   checksTimeoutComment,
   shaChainDisarmedComment,
@@ -544,6 +545,20 @@ describe("comment bodies", () => {
     const body = deliveryFailureComment("SYD-9", "merge conflict");
     expect(body).toContain("SYD-9");
     expect(body).toContain("merge conflict");
+  });
+});
+
+describe("publish-failure comment (SYD-257)", () => {
+  it("names the ref, the agent branch, and the git/gh error", () => {
+    const body = publishFailureComment("SYD-9", "ssh: connect to host github.com: config error");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("agent/SYD-9");
+    expect(body).toContain("ssh: connect to host github.com: config error");
+  });
+
+  it("says there is no PR yet, unlike a merge-time delivery failure", () => {
+    const body = publishFailureComment("SYD-9", "boom");
+    expect(body).toContain("no PR yet");
   });
 });
 
