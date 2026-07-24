@@ -65,7 +65,7 @@ describe("isHardGated", () => {
   });
 
   it("only lists actions that have an executor", () => {
-    expect(EXECUTABLE_GATE_ACTIONS).toEqual(["done"]);
+    expect(EXECUTABLE_GATE_ACTIONS).toEqual(["done", "dependency.remove"]);
   });
 });
 
@@ -77,7 +77,9 @@ describe("supervised.hard_gate_actions validation", () => {
   });
 
   it("accepts the executable set", () => {
-    expect(() => setSetting(db, human, "supervised.hard_gate_actions", ["done"])).not.toThrow();
+    expect(() =>
+      setSetting(db, human, "supervised.hard_gate_actions", ["done", "dependency.remove"]),
+    ).not.toThrow();
   });
 });
 

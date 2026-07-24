@@ -8,6 +8,8 @@ import { getIssue, toView, type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { listOpenPrByIssueId } from "./pr-status.js";
+import { EXECUTABLE_GATE_ACTIONS, findOrCreatePendingAction, isHardGated } from "./hard-gate.js";
+import { getSetting } from "./settings.js";
 
 const CLOSED = ["done", "canceled"] as const;
 const PRIORITY_RANK = sql`CASE ${issues.priority}
@@ -53,14 +55,59 @@ export function addDependency(
 /** Remove a dependency edge. A no-op (no event) if the edge doesn't exist —
  * removal is mistake correction, so idempotency beats erroring. Human-only:
  * removing a blocker makes gated work claimable, so an agent allowed to
- * remove edges could unblock itself and take work a human deliberately held. */
+ * remove edges could unblock itself and take work a human deliberately held.
+ * A supervised session's accountable actor already resolves to the bound
+ * human (SYD-246), so the human-only check below passes it through by
+ * default (full absorption) — the hard-gate check runs first, mirroring
+ * updateIssue's divert, so a project that opts "dependency.remove" into
+ * supervised.hard_gate_actions can still demand a fresh affirmation. */
 export function removeDependency(
-  db: Db,
+  db: DbOrTx,
   actor: Actor,
   blockerRef: string,
   blockedRef: string,
   attr: Attribution = {},
 ): void {
+  if (attr.sessionId != null) {
+    const blocker = getIssue(db, blockerRef);
+    const blocked = getIssue(db, blockedRef);
+    // Only divert an actual change — mirrors updateIssue's `patch.status !==
+    // target.status` skip. A proposal to remove an edge that isn't there is
+    // already a no-op below; parking it would demand affirmation for nothing.
+    const edgeExists = db
+      .select({ blockerId: dependencies.blockerId })
+      .from(dependencies)
+      .where(and(eq(dependencies.blockerId, blocker.id), eq(dependencies.blockedId, blocked.id)))
+      .get();
+    if (edgeExists && isHardGated(db, "dependency.remove")) {
+      if (!EXECUTABLE_GATE_ACTIONS.includes("dependency.remove")) {
+        throw new SwitchyardError(
+          `"dependency.remove" is hard-gated but not an affirmable action in this version — remove it from supervised.hard_gate_actions.`,
+        );
+      }
+      // Parameterized by blocker: the pending_actions dedup key is (session,
+      // issue, actionType), and an issue can have several open blockers — a
+      // bare "dependency.remove" would let a second proposal (remove B) clobber
+      // a still-pending first one (remove A) on the same blocked issue instead
+      // of parking its own row. affirmPendingAction splits back to the base
+      // kind on ":" to route execution and the executor check.
+      // Same TTL source as the "done" divert in updateIssue: an affirmation
+      // that outlives the human's attention is a bearer token with extra steps.
+      const expiresAt =
+        Math.floor(Date.now() / 1000) + getSetting(db, "supervised.affirm_ttl_seconds");
+      const pendingActionId = findOrCreatePendingAction(
+        db,
+        attr.sessionId,
+        blocked.id,
+        `dependency.remove:${blocker.ref}`,
+        { blockerRef: blocker.ref, blockedRef: blocked.ref },
+        expiresAt,
+      );
+      throw new SwitchyardError(
+        `Awaiting human affirmation: removing the ${blocker.ref} → ${blocked.ref} dependency is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`,
+      );
+    }
+  }
   if (actor.type !== "human") {
     throw new SwitchyardError(
       "Only humans remove dependencies — if you believe a blocker is wrong, say so in a comment.",
