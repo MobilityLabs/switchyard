@@ -2,14 +2,15 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
 import { pendingActions, sessions, type PendingActionStatus } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import { removeDependency } from "./dependencies.js";
 import { SwitchyardError } from "./errors.js";
-import { issueRefById, updateIssue, type IssueView } from "./issues.js";
-import { getSetting } from "./settings.js";
+import { getIssue, issueRefById, updateIssue, type IssueView } from "./issues.js";
+import { EXECUTABLE_GATE_ACTIONS, getSetting } from "./settings.js";
 
 // Defined in settings.ts (next to the validator that enforces it) to keep this
 // module's import edge one-way; re-exported here because hard-gate is where
 // callers reason about the gate.
-export { EXECUTABLE_GATE_ACTIONS } from "./settings.js";
+export { EXECUTABLE_GATE_ACTIONS };
 
 export type PendingActionRow = typeof pendingActions.$inferSelect;
 
@@ -145,9 +146,13 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
     if (row.expiresAt < nowSec()) {
       throw new SwitchyardError(`Pending action ${id} expired.`);
     }
-    if (row.actionType !== "done") {
+    // "dependency.remove" rows carry a ":<blockerRef>" suffix (see the divert
+    // in removeDependency) to dedup per-blocker instead of per-issue — split
+    // it back off to route on the base kind.
+    const actionKind = row.actionType.split(":")[0];
+    if (!EXECUTABLE_GATE_ACTIONS.includes(actionKind)) {
       throw new SwitchyardError(
-        `Pending action ${id} is "${row.actionType}", which has no executor — only "done" can be affirmed.`,
+        `Pending action ${id} is "${row.actionType}", which has no executor — only ${EXECUTABLE_GATE_ACTIONS.join(", ")} can be affirmed.`,
       );
     }
     const claimed = tx
@@ -161,6 +166,20 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
     const ref = issueRefById(tx, row.issueId);
     if (!ref) {
       throw new SwitchyardError(`Pending action ${id} points at an issue that no longer exists.`);
+    }
+    if (actionKind === "dependency.remove") {
+      const blockerRef = row.payload.blockerRef;
+      const blockedRef = row.payload.blockedRef;
+      if (typeof blockerRef !== "string" || typeof blockedRef !== "string") {
+        throw new SwitchyardError(
+          `Pending action ${id}'s payload is missing blocker/blocked refs — cannot execute.`,
+        );
+      }
+      // Executed as the human with NO attribution, same reasoning as the done
+      // path below: an empty attr keeps supervised provenance off an event the
+      // human authored directly and stops the divert re-gating this removal.
+      removeDependency(tx, human, blockerRef, blockedRef, {});
+      return getIssue(tx, ref);
     }
     const expectedHeadSha = row.payload.expectedHeadSha;
     // Executed as the human with NO attribution: an empty `attr` leaves
