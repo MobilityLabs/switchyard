@@ -49,7 +49,7 @@ export const REGISTRY = {
     type: "string[]",
     default: ["done"],
     description:
-      "Status transitions requiring fresh human affirmation in a supervised session. Only affirmable statuses are allowed (Phase 1: done). Empty = full absorption.",
+      "Actions requiring fresh human affirmation in a supervised session before they execute. Only affirmable actions are allowed (done, dependency.remove). Empty = full absorption.",
   },
 } satisfies Record<string, RegistryEntry>;
 
@@ -59,7 +59,7 @@ export const REGISTRY = {
 // hard-gate.ts (which re-exports it as its public name) to keep settings.ts a
 // leaf — hard-gate.ts imports getSetting and updateIssue, so importing it back
 // would close a settings -> hard-gate -> issues -> settings cycle.
-export const EXECUTABLE_GATE_ACTIONS: readonly string[] = ["done"];
+export const EXECUTABLE_GATE_ACTIONS: readonly string[] = ["done", "dependency.remove"];
 
 export type SettingKey = keyof typeof REGISTRY;
 

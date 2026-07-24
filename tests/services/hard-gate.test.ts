@@ -6,7 +6,10 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
-import { openSupervisedSession, closeSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  closeSupervisedSession,
+} from "../../src/services/supervised-sessions.js";
 import { setSetting } from "../../src/services/settings.js";
 import { events, pendingActions } from "../../src/db/schema.js";
 import {
@@ -45,7 +48,7 @@ describe("isHardGated", () => {
   });
 
   it("only lists actions that have an executor", () => {
-    expect(EXECUTABLE_GATE_ACTIONS).toEqual(["done"]);
+    expect(EXECUTABLE_GATE_ACTIONS).toEqual(["done", "dependency.remove"]);
   });
 });
 
@@ -57,7 +60,9 @@ describe("supervised.hard_gate_actions validation", () => {
   });
 
   it("accepts the executable set", () => {
-    expect(() => setSetting(db, human, "supervised.hard_gate_actions", ["done"])).not.toThrow();
+    expect(() =>
+      setSetting(db, human, "supervised.hard_gate_actions", ["done", "dependency.remove"]),
+    ).not.toThrow();
   });
 });
 
