@@ -44,7 +44,9 @@ function openRows(db: Db, issueId?: number): Row[] {
 export function getOpenPr(db: Db, issueId: number): OpenPr | null {
   const rows = openRows(db, issueId);
   const row = rows[rows.length - 1];
-  return row ? { prNumber: row.prNumber, url: row.url, repo: row.repo, headSha: row.headSha } : null;
+  return row
+    ? { prNumber: row.prNumber, url: row.url, repo: row.repo, headSha: row.headSha }
+    : null;
 }
 
 export function listOpenPrByIssueId(db: Db): Map<number, OpenPr> {

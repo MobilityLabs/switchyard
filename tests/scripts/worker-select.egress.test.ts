@@ -37,10 +37,9 @@ function mockExec(respond: (call: Call) => string | Error) {
 
 describe("injectKeyEnvArgs", () => {
   it("emits a bare `-e VAR` (value never in argv) for each present provider key", () => {
-    expect(injectKeyEnvArgs({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-X" } as NodeJS.ProcessEnv)).toEqual([
-      "-e",
-      "CLAUDE_CODE_OAUTH_TOKEN",
-    ]);
+    expect(
+      injectKeyEnvArgs({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-X" } as NodeJS.ProcessEnv),
+    ).toEqual(["-e", "CLAUDE_CODE_OAUTH_TOKEN"]);
   });
 
   it("omits absent keys and never carries a secret value", () => {
@@ -78,7 +77,9 @@ describe("ensureEgressGuard — credential injection + CA (SYD-186)", () => {
     // CA volume mounted at the mitmproxy confdir.
     expect(joined).toContain(`-v ${EGRESS_CA_VOLUME}:${EGRESS_CA_DIR}`);
     // Real key passed bare — the value never appears in argv.
-    const passesKey = run!.args.some((a, i) => a === "-e" && run!.args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN");
+    const passesKey = run!.args.some(
+      (a, i) => a === "-e" && run!.args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN",
+    );
     expect(passesKey).toBe(true);
     expect(joined).not.toContain("sk-ant-oat-REAL");
     // Freshness sentinel carries key *names* only, never values.

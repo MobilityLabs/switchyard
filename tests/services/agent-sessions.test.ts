@@ -142,12 +142,12 @@ describe("listAgentSessions", () => {
     startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" }); // claude/worker
     startAgentSession(db, codex, { ref: "SYD-2", mode: "cli" }); // codex actor
 
-    expect(
-      listAgentSessions(db, { active: true, actorId: agent.id }).map((s) => s.ref),
-    ).toEqual(["SYD-1"]);
-    expect(
-      listAgentSessions(db, { active: true, actorId: codex.id }).map((s) => s.ref),
-    ).toEqual(["SYD-2"]);
+    expect(listAgentSessions(db, { active: true, actorId: agent.id }).map((s) => s.ref)).toEqual([
+      "SYD-1",
+    ]);
+    expect(listAgentSessions(db, { active: true, actorId: codex.id }).map((s) => s.ref)).toEqual([
+      "SYD-2",
+    ]);
     // unscoped still returns both — the UI panel is not actor-scoped.
     expect(
       listAgentSessions(db, { active: true })

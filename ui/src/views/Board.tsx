@@ -204,7 +204,10 @@ export function Card({
         })()}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
       {issue.workerPreference === "interactive" ? (
-        <span className="badge worker-pref interactive" title="Interactive session only — not headless-dispatched">
+        <span
+          className="badge worker-pref interactive"
+          title="Interactive session only — not headless-dispatched"
+        >
           👤 interactive
         </span>
       ) : (

@@ -2,10 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-const dockerfile = readFileSync(
-  path.resolve(__dirname, "../../Dockerfile.egress-proxy"),
-  "utf8",
-);
+const dockerfile = readFileSync(path.resolve(__dirname, "../../Dockerfile.egress-proxy"), "utf8");
 
 describe("Dockerfile.egress-proxy (SYD-186)", () => {
   const lines = dockerfile.split("\n").map((l) => l.trim());

@@ -19,9 +19,7 @@ if (!dbPath || !cmd) {
   console.log("usage: tsx src/cli.ts <db-path> add-actor <name> <human|agent|service>");
   console.log("       tsx src/cli.ts <db-path> add-project <KEY> <name...>");
   console.log("       tsx src/cli.ts <db-path> mint-login <name>");
-  console.log(
-    "       tsx src/cli.ts <db-path> mint-supervised-session <humanName> <agentName>",
-  );
+  console.log("       tsx src/cli.ts <db-path> mint-supervised-session <humanName> <agentName>");
   console.log("       tsx src/cli.ts <db-path> add-webhook <url> [PROJECT_KEY] [secret]");
   console.log("       tsx src/cli.ts <db-path> list-webhooks");
   console.log("       tsx src/cli.ts <db-path> rm-webhook <id>");

@@ -265,7 +265,10 @@ export const prState = sqliteTable(
     lastTransitionEventId: integer("last_transition_event_id"),
     updatedAt: integer("updated_at").notNull().default(now()),
   },
-  (t) => [primaryKey({ columns: [t.repo, t.prNumber] }), index("pr_state_issue_ref_idx").on(t.issueRef)],
+  (t) => [
+    primaryKey({ columns: [t.repo, t.prNumber] }),
+    index("pr_state_issue_ref_idx").on(t.issueRef),
+  ],
 );
 
 // The delivery-side twin of pr_state (SYD-208, spec: docs/2026-07-12-sync-

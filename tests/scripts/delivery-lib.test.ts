@@ -62,7 +62,9 @@ describe("resolveInfraToken (SYD-213)", () => {
     expect(resolveInfraToken({ SWITCHYARD_TOKEN: "gen" })).toBe("gen");
   });
   it("falls through a blank service token to the general token (|| not ??)", () => {
-    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe("gen");
+    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe(
+      "gen",
+    );
   });
   it("is undefined when neither is set", () => {
     expect(resolveInfraToken({})).toBeUndefined();

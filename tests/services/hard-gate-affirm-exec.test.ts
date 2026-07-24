@@ -35,9 +35,9 @@ function onlyPendingId(): number {
 
 describe("divert -> affirm end to end", () => {
   it("affirming the human's own pending action executes the done transition", () => {
-    expect(() =>
-      updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId }),
-    ).toThrow(/awaiting human affirmation/i);
+    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+      /awaiting human affirmation/i,
+    );
     const id = onlyPendingId();
     const view = affirmPendingAction(db, human, id);
     expect(view.status).toBe("done");
@@ -74,15 +74,17 @@ describe("divert -> affirm end to end", () => {
   });
 
   it("double-affirm: second affirm throws and exactly one done event is recorded", () => {
-    expect(() =>
-      updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId }),
-    ).toThrow(/awaiting human affirmation/i);
+    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+      /awaiting human affirmation/i,
+    );
     const id = onlyPendingId();
 
     affirmPendingAction(db, human, id);
     expect(() => affirmPendingAction(db, human, id)).toThrow(/no longer pending/i);
 
-    const n = db.get<{ c: number }>(sql`SELECT COUNT(*) c FROM events WHERE issue_id = ${issueId} AND type='status_changed' AND json_extract(payload,'$.to') = 'done'`);
+    const n = db.get<{ c: number }>(
+      sql`SELECT COUNT(*) c FROM events WHERE issue_id = ${issueId} AND type='status_changed' AND json_extract(payload,'$.to') = 'done'`,
+    );
     expect(n!.c).toBe(1);
     expect(getIssue(db, "SYD-1").status).toBe("done");
   });
