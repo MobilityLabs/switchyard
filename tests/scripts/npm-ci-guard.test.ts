@@ -42,7 +42,7 @@ describe("npm-ci-guard.mjs", () => {
 
     const { stderr } = runCapturingStderr(workspace);
 
-    expect(stderr).toContain("npm ci skipped -- no package-lock.json");
+    expect(stderr).toContain("dependency installation skipped -- no package-lock.json");
     expect(existsSync(path.join(workspace, "node_modules"))).toBe(false);
   });
 
@@ -99,9 +99,61 @@ describe("npm-ci-guard.mjs", () => {
 
     const { stderr } = runCapturingStderr(workspace);
 
-    expect(stderr).toContain("npm ci failed");
+    expect(stderr).toContain("npm install failed");
     expect(stderr).toContain(`node ${process.version}`);
     expect(stderr).toContain("engines/packageManager");
+  });
+
+  it("runs yarn install successfully when package.json and yarn.lock are present", () => {
+    const workspace = tmpWorkspace();
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
+    );
+    writeFileSync(
+      path.join(workspace, "yarn.lock"),
+      "# yarn lockfile v1\n",
+    );
+
+    const { stderr } = runCapturingStderr(workspace);
+
+    expect(stderr).not.toContain("WARNING");
+  });
+
+  it("logs node/yarn version when yarn install fails", () => {
+    const workspace = tmpWorkspace();
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      "invalid-json",
+    );
+    writeFileSync(
+      path.join(workspace, "yarn.lock"),
+      "# yarn lockfile v1\n",
+    );
+
+    const { stderr } = runCapturingStderr(workspace);
+
+    expect(stderr).toContain("yarn install failed");
+    expect(stderr).toContain(`node ${process.version}`);
+    expect(stderr).toContain("yarn 1.");
+  });
+
+  it("logs node/pnpm version when pnpm install fails", () => {
+    const workspace = tmpWorkspace();
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
+    );
+    writeFileSync(
+      path.join(workspace, "pnpm-lock.yaml"),
+      "lockfileVersion: '6.0'\n",
+    );
+
+    const { stderr } = runCapturingStderr(workspace);
+
+    expect(stderr).toContain("pnpm install failed");
+    expect(stderr).toContain(`node ${process.version}`);
+    expect(stderr).toContain("pnpm unknown");
   });
 
   it("requires a workspace argument", () => {
@@ -139,6 +191,50 @@ writeFileSync(
         requires: true,
         packages: { "": { name: "tmp-x", version: "1.0.0" } },
       }),
+    );
+
+    const result = spawnSync("node", [SCRIPT, workspace], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SWITCHYARD_TOKEN: "syd_secret",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth_secret",
+        ANTHROPIC_API_KEY: "key_secret",
+      },
+    });
+    expect(result.status).toBe(0);
+
+    const seen = readFileSync(path.join(workspace, "env-seen.txt"), "utf8");
+    expect(seen).toBe(
+      "SWITCHYARD_TOKEN=unset,CLAUDE_CODE_OAUTH_TOKEN=unset,ANTHROPIC_API_KEY=unset,PATH=set",
+    );
+  });
+
+  it("runs yarn install with the secret env vars stripped, so lifecycle scripts can't read tokens (SYD-110)", () => {
+    const workspace = tmpWorkspace();
+    // A real root-project postinstall script: records which secrets it can see.
+    writeFileSync(
+      path.join(workspace, "record-env.mjs"),
+      `import { writeFileSync } from "node:fs";
+writeFileSync(
+  "env-seen.txt",
+  ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "PATH"]
+    .map((k) => (process.env[k] ? k + "=set" : k + "=unset"))
+    .join(","),
+);
+`,
+    );
+    writeFileSync(
+      path.join(workspace, "package.json"),
+      JSON.stringify({
+        name: "tmp-x",
+        version: "1.0.0",
+        scripts: { postinstall: "node record-env.mjs" },
+      }),
+    );
+    writeFileSync(
+      path.join(workspace, "yarn.lock"),
+      "# yarn lockfile v1\n",
     );
 
     const result = spawnSync("node", [SCRIPT, workspace], {
