@@ -315,6 +315,30 @@ describe("validateWorkerConfig", () => {
       expect(validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo" } } })).toEqual([]);
     });
 
+    it("accepts a project with valid requiredChecks", () => {
+      expect(
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", requiredChecks: ["Lint", "Build"] } },
+        }),
+      ).toEqual([]);
+    });
+
+    it("rejects a project with invalid requiredChecks", () => {
+      expect(
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", requiredChecks: "Lint" } },
+        }),
+      ).toHaveLength(1);
+      expect(
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", requiredChecks: [123] } },
+        }),
+      ).toHaveLength(1);
+    });
+
     it("accepts a fully-populated stack block", () => {
       expect(
         validateWorkerConfig({
@@ -851,6 +875,15 @@ describe("buildProtectMainArgs", () => {
     const { input } = buildProtectMainArgs("seanperkins", "nocturne", "build");
     const body = JSON.parse(input);
     expect(body.required_status_checks).toEqual({ strict: false, checks: [{ context: "build" }] });
+  });
+
+  it("lets the caller name multiple required check contexts as an array", () => {
+    const { input } = buildProtectMainArgs("seanperkins", "nocturne", ["Lint", "Build"]);
+    const body = JSON.parse(input);
+    expect(body.required_status_checks).toEqual({
+      strict: false,
+      checks: [{ context: "Lint" }, { context: "Build" }],
+    });
   });
 });
 

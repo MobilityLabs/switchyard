@@ -91,6 +91,8 @@ export type WorkerProject = {
   stack?: WorkerStack;
   /** Integration branch containerized dispatch bases agent/<ref> on (default "main"). */
   baseBranch?: string;
+  /** Required check run/status context names for branch protection. */
+  requiredChecks?: string[];
 };
 
 export type DeliveryConfig = {
