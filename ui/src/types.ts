@@ -96,6 +96,7 @@ export type AgentSession = {
   startedAt: number;
   endedAt: number | null;
   lastNote: { note: string; createdAt: number } | null;
+  actor: string;
 };
 
 // Supervised-session hard-gate queue (SYD phase 1 task 8): a gated action

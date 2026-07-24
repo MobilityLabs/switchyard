@@ -24,6 +24,7 @@ function SessionRow({ s }: { s: AgentSession }) {
         {s.ref}
       </a>{" "}
       {s.issueTitle}
+      <span className="badge">{s.actor}</span>
       <span className="badge">{s.mode}</span>
       {s.status === "running" ? (
         <span className="badge session-live">live · {elapsed}</span>

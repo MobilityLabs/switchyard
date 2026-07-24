@@ -28,6 +28,7 @@ function session(overrides: Partial<AgentSession>): AgentSession {
     startedAt: Math.floor(Date.now() / 1000) - 90,
     endedAt: null,
     lastNote: null,
+    actor: "claude/worker",
     ...overrides,
   };
 }
@@ -67,14 +68,15 @@ describe("formatElapsed", () => {
 });
 
 describe("Agents view", () => {
-  it("splits running sessions from exited ones and links the ref", async () => {
+  it("splits running sessions from exited ones, links the ref, and displays the actor name", async () => {
     vi.mocked(listAgentSessions).mockResolvedValue([
-      session({ id: 2, status: "running", lastNote: { note: "writing tests", createdAt: 0 } }),
+      session({ id: 2, status: "running", actor: "gemini/dev", lastNote: { note: "writing tests", createdAt: 0 } }),
       session({
         id: 1,
         ref: "SYD-9",
         status: "exited",
         exitCode: 0,
+        actor: "codex/dev",
         endedAt: Math.floor(Date.now() / 1000),
       }),
     ]);
@@ -82,6 +84,8 @@ describe("Agents view", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("writing tests");
     expect(text).toContain("SYD-9");
+    expect(text).toContain("gemini/dev");
+    expect(text).toContain("codex/dev");
     expect(container.querySelector('a[href="/issue/SYD-1"]')).not.toBeNull();
     const sections = [...container.querySelectorAll("h2")].map((h) => h.textContent);
     expect(sections).toEqual(["Active sessions", "Recent"]);

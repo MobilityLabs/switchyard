@@ -357,7 +357,7 @@ export function AgentSessionStrip({ refId }: { refId: string }) {
     <div className="agent-session-strip panel">
       {data.map((s) => (
         <span key={s.id}>
-          🤖 agent session running ({s.mode}) · {formatElapsed(s.startedAt, null)} elapsed
+          🤖 agent session running ({s.actor} via {s.mode}) · {formatElapsed(s.startedAt, null)} elapsed
           {s.lastNote && (
             <>
               {" "}
