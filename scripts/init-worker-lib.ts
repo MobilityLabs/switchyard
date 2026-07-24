@@ -118,7 +118,10 @@ export function validateWorkerConfig(raw: unknown): string[] {
         problems.push(`projects.${key}.baseBranch must be a non-empty string when set`);
       }
       if (project?.requiredChecks !== undefined) {
-        if (!Array.isArray(project.requiredChecks) || project.requiredChecks.some((c) => typeof c !== "string" || c.trim() === "")) {
+        if (
+          !Array.isArray(project.requiredChecks) ||
+          project.requiredChecks.some((c) => typeof c !== "string" || c.trim() === "")
+        ) {
           problems.push(`projects.${key}.requiredChecks must be an array of non-empty strings`);
         }
       }

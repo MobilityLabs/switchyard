@@ -110,10 +110,7 @@ describe("npm-ci-guard.mjs", () => {
       path.join(workspace, "package.json"),
       JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
     );
-    writeFileSync(
-      path.join(workspace, "yarn.lock"),
-      "# yarn lockfile v1\n",
-    );
+    writeFileSync(path.join(workspace, "yarn.lock"), "# yarn lockfile v1\n");
 
     const { stderr } = runCapturingStderr(workspace);
 
@@ -122,14 +119,8 @@ describe("npm-ci-guard.mjs", () => {
 
   it("logs node/yarn version when yarn install fails", () => {
     const workspace = tmpWorkspace();
-    writeFileSync(
-      path.join(workspace, "package.json"),
-      "invalid-json",
-    );
-    writeFileSync(
-      path.join(workspace, "yarn.lock"),
-      "# yarn lockfile v1\n",
-    );
+    writeFileSync(path.join(workspace, "package.json"), "invalid-json");
+    writeFileSync(path.join(workspace, "yarn.lock"), "# yarn lockfile v1\n");
 
     const { stderr } = runCapturingStderr(workspace);
 
@@ -144,10 +135,7 @@ describe("npm-ci-guard.mjs", () => {
       path.join(workspace, "package.json"),
       JSON.stringify({ name: "tmp-x", version: "1.0.0" }),
     );
-    writeFileSync(
-      path.join(workspace, "pnpm-lock.yaml"),
-      "lockfileVersion: '6.0'\n",
-    );
+    writeFileSync(path.join(workspace, "pnpm-lock.yaml"), "lockfileVersion: '6.0'\n");
 
     const { stderr } = runCapturingStderr(workspace);
 
@@ -232,10 +220,7 @@ writeFileSync(
         scripts: { postinstall: "node record-env.mjs" },
       }),
     );
-    writeFileSync(
-      path.join(workspace, "yarn.lock"),
-      "# yarn lockfile v1\n",
-    );
+    writeFileSync(path.join(workspace, "yarn.lock"), "# yarn lockfile v1\n");
 
     const result = spawnSync("node", [SCRIPT, workspace], {
       encoding: "utf8",

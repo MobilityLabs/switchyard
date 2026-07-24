@@ -423,9 +423,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // through a non-agent branch) — Retry is a dead end there since there's no
   // attributed PR to re-authorize.
   app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
-    c.json(
-      resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note),
-    ),
+    c.json(resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note)),
   );
 
   // Task-6 worker contract (SYD-208): human-token-only read of what delivery
@@ -442,18 +440,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // trigger-shaped infra state an agent could exploit.
   app.get("/delivery-health", (c) => {
     const hoursParam = c.req.query("hours");
-    return c.json(
-      getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined),
-    );
+    return c.json(getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined));
   });
 
-  app.post(
-    "/issues/:ref/delivery-attempts",
-    body(deliveryAttemptStartBody),
-    (c) =>
-      c.json(
-        startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json")),
-      ),
+  app.post("/issues/:ref/delivery-attempts", body(deliveryAttemptStartBody), (c) =>
+    c.json(startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
   );
 
   const parseAttemptId = (idParam: string): number => {

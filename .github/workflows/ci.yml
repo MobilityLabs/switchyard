@@ -34,6 +34,8 @@ jobs:
       # single-package allowlist the SYD-209 spec calls for.
       - run: npm ci --ignore-scripts
       - run: npm rebuild better-sqlite3
+      - run: npm run lint
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm run build:ui
       - run: npm test

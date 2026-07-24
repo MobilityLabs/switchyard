@@ -298,7 +298,9 @@ async function finishDelivery(
   try {
     freshness = await prFreshness(project.repo, prNumber);
   } catch (err) {
-    console.error(`could not fetch PR freshness for ${ref} #${prNumber}: ${(err as Error).message}`);
+    console.error(
+      `could not fetch PR freshness for ${ref} #${prNumber}: ${(err as Error).message}`,
+    );
   }
   await postDeliveryEvent(config, token, ref, {
     type: "delivered",
@@ -382,7 +384,9 @@ export async function deliverQueue(
       // verify, or merge) — bounce, and close the now-pointless open PR
       // automatically so re-dispatch (the only remediation) isn't blocked on
       // a human closing it by hand.
-      console.log(`${ref}: no ${agentBranch(ref)} branch found to rebase for PR #${prNumber} — bouncing`);
+      console.log(
+        `${ref}: no ${agentBranch(ref)} branch found to rebase for PR #${prNumber} — bouncing`,
+      );
       await postComment(config, token, ref, noBranchBounceComment(ref, prNumber));
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
@@ -399,7 +403,12 @@ export async function deliverQueue(
       console.log(
         `${ref}: SHA chain broken — branch head ${rebase.observed} is not an authorized head`,
       );
-      await postComment(config, token, ref, shaChainDisarmedComment(ref, accepted[0], rebase.observed));
+      await postComment(
+        config,
+        token,
+        ref,
+        shaChainDisarmedComment(ref, accepted[0], rebase.observed),
+      );
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
         message: `a commit landed on ${agentBranch(ref)} after the delivery was authorized — disarmed`,
@@ -409,8 +418,15 @@ export async function deliverQueue(
       return { outcome: "sha_chain_disarmed" };
     }
     if (rebase.status === "conflict") {
-      console.log(`${ref}: rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`);
-      await postComment(config, token, ref, queueRebaseConflictComment(ref, prNumber, rebase.files));
+      console.log(
+        `${ref}: rebase hit conflicts in ${rebase.files.join(", ") || "(unknown files)"}`,
+      );
+      await postComment(
+        config,
+        token,
+        ref,
+        queueRebaseConflictComment(ref, prNumber, rebase.files),
+      );
       await postDeliveryEvent(config, token, ref, {
         type: "delivery_failed",
         message: `rebase onto main hit real conflicts`,
@@ -606,7 +622,9 @@ async function deliverPending(
           token,
           ref,
           closedPrAlreadyDeliveredComment(ref, auth.pin.prNumber, merged.prNumber, merged.mergeSha),
-        ).catch((e: Error) => console.error(`could not comment the reconcile on ${ref}: ${e.message}`));
+        ).catch((e: Error) =>
+          console.error(`could not comment the reconcile on ${ref}: ${e.message}`),
+        );
         await postDeliveryEvent(config, token, ref, {
           type: "delivered",
           prNumber: merged.prNumber,
@@ -645,7 +663,8 @@ async function deliverPending(
         shaChainDisarmedComment(ref, "(none recorded)", live.headRefOid),
       ).catch((e: Error) => console.error(`could not comment the disarm on ${ref}: ${e.message}`));
       await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
-        (e: Error) => console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
+        (e: Error) =>
+          console.error(`could not record delivery_failed event on ${ref}: ${e.message}`),
       );
       return;
     }
@@ -706,8 +725,8 @@ async function deliverPending(
           `Attempt will be left unfinished for resumeAttempt.`,
       );
     } else {
-      await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch((e: Error) =>
-        console.error(`could not comment the failure on ${ref}: ${e.message}`),
+      await postComment(config, token, ref, deliveryFailureComment(ref, message)).catch(
+        (e: Error) => console.error(`could not comment the failure on ${ref}: ${e.message}`),
       );
       await postDeliveryEvent(config, token, ref, { type: "delivery_failed", message }).catch(
         (e: Error) =>
@@ -764,7 +783,9 @@ async function resumeAttempt(
 
     const live = await prLiveState(project.repo, attempt.prNumber);
     if (resumeActionFor(live.state) === "finish-delivery") {
-      console.log(`${ref}: resuming crashed attempt ${attempt.id} — PR #${attempt.prNumber} is MERGED`);
+      console.log(
+        `${ref}: resuming crashed attempt ${attempt.id} — PR #${attempt.prNumber} is MERGED`,
+      );
       const outcome = await runDeliveryTail(
         ref,
         project,
@@ -914,7 +935,8 @@ async function tick(
   await runGated(gate, async () => {
     const url = `${apiBase(config)}/api/delivery-work`;
     const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    if (!res.ok) throw new Error(`GET /api/delivery-work failed: ${res.status} ${await res.text()}`);
+    if (!res.ok)
+      throw new Error(`GET /api/delivery-work failed: ${res.status} ${await res.text()}`);
     const work = filterWorkToProjects(
       (await res.json()) as DeliveryWork,
       Object.keys(config.projects),

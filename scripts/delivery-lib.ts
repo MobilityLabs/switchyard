@@ -126,9 +126,7 @@ export function resumeActionFor(liveState: "OPEN" | "MERGED" | "CLOSED"): Resume
  */
 export function crashedAttemptComment(ref: string, prNumber: number | null): string {
   const pr =
-    prNumber === null
-      ? "no PR was pinned to the attempt"
-      : `PR #${prNumber} was never merged`;
+    prNumber === null ? "no PR was pinned to the attempt" : `PR #${prNumber} was never merged`;
   return (
     `Delivery FAILED for ${ref}: the delivery worker crashed mid-attempt and ${pr}. ` +
     `No merge landed — re-stamp the issue done or click Retry delivery on the attention banner to re-authorize.`
@@ -450,9 +448,10 @@ type BranchProtection = {
  * just the first) so the operator alarm names all of them at once. `null`
  * models the API's 404 for an unprotected branch.
  */
-export function evaluateBranchProtection(
-  protection: BranchProtection | null,
-): { ok: boolean; problems: string[] } {
+export function evaluateBranchProtection(protection: BranchProtection | null): {
+  ok: boolean;
+  problems: string[];
+} {
   const problems: string[] = [];
   if (!protection) {
     return { ok: false, problems: ["no branch protection on main"] };
@@ -472,7 +471,9 @@ export function evaluateBranchProtection(
       ? protection.enforce_admins
       : (protection.enforce_admins?.enabled ?? false);
   if (!adminsEnforced) {
-    problems.push("enforce_admins is off — an admin credential can bypass required checks / push main");
+    problems.push(
+      "enforce_admins is off — an admin credential can bypass required checks / push main",
+    );
   }
   return { ok: problems.length === 0, problems };
 }
@@ -772,11 +773,7 @@ export function checksTimeoutComment(ref: string): string {
  * third-party push landed on the branch after the human stamp. The attempt
  * disarms and surfaces the old→new delta so a reflexive Retry doesn't re-pin
  * the very push the disarm just refused. */
-export function shaChainDisarmedComment(
-  ref: string,
-  expected: string,
-  observed: string,
-): string {
+export function shaChainDisarmedComment(ref: string, expected: string, observed: string): string {
   return (
     `Delivery DISARMED for ${ref}: a commit landed on ${agentBranch(ref)} after this delivery was authorized, so ` +
     `the merge was NOT performed — ${MAIN_BRANCH} is untouched.\n` +

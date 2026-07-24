@@ -37,13 +37,7 @@ import {
   resolveDeliveryFailure,
   updateIssue,
 } from "../api";
-import type {
-  Activity,
-  Attachment,
-  IssueDetail as IssueDetailType,
-  Issue,
-  Status,
-} from "../types";
+import type { Activity, Attachment, IssueDetail as IssueDetailType, Issue, Status } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 

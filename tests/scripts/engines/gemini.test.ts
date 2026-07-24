@@ -13,9 +13,7 @@ describe("gemini engine builders", () => {
     const settings = JSON.parse(json);
     expect(settings.mcpServers.switchyard.httpUrl).toBe("http://host:3300/mcp");
     // The token is an env REFERENCE (${VAR}), so the value never lands in the file.
-    expect(settings.mcpServers.switchyard.headers.Authorization).toBe(
-      "Bearer ${SWITCHYARD_TOKEN}",
-    );
+    expect(settings.mcpServers.switchyard.headers.Authorization).toBe("Bearer ${SWITCHYARD_TOKEN}");
     // API-key mode selected non-interactively.
     expect(settings.security.auth.selectedType).toBe("gemini-api-key");
     // No baked secret / bearer literal.
@@ -40,11 +38,7 @@ describe("gemini engine builders", () => {
   });
 
   it("builds a headless full-auto gemini argv (container is the sandbox)", () => {
-    expect(buildGeminiExecArgs("do the thing")).toEqual([
-      "--yolo",
-      "--prompt",
-      "do the thing",
-    ]);
+    expect(buildGeminiExecArgs("do the thing")).toEqual(["--yolo", "--prompt", "do the thing"]);
   });
 
   it("exposes the gemini image + api-key var constants", () => {

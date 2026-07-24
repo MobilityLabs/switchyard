@@ -29,7 +29,7 @@ describe("recordEvent attribution", () => {
     });
 
     const [row] = db.all<{ via_agent_id: number | null; session_id: number | null }>(
-      sql`SELECT via_agent_id, session_id FROM events WHERE id = ${eventId}`
+      sql`SELECT via_agent_id, session_id FROM events WHERE id = ${eventId}`,
     );
 
     expect(row.via_agent_id).toBe(agent.id);
@@ -44,7 +44,7 @@ describe("recordEvent attribution", () => {
     });
 
     const [row] = db.all<{ via_agent_id: number | null; session_id: number | null }>(
-      sql`SELECT via_agent_id, session_id FROM events WHERE id = ${eventId}`
+      sql`SELECT via_agent_id, session_id FROM events WHERE id = ${eventId}`,
     );
 
     expect(row.via_agent_id).toBeNull();

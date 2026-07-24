@@ -20,7 +20,13 @@ import { getOpenBlockers } from "./dependencies.js";
 import { getOpenPr, getMergedPr } from "./pr-status.js";
 import { doneWithoutMergedPr } from "./deviation.js";
 import { getSetting } from "./settings.js";
-import { mintLease, validateLease, invalidateLease, getActiveLease, heartbeatLease } from "./leases.js";
+import {
+  mintLease,
+  validateLease,
+  invalidateLease,
+  getActiveLease,
+  heartbeatLease,
+} from "./leases.js";
 import { isHardGated, findOrCreatePendingAction, EXECUTABLE_GATE_ACTIONS } from "./hard-gate.js";
 
 export type Provenance = {
@@ -308,10 +314,18 @@ export function updateIssue(
       // the executor re-drives updateIssue at affirm time, which re-validates every
       // guard (incl. the SYD-208 head pin) against current state: it either no-ops
       // (already done) or throws and rolls back, leaving the row pending.
-      const pendingActionId = findOrCreatePendingAction(db, attr.sessionId, target.id, patch.status, {
-        status: patch.status,
-        ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
-      });
+      const pendingActionId = findOrCreatePendingAction(
+        db,
+        attr.sessionId,
+        target.id,
+        patch.status,
+        {
+          status: patch.status,
+          ...(patch.expectedHeadSha !== undefined
+            ? { expectedHeadSha: patch.expectedHeadSha }
+            : {}),
+        },
+      );
       throw new SwitchyardError(
         `Awaiting human affirmation: ${ref} → ${patch.status} is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`,
       );

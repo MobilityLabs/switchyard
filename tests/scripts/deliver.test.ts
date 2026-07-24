@@ -33,7 +33,8 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   closeDeadAgentPr: (...args: unknown[]) => closeDeadAgentPr(...args),
 }));
 
-const { deliverQueue, tick, warnOnRelaxedBranchProtection } = await import("../../scripts/deliver.js");
+const { deliverQueue, tick, warnOnRelaxedBranchProtection } =
+  await import("../../scripts/deliver.js");
 
 const token = "test-token";
 const project: WorkerProject = { repo: "/repo/syd" };
@@ -87,8 +88,7 @@ function patchCalls(): unknown[][] {
 function derivedHeadCalls(): unknown[][] {
   return fetchMock().mock.calls.filter(
     ([u, init]) =>
-      String(u).includes("/derived-head") &&
-      (init as RequestInit | undefined)?.method === "PATCH",
+      String(u).includes("/derived-head") && (init as RequestInit | undefined)?.method === "PATCH",
   );
 }
 
@@ -155,7 +155,9 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     await tick(config, token, newTickGate(), false);
 
     // Anchored on S0 (the pinned head).
-    expect(attemptAutoRebase).toHaveBeenCalledWith("/repo/syd", expect.any(String), "SYD-9", ["s0abc"]);
+    expect(attemptAutoRebase).toHaveBeenCalledWith("/repo/syd", expect.any(String), "SYD-9", [
+      "s0abc",
+    ]);
     // S1 persisted mid-attempt before the merge.
     const dh = derivedHeadCalls();
     expect(dh).toHaveLength(1);
@@ -166,7 +168,10 @@ describe("delivery worker trigger (SYD-208/209)", () => {
 
     const patches = patchCalls();
     expect(patches).toHaveLength(1);
-    expect(bodyOf(patches[0])).toMatchObject({ outcome: "merged_deployed", derivedHeadSha: "s1def" });
+    expect(bodyOf(patches[0])).toMatchObject({
+      outcome: "merged_deployed",
+      derivedHeadSha: "s1def",
+    });
   });
 
   it("a third-party push after the stamp (S0 anchor fails) disarms — sha_chain_disarmed, never merges", async () => {
@@ -236,7 +241,10 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     await tick(config, token, newTickGate(), false);
 
     expect(mergeAgentPr).not.toHaveBeenCalled();
-    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "verify_failed", derivedHeadSha: "s1def" });
+    expect(bodyOf(patchCalls()[0])).toMatchObject({
+      outcome: "verify_failed",
+      derivedHeadSha: "s1def",
+    });
     expect(bodyOf(deliveryEventCalls("SYD-9")[0])).toMatchObject({ type: "delivery_failed" });
   });
 
@@ -249,7 +257,10 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     await tick(config, token, newTickGate(), false);
 
     expect(mergeAgentPr).not.toHaveBeenCalled();
-    expect(bodyOf(patchCalls()[0])).toMatchObject({ outcome: "checks_timeout", derivedHeadSha: "s1def" });
+    expect(bodyOf(patchCalls()[0])).toMatchObject({
+      outcome: "checks_timeout",
+      derivedHeadSha: "s1def",
+    });
     expect(bodyOf(deliveryEventCalls("SYD-9")[0])).toMatchObject({ type: "delivery_failed" });
   });
 
@@ -479,13 +490,17 @@ describe("delivery worker trigger (SYD-208/209)", () => {
 
   it("does not post delivery_failed comment or event if merge+deploy succeed but finishAttempt PATCH throws (SYD-217)", async () => {
     installFetch(pendingWork({ repo: "acme/widgets", prNumber: 42, headSha: "s0abc" }));
-    
+
     // Make the PATCH to finish the attempt throw (using 400 so withRetry fails immediately without backoff delays)
     const originalFetch = fetch;
     const fetchMockWrapper = vi.fn(async (url: unknown, init?: RequestInit) => {
       const u = String(url);
       const method = init?.method ?? "GET";
-      if (u.includes("/api/delivery-attempts/") && method === "PATCH" && !u.endsWith("/derived-head")) {
+      if (
+        u.includes("/api/delivery-attempts/") &&
+        method === "PATCH" &&
+        !u.endsWith("/derived-head")
+      ) {
         return new Response("Tracker error", { status: 400 });
       }
       return originalFetch(url as any, init);
@@ -526,12 +541,27 @@ describe("delivery worker trigger (SYD-208/209)", () => {
   it("skips refs outside the configured projects", async () => {
     const work: DeliveryWork = {
       pending: [
-        { authorizationId: 5, ref: "OTHER-1", kind: "done_stamp", pin: { repo: "x/y", prNumber: 1, headSha: null } },
+        {
+          authorizationId: 5,
+          ref: "OTHER-1",
+          kind: "done_stamp",
+          pin: { repo: "x/y", prNumber: 1, headSha: null },
+        },
       ],
       unfinished: [
-        { id: 9, issueRef: "OTHER-2", prNumber: 2, headSha: null, derivedHeadSha: null, authorizationId: 6, startedAt: 0 },
+        {
+          id: 9,
+          issueRef: "OTHER-2",
+          prNumber: 2,
+          headSha: null,
+          derivedHeadSha: null,
+          authorizationId: 6,
+          startedAt: 0,
+        },
       ],
-      deployRetries: [{ authorizationId: 7, ref: "OTHER-3", prNumber: 3, headSha: null, retryNumber: 1 }],
+      deployRetries: [
+        { authorizationId: 7, ref: "OTHER-3", prNumber: 3, headSha: null, retryNumber: 1 },
+      ],
     };
     installFetch(work);
 

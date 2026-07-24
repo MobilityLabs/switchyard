@@ -72,7 +72,11 @@ if (hasNpmLock) {
 }
 
 try {
-  execFileSync(packageManager, installArgs, { cwd: workspace, stdio: "inherit", env: sanitizedEnv });
+  execFileSync(packageManager, installArgs, {
+    cwd: workspace,
+    stdio: "inherit",
+    env: sanitizedEnv,
+  });
 } catch {
   let pmVersion = "unknown";
   try {

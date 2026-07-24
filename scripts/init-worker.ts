@@ -242,7 +242,7 @@ function discoverRequiredChecks(owner: string, repo: string, ref: string): strin
   const checkRunsRes = spawnSync(
     "gh",
     ["api", `repos/${owner}/${repo}/commits/${ref}/check-runs`],
-    { encoding: "utf8" }
+    { encoding: "utf8" },
   );
   const checkRuns: string[] = [];
   if (checkRunsRes.status === 0) {
@@ -260,11 +260,9 @@ function discoverRequiredChecks(owner: string, repo: string, ref: string): strin
     }
   }
 
-  const statusesRes = spawnSync(
-    "gh",
-    ["api", `repos/${owner}/${repo}/commits/${ref}/statuses`],
-    { encoding: "utf8" }
-  );
+  const statusesRes = spawnSync("gh", ["api", `repos/${owner}/${repo}/commits/${ref}/statuses`], {
+    encoding: "utf8",
+  });
   const statuses: string[] = [];
   if (statusesRes.status === 0) {
     try {
@@ -291,10 +289,7 @@ function discoverRequiredChecks(owner: string, repo: string, ref: string): strin
  * Also flags mismatch if switchyard-worker.json `requiredChecks` does not match the
  * required checks on GitHub.
  */
-function checkRequiredChecks(
-  key: string,
-  project: WorkerProject,
-): CheckResult[] {
+function checkRequiredChecks(key: string, project: WorkerProject): CheckResult[] {
   const results: CheckResult[] = [];
   const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], {
     encoding: "utf8",
@@ -317,7 +312,7 @@ function checkRequiredChecks(
   const protectionRes = spawnSync(
     "gh",
     ["api", `repos/${parsed.owner}/${parsed.repo}/branches/${baseBranch}/protection`],
-    { encoding: "utf8" }
+    { encoding: "utf8" },
   );
 
   let githubRequired: string[] = [];
@@ -352,7 +347,8 @@ function checkRequiredChecks(
       results.push({
         name: `projects.${key} branch protection required checks sync`,
         ok: false,
-        note: `switchyard-worker.json requiredChecks and GitHub branch protection required checks are out of sync. ` +
+        note:
+          `switchyard-worker.json requiredChecks and GitHub branch protection required checks are out of sync. ` +
           `switchyard-worker.json has: [${configRequired.join(", ")}]. GitHub has: [${githubRequired.join(", ")}]. ` +
           `Run \`npm run init-worker -- --protect-main ${key}\` to sync them.`,
       });
@@ -367,7 +363,8 @@ function checkRequiredChecks(
         name: `projects.${key} required checks health`,
         ok: true,
         warn: true,
-        note: `The following required check(s) are configured but not reporting on the latest commit of ${baseBranch}: ` +
+        note:
+          `The following required check(s) are configured but not reporting on the latest commit of ${baseBranch}: ` +
           `[${nonReporting.join(", ")}]. Actually reporting: [${reporting.join(", ")}]. This will make PRs unmergeable.`,
       });
     } else {
@@ -1047,15 +1044,21 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
     let checksToRequire: string | string[] = "test";
     if (project.requiredChecks && project.requiredChecks.length > 0) {
       checksToRequire = project.requiredChecks;
-      console.log(`using required checks from switchyard-worker.json: [${project.requiredChecks.join(", ")}]`);
+      console.log(
+        `using required checks from switchyard-worker.json: [${project.requiredChecks.join(", ")}]`,
+      );
     } else {
       const baseBranch = project.baseBranch || "main";
       const discovered = discoverRequiredChecks(parsed.owner, parsed.repo, baseBranch);
       if (discovered.length > 0) {
         checksToRequire = discovered;
-        console.log(`discovered required checks from latest commit on ${baseBranch}: [${discovered.join(", ")}]`);
+        console.log(
+          `discovered required checks from latest commit on ${baseBranch}: [${discovered.join(", ")}]`,
+        );
       } else {
-        console.log(`no checks discovered on ${baseBranch} — falling back to default required check: "test"`);
+        console.log(
+          `no checks discovered on ${baseBranch} — falling back to default required check: "test"`,
+        );
       }
     }
 
