@@ -7,7 +7,7 @@ import { issueRoute, navigate } from "../router";
 import { PRIORITIES, SUMMARY_MAX_LENGTH, WORKER_PREFERENCES, type Priority } from "../types";
 import { parseLabels } from "../labels";
 
-export default function NewIssue(_props: { defaultProject: string | null }) {
+export default function NewIssue({ defaultProject }: { defaultProject: string | null }) {
   const projects = usePoll(listProjects, []);
   const availableProjects = projects.data ?? [];
 
@@ -27,9 +27,9 @@ export default function NewIssue(_props: { defaultProject: string | null }) {
   const paste = useDeferredPasteUpload(setDescription);
   const { uploading, uploadPending } = paste;
 
-  // Falls back to the first loaded project until the user picks one
-  // explicitly, same pattern as Shell's board-project fallback.
-  const effectiveProjectKey = projectKey || availableProjects[0]?.key || "";
+  // Until the user picks explicitly: the URL scope's project (SYD-254),
+  // else the first loaded project — same pattern as Shell's board fallback.
+  const effectiveProjectKey = projectKey || defaultProject || availableProjects[0]?.key || "";
   const trimmedTitle = title.trim();
 
   function submit() {

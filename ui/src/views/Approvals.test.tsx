@@ -64,12 +64,12 @@ function signatureSetting(required: boolean): SettingView {
   };
 }
 
-async function renderApprovals(): Promise<HTMLElement> {
+async function renderApprovals(project: string | null = null): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Approvals project={null} />);
+    root.render(<Approvals project={project} />);
   });
   return container;
 }
@@ -165,9 +165,37 @@ describe("Approvals view", () => {
     vi.mocked(listSettings).mockResolvedValue([signatureSetting(true)]);
     const container = await renderApprovals();
 
-    expect(container.querySelector('a[href="/issue/SYD-42"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/SYD/issue/SYD-42"]')).not.toBeNull();
     expect(findButton(container, "Approve")).toBeUndefined();
     expect(container.textContent).toContain("npm run affirm -- <REF>");
     expect(container.textContent).toContain("PIN or fingerprint, depending on your key");
+  });
+
+  // SYD-254: /SYD/approvals shows only that project's pending approvals —
+  // except rows with no resolvable ref, which must stay visible in every
+  // scope: an approval blocks work, so a missing ref must never silently
+  // hide one. Refs come straight off the pending action (SYD-244).
+  it("filters rows to the scoped project but keeps ref-less rows visible", async () => {
+    vi.mocked(listPendingActions).mockResolvedValue([
+      pendingAction({ id: 1, issueId: 42, issueRef: "SYD-42" }),
+      pendingAction({ id: 2, issueId: 43, issueRef: "HEX-7" }),
+      pendingAction({ id: 3, issueId: 999, issueRef: null }),
+    ]);
+    const container = await renderApprovals("SYD");
+    expect(container.querySelector('a[href="/SYD/issue/SYD-42"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/HEX/issue/HEX-7"]')).toBeNull();
+    expect(container.textContent).toContain("issue #999");
+    // The header count reflects what's shown, not the unfiltered queue.
+    expect(container.querySelector("h2 .badge")?.textContent).toBe("2");
+  });
+
+  it("shows every project's approvals in the all scope", async () => {
+    vi.mocked(listPendingActions).mockResolvedValue([
+      pendingAction({ id: 1, issueId: 42, issueRef: "SYD-42" }),
+      pendingAction({ id: 2, issueId: 43, issueRef: "HEX-7" }),
+    ]);
+    const container = await renderApprovals(null);
+    expect(container.querySelector('a[href="/SYD/issue/SYD-42"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/HEX/issue/HEX-7"]')).not.toBeNull();
   });
 });

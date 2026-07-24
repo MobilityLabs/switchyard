@@ -67,13 +67,13 @@ function setValue(
   el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-async function render(): Promise<HTMLElement> {
+async function render(defaultProject: string | null = null): Promise<HTMLElement> {
   vi.mocked(listProjects).mockResolvedValue(PROJECTS);
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<NewIssue defaultProject={null} />);
+    root.render(<NewIssue defaultProject={defaultProject} />);
   });
   await act(async () => {}); // flush listProjects()
   return container;
@@ -101,6 +101,28 @@ describe("NewIssue", () => {
     expect(select.value).toBe("SYD");
     const optionLabels = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
     expect(optionLabels).toEqual(["SYD — Switchyard", "ACME — Acme"]);
+  });
+
+  // SYD-254: /ACME/new pre-selects the URL scope's project.
+  it("pre-selects the scoped project over the first-loaded fallback", async () => {
+    const container = await render("ACME");
+    const select = container.querySelector("select") as HTMLSelectElement;
+    expect(select.value).toBe("ACME");
+  });
+
+  it("submits with the scoped project when the user never touches the select", async () => {
+    vi.mocked(createIssue).mockResolvedValueOnce(issue({ ref: "ACME-1" }));
+    const container = await render("ACME");
+    const titleInput = container.querySelector(
+      "input[placeholder='Short summary']",
+    ) as HTMLInputElement;
+    await act(async () => {
+      setValue(titleInput, "Scoped filing");
+    });
+    await submitForm(container);
+    expect(createIssue).toHaveBeenCalledWith(
+      expect.objectContaining({ projectKey: "ACME", title: "Scoped filing" }),
+    );
   });
 
   it("disables submit until a title is entered", async () => {
