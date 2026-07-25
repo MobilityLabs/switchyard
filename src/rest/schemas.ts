@@ -48,6 +48,15 @@ export const redeliverBody = z.object({ expectedHeadSha: z.string().min(1).optio
 
 export const resolveDeliveryBody = z.object({ note: z.string().min(1) });
 
+// SYD-262: `reason` is validated against RESOLVABLE_DEVIATIONS in the service,
+// not here — the list is a service-layer policy (which deviations are
+// recorded-once and therefore human-clearable), and keeping it there means the
+// MCP/UI surfaces get the same refusal wording for free.
+export const resolveDeviationBody = z.object({
+  reason: z.string().min(1),
+  note: z.string().min(1),
+});
+
 // SYD-208: the Task-6 worker's outcome vocabulary excludes skipped_rollout —
 // that value is written only by the one-time rollout backfill
 // (ensureRolloutBackfill), never by a live delivery attempt, so the schema
@@ -92,7 +101,10 @@ const deployResult = z.union([
 // pr_opened) stay OPTIONAL until the worker host go-live — making them
 // required now would 400 the un-upgraded worker and silently drop its
 // pr_opened publish (the deploy-skew rule in the sync-simplification spec).
-const repoField = z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"').optional();
+const repoField = z
+  .string()
+  .regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"')
+  .optional();
 export const deliveryEventBody = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("pr_opened"),
@@ -146,7 +158,10 @@ export const githubEventBody = z.object({
   payload: z.unknown(),
   // Optional-first per the SYD-205 deploy-skew rule; the server infers a sole
   // bound repo when absent.
-  repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"').optional(),
+  repo: z
+    .string()
+    .regex(/^[\w.-]+\/[\w.-]+$/, 'must be "owner/repo"')
+    .optional(),
 });
 export const settingPutBody = z.object({ value: z.any() });
 

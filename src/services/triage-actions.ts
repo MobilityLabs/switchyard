@@ -163,6 +163,71 @@ export function redeliverIssue(
  * everything else here. Human-only, like the rest of this file — agents
  * still can't clear their own failures.
  */
+/**
+ * Deviation reasons a human may clear by hand (SYD-262).
+ *
+ * Only `done_without_merged_pr` qualifies today, and the reason is structural:
+ * it is recorded ONCE at the done transition (SYD-204) and then cleared only by
+ * a merged `pr_state` row — which strict agent/<ref> attribution (SYD-206) never
+ * produces for the `feat/<topic>` branches CLAUDE.md prescribes for interactive
+ * work. So it is a dead end by construction, exactly as delivery_failed was
+ * before SYD-178.
+ *
+ * The other reasons (open_pr_not_in_review, merged_pr_not_done, stale_claim) are
+ * recomputed live from current state by getDeviation, so they clear themselves
+ * the moment the drift they describe stops being true — a manual override there
+ * would be a lie that re-raises on the next read. Keep this list to
+ * recorded-once deviations.
+ */
+export const RESOLVABLE_DEVIATIONS = ["done_without_merged_pr"] as const;
+export type ResolvableDeviation = (typeof RESOLVABLE_DEVIATIONS)[number];
+
+/**
+ * Clears a stuck recorded-once process deviation. Generic over the reason so a
+ * future recorded-once deviation gets the escape hatch for free (Sean's call,
+ * 2026-07-24) — the reason rides the payload and attention.ts matches on it, so
+ * clearing one signal can never silence another on the same issue.
+ *
+ * Retroactive by construction: the resolve is compared against the deviation's
+ * event id, so an issue flagged days ago (SYD-236 has been stuck since
+ * 2026-07-14) clears exactly like a fresh one. A later deviation still re-raises.
+ *
+ * Human-only with a required note, same provenance bar as resolveDeliveryFailure
+ * — this silences a "needs my action" signal, so someone has to own having
+ * checked.
+ */
+export function resolveDeviation(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  reason: string,
+  note: string,
+): IssueView {
+  requireHuman(actor, "resolve a process deviation");
+  if (!(RESOLVABLE_DEVIATIONS as readonly string[]).includes(reason)) {
+    throw new SwitchyardError(
+      `"${reason}" cannot be resolved by hand — it is recomputed from current state and clears itself once the drift stops. Resolvable reasons: ${RESOLVABLE_DEVIATIONS.join(", ")}.`,
+    );
+  }
+  if (!note.trim()) {
+    throw new SwitchyardError(
+      "A note is required — say how you confirmed the work actually landed.",
+    );
+  }
+  const current = getIssue(db, ref);
+  const attention = getAttention(db, current.id);
+  if (attention?.reason !== reason) {
+    throw new SwitchyardError(`${ref} has no unresolved ${reason} deviation to resolve.`);
+  }
+  recordEvent(db, {
+    issueId: current.id,
+    actorId: actor.id,
+    type: "deviation_resolved",
+    payload: { reason, note: note.trim() },
+  });
+  return getIssue(db, ref);
+}
+
 export function resolveDeliveryFailure(db: Db, actor: Actor, ref: string, note: string): IssueView {
   requireHuman(actor, "resolve a delivery failure");
   if (!note.trim()) {

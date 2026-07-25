@@ -9,7 +9,13 @@ import {
 } from "../../scripts/worker-select.js";
 
 const cfg = (over: Partial<WorkerConfig> = {}): WorkerConfig =>
-  ({ url: "http://x", intervalSeconds: 300, maxConcurrent: 1, projects: {}, ...over }) as WorkerConfig;
+  ({
+    url: "http://x",
+    intervalSeconds: 300,
+    maxConcurrent: 1,
+    projects: {},
+    ...over,
+  }) as WorkerConfig;
 
 const zero = { misses: 0, invalids: 0 };
 

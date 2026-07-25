@@ -30,7 +30,9 @@ beforeEach(async () => {
 describe("MCP lease enforcement", () => {
   it("claim_issue returns a lease_token", async () => {
     const c = await connect(agent);
-    const res = JSON.parse(text(await c.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } })));
+    const res = JSON.parse(
+      text(await c.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } })),
+    );
     expect(res.lease_token).toMatch(/^lease_/);
     expect(res.status).toBe("in_progress");
   });
@@ -39,14 +41,19 @@ describe("MCP lease enforcement", () => {
     const a = await connect(agent);
     await a.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } }); // session A holds the lease
     const b = await connect(agent); // same actor (shared bearer token), different session
-    const r = await b.callTool({ name: "update_issue", arguments: { ref: "AIPI-1", status: "in_review" } });
+    const r = await b.callTool({
+      name: "update_issue",
+      arguments: { ref: "AIPI-1", status: "in_review" },
+    });
     expect(r.isError).toBe(true);
     expect(text(r)).toMatch(/lease/i);
   });
 
   it("the holder can update_issue with the returned lease_token", async () => {
     const c = await connect(agent);
-    const claim = JSON.parse(text(await c.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } })));
+    const claim = JSON.parse(
+      text(await c.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1" } })),
+    );
     const r = await c.callTool({
       name: "update_issue",
       arguments: { ref: "AIPI-1", status: "in_review", lease_token: claim.lease_token },
@@ -112,7 +119,10 @@ describe("MCP lease enforcement", () => {
     expect(text(r)).not.toContain(claim.lease_token);
     expect(text(r)).not.toMatch(/lease_[0-9a-f]/); // no fresh token minted into the result
     // takeover is likewise refused for a connection-lease session
-    const t = await session.callTool({ name: "claim_issue", arguments: { ref: "AIPI-1", takeover: true } });
+    const t = await session.callTool({
+      name: "claim_issue",
+      arguments: { ref: "AIPI-1", takeover: true },
+    });
     expect(t.isError).toBe(true);
   });
 

@@ -109,7 +109,10 @@ describe("ActorsTab (SYD-158)", () => {
   it("rotates a token behind a confirm and shows the new token once", async () => {
     vi.mocked(listActors).mockResolvedValue(ACTORS);
     vi.mocked(rotateActorToken).mockResolvedValue({ token: "syd_rotated_once" });
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
     const container = await render();
 
     const agentRow = [...container.querySelectorAll("tbody tr")][1];
@@ -121,7 +124,10 @@ describe("ActorsTab (SYD-158)", () => {
 
   it("does not rotate when the confirm is declined", async () => {
     vi.mocked(listActors).mockResolvedValue(ACTORS);
-    vi.stubGlobal("confirm", vi.fn(() => false));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => false),
+    );
     const container = await render();
 
     await click(buttonIn([...container.querySelectorAll("tbody tr")][1], "Rotate token"));
@@ -131,7 +137,10 @@ describe("ActorsTab (SYD-158)", () => {
   it("revokes a token behind a confirm", async () => {
     vi.mocked(listActors).mockResolvedValue(ACTORS);
     vi.mocked(revokeActorToken).mockResolvedValue({ ok: true });
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
     const container = await render();
 
     await click(buttonIn([...container.querySelectorAll("tbody tr")][1], "Revoke token"));

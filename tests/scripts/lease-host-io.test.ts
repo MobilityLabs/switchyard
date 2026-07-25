@@ -51,7 +51,12 @@ describe("persistLeaseToken / readPersistedLeaseToken", () => {
 });
 
 describe("startLeaseHeartbeat orchestration", () => {
-  const cfg = { url: "http://x", intervalSeconds: 300, maxConcurrent: 1, projects: {} } as WorkerConfig;
+  const cfg = {
+    url: "http://x",
+    intervalSeconds: 300,
+    maxConcurrent: 1,
+    projects: {},
+  } as WorkerConfig;
 
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {

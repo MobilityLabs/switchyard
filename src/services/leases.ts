@@ -105,7 +105,10 @@ export function heartbeatLease(
   const now = nowSeconds();
   return db
     .update(claimLeases)
-    .set({ lastBeatAt: now, expiresAt: now + getSetting(db as Db, "claims.heartbeat_window_seconds") })
+    .set({
+      lastBeatAt: now,
+      expiresAt: now + getSetting(db as Db, "claims.heartbeat_window_seconds"),
+    })
     .where(eq(claimLeases.id, active.id))
     .returning()
     .get();
@@ -153,11 +156,7 @@ export function invalidateLease(tx: DbOrTx, issueId: number): void {
  * outage longer than the window still loses those leases (the host cancels
  * those containers on its own missed-beat counter) — an accepted cost.
  */
-export function expireLeases(
-  db: Db,
-  now: number = nowSeconds(),
-  serverStartedAt?: number,
-): number {
+export function expireLeases(db: Db, now: number = nowSeconds(), serverStartedAt?: number): number {
   if (
     serverStartedAt !== undefined &&
     now - serverStartedAt < getSetting(db, "claims.heartbeat_window_seconds")

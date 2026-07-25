@@ -21,18 +21,18 @@ beforeEach(() => {
 
 describe("updateIssue hard-gate divert", () => {
   it("parks a supervised done-stamp as a pending action instead of committing", () => {
-    expect(() =>
-      updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId }),
-    ).toThrow(/awaiting human affirmation/i);
+    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+      /awaiting human affirmation/i,
+    );
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
     expect(db.select().from(pendingActions).all()).toHaveLength(1);
   });
 
   it("dedups a retried proposal instead of piling up rows", () => {
     for (let i = 0; i < 2; i++) {
-      expect(() =>
-        updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId }),
-      ).toThrow(/awaiting human affirmation/i);
+      expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+        /awaiting human affirmation/i,
+      );
     }
     expect(db.select().from(pendingActions).all()).toHaveLength(1);
   });

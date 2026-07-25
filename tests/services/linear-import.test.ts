@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
-import { actors, attachments, dependencies, events, issues, projects } from "../../src/db/schema.js";
+import {
+  actors,
+  attachments,
+  dependencies,
+  events,
+  issues,
+  projects,
+} from "../../src/db/schema.js";
 import { SwitchyardError } from "../../src/services/errors.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -54,8 +61,7 @@ function fixture(): LinearExport {
         number: 1,
         teamKey: "ENG",
         title: "Ship the widget",
-        description:
-          "See diagram.\n\n![diagram.png](https://uploads.linear.app/aa/bb/cc)\n",
+        description: "See diagram.\n\n![diagram.png](https://uploads.linear.app/aa/bb/cc)\n",
         priority: 2,
         stateName: "Done",
         stateType: "completed",
