@@ -82,3 +82,24 @@ describe("Dockerfile.worker pinned CLI version (SYD-198)", () => {
     expect(raw).toContain("claude --version");
   });
 });
+
+// SYD-227: the same hole in the codex image — both engines' images now pin,
+// so neither rebuild drifts silently.
+describe("Dockerfile.worker.codex pinned CLI version (SYD-227)", () => {
+  const raw = readFileSync(path.join(__dirname, "../../Dockerfile.worker.codex"), "utf8");
+
+  it("declares a CODEX_CLI_VERSION build arg with a pinned default", () => {
+    const match = raw.match(/^ARG CODEX_CLI_VERSION=(\S+)$/m);
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("installs the CLI at the pinned version, not unpinned latest", () => {
+    expect(raw).toContain("npm install -g @openai/codex@${CODEX_CLI_VERSION}");
+    expect(raw).not.toMatch(/npm install -g @openai\/codex\s*(&&|$)/m);
+  });
+
+  it("records the installed version in build output", () => {
+    expect(raw).toContain("codex --version");
+  });
+});
