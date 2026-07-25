@@ -17,6 +17,8 @@ npm run dev            # server on :3300 (tsx src/server.ts); SWITCHYARD_DB / PO
 npm test               # vitest run (all tests)
 npx vitest run tests/services/issues-update.test.ts   # single test file
 npm run typecheck      # checks BOTH tsconfigs: app (tsc --noEmit) and ui (tsc -p ui)
+npm run lint           # eslint .
+npm run format:check   # prettier --check . (npm run format to fix)
 npm run build:ui       # vite build → dist/ui (server 404s SPA routes until this exists)
 npm run dev:ui         # vite dev server for UI work
 npm run db:generate    # drizzle-kit generate — run after editing src/db/schema.ts
@@ -24,6 +26,8 @@ npm run deploy         # ship working tree to the NAS + rebuild container (scrip
 npm run init-worker    # doctor for the auto-dispatch worker (--self-test, --install-launchd)
 npm run build:worker-image   # docker image for containerized dispatch
 ```
+
+Before opening a PR, run `npm run lint && npm run format:check && npm run typecheck && npm test` — CI (`.github/workflows/ci.yml`) runs the same checks and fails the build on any of them.
 
 Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-project|add-actor|mint-login|add-webhook ...`
 

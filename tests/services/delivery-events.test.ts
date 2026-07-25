@@ -194,6 +194,18 @@ describe("recordDeliveryEvent / ingestion groundwork (SYD-205)", () => {
     expect(findPrState(db, "acme/bound", 12)!.status).toBe("merged");
   });
 
+  it("normalizes an explicitly named repo to lowercase so it converges with the bound repo's casing (SYD-212)", () => {
+    const { db, worker } = setup(["acme/bound"]);
+    recordDeliveryEvent(db, worker, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 12,
+      url: "https://github.com/acme/bound/pull/12",
+      repo: "Acme/Bound",
+    });
+    expect(getActivity(db, "SYD-1")[1].payload).toMatchObject({ repo: "acme/bound" });
+    expect(findPrState(db, "acme/bound", 12)!.issueRef).toBe("SYD-1");
+  });
+
   it("never writes pr_state when the event's repo is not bound to the issue's project", () => {
     const { db, worker } = setup(["acme/bound"]);
     recordDeliveryEvent(db, worker, "SYD-1", {

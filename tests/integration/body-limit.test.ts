@@ -25,7 +25,10 @@ beforeEach(() => {
   db = openDb(":memory:");
   const { token } = createActor(db, { name: "claude/dev", type: "agent" });
   agentH = { authorization: `Bearer ${token}` };
-  createProject(db, createActor(db, { name: "sean", type: "human" }).actor, { key: "SYD", name: "Switchyard" });
+  createProject(db, createActor(db, { name: "sean", type: "human" }).actor, {
+    key: "SYD",
+    name: "Switchyard",
+  });
   app = createApp(db);
 });
 

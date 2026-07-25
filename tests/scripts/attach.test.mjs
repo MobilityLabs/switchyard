@@ -23,7 +23,13 @@ beforeEach(async () => {
   captured = null;
   respond = (res) => {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ id: 7, url: "/api/attachments/7/shot.png", markdown: "![shot.png](/api/attachments/7/shot.png)" }));
+    res.end(
+      JSON.stringify({
+        id: 7,
+        url: "/api/attachments/7/shot.png",
+        markdown: "![shot.png](/api/attachments/7/shot.png)",
+      }),
+    );
   };
   server = createServer(async (req, res) => {
     captured = {
@@ -70,12 +76,16 @@ describe("uploadAttachment", () => {
 
   it("throws when the token is missing", async () => {
     const file = tmpFile("shot.png");
-    await expect(uploadAttachment({ url: baseUrl, token: "", ref: "SYD-1", file })).rejects.toThrow(/SWITCHYARD_TOKEN/);
+    await expect(uploadAttachment({ url: baseUrl, token: "", ref: "SYD-1", file })).rejects.toThrow(
+      /SWITCHYARD_TOKEN/,
+    );
   });
 
   it("throws when the URL is missing", async () => {
     const file = tmpFile("shot.png");
-    await expect(uploadAttachment({ url: "", token: "tok", ref: "SYD-1", file })).rejects.toThrow(/SWITCHYARD_URL/);
+    await expect(uploadAttachment({ url: "", token: "tok", ref: "SYD-1", file })).rejects.toThrow(
+      /SWITCHYARD_URL/,
+    );
   });
 
   it("throws when the file does not exist", async () => {
@@ -90,8 +100,8 @@ describe("uploadAttachment", () => {
       res.end(JSON.stringify({ error: "not an allowed attachment type" }));
     };
     const file = tmpFile("notes.txt");
-    await expect(uploadAttachment({ url: baseUrl, token: "tok", ref: "SYD-1", file })).rejects.toThrow(
-      /upload failed \(400\)/,
-    );
+    await expect(
+      uploadAttachment({ url: baseUrl, token: "tok", ref: "SYD-1", file }),
+    ).rejects.toThrow(/upload failed \(400\)/);
   });
 });

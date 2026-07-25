@@ -371,10 +371,19 @@ the issue `done`. Three pieces (SYD-49):
    **Retry delivery** on the issue's attention banner, which fires a
    `redeliver_requested` event — its own authorization, independent of the
    done-stamp history, that the worker also picks up (SYD-102).
-3. **Branch protection on `main`** blocks force-pushes and deletion. Required
-   PR reviews stay off for now: all pushes authenticate as one GitHub identity
-   and GitHub forbids self-approval — full can't-push-to-main enforcement is
-   the SYD-19 (second identity) upgrade path.
+3. **Branch protection on `main`** blocks force-pushes and deletion, requires
+   the CI workflow's `test` check, and enforces that on admin credentials too
+   (`npm run init-worker -- --protect-main`, docs/onboarding-a-project.md
+   step 4). This is load-bearing, not cosmetic: SYD-209 made CI the sole check
+   authority for delivery (no client-side verify gate), so an unprotected
+   `main` leaves that merge gate enforcing nothing. `deliver.ts` checks each
+   linked repo's live protection at startup/on a health probe and warns loudly
+   if it's relaxed (`warnOnRelaxedBranchProtection`); set
+   `delivery.requireBranchProtection: true` to make that refuse to start
+   instead (SYD-222). Required PR reviews stay off for now: all pushes
+   authenticate as one GitHub identity and GitHub forbids self-approval — full
+   can't-push-to-main enforcement is the SYD-19 (second identity) upgrade
+   path.
 
 Escalations resume fast: when a session calls `request_human_input`, the issue
 parks (`needsInput`) until a human answers with a comment. The answer releases

@@ -1,14 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Actor, Project } from "./types";
-import { getLastProject, href, isIssueRef, navigate, useRoute, type Route } from "./router";
-import { logout, listIssues, listAgentSessions } from "./api";
+import {
+  ALL_SCOPE,
+  getLastProject,
+  href,
+  isIssueRef,
+  issueRoute,
+  navigate,
+  scopeProject,
+  useRoute,
+  type Route,
+} from "./router";
+import { logout, listIssues, listAgentSessions, listPendingActions } from "./api";
 import { usePoll } from "./usePoll";
 
 // Search box lives in the topbar so it's reachable from every view (SYD-86).
 // "/" focuses it unless the user is already typing somewhere else; Enter
-// either jumps straight to an issue ref (fast-path) or opens /search?q=.
-function SearchBox({ route }: { route: Route }) {
+// either jumps straight to an issue ref (fast-path) or opens the current
+// scope's /search?q=.
+function SearchBox({ route, scope }: { route: Route; scope: string }) {
   const [query, setQuery] = useState(route.view === "search" ? route.query : "");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -34,8 +45,8 @@ function SearchBox({ route }: { route: Route }) {
     const trimmed = query.trim();
     if (!trimmed) return;
     const upper = trimmed.toUpperCase();
-    if (isIssueRef(upper)) navigate({ view: "issue", ref: upper });
-    else navigate({ view: "search", query: trimmed });
+    if (isIssueRef(upper)) navigate(issueRoute(upper));
+    else navigate({ view: "search", scope, query: trimmed });
   }
 
   return (
@@ -62,31 +73,21 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
   const allProjects = props.projects;
 
   const rememberedProject = allProjects.some((p) => p.key === lastProject) ? lastProject : null;
-  const currentProject =
-    route.view === "board" ? route.project : (rememberedProject ?? allProjects[0]?.key ?? "");
+  // Every route except settings carries its scope in the URL (SYD-254);
+  // settings is global, so its nav renders under the remembered scope.
+  const scope = route.view === "settings" ? (rememberedProject ?? ALL_SCOPE) : route.scope;
+  const scopeKey = scopeProject(scope);
+  // The Board link always needs a concrete project: the current scope if it
+  // has one, else the remembered project, else the first project.
+  const boardProject = scopeKey ?? rememberedProject ?? allProjects[0]?.key ?? "";
 
-  // Scopes the Review nav badge to whatever project context is active: the
-  // route's own project when it carries one, else the SYD-55 remembered
-  // project, else unscoped ("All projects").
-  const scopeProject: string | null =
-    route.view === "triage" || route.view === "review" ? route.project : rememberedProject;
   const inReview = usePoll(
-    () => listIssues({ status: "in_review", project: scopeProject ?? undefined }),
-    [scopeProject],
+    () => listIssues({ status: "in_review", project: scopeKey ?? undefined }),
+    [scopeKey],
     30000,
   );
   const liveSessions = usePoll(() => listAgentSessions({ active: true }), [], 15000);
-
-  // Triage/Review tabs default to the last project you were looking at
-  // (SYD-55) rather than always landing on "All projects" — but a bare
-  // /triage or /review URL (an old bookmark, a fresh link) still means
-  // "All projects", so this only shapes the nav link target, not routing.
-  const triageHref =
-    route.view === "triage" ? href(route) : href({ view: "triage", project: rememberedProject });
-  const reviewHref =
-    route.view === "review"
-      ? href(route)
-      : href({ view: "review", project: rememberedProject, ref: null });
+  const pendingApprovals = usePoll(() => listPendingActions("pending"), [], 15000);
 
   return (
     <>
@@ -105,29 +106,47 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
             menu toggled by menu-toggle above; any click inside closes it so
             picking a link doesn't leave the menu open (SYD-214). */}
         <nav className={navOpen ? "open" : undefined} onClick={() => setNavOpen(false)}>
-          <a href={triageHref} className={route.view === "triage" ? "active" : ""}>
+          <a
+            href={href({ view: "triage", scope })}
+            className={route.view === "triage" ? "active" : ""}
+          >
             Triage
           </a>
           <a
             href={
-              currentProject
-                ? href({ view: "board", project: currentProject })
-                : href({ view: "triage", project: null })
+              boardProject
+                ? href({ view: "board", scope: boardProject })
+                : href({ view: "triage", scope: ALL_SCOPE })
             }
             className={route.view === "board" ? "active" : ""}
           >
             Board
           </a>
-          <a href={reviewHref} className={route.view === "review" ? "active" : ""}>
+          <a
+            href={href({ view: "review", scope, ref: null })}
+            className={route.view === "review" ? "active" : ""}
+          >
             Review
             {inReview.data && inReview.data.length > 0 && (
               <span className="badge">{inReview.data.length}</span>
             )}
           </a>
-          <a href={href({ view: "agents" })} className={route.view === "agents" ? "active" : ""}>
+          <a
+            href={href({ view: "agents", scope })}
+            className={route.view === "agents" ? "active" : ""}
+          >
             Agents
             {liveSessions.data && liveSessions.data.length > 0 && (
               <span className="badge">{liveSessions.data.length}</span>
+            )}
+          </a>
+          <a
+            href={href({ view: "approvals", scope })}
+            className={route.view === "approvals" ? "active" : ""}
+          >
+            Approvals
+            {pendingApprovals.data && pendingApprovals.data.length > 0 && (
+              <span className="badge warn">{pendingApprovals.data.length}</span>
             )}
           </a>
           {props.me.type === "human" && (
@@ -139,18 +158,37 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
             </a>
           )}
         </nav>
-        <SearchBox route={route} />
-        {(route.view === "board" || route.view === "triage" || route.view === "review") && (
+        <SearchBox route={route} scope={scope} />
+        {route.view !== "settings" && (
           <select
-            value={route.view === "board" ? route.project : (route.project ?? "")}
+            value={scopeKey ?? ""}
             onChange={(e) => {
-              if (route.view === "board") navigate({ view: "board", project: e.target.value });
-              else if (route.view === "triage")
-                navigate({ view: "triage", project: e.target.value || null });
-              else navigate({ view: "review", project: e.target.value || null, ref: null });
+              const next = e.target.value || ALL_SCOPE;
+              // Board and issue views need a concrete project. An issue's
+              // scope is pinned to its ref, so switching projects there goes
+              // to the target project's board — the nearest "keep browsing
+              // that project" surface. Review drops the selected ref: it
+              // belongs to the scope being left.
+              if (route.view === "issue") {
+                navigate(
+                  next === ALL_SCOPE
+                    ? { view: "triage", scope: ALL_SCOPE }
+                    : { view: "board", scope: next },
+                );
+              } else if (route.view === "board") {
+                navigate({ view: "board", scope: e.target.value });
+              } else if (route.view === "review") {
+                navigate({ view: "review", scope: next, ref: null });
+              } else if (route.view === "search") {
+                navigate({ view: "search", scope: next, query: route.query });
+              } else {
+                navigate({ ...route, scope: next });
+              }
             }}
           >
-            {route.view !== "board" && <option value="">All projects</option>}
+            {route.view !== "board" && route.view !== "issue" && (
+              <option value="">All projects</option>
+            )}
             {allProjects.map((p) => (
               <option key={p.key} value={p.key}>
                 {p.key} — {p.name}
@@ -159,7 +197,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
           </select>
         )}
         <span className="spacer" />
-        <button className="primary" onClick={() => navigate({ view: "new-issue" })}>
+        <button className="primary" onClick={() => navigate({ view: "new-issue", scope })}>
           + New issue
         </button>
         <span className="badge actor">{props.me.name}</span>

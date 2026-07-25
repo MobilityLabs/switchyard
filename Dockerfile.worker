@@ -3,8 +3,12 @@
 # pushes the branch back out — it never mutates the host filesystem directly.
 FROM node:24-slim
 
+# python3/make/g++ (SYD-224): node-gyp's toolchain, so native modules like
+# better-sqlite3 build from source via its `node-gyp rebuild` fallback --
+# prebuild-install's GitHub Releases fetch isn't reachable inside the
+# session's egress allowlist (EGRESS_BASELINE in scripts/worker-select.ts).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Pinned so image rebuilds are reproducible (SYD-198) -- a plain `npm install -g

@@ -187,6 +187,45 @@ describe("autolinker", () => {
     expect(el.querySelectorAll("code").length).toBe(2);
   });
 
+  it("links a #N reference to the repo's pull URL", () => {
+    const a = toDom("fixed in #20").querySelector("a")!;
+    expect(a.getAttribute("href")).toBe(`${REPO}/pull/20`);
+    expect(a.textContent).toBe("#20");
+  });
+
+  it("links the #N even when written as 'PR #20'", () => {
+    const a = toDom("Fixed in consolidation PR #20 (commit b3084f4)").querySelector(
+      "a[href$='/pull/20']",
+    )!;
+    expect(a).not.toBeNull();
+    expect(a.textContent).toBe("#20");
+  });
+
+  it("leaves a bare # with no digits as literal text", () => {
+    const el = toDom("a C# tag and a # alone");
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toContain("C# tag");
+    expect(el.textContent).toContain("# alone");
+  });
+
+  it("does not autolink #N inside inline code", () => {
+    const el = toDom("`#20`");
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.querySelector("code")!.textContent).toBe("#20");
+  });
+
+  it("does not autolink #N inside fenced code blocks", () => {
+    const el = toDom("```\nsee #20\n```");
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.querySelector("pre code")).not.toBeNull();
+  });
+
+  it("leaves #N as plain text for unknown project keys", () => {
+    const el = toDom("see #20", "NOPE");
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toContain("#20");
+  });
+
   it("does not autolink inside inline code", () => {
     const el = toDom("`src/db/client.ts`");
     expect(el.querySelector("a")).toBeNull();

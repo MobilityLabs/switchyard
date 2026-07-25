@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, loginLinks, sessions } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -52,19 +52,28 @@ export function redeemLoginLink(db: Db, token: string): { sessionToken: string; 
   return { sessionToken, actor: { id: a.id, name: a.name, type: a.type } };
 }
 
+// kind='plain' is a security boundary, not a convenience filter: the
+// `sessions` table also holds supervised-session tokens (sup_...), and this
+// function backs both direct callers and the REST cookie fallback. Without
+// this filter a sup_ token sent as the web cookie would authenticate as the
+// full human across the entire REST API. See src/services/supervised-sessions.ts.
 export function getSessionActor(db: Db, sessionToken: string): Actor | null {
   const row = db
     .select({ s: sessions, a: actors })
     .from(sessions)
     .innerJoin(actors, eq(sessions.actorId, actors.id))
-    .where(eq(sessions.tokenHash, hashToken(sessionToken)))
+    .where(and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "plain")))
     .get();
   if (!row || row.s.expiresAt < nowSec()) return null;
   return { id: row.a.id, name: row.a.name, type: row.a.type };
 }
 
+// kind='plain' scoping mirrors getSessionActor above: a supervised session
+// must only ever be revoked via closeSupervisedSession's soft-close (sessions
+// rows can be an FK target once events reference them), never hard-deleted
+// by a logout request replaying a sup_ token as a cookie.
 export function deleteSession(db: Db, sessionToken: string): void {
   db.delete(sessions)
-    .where(eq(sessions.tokenHash, hashToken(sessionToken)))
+    .where(and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "plain")))
     .run();
 }

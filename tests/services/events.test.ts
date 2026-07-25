@@ -6,7 +6,9 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { addComment } from "../../src/services/comments.js";
+import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
 import {
+  listIssueEvents,
   listRecentEvents,
   listRecentEventsPage,
   listUnansweredQuestions,
@@ -14,6 +16,37 @@ import {
   DEFAULT_RECENT_EVENTS_LIMIT,
   MAX_RECENT_EVENTS_LIMIT,
 } from "../../src/services/events.js";
+
+describe("listIssueEvents", () => {
+  it("projects viaAgentName only on supervised events, in a mixed feed with plain events (SYD-240)", () => {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // plain event
+
+    const { sessionId } = openSupervisedSession(db, human, agent.name);
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "comment",
+      payload: { body: "supervised edit" },
+      viaAgentId: agent.id,
+      sessionId,
+    });
+
+    const rows = listIssueEvents(db, issue.id);
+    expect(rows).toHaveLength(2);
+
+    const [created, supervised] = rows;
+    expect(created.actorName).toBe("sean");
+    expect(created.viaAgentName).toBeNull();
+
+    expect(supervised.actorName).toBe("sean");
+    expect(supervised.viaAgentName).toBe("claude-code");
+    expect(supervised.sessionId).toBe(sessionId);
+  });
+});
 
 describe("listRecentEvents", () => {
   it("returns events newest-first, joined with issue ref, title, project key, and actor name", () => {

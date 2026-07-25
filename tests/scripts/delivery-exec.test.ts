@@ -20,6 +20,7 @@ import {
   attemptAutoRebase,
   checkBranchProtection,
   mergeAgentPr,
+  closeDeadAgentPr,
 } from "../../scripts/delivery-exec.js";
 
 const execFileP = promisify(execFile);
@@ -256,6 +257,49 @@ describe("readChecks / waitForChecks", () => {
     expect(state).toBe("head-moved");
   });
 
+  // SYD-216: GitHub's PR API is read-after-write eventually consistent, so
+  // the very first read right after the S1 force-push can momentarily still
+  // report the pre-push head — indistinguishable at that instant from a real
+  // third-party push. waitForChecks must absorb exactly one such transient
+  // read before proceeding, and still disarm if a second consecutive read
+  // confirms the head really did move.
+  it("settles a transient head-moved (read-after-write lag) and proceeds once the re-read shows S1", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      // Stale pre-push read GitHub is still serving right after the force-push.
+      JSON.stringify({ headRefOid: "stale-pre-push-head", statusCheckRollup: [] }),
+      // The settle re-read: GitHub has caught up to S1, checks not concluded yet.
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "IN_PROGRESS", conclusion: null }],
+      }),
+      JSON.stringify({
+        headRefOid: S1,
+        statusCheckRollup: [{ __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 5000 }),
+    );
+    expect(state).toBe("passing");
+  }, 10000);
+
+  it("disarms (head-moved) once a second consecutive read still isn't S1 — a real third-party push, not lag", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
+    makeFakeGhChecks(binDir, [
+      JSON.stringify({ headRefOid: "someoneelsepushed", statusCheckRollup: [] }),
+      JSON.stringify({ headRefOid: "someoneelsepushed", statusCheckRollup: [] }),
+    ]);
+
+    const state = await withFakeGhOnPath(binDir, () =>
+      waitForChecks(repo, 42, S1, { pollIntervalMs: 5, timeoutMs: 5000 }),
+    );
+    expect(state).toBe("head-moved");
+  }, 10000);
+
   it("waitForChecks times out to pending if checks never conclude", async () => {
     const repo = await makeRepoWithOrigin();
     const binDir = mkdtempSync(path.join(tmpdir(), "delivery-exec-checks-bin-"));
@@ -381,6 +425,78 @@ describe("mergeAgentPr merge/read atomicity", () => {
     chmodSync(ghPath, 0o755);
 
     await expect(withFakeGhOnPath(binDir, () => mergeAgentPr(repo, 42, "s1def"))).rejects.toThrow();
+  });
+});
+
+// SYD-165: closeDeadAgentPr shells out to `gh pr close`, optionally deleting
+// the branch — a real fake-gh-on-PATH test proves the exact argv it invokes.
+describe("closeDeadAgentPr", () => {
+  async function makeRepoWithOrigin(): Promise<string> {
+    const repo = mkdtempSync(path.join(tmpdir(), "close-pr-repo-"));
+    await execFileP("git", ["init", "-q", repo]);
+    await execFileP("git", [
+      "-C",
+      repo,
+      "remote",
+      "add",
+      "origin",
+      "https://github.com/acme/widgets.git",
+    ]);
+    return repo;
+  }
+
+  async function withFakeGhOnPath<T>(binDir: string, fn: () => Promise<T>): Promise<T> {
+    const origPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${origPath ?? ""}`;
+    try {
+      return await fn();
+    } finally {
+      process.env.PATH = origPath;
+    }
+  }
+
+  /** Fake `gh` that records its argv to `callsFile` (one line per call) and exits 0. */
+  function makeFakeGhRecorder(binDir: string): { callsFile: string } {
+    const callsFile = path.join(binDir, "calls");
+    writeFileSync(callsFile, "");
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, `#!/bin/sh\necho "$@" >> "${callsFile}"\n`);
+    chmodSync(ghPath, 0o755);
+    return { callsFile };
+  }
+
+  it("closes the PR without --delete-branch by default (no-branch bounce)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "close-pr-bin-"));
+    const { callsFile } = makeFakeGhRecorder(binDir);
+
+    await withFakeGhOnPath(binDir, () => closeDeadAgentPr(repo, 41, { deleteBranch: false }));
+
+    expect(readFileSync(callsFile, "utf8").trim()).toBe("pr close 41 -R acme/widgets");
+  });
+
+  it("closes the PR with --delete-branch when asked (conflict bounce)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "close-pr-bin-"));
+    const { callsFile } = makeFakeGhRecorder(binDir);
+
+    await withFakeGhOnPath(binDir, () => closeDeadAgentPr(repo, 41, { deleteBranch: true }));
+
+    expect(readFileSync(callsFile, "utf8").trim()).toBe(
+      "pr close 41 -R acme/widgets --delete-branch",
+    );
+  });
+
+  it("propagates a real close failure (gh pr close exits non-zero)", async () => {
+    const repo = await makeRepoWithOrigin();
+    const binDir = mkdtempSync(path.join(tmpdir(), "close-pr-bin-"));
+    const ghPath = path.join(binDir, "gh");
+    writeFileSync(ghPath, '#!/bin/sh\necho "pull request already closed" 1>&2\nexit 1\n');
+    chmodSync(ghPath, 0o755);
+
+    await expect(
+      withFakeGhOnPath(binDir, () => closeDeadAgentPr(repo, 41, { deleteBranch: true })),
+    ).rejects.toThrow();
   });
 });
 
