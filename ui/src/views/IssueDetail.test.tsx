@@ -37,13 +37,7 @@ import {
   resolveDeliveryFailure,
   updateIssue,
 } from "../api";
-import type {
-  Activity,
-  Attachment,
-  IssueDetail as IssueDetailType,
-  Issue,
-  Status,
-} from "../types";
+import type { Activity, Attachment, IssueDetail as IssueDetailType, Issue, Status } from "../types";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -52,6 +46,7 @@ import { createRoot } from "react-dom/client";
 const ev = (o: Partial<Activity>): Activity => ({
   type: "comment",
   actorName: "claude/worker",
+  viaAgentName: null,
   payload: {},
   createdAt: 1000,
   ...o,
@@ -143,6 +138,37 @@ describe("AttentionBanner", () => {
       button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(clicked).toBe(1);
+  });
+
+  // SYD-262: done_without_merged_pr is a warn banner with no action today, and
+  // it can never clear itself on a feat/ branch — it needs the same explicit
+  // "I checked, it landed" affordance delivery_failed has.
+  it("offers Mark resolved on a done_without_merged_pr deviation", async () => {
+    let clicked = 0;
+    const container = await render(
+      { reason: "done_without_merged_pr", message: "verify the code actually landed" },
+      undefined,
+      () => {
+        clicked += 1;
+      },
+    );
+    const button = container.querySelector(".resolve-delivery") as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(clicked).toBe(1);
+  });
+
+  // Retry re-authorizes an attributed agent PR; a deviation has none, so
+  // offering it would be a button that cannot work.
+  it("offers no Retry delivery on a done_without_merged_pr deviation", async () => {
+    const container = await render(
+      { reason: "done_without_merged_pr", message: "verify the code actually landed" },
+      () => {},
+      () => {},
+    );
+    expect(container.querySelector(".retry-delivery")).toBeNull();
   });
 
   it("renders no Mark resolved button when onResolveClick is not passed", async () => {
@@ -500,6 +526,27 @@ describe("Event rendering for delivery events", () => {
     expect(container.textContent).toContain("deploy FAILED");
   });
 
+  it("shows a via-agent provenance chip for a supervised-session event (SYD-240)", async () => {
+    const container = await render(
+      ev({
+        type: "comment",
+        actorName: "sean",
+        viaAgentName: "claude-code",
+        payload: { body: "edited on Sean's behalf" },
+      }),
+    );
+    expect(container.textContent).toContain("sean");
+    expect(container.textContent).toContain("via claude-code");
+    expect(container.querySelector(".via-agent-chip")).not.toBeNull();
+  });
+
+  it("omits the via-agent chip for a plain, non-supervised event", async () => {
+    const container = await render(
+      ev({ type: "comment", actorName: "sean", viaAgentName: null, payload: { body: "hi" } }),
+    );
+    expect(container.querySelector(".via-agent-chip")).toBeNull();
+  });
+
   it("renders a delivery_resolved event with its note (SYD-178)", async () => {
     const container = await render(
       ev({
@@ -607,6 +654,37 @@ describe("Event rendering for delivery events", () => {
     );
     expect(container.querySelector("a")).toBeNull();
     expect(container.textContent).toContain("attached old.png");
+  });
+});
+
+// SYD-262: the resolve writes a deviation_resolved event; without a renderer it
+// falls through to the generic "actor deviation resolved" line and loses the
+// note, which is the whole provenance the required-note rule exists to capture.
+describe("Event rendering for deviation_resolved (SYD-262)", () => {
+  it("names the actor and shows the note", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <Event
+          ev={{
+            type: "deviation_resolved",
+            actorName: "sean",
+            // SYD-240 made viaAgentName a required field on Activity; a human
+            // clearing a flag directly has no delegate agent behind it.
+            viaAgentName: null,
+            createdAt: 1,
+            payload: { reason: "done_without_merged_pr", note: "merged as d0073fb via PR #197" },
+          }}
+          projectKey="SYD"
+        />,
+      );
+    });
+    const line = container.querySelector(".event.deviation-resolved");
+    expect(line).not.toBeNull();
+    expect(line?.textContent).toContain("sean");
+    expect(line?.textContent).toContain("merged as d0073fb via PR #197");
   });
 });
 

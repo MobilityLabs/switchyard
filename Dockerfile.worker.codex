@@ -17,7 +17,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @openai/codex
+# Pinned so image rebuilds are reproducible (SYD-227) -- a plain `npm install -g
+# @openai/codex` would silently pick up whatever is newest at build
+# time. Bump via `--build-arg CODEX_CLI_VERSION=x.y.z` or by editing the
+# default below; see README's containerized-mode section for the update steps.
+ARG CODEX_CLI_VERSION=0.145.0
+RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
+    && codex --version
 
 COPY scripts/container-entry.codex.sh /entry.sh
 COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs

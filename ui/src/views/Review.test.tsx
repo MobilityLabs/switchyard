@@ -32,7 +32,7 @@ vi.mock("../api", () => ({
 
 import { listIssues, updateIssue } from "../api";
 import Review from "./Review";
-import { navigate, useRoute } from "../router";
+import { navigate, scopeProject, useRoute } from "../router";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -80,7 +80,7 @@ function detailOf(i: Issue): IssueDetail {
 function ReviewRoute() {
   const route = useRoute();
   if (route.view !== "review") return null;
-  return <Review project={route.project} currentRef={route.ref} />;
+  return <Review project={scopeProject(route.scope)} currentRef={route.ref} />;
 }
 
 async function flush(): Promise<void> {
@@ -117,7 +117,7 @@ describe("Review selection stability", () => {
   it("redirects bare /review to the first in-review issue", async () => {
     vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First"), issue("SYD-2", "Second")]);
     const container = await mountReviewRoute("/review");
-    expect(location.pathname).toBe("/review/SYD-1");
+    expect(location.pathname).toBe("/all/review/SYD-1");
     expect(refText(container)).toBe("SYD-1");
   });
 
@@ -149,7 +149,7 @@ describe("Review selection stability", () => {
       "SYD-9 is no longer in review",
     );
     expect(refText(container)).toBeNull();
-    expect(location.pathname).toBe("/review/SYD-9");
+    expect(location.pathname).toBe("/SYD/review/SYD-9");
 
     const jumpButton = [...container.querySelectorAll("button")].find(
       (b) => b.textContent === "Jump to next",
@@ -159,7 +159,7 @@ describe("Review selection stability", () => {
     });
     await flush();
 
-    expect(location.pathname).toBe("/review/SYD-1");
+    expect(location.pathname).toBe("/SYD/review/SYD-1");
   });
 });
 
@@ -359,16 +359,16 @@ describe("Review project scoping", () => {
   it("resets to the first item when the project scope changes", async () => {
     vi.mocked(listIssues).mockResolvedValue([issue("SYD-1", "First"), issue("SYD-2", "Second")]);
     const container = await mountReviewRoute("/review/SYD");
-    expect(location.pathname).toBe("/review/SYD-1");
+    expect(location.pathname).toBe("/SYD/review/SYD-1");
     expect(refText(container)).toBe("SYD-1");
 
     vi.mocked(listIssues).mockResolvedValue([issue("ACME-1", "First"), issue("ACME-2", "Second")]);
     await act(async () => {
-      navigate({ view: "review", project: "ACME", ref: null });
+      navigate({ view: "review", scope: "ACME", ref: null });
     });
     await flush();
 
-    expect(location.pathname).toBe("/review/ACME-1");
+    expect(location.pathname).toBe("/ACME/review/ACME-1");
     expect(refText(container)).toBe("ACME-1");
   });
 

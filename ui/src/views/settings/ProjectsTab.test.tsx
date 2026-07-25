@@ -108,7 +108,10 @@ describe("ProjectsTab (SYD-158)", () => {
     const container = await render();
 
     await type(container.querySelector<HTMLInputElement>('input[placeholder="ACME"]')!, "ACME");
-    await type(container.querySelector<HTMLInputElement>('input[placeholder="Acme Corp"]')!, "Acme");
+    await type(
+      container.querySelector<HTMLInputElement>('input[placeholder="Acme Corp"]')!,
+      "Acme",
+    );
     await click(button(container, "Create project"));
 
     expect(createProject).toHaveBeenCalledWith({ key: "ACME", name: "Acme" });
@@ -117,7 +120,10 @@ describe("ProjectsTab (SYD-158)", () => {
   it("blocks invalid keys client-side with the server's own rule", async () => {
     const container = await render();
     await type(container.querySelector<HTMLInputElement>('input[placeholder="ACME"]')!, "A1");
-    await type(container.querySelector<HTMLInputElement>('input[placeholder="Acme Corp"]')!, "Acme");
+    await type(
+      container.querySelector<HTMLInputElement>('input[placeholder="Acme Corp"]')!,
+      "Acme",
+    );
     expect(button(container, "Create project").disabled).toBe(true);
     expect(createProject).not.toHaveBeenCalled();
   });

@@ -49,9 +49,7 @@ describe("createProject human-only guard (SYD-157)", () => {
   it("rejects agent actors", () => {
     const db = openDb(":memory:");
     const { agent } = actors(db);
-    expect(() => createProject(db, agent, { key: "AIPI", name: "x" })).toThrowError(
-      /only humans/i,
-    );
+    expect(() => createProject(db, agent, { key: "AIPI", name: "x" })).toThrowError(/only humans/i);
   });
 });
 

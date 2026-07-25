@@ -143,6 +143,14 @@ export const resolveDeliveryFailure = (ref: string, note?: string) =>
     method: "POST",
     body: JSON.stringify({ note }),
   });
+// SYD-262: sibling of resolveDeliveryFailure for a recorded-once process
+// deviation. The reason is explicit so the server can scope the clear — one
+// deviation resolving must never silence a different signal on the issue.
+export const resolveDeviation = (ref: string, reason: string, note?: string) =>
+  api<Issue>(`/api/issues/${ref}/resolve-deviation`, {
+    method: "POST",
+    body: JSON.stringify({ reason, note }),
+  });
 export const addDependency = (blockerRef: string, blockedRef: string) =>
   api<{ ok: true }>("/api/dependencies", {
     method: "POST",

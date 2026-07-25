@@ -1,7 +1,8 @@
 import { listAgentSessions } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
-import { href } from "../router";
+import { href, issueRoute } from "../router";
+import { projectKeyFromRef } from "../refs";
 import type { AgentSession } from "../types";
 
 // Exported for the issue-detail live strip (SYD-43). "42s", "7m", "1h 12m".
@@ -20,7 +21,7 @@ function SessionRow({ s }: { s: AgentSession }) {
   const elapsed = formatElapsed(s.startedAt, s.endedAt);
   return (
     <li className="session-row panel">
-      <a className="ref" href={href({ view: "issue", ref: s.ref })}>
+      <a className="ref" href={href(issueRoute(s.ref))}>
         {s.ref}
       </a>{" "}
       {s.issueTitle}
@@ -41,13 +42,15 @@ function SessionRow({ s }: { s: AgentSession }) {
 // The Agents panel (SYD-43): live worker sessions, then recently-exited ones.
 // One unfiltered poll, split client-side — the nav badge (Shell) uses the
 // server's active filter, which also drops zombie sessions; here a zombie
-// showing hours of "live" elapsed is itself useful signal.
-export default function Agents() {
+// showing hours of "live" elapsed is itself useful signal. Under a project
+// scope (SYD-254) only sessions working that project's issues are shown.
+export default function Agents({ project }: { project: string | null }) {
   const { data, error } = usePoll(() => listAgentSessions(), []);
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
-  const running = data.filter((s) => s.status === "running");
-  const exited = data.filter((s) => s.status === "exited");
+  const scoped = project ? data.filter((s) => projectKeyFromRef(s.ref) === project) : data;
+  const running = scoped.filter((s) => s.status === "running");
+  const exited = scoped.filter((s) => s.status === "exited");
   return (
     <section className="agents">
       <PollErrorBar error={error} />

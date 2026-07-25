@@ -76,7 +76,9 @@ export function validateWorkerConfig(raw: unknown): string[] {
     problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
   }
   if (c.token !== undefined && (typeof c.token !== "string" || c.token.length === 0)) {
-    problems.push("`token` must be a non-empty string (the NAME of the env var holding this worker's token)");
+    problems.push(
+      "`token` must be a non-empty string (the NAME of the env var holding this worker's token)",
+    );
   }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
@@ -114,6 +116,14 @@ export function validateWorkerConfig(raw: unknown): string[] {
         (typeof project.baseBranch !== "string" || project.baseBranch.trim() === "")
       ) {
         problems.push(`projects.${key}.baseBranch must be a non-empty string when set`);
+      }
+      if (project?.requiredChecks !== undefined) {
+        if (
+          !Array.isArray(project.requiredChecks) ||
+          project.requiredChecks.some((c) => typeof c !== "string" || c.trim() === "")
+        ) {
+          problems.push(`projects.${key}.requiredChecks must be an array of non-empty strings`);
+        }
       }
     }
   }
@@ -319,6 +329,27 @@ export function nodeVersionSatisfiesEngines(range: string, actual: string): bool
   return true;
 }
 
+/**
+ * Enforces `engines.node` before a caller proceeds (SYD-200, used by
+ * vitest.config.ts): a bare warning let an unsupported Node version continue
+ * into a noisy, unrelated jsdom/native-module failure log instead of
+ * stopping on the actual root cause. `io` is injected so this is
+ * unit-testable without spawning a real process or depending on the
+ * runner's actual `process.version`.
+ */
+export function enforceNodeEngines(
+  enginesNode: string | undefined,
+  actualVersion: string,
+  io: { error: (message: string) => void; exit: (code: number) => void },
+): void {
+  if (!enginesNode || nodeVersionSatisfiesEngines(enginesNode, actualVersion)) return;
+  io.error(
+    `\n✗ running tests under node ${actualVersion}, outside the supported engines.node range "${enginesNode}". ` +
+      `See .nvmrc and SYD-97 — install a supported Node version before running tests.\n`,
+  );
+  io.exit(1);
+}
+
 function escapeXml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -331,6 +362,7 @@ export const WORKER_LAUNCHD_LABEL = "com.switchyard.worker";
 export const WORKER_CODE_LAUNCHD_LABEL = "com.switchyard.worker-code";
 export const WORKER_ANSWER_LAUNCHD_LABEL = "com.switchyard.worker-answer";
 export const DELIVER_LAUNCHD_LABEL = "com.switchyard.deliver";
+export const POLL_LAUNCHD_LABEL = "com.switchyard.poll";
 
 /** LaunchAgent label for a given worker role (SYD-67) — "all" keeps the pre-split label. */
 export function workerLaunchdLabel(role: WorkerRole): string {
@@ -467,6 +499,22 @@ export function renderDeliverPlist(opts: {
     scriptRelPath: "scripts/deliver.ts",
     logStem: "deliver",
     generatedBy: "npm run init-worker -- --install-launchd-deliver",
+  });
+}
+
+/** Render the LaunchAgent that keeps the GitHub polling fallback alive. */
+export function renderPollPlist(opts: {
+  repoRoot: string;
+  nodeBinDir: string;
+  home: string;
+  extraPathDirs?: string[];
+}): string {
+  return renderLaunchdPlist({
+    ...opts,
+    label: POLL_LAUNCHD_LABEL,
+    scriptRelPath: "scripts/github-poll.ts",
+    logStem: "poll",
+    generatedBy: "npm run init-worker -- --install-launchd-poll",
   });
 }
 
@@ -833,14 +881,18 @@ export function formatDockerfileStackGuidance(
 export function buildProtectMainArgs(
   owner: string,
   repo: string,
-  ciCheckContext = "test",
+  ciCheckContexts: string | string[] = "test",
 ): { args: string[]; input: string } {
+  const contexts = Array.isArray(ciCheckContexts) ? ciCheckContexts : [ciCheckContexts];
   return {
     args: ["api", "-X", "PUT", `repos/${owner}/${repo}/branches/main/protection`, "--input", "-"],
     input:
       JSON.stringify(
         {
-          required_status_checks: { strict: false, checks: [{ context: ciCheckContext }] },
+          required_status_checks: {
+            strict: false,
+            checks: contexts.map((c) => ({ context: c })),
+          },
           enforce_admins: true,
           required_pull_request_reviews: null,
           restrictions: null,

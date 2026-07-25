@@ -9,6 +9,8 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, type IssueView } from "../../src/services/issues.js";
+import { addDependency, listDependencies } from "../../src/services/dependencies.js";
+import { setSetting } from "../../src/services/settings.js";
 import {
   openSupervisedSession,
   resolveSupervisedPrincipal,
@@ -83,8 +85,10 @@ describe("MCP write tools in a supervised session", () => {
       arguments: { ref: issue.ref, status: "done" },
     });
 
-    expect(r.isError).toBe(true);
-    expect(text(r)).toMatch(/awaiting human affirmation/i);
+    // Task 4: parked is a SUCCESS, not an error — guard() translates the
+    // PendingAffirmation signal into an ok() result carrying the canonical doc.
+    expect(r.isError).toBeUndefined();
+    expect(JSON.parse(text(r)).pendingActionId).toBeGreaterThan(0);
 
     const rows = db.all<{ id: number; session_id: number; issue_id: number; action_type: string }>(
       sql`SELECT id, session_id, issue_id, action_type FROM pending_actions WHERE status = 'pending'`,
@@ -129,5 +133,55 @@ describe("MCP write tools in a supervised session", () => {
       expect(props).not.toContain("via_agent");
       expect(props).not.toContain("via_agent_id");
     }
+  });
+
+  it("remove_dependency via plain agent is refused, but supervised session parks or executes it", async () => {
+    // 1. Setup blocker issue and dependency
+    const blocker = createIssue(db, human, { projectKey: "SUP", title: "The blocker" });
+    addDependency(db, human, blocker.ref, issue.ref);
+
+    // 2. Plain agent via MCP is refused directly
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await buildMcpServer(db, agent, dir).connect(st);
+    const plainAgentClient = new Client({ name: "test", version: "0.0.0" });
+    await plainAgentClient.connect(ct);
+
+    const rPlain = await plainAgentClient.callTool({
+      name: "remove_dependency",
+      arguments: { blocker_ref: blocker.ref, blocked_ref: issue.ref },
+    });
+    expect(rPlain.isError).toBe(true);
+    expect(text(rPlain)).toMatch(/Only humans remove dependencies/i);
+
+    // 3. Supervised session with hard-gate action configured parks a pending action
+    setSetting(db, human, "supervised.hard_gate_actions", ["dependency.remove"]);
+    const client = await connectSupervised();
+    const rGated = await client.callTool({
+      name: "remove_dependency",
+      arguments: { blocker_ref: blocker.ref, blocked_ref: issue.ref },
+    });
+    expect(rGated.isError).toBeUndefined();
+    const parsedGated = JSON.parse(text(rGated));
+    expect(parsedGated.pendingActionId).toBeGreaterThan(0);
+
+    const rows = db.all<{ id: number; session_id: number; issue_id: number; action_type: string }>(
+      sql`SELECT id, session_id, issue_id, action_type FROM pending_actions WHERE status = 'pending'`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action_type).toBe(`dependency.remove:${blocker.ref}`);
+
+    // Edge still exists (nothing was changed)
+    expect(listDependencies(db, issue.ref).blockedBy.map((d) => d.ref)).toEqual([blocker.ref]);
+
+    // 4. Supervised session with full absorption (no hard-gate) executes immediately
+    setSetting(db, human, "supervised.hard_gate_actions", []);
+    const rAbsorb = await client.callTool({
+      name: "remove_dependency",
+      arguments: { blocker_ref: blocker.ref, blocked_ref: issue.ref },
+    });
+    expect(rAbsorb.isError).toBeUndefined();
+
+    // Edge is gone!
+    expect(listDependencies(db, issue.ref).blockedBy).toEqual([]);
   });
 });

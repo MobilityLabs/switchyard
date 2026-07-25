@@ -10,11 +10,7 @@
 import { openDb } from "../src/db/index.js";
 import { SwitchyardError } from "../src/services/errors.js";
 import { defaultAttachmentsDir } from "../src/services/attachments.js";
-import {
-  buildImportPlan,
-  executeImportPlan,
-  renderPlan,
-} from "../src/services/linear-import.js";
+import { buildImportPlan, executeImportPlan, renderPlan } from "../src/services/linear-import.js";
 import { fetchLinearExport, downloadUpload } from "./import-linear-lib.js";
 
 function usage(): never {

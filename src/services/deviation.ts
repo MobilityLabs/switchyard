@@ -190,7 +190,8 @@ export function emitProcessDeviations(db: Db): number {
       issueId: issue.id,
       actorId: issue.assigneeId ?? issue.creatorId,
       type: "process_deviation",
-      payload: c.prNumber != null ? { reason: c.reason, prNumber: c.prNumber } : { reason: c.reason },
+      payload:
+        c.prNumber != null ? { reason: c.reason, prNumber: c.prNumber } : { reason: c.reason },
     });
     emitted++;
   }

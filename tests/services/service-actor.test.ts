@@ -119,9 +119,9 @@ describe("service actor — DENIED all issue create/modify (fail-closed)", () =>
   });
 
   it("cannot reassign an issue to another actor", () => {
-    expect(() => updateIssue(db, service, "AIPI-1", { assigneeName: "claude/worker" })).toThrowError(
-      /cannot (create or )?modify issues/i,
-    );
+    expect(() =>
+      updateIssue(db, service, "AIPI-1", { assigneeName: "claude/worker" }),
+    ).toThrowError(/cannot (create or )?modify issues/i);
   });
 
   it("cannot make an arbitrary status transition (no allow-list)", () => {
@@ -131,9 +131,9 @@ describe("service actor — DENIED all issue create/modify (fail-closed)", () =>
   });
 
   it("cannot create an issue", () => {
-    expect(() =>
-      createIssue(db, service, { projectKey: "AIPI", title: "injected" }),
-    ).toThrowError(/cannot create.*issues/i);
+    expect(() => createIssue(db, service, { projectKey: "AIPI", title: "injected" })).toThrowError(
+      /cannot create.*issues/i,
+    );
   });
 
   it("cannot flag an issue needs-input (would stall auto-dispatch)", () => {

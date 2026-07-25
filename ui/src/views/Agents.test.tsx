@@ -33,12 +33,12 @@ function session(overrides: Partial<AgentSession>): AgentSession {
   };
 }
 
-async function renderAgents(): Promise<HTMLElement> {
+async function renderAgents(project: string | null = null): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Agents />);
+    root.render(<Agents project={project} />);
   });
   return container;
 }
@@ -86,7 +86,8 @@ describe("Agents view", () => {
     expect(text).toContain("SYD-9");
     expect(text).toContain("gemini/dev");
     expect(text).toContain("codex/dev");
-    expect(container.querySelector('a[href="/issue/SYD-1"]')).not.toBeNull();
+    // SYD-254 made routes scope-first, so the issue link is /<scope>/issue/<ref>.
+    expect(container.querySelector('a[href="/SYD/issue/SYD-1"]')).not.toBeNull();
     const sections = [...container.querySelectorAll("h2")].map((h) => h.textContent);
     expect(sections).toEqual(["Active sessions", "Recent"]);
   });
@@ -95,5 +96,26 @@ describe("Agents view", () => {
     vi.mocked(listAgentSessions).mockResolvedValue([]);
     const container = await renderAgents();
     expect(container.textContent).toContain("No agent sessions");
+  });
+
+  // SYD-254: /SYD/agents shows only sessions working that project's issues.
+  it("filters sessions to the scoped project", async () => {
+    vi.mocked(listAgentSessions).mockResolvedValue([
+      session({ id: 1, ref: "SYD-1", status: "running" }),
+      session({ id: 2, ref: "HEX-2", issueTitle: "Other project", status: "running" }),
+    ]);
+    const container = await renderAgents("SYD");
+    expect(container.textContent).toContain("SYD-1");
+    expect(container.textContent).not.toContain("HEX-2");
+  });
+
+  it("shows every project's sessions in the all scope", async () => {
+    vi.mocked(listAgentSessions).mockResolvedValue([
+      session({ id: 1, ref: "SYD-1", status: "running" }),
+      session({ id: 2, ref: "HEX-2", issueTitle: "Other project", status: "running" }),
+    ]);
+    const container = await renderAgents(null);
+    expect(container.textContent).toContain("SYD-1");
+    expect(container.textContent).toContain("HEX-2");
   });
 });

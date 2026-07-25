@@ -37,7 +37,14 @@ const PROJECTS: Project[] = [
   { id: 1, key: "SYD", name: "Switchyard", nextIssueNumber: 9, createdAt: 1751900000 },
 ];
 const WEBHOOKS: WebhookView[] = [
-  { id: 7, url: "https://hooks.example/x", projectId: 1, active: true, createdAt: 1, hasSecret: true },
+  {
+    id: 7,
+    url: "https://hooks.example/x",
+    projectId: 1,
+    active: true,
+    createdAt: 1,
+    hasSecret: true,
+  },
 ];
 const REPOS: GithubRepoView[] = [
   { id: 3, fullName: "acme/widgets", projectId: null, createdAt: 1, hasSecret: false },
@@ -74,7 +81,16 @@ function buttonIn(scope: Element, label: string): HTMLButtonElement {
 }
 
 afterEach(() => {
-  for (const m of [listProjects, listWebhooks, addWebhook, setWebhookActive, removeWebhook, listGithubRepos, addGithubRepo, removeGithubRepo]) {
+  for (const m of [
+    listProjects,
+    listWebhooks,
+    addWebhook,
+    setWebhookActive,
+    removeWebhook,
+    listGithubRepos,
+    addGithubRepo,
+    removeGithubRepo,
+  ]) {
     vi.mocked(m as ReturnType<typeof vi.fn>).mockReset();
   }
   vi.mocked(listProjects).mockResolvedValue([]);
@@ -126,7 +142,10 @@ describe("IntegrationsTab (SYD-158)", () => {
   it("deletes a webhook behind a confirm", async () => {
     vi.mocked(listWebhooks).mockResolvedValue(WEBHOOKS);
     vi.mocked(removeWebhook).mockResolvedValue({ ok: true });
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
     const container = await render();
 
     const webhookRow = [...container.querySelectorAll("tbody tr")][0];
@@ -138,7 +157,10 @@ describe("IntegrationsTab (SYD-158)", () => {
     vi.mocked(listGithubRepos).mockResolvedValue(REPOS);
     vi.mocked(addGithubRepo).mockResolvedValue(REPOS[0]);
     vi.mocked(removeGithubRepo).mockResolvedValue({ ok: true });
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => true),
+    );
     const container = await render();
 
     await type(

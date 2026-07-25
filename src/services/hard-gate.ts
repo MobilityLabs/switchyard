@@ -2,14 +2,15 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
 import { pendingActions, sessions, type PendingActionStatus } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import { removeDependency } from "./dependencies.js";
 import { SwitchyardError } from "./errors.js";
-import { issueRefById, updateIssue, type IssueView } from "./issues.js";
-import { getSetting } from "./settings.js";
+import { getIssue, issueRefById, updateIssue, type IssueView } from "./issues.js";
+import { EXECUTABLE_GATE_ACTIONS, getSetting } from "./settings.js";
 
 // Defined in settings.ts (next to the validator that enforces it) to keep this
 // module's import edge one-way; re-exported here because hard-gate is where
 // callers reason about the gate.
-export { EXECUTABLE_GATE_ACTIONS } from "./settings.js";
+export { EXECUTABLE_GATE_ACTIONS };
 
 export type PendingActionRow = typeof pendingActions.$inferSelect;
 
@@ -34,6 +35,10 @@ export function isHardGated(db: DbOrTx, actionType: string): boolean {
  * whose execution failed on a stale SHA becomes affirmable again once the agent
  * re-proposes with the current one. `targetWhere` must match the index
  * predicate exactly, or SQLite won't resolve the conflict target.
+ *
+ * `expiresAt` is the caller's to compute (the divert derives it from
+ * supervised.affirm_ttl_seconds) and is refreshed on re-proposal alongside the
+ * payload — see the `set` below.
  */
 export function findOrCreatePendingAction(
   db: DbOrTx,
@@ -41,14 +46,17 @@ export function findOrCreatePendingAction(
   issueId: number,
   actionType: string,
   payload: Record<string, unknown>,
+  expiresAt: number,
 ): number {
   const row = db
     .insert(pendingActions)
-    .values({ sessionId, issueId, actionType, payload, status: "pending" })
+    .values({ sessionId, issueId, actionType, payload, status: "pending", expiresAt })
     .onConflictDoUpdate({
       target: [pendingActions.sessionId, pendingActions.issueId, pendingActions.actionType],
       targetWhere: sql`status = 'pending'`,
-      set: { payload },
+      // expiresAt is refreshed alongside payload: a re-proposal restarts the
+      // window, so a row can't be stranded past its TTL by an earlier attempt.
+      set: { payload, expiresAt },
     })
     .returning({ id: pendingActions.id })
     .get();
@@ -86,6 +94,31 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
       "Only a human can affirm a gated action — that affirmation is the whole point of the gate.",
     );
   }
+  // Expiry is settled before the transaction opens: the `expired` marking must
+  // SURVIVE, and a throw inside db.transaction would roll its own writes back
+  // along with it. The in-transaction claim below (`WHERE status = 'pending'`)
+  // still guards the race if a concurrent affirm lands between this read and
+  // that claim.
+  //
+  // But this pre-block is a write, and it must not run before the owner tie is
+  // checked — otherwise any authenticated human could flip a stranger's overdue
+  // row to `expired` before authorization ever runs. So the ownership check is
+  // duplicated here (cheaply: it's a read) rather than moved. A non-owner falls
+  // through unchanged into the transaction, which throws the usual owner-tie
+  // error with no write having happened.
+  const pre = getPendingAction(db, id);
+  if (pre && pre.status === "pending" && pre.expiresAt < nowSec()) {
+    const preSession = db.select().from(sessions).where(eq(sessions.id, pre.sessionId)).get();
+    if (preSession && preSession.actorId === human.id) {
+      db.update(pendingActions)
+        .set({ status: "expired" })
+        .where(and(eq(pendingActions.id, id), eq(pendingActions.status, "pending")))
+        .run();
+      throw new SwitchyardError(
+        `Pending action ${id} expired — an affirmation that outlives your attention is a bearer token with extra steps. Re-propose it from the session to affirm.`,
+      );
+    }
+  }
   return db.transaction((tx) => {
     // Read inside the transaction so the payload we execute is the one the
     // claim below locks — a concurrent re-proposal refreshing it can't slip
@@ -105,9 +138,21 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
         `Pending action ${id}'s session has been closed or expired — its proposals are revoked. Re-propose from a live session to affirm.`,
       );
     }
-    if (row.actionType !== "done") {
+    // Defense in depth: the pre-transaction block already rejects expired rows,
+    // but ONLY for the owning human. This makes row-expiry independent of the
+    // ownership rule, so a future change loosening the owner-tie can't reach the
+    // claim with an expired row. Throw only — the pre-block owns the `expired`
+    // marking, so there is nothing to roll back here.
+    if (row.expiresAt < nowSec()) {
+      throw new SwitchyardError(`Pending action ${id} expired.`);
+    }
+    // "dependency.remove" rows carry a ":<blockerRef>" suffix (see the divert
+    // in removeDependency) to dedup per-blocker instead of per-issue — split
+    // it back off to route on the base kind.
+    const actionKind = row.actionType.split(":")[0];
+    if (!EXECUTABLE_GATE_ACTIONS.includes(actionKind)) {
       throw new SwitchyardError(
-        `Pending action ${id} is "${row.actionType}", which has no executor — only "done" can be affirmed.`,
+        `Pending action ${id} is "${row.actionType}", which has no executor — only ${EXECUTABLE_GATE_ACTIONS.join(", ")} can be affirmed.`,
       );
     }
     const claimed = tx
@@ -121,6 +166,20 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
     const ref = issueRefById(tx, row.issueId);
     if (!ref) {
       throw new SwitchyardError(`Pending action ${id} points at an issue that no longer exists.`);
+    }
+    if (actionKind === "dependency.remove") {
+      const blockerRef = row.payload.blockerRef;
+      const blockedRef = row.payload.blockedRef;
+      if (typeof blockerRef !== "string" || typeof blockedRef !== "string") {
+        throw new SwitchyardError(
+          `Pending action ${id}'s payload is missing blocker/blocked refs — cannot execute.`,
+        );
+      }
+      // Executed as the human with NO attribution, same reasoning as the done
+      // path below: an empty attr keeps supervised provenance off an event the
+      // human authored directly and stops the divert re-gating this removal.
+      removeDependency(tx, human, blockerRef, blockedRef, {});
+      return getIssue(tx, ref);
     }
     const expectedHeadSha = row.payload.expectedHeadSha;
     // Executed as the human with NO attribution: an empty `attr` leaves
