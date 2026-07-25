@@ -64,6 +64,7 @@ export function getActivity(db: Db, ref: string) {
   return listIssueEvents(db, issue.id).map((e) => ({
     type: e.type,
     actorName: e.actorName,
+    viaAgentName: e.viaAgentName,
     payload: e.payload,
     createdAt: e.createdAt,
   }));

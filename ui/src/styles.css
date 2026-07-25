@@ -555,6 +555,19 @@ h2 {
   color: var(--muted);
   font-size: 11px;
 }
+.via-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
 .composer {
   display: flex;
   gap: 8px;
