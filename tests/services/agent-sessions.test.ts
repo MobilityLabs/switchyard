@@ -37,7 +37,7 @@ beforeEach(() => {
 });
 
 describe("startAgentSession", () => {
-  it("creates a running session joined with the issue ref and title", () => {
+  it("creates a running session joined with the issue ref, title, and actor name", () => {
     const s = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli", pid: 4242 });
     expect(s).toMatchObject({
       ref: "SYD-1",
@@ -48,8 +48,25 @@ describe("startAgentSession", () => {
       exitCode: null,
       endedAt: null,
       lastNote: null,
+      actor: "claude/worker",
     });
     expect(s.startedAt).toBeGreaterThan(0);
+  });
+
+  it("includes the correct actor name for each session view when multiple agents are active", () => {
+    const codex = createActor(db, { name: "auto-codex", type: "agent" }).actor;
+    const s1 = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
+    const s2 = startAgentSession(db, codex, { ref: "SYD-1", mode: "cli" });
+
+    expect(s1.actor).toBe("claude/worker");
+    expect(s2.actor).toBe("auto-codex");
+
+    const views = listAgentSessions(db);
+    const view1 = views.find((v) => v.id === s1.id);
+    const view2 = views.find((v) => v.id === s2.id);
+
+    expect(view1?.actor).toBe("claude/worker");
+    expect(view2?.actor).toBe("auto-codex");
   });
 
   it("rejects human actors — only workers report sessions", () => {

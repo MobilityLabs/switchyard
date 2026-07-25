@@ -803,7 +803,7 @@ describe("ActivityFeed (SYD-104)", () => {
 // detail view shows liveness + the session's latest progress note so a human
 // doesn't have to guess whether an agent is still working.
 describe("AgentSessionStrip (SYD-43)", () => {
-  it("shows a live line per active session with the last note", async () => {
+  it("shows a live line per active session with the last note and the actor name", async () => {
     vi.mocked(listAgentSessions).mockResolvedValue([
       {
         id: 1,
@@ -816,6 +816,7 @@ describe("AgentSessionStrip (SYD-43)", () => {
         startedAt: Math.floor(Date.now() / 1000) - 300,
         endedAt: null,
         lastNote: { note: "running the tests", createdAt: 0 },
+        actor: "claude/worker",
       },
     ]);
     const container = document.createElement("div");
@@ -825,6 +826,7 @@ describe("AgentSessionStrip (SYD-43)", () => {
       root.render(<AgentSessionStrip refId="SYD-1" />);
     });
     expect(container.textContent).toContain("running the tests");
+    expect(container.textContent).toContain("claude/worker via container");
     expect(container.textContent).toMatch(/5m/);
   });
 

@@ -5,7 +5,7 @@
 // state (pid, exit code), not issue history.
 import { and, desc, eq, gt, gte, lt, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { agentSessions, events, issues, projects } from "../db/schema.js";
+import { actors, agentSessions, events, issues, projects } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
@@ -41,6 +41,7 @@ export type AgentSessionView = {
   startedAt: number;
   endedAt: number | null;
   lastNote: { note: string; createdAt: number } | null;
+  actor: string;
 };
 
 function requireAgent(actor: Actor, action: string): void {
@@ -92,10 +93,12 @@ function queryViews(db: Db, conditions: SQL[]): AgentSessionView[] {
       key: projects.key,
       number: issues.number,
       issueTitle: issues.title,
+      actorName: actors.name,
     })
     .from(agentSessions)
     .innerJoin(issues, eq(agentSessions.issueId, issues.id))
     .innerJoin(projects, eq(issues.projectId, projects.id))
+    .innerJoin(actors, eq(agentSessions.actorId, actors.id))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(agentSessions.id))
     .limit(LIST_LIMIT)
@@ -111,6 +114,7 @@ function queryViews(db: Db, conditions: SQL[]): AgentSessionView[] {
     startedAt: r.s.startedAt,
     endedAt: r.s.endedAt,
     lastNote: lastNoteFor(db, r.s.issueId, r.s.actorId, r.s.startedAt, r.s.endedAt),
+    actor: r.actorName,
   }));
 }
 
