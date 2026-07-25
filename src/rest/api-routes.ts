@@ -3,7 +3,7 @@ import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/index.js";
-import { SwitchyardError } from "../services/errors.js";
+import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import {
   authenticate,
   createActor,
@@ -59,6 +59,7 @@ import {
   markDuplicate,
   redeliverIssue,
   resolveDeliveryFailure,
+  resolveDeviation,
 } from "../services/triage-actions.js";
 import {
   addWebhook,
@@ -116,6 +117,7 @@ import {
   settingPutBody,
   redeliverBody,
   resolveDeliveryBody,
+  resolveDeviationBody,
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
   deliveryAttemptDerivedHeadBody,
@@ -156,6 +158,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.onError((err, c) => {
+    // Unreachable today BY CONSTRUCTION: PendingAffirmation is thrown only by
+    // the diverts in updateIssue and removeDependency (SYD-260), both of which
+    // require attr.sessionId, which only a supervised principal carries — and a
+    // sup_ token resolves ONLY at /mcp (src/server.ts:77). REST never calls
+    // resolveSupervisedPrincipal; PATCH /issues/:ref and DELETE /dependencies
+    // both pass no attr at all. Kept as a tripwire: this class
+    // extends Error, so if REST ever gains supervised attribution, without this
+    // arm the catch-all below turns a parked action into a 500 + stack trace.
+    if (err instanceof PendingAffirmation) return c.json(err.pending, 202);
     if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
     if (
       err instanceof SyntaxError ||
@@ -423,8 +434,22 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // through a non-agent branch) — Retry is a dead end there since there's no
   // attributed PR to re-authorize.
   app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
+    c.json(resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note)),
+  );
+
+  // SYD-262: the same escape hatch for a recorded-once process deviation.
+  // done_without_merged_pr clears only via a merged pr_state row, which strict
+  // agent/<ref> attribution never produces for the feat/ branches interactive
+  // work uses — so without this the banner is lit forever.
+  app.post("/issues/:ref/resolve-deviation", body(resolveDeviationBody), (c) =>
     c.json(
-      resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note),
+      resolveDeviation(
+        db,
+        c.var.actor,
+        c.req.param("ref"),
+        c.req.valid("json").reason,
+        c.req.valid("json").note,
+      ),
     ),
   );
 
@@ -442,18 +467,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // trigger-shaped infra state an agent could exploit.
   app.get("/delivery-health", (c) => {
     const hoursParam = c.req.query("hours");
-    return c.json(
-      getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined),
-    );
+    return c.json(getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined));
   });
 
-  app.post(
-    "/issues/:ref/delivery-attempts",
-    body(deliveryAttemptStartBody),
-    (c) =>
-      c.json(
-        startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json")),
-      ),
+  app.post("/issues/:ref/delivery-attempts", body(deliveryAttemptStartBody), (c) =>
+    c.json(startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
   );
 
   const parseAttemptId = (idParam: string): number => {

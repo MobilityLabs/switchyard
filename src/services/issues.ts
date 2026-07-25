@@ -13,14 +13,21 @@ import {
 } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
-import { SwitchyardError } from "./errors.js";
+import { SwitchyardError, PendingAffirmation } from "./errors.js";
+import { canonicalizeAction, type CanonicalAction } from "./canonical-action.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { getOpenBlockers } from "./dependencies.js";
 import { getOpenPr, getMergedPr } from "./pr-status.js";
 import { doneWithoutMergedPr } from "./deviation.js";
 import { getSetting } from "./settings.js";
-import { mintLease, validateLease, invalidateLease, getActiveLease, heartbeatLease } from "./leases.js";
+import {
+  mintLease,
+  validateLease,
+  invalidateLease,
+  getActiveLease,
+  heartbeatLease,
+} from "./leases.js";
 import { isHardGated, findOrCreatePendingAction, EXECUTABLE_GATE_ACTIONS } from "./hard-gate.js";
 
 export type Provenance = {
@@ -50,6 +57,26 @@ const AGENT_STATUS_TRANSITIONS: Partial<Record<Status, { to: Status; assigneeOnl
   };
 
 export const SUMMARY_MAX_LENGTH = 280;
+
+/**
+ * Labels whose work a headless container cannot finish, so an issue carrying
+ * one defaults to a human-attended session (SYD-239).
+ *
+ * `ui` is here because the SYD-183 norm asks for a screenshot of UI work and
+ * the worker images ship no browser to make one — an upload path
+ * (switchyard-attach, SYD-182) with nothing to upload. Rather than bake
+ * chromium into three images, UI work routes to a session that already has a
+ * browser. The refusal itself is worker-select's INTERACTIVE_PREFERENCE skip;
+ * this only sets the field it reads.
+ *
+ * A default, never an override: an explicit workerPreference always wins, so a
+ * `ui` issue that genuinely is headless-doable can still be dispatched.
+ */
+const INTERACTIVE_ONLY_LABELS = ["ui"];
+
+export function defaultWorkerPreference(labels: string[] | undefined): string | null {
+  return labels?.some((l) => INTERACTIVE_ONLY_LABELS.includes(l)) ? "interactive" : null;
+}
 
 function checkSummaryLength(summary: string | null | undefined): void {
   if (summary != null && summary.length > SUMMARY_MAX_LENGTH) {
@@ -189,7 +216,7 @@ export function createIssue(
         sourceType: input.provenance?.sourceType ?? null,
         sourceDetail: input.provenance?.detail ?? null,
         sourceUrl: input.provenance?.url ?? null,
-        workerPreference: input.workerPreference ?? null,
+        workerPreference: input.workerPreference ?? defaultWorkerPreference(input.labels),
       })
       .returning()
       .get();
@@ -308,13 +335,36 @@ export function updateIssue(
       // the executor re-drives updateIssue at affirm time, which re-validates every
       // guard (incl. the SYD-208 head pin) against current state: it either no-ops
       // (already done) or throws and rolls back, leaving the row pending.
-      const pendingActionId = findOrCreatePendingAction(db, attr.sessionId, target.id, patch.status, {
-        status: patch.status,
-        ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
-      });
-      throw new SwitchyardError(
-        `Awaiting human affirmation: ${ref} → ${patch.status} is hard-gated (pending action #${pendingActionId}). A human must approve it in the board. Nothing was changed.`,
+      const expiresAt =
+        Math.floor(Date.now() / 1000) + getSetting(db, "supervised.affirm_ttl_seconds");
+      const pendingActionId = findOrCreatePendingAction(
+        db,
+        attr.sessionId,
+        target.id,
+        patch.status,
+        {
+          status: patch.status,
+          ...(patch.expectedHeadSha !== undefined
+            ? { expectedHeadSha: patch.expectedHeadSha }
+            : {}),
+        },
+        expiresAt,
       );
+      const action: CanonicalAction = {
+        v: 1,
+        pendingActionId,
+        sessionId: attr.sessionId,
+        issueRef: target.ref,
+        actionType: patch.status,
+        ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
+        expiresAt,
+      };
+      throw new PendingAffirmation({
+        pendingActionId,
+        canonical: canonicalizeAction(action),
+        action,
+        instructions: `${ref} -> ${patch.status} is hard-gated. Nothing was changed. A human must run: syd affirm ${ref}`,
+      });
     }
   }
   return db.transaction((tx) => {

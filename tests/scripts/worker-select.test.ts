@@ -38,6 +38,7 @@ import {
   isRetryableError,
   withRetry,
   applyDispatchPolicy,
+  projectsBlockedByWip,
   type WorkerConfig,
   type WorkerIssue,
   type WorkerProject,
@@ -80,6 +81,23 @@ const issue = (overrides: Partial<WorkerIssue>): WorkerIssue => ({
 });
 
 describe("selectDispatchable", () => {
+  it("suppresses a full project's work, logs once, and resumes below the limit", () => {
+    const issues = [issue({ ref: "SYD-1" }), issue({ ref: "AIPI-1" })];
+    const limited = {
+      ...config,
+      projects: { ...config.projects, AIPI: { repo: "/repo/aipi" } },
+      wipLimits: { in_review: 5 },
+      columnCounts: { SYD: { in_review: 5 }, AIPI: { in_review: 4 } },
+    };
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(selectDispatchable(issues, limited, [])).toEqual([issues[1]]);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith("WIP limit: pausing SYD dispatch — in_review 5/5");
+
+    limited.columnCounts.SYD.in_review = 4;
+    expect(selectDispatchable(issues, limited, [])).toEqual(issues);
+    logSpy.mockRestore();
+  });
   it("only selects issues carrying the configured label", () => {
     const issues = [
       issue({ ref: "SYD-1", labels: ["auto"] }),
@@ -190,6 +208,26 @@ describe("selectDispatchable", () => {
     expect(
       selectDispatchable(issues, { ...config, maxConcurrent: 1 }, []).map((i) => i.ref),
     ).toEqual(["SYD-2"]);
+  });
+});
+
+describe("projectsBlockedByWip", () => {
+  it("blocks at and over a limit, but not under it", () => {
+    expect(
+      projectsBlockedByWip(
+        { UNDER: { in_review: 4 }, AT: { in_review: 5 }, OVER: { in_review: 6 } },
+        { in_review: 5 },
+      ),
+    ).toEqual(new Set(["AT", "OVER"]));
+  });
+
+  it("ignores zero limits and isolates projects across multiple columns", () => {
+    expect(
+      projectsBlockedByWip(
+        { SYD: { todo: 99, in_progress: 2 }, AIPI: { todo: 99, in_progress: 1 } },
+        { todo: 0, in_progress: 2 },
+      ),
+    ).toEqual(new Set(["SYD"]));
   });
 });
 
@@ -398,6 +436,8 @@ describe("applyDispatchPolicy (SYD-155)", () => {
     maxAnswerConcurrent: 7,
     intervalSeconds: 60,
     eventPollSeconds: 10,
+    wipLimits: { in_review: 5 },
+    columnCounts: { SYD: { in_review: 5 } },
   };
 
   it("overlays every policy field onto the config in place", () => {
@@ -525,7 +565,9 @@ describe("workerPidFileName", () => {
   });
 
   it("gives different-labelled workers of the same role distinct locks", () => {
-    expect(workerPidFileName("code", "auto-codex")).not.toBe(workerPidFileName("code", "auto-gemini"));
+    expect(workerPidFileName("code", "auto-codex")).not.toBe(
+      workerPidFileName("code", "auto-gemini"),
+    );
     expect(workerPidFileName("code", "auto-codex")).not.toBe(workerPidFileName("code", "auto"));
   });
 
@@ -624,7 +666,11 @@ describe("egress config (SYD-110)", () => {
   });
 
   it("egressAllowlist covers the Anthropic API, npm registry, and the tracker host", () => {
-    expect(egressAllowlist(config)).toEqual(["api.anthropic.com", "localhost", "registry.npmjs.org"]);
+    expect(egressAllowlist(config)).toEqual([
+      "api.anthropic.com",
+      "localhost",
+      "registry.npmjs.org",
+    ]);
   });
 
   it("egressAllowlist merges config extras, deduped and sorted", () => {
@@ -789,7 +835,12 @@ describe("buildDockerArgs", () => {
   });
 
   it("omits the egress network and proxy env when egress is open (SYD-110)", () => {
-    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, { ...config, egress: "open" }, oauthEnv);
+    const args = buildDockerArgs(
+      issue({ ref: "SYD-1" }),
+      project,
+      { ...config, egress: "open" },
+      oauthEnv,
+    );
     expect(args).not.toContain("--network");
     expect(args.some((a) => a.includes("_PROXY") || a.includes("_proxy"))).toBe(false);
   });
@@ -851,32 +902,30 @@ describe("buildDockerArgs", () => {
   });
 
   it("proxy mode: agent container gets a placeholder + CA mount and no real credential (SYD-186)", () => {
-    const args = buildDockerArgs(
-      issue({ ref: "SYD-1" }),
-      project,
-      config,
-      { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv,
-    );
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, {
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL",
+    } as NodeJS.ProcessEnv);
     const joined = args.join(" ");
     expect(joined).toContain("CLAUDE_CODE_OAUTH_TOKEN=placeholder");
     expect(joined).not.toContain("sk-ant-oat-REAL"); // real value never crosses in
     expect(joined).toMatch(/-v [^ ]*egress-ca[^ ]*:\/ca:ro/); // CA mounted read-only
     // No bare passthrough of the real provider vars.
     const passesRealCred = args.some(
-      (a, i) => a === "-e" && (args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN" || args[i + 1] === "ANTHROPIC_API_KEY"),
+      (a, i) =>
+        a === "-e" &&
+        (args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN" || args[i + 1] === "ANTHROPIC_API_KEY"),
     );
     expect(passesRealCred).toBe(false);
   });
 
   it("open mode: the real credential is passed bare (no injecting sidecar) and no CA is mounted", () => {
-    const args = buildDockerArgs(
-      issue({ ref: "SYD-1" }),
-      project,
-      { ...config, egress: "open" },
-      { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv,
-    );
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, { ...config, egress: "open" }, {
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL",
+    } as NodeJS.ProcessEnv);
     // Without a sidecar the container needs the real key — bare, value from env.
-    const passesRealCred = args.some((a, i) => a === "-e" && args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN");
+    const passesRealCred = args.some(
+      (a, i) => a === "-e" && args[i + 1] === "CLAUDE_CODE_OAUTH_TOKEN",
+    );
     expect(passesRealCred).toBe(true);
     const joined = args.join(" ");
     expect(joined).not.toContain("CLAUDE_CODE_OAUTH_TOKEN=placeholder");
@@ -967,12 +1016,9 @@ describe("buildDockerArgs", () => {
   });
 
   it("codex engine: image + CA mount, no real credential and no Claude placeholder (SYD-187)", () => {
-    const args = buildDockerArgs(
-      issue({ ref: "SYD-1" }),
-      project,
-      { ...config, engine: "codex" },
-      { CODEX_OAUTH_TOKEN: "cxo-REAL" } as NodeJS.ProcessEnv,
-    );
+    const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, { ...config, engine: "codex" }, {
+      CODEX_OAUTH_TOKEN: "cxo-REAL",
+    } as NodeJS.ProcessEnv);
     const joined = args.join(" ");
     expect(args[args.length - 1]).toBe("switchyard-worker-codex");
     expect(joined).toMatch(/-v [^ ]*egress-ca[^ ]*:\/ca:ro/);
@@ -1123,7 +1169,15 @@ describe("selectDispatchable worker preference (SYD-201)", () => {
   const codexCfg = { ...base, engine: "codex" as const };
   const claudeCfg = { ...base, engine: "claude" as const };
   const iss = (ref: string, workerPreference: string | null, priority?: string) =>
-    ({ ref, labels: [], assigneeId: null, needsInput: false, updatedAt: 1, workerPreference, priority }) as never;
+    ({
+      ref,
+      labels: [],
+      assigneeId: null,
+      needsInput: false,
+      updatedAt: 1,
+      workerPreference,
+      priority,
+    }) as never;
   const refs = (out: unknown[]) => (out as { ref: string }[]).map((i) => i.ref);
 
   it("a codex worker orders match > neutral > foreign", () => {
@@ -1136,7 +1190,11 @@ describe("selectDispatchable worker preference (SYD-201)", () => {
   });
 
   it("a claude worker sorts codex-preferred issues last", () => {
-    const out = selectDispatchable([iss("SYD-2", "codex"), iss("SYD-1", null)], claudeCfg, [].values());
+    const out = selectDispatchable(
+      [iss("SYD-2", "codex"), iss("SYD-1", null)],
+      claudeCfg,
+      [].values(),
+    );
     expect(refs(out)).toEqual(["SYD-1", "SYD-2"]);
   });
 
@@ -1197,6 +1255,17 @@ describe("buildContainerizedPrompt", () => {
     const prompt = buildContainerizedPrompt("SYD-7", { baseBranch: "develop" });
     expect(prompt).toContain("origin/develop");
     expect(prompt).not.toContain("origin/main");
+  });
+
+  // SYD-239: the worker images ship switchyard-attach but no browser, so a
+  // container cannot satisfy the SYD-183 "attach a screenshot" norm. Say so,
+  // rather than leaving the session to discover it by failing — and point at
+  // the evidence it CAN produce.
+  it("tells the session it has no browser and asks for a written visual description", () => {
+    const prompt = buildContainerizedPrompt("SYD-7");
+    expect(prompt).toMatch(/no browser/i);
+    expect(prompt).not.toMatch(/attach a screenshot/i);
+    expect(prompt).toMatch(/describe/i);
   });
 });
 

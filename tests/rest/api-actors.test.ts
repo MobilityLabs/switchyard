@@ -5,11 +5,7 @@ import { createLoginLink, redeemLoginLink } from "../../src/services/auth.js";
 import { setSetting } from "../../src/services/settings.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
-let db: Db,
-  app: ReturnType<typeof buildApiRoutes>,
-  bearer: string,
-  cookie: string,
-  sean: Actor;
+let db: Db, app: ReturnType<typeof buildApiRoutes>, bearer: string, cookie: string, sean: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");

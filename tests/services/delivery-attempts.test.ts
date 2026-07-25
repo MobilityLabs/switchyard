@@ -46,7 +46,11 @@ function setup() {
  * testing. Tests that specifically exercise the pin-less/interactive-skip
  * path call updateIssue directly instead of this helper. */
 let stampDonePinSeq = 0;
-function stampDone(db: ReturnType<typeof openDb>, human: ReturnType<typeof createActor>["actor"], ref: string) {
+function stampDone(
+  db: ReturnType<typeof openDb>,
+  human: ReturnType<typeof createActor>["actor"],
+  ref: string,
+) {
   const issue = getIssue(db, ref);
   updateIssue(db, human, ref, { status: "done" });
   stampDonePinSeq += 1;
@@ -244,8 +248,18 @@ describe("listPendingDeliveryAuthorizations", () => {
     const { db, human } = setup();
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
     stampDone(db, human, issue.ref);
-    recordEvent(db, { issueId: issue.id, actorId: human.id, type: "redeliver_requested", payload: {} });
-    recordEvent(db, { issueId: issue.id, actorId: human.id, type: "redeliver_requested", payload: {} });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: {},
+    });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: {},
+    });
 
     const pending = listPendingDeliveryAuthorizations(db);
     expect(pending).toHaveLength(3);

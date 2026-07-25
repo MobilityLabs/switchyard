@@ -23,11 +23,7 @@
 // SWITCHYARD_TOKEN must belong to a human-type actor (SYD-107), same as the
 // poller — POST /api/github-events rejects agent actors.
 
-import {
-  observeRepoState,
-  selectBackfillWork,
-  type GhPr,
-} from "./github-poll-lib.js";
+import { observeRepoState, selectBackfillWork, type GhPr } from "./github-poll-lib.js";
 import {
   listPullRequests,
   listPullRequestsForBranch,
@@ -123,9 +119,7 @@ async function main(): Promise<void> {
     for (const p of problems) console.error(`  - ${p}`);
     process.exit(1);
   }
-  console.log(
-    `preflight OK: ${configured.length} configured project(s) linked and project-bound`,
-  );
+  console.log(`preflight OK: ${configured.length} configured project(s) linked and project-bound`);
 
   const keysByProjectId = new Map<number, string[]>();
   for (const p of serverProjects) {

@@ -91,6 +91,8 @@ export type WorkerProject = {
   stack?: WorkerStack;
   /** Integration branch containerized dispatch bases agent/<ref> on (default "main"). */
   baseBranch?: string;
+  /** Required check run/status context names for branch protection. */
+  requiredChecks?: string[];
 };
 
 export type DeliveryConfig = {
@@ -126,6 +128,10 @@ export type WorkerConfig = {
    * host derives its miss-limit from it. Undefined until first policy fetch. */
   heartbeatWindowSeconds?: number;
   maxConcurrent: number;
+  /** Per-status board back-pressure limits (0 or absent means unlimited). */
+  wipLimits?: Record<string, number>;
+  /** Live per-project board counts supplied with the dispatch policy. */
+  columnCounts?: Record<string, Record<string, number>>;
   projects: Record<string, WorkerProject>;
   allowedTools?: string[];
   dispatchPolicy?: "labeled" | "all-todo";
@@ -213,6 +219,8 @@ export type DispatchPolicy = {
   // miss-limit from it so the two can't diverge. Optional so an un-upgraded
   // tracker (no field) falls back to the host default.
   heartbeatWindowSeconds?: number;
+  wipLimits: Record<string, number>;
+  columnCounts: Record<string, Record<string, number>>;
 };
 
 /**
@@ -232,6 +240,26 @@ export function applyDispatchPolicy(config: WorkerConfig, policy: DispatchPolicy
   if (policy.heartbeatWindowSeconds !== undefined) {
     config.heartbeatWindowSeconds = policy.heartbeatWindowSeconds;
   }
+  config.wipLimits = policy.wipLimits;
+  config.columnCounts = policy.columnCounts;
+}
+
+/** Projects where any configured board column is at or above its nonzero limit. */
+export function projectsBlockedByWip(
+  columnCounts: Record<string, Record<string, number>>,
+  wipLimits: Record<string, number>,
+): Set<string> {
+  const blocked = new Set<string>();
+  for (const [projectKey, counts] of Object.entries(columnCounts)) {
+    if (
+      Object.entries(wipLimits).some(
+        ([status, limit]) => limit > 0 && (counts[status] ?? 0) >= limit,
+      )
+    ) {
+      blocked.add(projectKey);
+    }
+  }
+  return blocked;
 }
 
 /**
@@ -375,6 +403,21 @@ export function selectDispatchable<T extends WorkerIssue>(
   const capacity = config.maxConcurrent - countWorkActive(active);
   if (capacity <= 0) return [];
 
+  const counts = config.columnCounts ?? {};
+  const limits = config.wipLimits ?? {};
+  const wipBlocked = projectsBlockedByWip(counts, limits);
+  for (const projectKey of wipBlocked) {
+    const full = Object.entries(limits).find(
+      ([status, limit]) => limit > 0 && (counts[projectKey]?.[status] ?? 0) >= limit,
+    );
+    if (full) {
+      const [status, limit] = full;
+      console.log(
+        `WIP limit: pausing ${projectKey} dispatch — ${status} ${counts[projectKey]?.[status] ?? 0}/${limit}`,
+      );
+    }
+  }
+
   // Soft routing (SYD-201): this worker's classification is its engine. An
   // issue matching it sorts first, neutral (no preference) next, another
   // classification's last — ahead of priority, so each worker prefers its own
@@ -409,7 +452,9 @@ export function selectDispatchable<T extends WorkerIssue>(
       // all-todo: every vetted-ready issue is fair game unless held back.
       if (issue.labels.includes("hold")) continue;
     }
-    if (!(projectKeyOf(issue.ref) in config.projects)) continue;
+    const projectKey = projectKeyOf(issue.ref);
+    if (!(projectKey in config.projects)) continue;
+    if (wipBlocked.has(projectKey)) continue;
     if (issue.assigneeId !== null) continue;
     // Human-attended-only: never headless-dispatch an interactive-marked issue,
     // regardless of engine/dispatchPolicy (a human/interactive session takes it).
@@ -739,7 +784,19 @@ export function buildContainerizedPrompt(
     // holds its lease — do NOT call claim_issue (a re-claim would fail); your
     // claim-scoped writes are authorized automatically. Call get_issue to read it.
     `This issue is already claimed for your session — do not call claim_issue; call get_issue to read it. ` +
-    `Implement the work with tests. Comment verification ` +
+    `Implement the work with tests. ` +
+    // SYD-239: SYD-183 asks agents to attach a screenshot for UI work, but the
+    // worker images (Dockerfile.worker/.codex/.gemini) ship switchyard-attach
+    // and no browser — there is nothing here to render the app with. Say that
+    // outright so a session doesn't burn a turn discovering it, and name the
+    // evidence it CAN produce. UI issues now default to workerPreference
+    // "interactive" (defaultWorkerPreference in src/services/issues.ts) so the
+    // visual check happens in a session that actually has a browser. A Mermaid
+    // diagram still works here — that renders without one.
+    `This container has no browser, so you cannot take a screenshot: describe any visual ` +
+    `change in words in your verification comment instead. A diagram (e.g. Mermaid rendered ` +
+    `to PNG) can still be attached with switchyard-attach. ` +
+    `Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
@@ -930,9 +987,11 @@ export async function ensureEgressGuard(
   // kickstart together — observed live 2026-07-11): every mutating step below
   // races an identical twin, so a failure only counts if the desired state
   // genuinely isn't there when we look again.
-  const inspectProxy = async (): Promise<
-    { running: boolean; sameDomains: boolean; sameKeys: boolean } | null
-  > => {
+  const inspectProxy = async (): Promise<{
+    running: boolean;
+    sameDomains: boolean;
+    sameKeys: boolean;
+  } | null> => {
     try {
       const { stdout } = await exec("docker", [
         "inspect",

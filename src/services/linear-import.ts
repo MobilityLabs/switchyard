@@ -357,7 +357,10 @@ export async function executeImportPlan(
     }
   }
   const projectByKey = new Map(
-    plan.projects.map((p) => [p.key, db.select().from(projects).where(eq(projects.key, p.key)).get()!]),
+    plan.projects.map((p) => [
+      p.key,
+      db.select().from(projects).where(eq(projects.key, p.key)).get()!,
+    ]),
   );
 
   const actorByName = new Map<string, Actor>();
@@ -429,7 +432,9 @@ export async function executeImportPlan(
     for (const [url, filename] of wanted) {
       const file = await deps.download(url);
       if (!file) {
-        report.warnings.push(`${pi.ref}: could not download ${filename} (${url}) — keeping the original URL`);
+        report.warnings.push(
+          `${pi.ref}: could not download ${filename} (${url}) — keeping the original URL`,
+        );
         continue;
       }
       try {
@@ -445,7 +450,9 @@ export async function executeImportPlan(
         report.attachmentsCreated++;
       } catch (err) {
         if (err instanceof SwitchyardError) {
-          report.warnings.push(`${pi.ref}: could not re-upload ${filename} — ${err.message} Keeping the original URL.`);
+          report.warnings.push(
+            `${pi.ref}: could not re-upload ${filename} — ${err.message} Keeping the original URL.`,
+          );
         } else {
           throw err;
         }

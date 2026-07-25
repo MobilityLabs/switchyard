@@ -5,6 +5,7 @@
 //   npm run init-worker -- --install-launchd-code      # doctor, then install the code-role-only LaunchAgent (SYD-67)
 //   npm run init-worker -- --install-launchd-answer    # doctor, then install the answer-role-only LaunchAgent (SYD-67)
 //   npm run init-worker -- --install-launchd-deliver   # doctor, then install deliver.ts's KeepAlive LaunchAgent
+//   npm run init-worker -- --install-launchd-poll      # doctor, then install github-poll.ts's KeepAlive LaunchAgent
 //   npm run init-worker -- --self-test                 # doctor, then one dry-run worker tick
 //   npm run init-worker -- --protect-main [KEY]        # doctor, then apply branch protection to main
 //                                                       # (all configured projects, or just KEY)
@@ -84,6 +85,7 @@ import {
   parseMcpServerNames,
   parsePlistPath,
   renderDeliverPlist,
+  renderPollPlist,
   renderClaudeMdSnippet,
   renderWorkerPlist,
   stackParityGaps,
@@ -92,6 +94,7 @@ import {
   validateWorkerConfig,
   workerLaunchdLabel,
   DELIVER_LAUNCHD_LABEL,
+  POLL_LAUNCHD_LABEL,
   type CheckResult,
   type RoleStatus,
   type UserStackCapture,
@@ -169,18 +172,20 @@ function checkPlistPinnedNode(opts: {
  * would pass a doctor run on a host that happens to have the tool while the
  * container that actually runs sessions doesn't.
  */
-function runsOk(cmd: string, config: WorkerConfig): boolean {
+export function runsOk(cmd: string, config: WorkerConfig): boolean {
   if (config.containerized) {
     const image = config.image ?? "switchyard-worker";
     return (
-      spawnSync("docker", ["run", "--rm", image, "sh", "-c", cmd], { stdio: "ignore" }).status === 0
+      spawnSync("docker", ["run", "--rm", "--entrypoint", "sh", image, "-c", cmd], {
+        stdio: "ignore",
+      }).status === 0
     );
   }
   return spawnSync("sh", ["-c", cmd], { stdio: "ignore" }).status === 0;
 }
 
 /** Doctor checks for a project's declared `stack` (SYD-76): Node version, extra CLIs, declared ports. */
-function checkProjectStack(
+export function checkProjectStack(
   key: string,
   project: WorkerProject,
   config: WorkerConfig,
@@ -193,7 +198,7 @@ function checkProjectStack(
     let actual: string | null;
     if (config.containerized) {
       const image = config.image ?? "switchyard-worker";
-      const out = spawnSync("docker", ["run", "--rm", image, "node", "--version"], {
+      const out = spawnSync("docker", ["run", "--rm", "--entrypoint", "node", image, "--version"], {
         encoding: "utf8",
       });
       actual = out.status === 0 ? out.stdout.trim() : null;
@@ -226,6 +231,151 @@ function checkProjectStack(
       ok: true,
       note: `declared: ${stack.ports.join(", ")} (informational — not port-mapped automatically yet)`,
     });
+  }
+
+  return results;
+}
+
+/**
+ * Fetches actually-reporting check-runs and statuses for the latest commit
+ * on the specified ref (branch/commit/etc.) using the `gh api` CLI.
+ */
+function discoverRequiredChecks(owner: string, repo: string, ref: string): string[] {
+  const checkRunsRes = spawnSync(
+    "gh",
+    ["api", `repos/${owner}/${repo}/commits/${ref}/check-runs`],
+    { encoding: "utf8" },
+  );
+  const checkRuns: string[] = [];
+  if (checkRunsRes.status === 0) {
+    try {
+      const parsed = JSON.parse(checkRunsRes.stdout);
+      if (parsed && Array.isArray(parsed.check_runs)) {
+        for (const run of parsed.check_runs) {
+          if (run && typeof run.name === "string" && run.name.trim() !== "") {
+            checkRuns.push(run.name.trim());
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const statusesRes = spawnSync("gh", ["api", `repos/${owner}/${repo}/commits/${ref}/statuses`], {
+    encoding: "utf8",
+  });
+  const statuses: string[] = [];
+  if (statusesRes.status === 0) {
+    try {
+      const parsed = JSON.parse(statusesRes.stdout);
+      if (Array.isArray(parsed)) {
+        for (const status of parsed) {
+          if (status && typeof status.context === "string" && status.context.trim() !== "") {
+            statuses.push(status.context.trim());
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return Array.from(new Set([...checkRuns, ...statuses]));
+}
+
+/**
+ * Doctor check (SYD-252): verifies that the branch protection required checks for
+ * the integration branch (e.g., `main` or project.baseBranch) are actually reporting
+ * on the latest commit. If they aren't, the branch is permanently unmergeable!
+ * Also flags mismatch if switchyard-worker.json `requiredChecks` does not match the
+ * required checks on GitHub.
+ */
+function checkRequiredChecks(key: string, project: WorkerProject): CheckResult[] {
+  const results: CheckResult[] = [];
+  const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], {
+    encoding: "utf8",
+  });
+  if (remote.status !== 0) {
+    return results;
+  }
+  const parsed = parseGithubRemote(remote.stdout.trim());
+  if (!parsed) {
+    return results;
+  }
+
+  const baseBranch = project.baseBranch || "main";
+
+  const auth = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
+  if (auth.status !== 0) {
+    return results;
+  }
+
+  const protectionRes = spawnSync(
+    "gh",
+    ["api", `repos/${parsed.owner}/${parsed.repo}/branches/${baseBranch}/protection`],
+    { encoding: "utf8" },
+  );
+
+  let githubRequired: string[] = [];
+  let isProtected = false;
+
+  if (protectionRes.status === 0) {
+    isProtected = true;
+    try {
+      const protection = JSON.parse(protectionRes.stdout);
+      const rsc = protection?.required_status_checks;
+      if (rsc) {
+        const contexts = Array.isArray(rsc.contexts) ? rsc.contexts : [];
+        const checks = Array.isArray(rsc.checks)
+          ? rsc.checks
+              .map((c: { context?: string }) => c?.context)
+              .filter((ctx: unknown): ctx is string => typeof ctx === "string" && ctx !== "")
+          : [];
+        githubRequired = Array.from(new Set([...contexts, ...checks]));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const reporting = discoverRequiredChecks(parsed.owner, parsed.repo, baseBranch);
+  const configRequired = project.requiredChecks || [];
+
+  if (isProtected && configRequired.length > 0) {
+    const missingOnGithub = configRequired.filter((c) => !githubRequired.includes(c));
+    const extraOnGithub = githubRequired.filter((c) => !configRequired.includes(c));
+    if (missingOnGithub.length > 0 || extraOnGithub.length > 0) {
+      results.push({
+        name: `projects.${key} branch protection required checks sync`,
+        ok: false,
+        note:
+          `switchyard-worker.json requiredChecks and GitHub branch protection required checks are out of sync. ` +
+          `switchyard-worker.json has: [${configRequired.join(", ")}]. GitHub has: [${githubRequired.join(", ")}]. ` +
+          `Run \`npm run init-worker -- --protect-main ${key}\` to sync them.`,
+      });
+    }
+  }
+
+  const checksToValidate = configRequired.length > 0 ? configRequired : githubRequired;
+  if (checksToValidate.length > 0) {
+    const nonReporting = checksToValidate.filter((c) => !reporting.includes(c));
+    if (nonReporting.length > 0) {
+      results.push({
+        name: `projects.${key} required checks health`,
+        ok: true,
+        warn: true,
+        note:
+          `The following required check(s) are configured but not reporting on the latest commit of ${baseBranch}: ` +
+          `[${nonReporting.join(", ")}]. Actually reporting: [${reporting.join(", ")}]. This will make PRs unmergeable.`,
+      });
+    } else {
+      results.push({
+        name: `projects.${key} required checks health`,
+        ok: true,
+        note: `All required checks [${checksToValidate.join(", ")}] are actively reporting on ${baseBranch}.`,
+      });
+    }
   }
 
   return results;
@@ -348,6 +498,9 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
       });
       if (project.stack) {
         results.push(...checkProjectStack(key, project, config));
+      }
+      if (isRepo) {
+        results.push(...checkRequiredChecks(key, project));
       }
     }
 
@@ -507,12 +660,16 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   // the config alone: whether `gh` is actually installed and authenticated,
   // and whether each project repo actually has a GitHub `origin` to open PRs
   // and merge against.
-  if (config?.delivery) {
+  const pollPlistInstalled = existsSync(
+    path.join(os.homedir(), "Library", "LaunchAgents", `${POLL_LAUNCHD_LABEL}.plist`),
+  );
+  const pollRequested = process.argv.includes("--install-launchd-poll");
+  if (config?.delivery || config?.githubPoll || pollPlistInstalled || pollRequested) {
     const hasGh = commandExists("gh");
     results.push({
       name: "gh CLI",
       ok: hasGh,
-      note: hasGh ? undefined : "required for the delivery gate — https://cli.github.com",
+      note: hasGh ? undefined : "required for delivery/GitHub polling — https://cli.github.com",
     });
     if (hasGh) {
       const auth = spawnSync("gh", ["auth", "status"], { stdio: "ignore" });
@@ -522,7 +679,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         note: auth.status === 0 ? undefined : "run: gh auth login",
       });
     }
-    for (const [key, project] of Object.entries(config.projects)) {
+    for (const [key, project] of Object.entries(config?.projects ?? {})) {
       const remote = spawnSync("git", ["-C", project.repo, "remote", "get-url", "origin"], {
         encoding: "utf8",
       });
@@ -608,6 +765,69 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
     );
   }
 
+  // The poller is separately managed from dispatch/delivery. Surface both
+  // installation and live pid-lock state, then validate the exact Node/PATH
+  // baked into its plist so a stale LaunchAgent cannot fail silently.
+  const pollPlistPath = path.join(
+    os.homedir(),
+    "Library",
+    "LaunchAgents",
+    `${POLL_LAUNCHD_LABEL}.plist`,
+  );
+  const pollInstalled = existsSync(pollPlistPath);
+  const pollRunning = pollAlreadyRunning();
+  results.push({
+    name: "GitHub poll LaunchAgent",
+    ok: true,
+    warn: !pollRunning,
+    note: pollRunning
+      ? pollInstalled
+        ? "running, installed"
+        : "running, not installed"
+      : pollInstalled
+        ? "installed, not running"
+        : "not installed — run: npm run init-worker -- --install-launchd-poll",
+  });
+  if (pollInstalled) {
+    results.push(
+      checkPlistPinnedNode({ noun: "GitHub poll", plistPath: pollPlistPath, enginesNode }),
+    );
+  }
+
+  if (config?.githubPoll || pollInstalled || pollRequested) {
+    const infraToken = env.SWITCHYARD_SERVICE_TOKEN || env.SWITCHYARD_TOKEN;
+    results.push({
+      name: "GitHub poll service token",
+      ok: Boolean(infraToken),
+      note: infraToken ? undefined : "set SWITCHYARD_SERVICE_TOKEN (preferred) or SWITCHYARD_TOKEN",
+    });
+    if (infraToken && config) {
+      const base = config.url.replace(/\/$/, "");
+      try {
+        const me = await fetch(`${base}/api/me`, {
+          headers: { authorization: `Bearer ${infraToken}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!me.ok) {
+          results.push({
+            name: "GitHub poll token valid",
+            ok: false,
+            note: `/api/me returned ${me.status}`,
+          });
+        } else {
+          const actor = (await me.json()) as { name: string; type: string };
+          results.push({
+            name: "GitHub poll token is a non-agent actor",
+            ok: actor.type !== "agent",
+            note: `${actor.name} (${actor.type})`,
+          });
+        }
+      } catch (err) {
+        results.push({ name: "GitHub poll token valid", ok: false, note: (err as Error).message });
+      }
+    }
+  }
+
   return { results, config };
 }
 
@@ -628,11 +848,17 @@ function defaultConfigLabel(): string | undefined {
 }
 
 function workerAlreadyRunning(role: WorkerRole): boolean {
-  return isLocked(path.join(repoRoot, ".superpowers", workerPidFileName(role, defaultConfigLabel())));
+  return isLocked(
+    path.join(repoRoot, ".superpowers", workerPidFileName(role, defaultConfigLabel())),
+  );
 }
 
 function deliverAlreadyRunning(): boolean {
   return isLocked(path.join(repoRoot, ".superpowers", "deliver.pid"));
+}
+
+function pollAlreadyRunning(): boolean {
+  return isLocked(path.join(repoRoot, ".superpowers", "github-poll.pid"));
 }
 
 /** Shared write-plist / launchctl-load flow for the worker and deliver LaunchAgents. */
@@ -764,6 +990,22 @@ function installLaunchdDeliver(config: WorkerConfig | null): void {
   console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "deliver.out.log")}`);
 }
 
+/** Install the always-on GitHub poller, which is valid with default poll settings. */
+function installLaunchdPoll(): void {
+  const plist = renderPollPlist({
+    repoRoot,
+    nodeBinDir: path.dirname(process.execPath),
+    home: os.homedir(),
+  });
+  installPlist({
+    label: POLL_LAUNCHD_LABEL,
+    plist,
+    alreadyRunning: pollAlreadyRunning,
+    noun: "GitHub poll worker",
+  });
+  console.log(`logs: ${path.join(repoRoot, ".superpowers", "worker-logs", "poll.out.log")}`);
+}
+
 /**
  * Applies the standard force-push/deletion branch protection (see
  * docs/onboarding-a-project.md step 4) to `main` on each configured
@@ -800,15 +1042,38 @@ function protectMain(config: WorkerConfig | null, onlyKey: string | undefined): 
       failures++;
       continue;
     }
-    const { args, input } = buildProtectMainArgs(parsed.owner, parsed.repo);
+
+    let checksToRequire: string | string[] = "test";
+    if (project.requiredChecks && project.requiredChecks.length > 0) {
+      checksToRequire = project.requiredChecks;
+      console.log(
+        `using required checks from switchyard-worker.json: [${project.requiredChecks.join(", ")}]`,
+      );
+    } else {
+      const baseBranch = project.baseBranch || "main";
+      const discovered = discoverRequiredChecks(parsed.owner, parsed.repo, baseBranch);
+      if (discovered.length > 0) {
+        checksToRequire = discovered;
+        console.log(
+          `discovered required checks from latest commit on ${baseBranch}: [${discovered.join(", ")}]`,
+        );
+      } else {
+        console.log(
+          `no checks discovered on ${baseBranch} — falling back to default required check: "test"`,
+        );
+      }
+    }
+
+    const { args, input } = buildProtectMainArgs(parsed.owner, parsed.repo, checksToRequire);
     const res = spawnSync("gh", args, { input, encoding: "utf8" });
     if (res.status !== 0) {
       console.error(`✗ ${key}: gh api failed — ${(res.stderr || res.stdout || "").trim()}`);
       failures++;
       continue;
     }
+    const checksStr = Array.isArray(checksToRequire) ? checksToRequire.join(", ") : checksToRequire;
     console.log(
-      `✓ ${key}: main branch protected on ${parsed.owner}/${parsed.repo} (force-push + deletion blocked)`,
+      `✓ ${key}: main branch protected on ${parsed.owner}/${parsed.repo} (force-push + deletion blocked; checks required: [${checksStr}])`,
     );
   }
   if (failures > 0) process.exit(1);
@@ -1132,6 +1397,7 @@ async function main(): Promise<void> {
   if (args.includes("--install-launchd-code")) installLaunchd("code");
   if (args.includes("--install-launchd-answer")) installLaunchd("answer");
   if (args.includes("--install-launchd-deliver")) installLaunchdDeliver(config);
+  if (args.includes("--install-launchd-poll")) installLaunchdPoll();
 
   const protectIdx = args.indexOf("--protect-main");
   if (protectIdx !== -1) {
@@ -1141,7 +1407,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

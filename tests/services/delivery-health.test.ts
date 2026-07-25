@@ -23,7 +23,11 @@ function setup() {
 }
 
 let stampDonePinSeq = 0;
-function stampDone(db: ReturnType<typeof openDb>, human: ReturnType<typeof createActor>["actor"], ref: string) {
+function stampDone(
+  db: ReturnType<typeof openDb>,
+  human: ReturnType<typeof createActor>["actor"],
+  ref: string,
+) {
   const issue = getIssue(db, ref);
   updateIssue(db, human, ref, { status: "done" });
   stampDonePinSeq += 1;

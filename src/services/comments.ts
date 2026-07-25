@@ -1,12 +1,9 @@
-import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
-import { getIssue } from "./issues.js";
+import { getIssue, updateIssue } from "./issues.js";
 import { listIssueEvents, recordEvent } from "./events.js";
-import { invalidateLease } from "./leases.js";
 
 /** Convention (SYD-56): a human comment addressed to agents leads with `@agent`. */
 const AGENT_QUESTION_RE = /^@agent\b/i;
@@ -48,37 +45,16 @@ export function addComment(
       // The agent that escalated stopped its session, so an in_progress claim is
       // dead weight — release it with the answer so the worker can re-dispatch
       // immediately instead of waiting out the stale-claim sweep.
+      //
+      // SYD-241: routed through updateIssue (instead of a raw tx.update)
+      // so this status write passes through the same hard-gate divert as
+      // every other status change — a supervised session answering its own
+      // escalation can no longer reach a gated status unseen by the gate.
+      // updateIssue's own needsInput-clearing and todo-release-clears-claim
+      // logic (which also records claim_released + invalidates the lease)
+      // subsumes what this branch used to do by hand.
       const release = issue.status === "in_progress";
-      tx.update(issues)
-        .set({
-          needsInput: false,
-          updatedAt: sql`(unixepoch())`,
-          ...(release ? { status: "todo" as const, assigneeId: null } : {}),
-        })
-        .where(eq(issues.id, issue.id))
-        .run();
-      recordEvent(tx, {
-        issueId: issue.id,
-        actorId: actor.id,
-        type: "needs_input_cleared",
-        viaAgentId: attr.viaAgentId,
-        sessionId: attr.sessionId,
-      });
-      if (release) {
-        recordEvent(tx, {
-          issueId: issue.id,
-          actorId: actor.id,
-          type: "claim_released",
-          payload: { reason: "needs_input_cleared" },
-          viaAgentId: attr.viaAgentId,
-          sessionId: attr.sessionId,
-        });
-        // SYD-210: the answering human never held the session's lease (this
-        // path is lease-exempt), but releasing the claim ends it — invalidate
-        // the active lease. Only on the in_progress release, preserving today's
-        // status condition (a non-in_progress answer just clears the flag).
-        invalidateLease(tx, issue.id);
-      }
+      updateIssue(tx, actor, ref, { status: release ? "todo" : issue.status }, {}, attr);
     }
   });
 }

@@ -7,13 +7,14 @@ import {
   redeliverIssue,
   removeDependency,
   resolveDeliveryFailure,
+  resolveDeviation,
   updateIssue,
 } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { PromptModal } from "../Modal";
-import { href } from "../router";
+import { href, issueRoute } from "../router";
 import {
   PRIORITIES,
   STATUSES,
@@ -259,6 +260,13 @@ export function AttentionBanner({
 }) {
   if (!attention) return null;
   const isError = attention.reason === "delivery_failed";
+  // SYD-262: done_without_merged_pr is recorded once and clears only via a
+  // merged pr_state row, which strict agent/<ref> attribution never produces
+  // for the feat/ branches interactive work uses — so it needs the same
+  // explicit "I checked, it landed" affordance. Retry stays exclusive to
+  // delivery_failed: it re-authorizes an attributed agent PR, and a deviation
+  // has none, so offering it here would be a button that cannot work.
+  const canResolve = isError || attention.reason === "done_without_merged_pr";
   return (
     <p className={`banner ${isError ? "danger" : "warn"} issue-attention`}>
       {isError ? "⛔" : "⚠"} {attention.message}
@@ -267,7 +275,7 @@ export function AttentionBanner({
           Retry delivery
         </button>
       )}
-      {isError && onResolveClick && (
+      {canResolve && onResolveClick && (
         <button className="resolve-delivery" onClick={onResolveClick}>
           Mark resolved…
         </button>
@@ -482,12 +490,25 @@ export default function IssueDetail({ refId }: { refId: string }) {
       />
       {resolveOpen && (
         <PromptModal
-          title={`Mark ${data.ref}'s delivery as resolved — how did you confirm it?`}
+          title={
+            data.attention?.reason === "delivery_failed"
+              ? `Mark ${data.ref}'s delivery as resolved — how did you confirm it?`
+              : `Mark ${data.ref}'s deviation as resolved — how did you confirm the work landed?`
+          }
           placeholder="e.g. merged via feat/SYD-1 PR #124"
           onCancel={() => setResolveOpen(false)}
           onSubmit={(note) => {
             setResolveOpen(false);
-            act(() => resolveDeliveryFailure(refId, note));
+            // SYD-262: two different flags share one "Mark resolved…" button, and
+            // each has its own scoped endpoint — route on the reason so clearing
+            // a deviation never posts to the delivery path (which would 400 with
+            // "no unresolved delivery failure") and vice versa.
+            const reason = data.attention?.reason;
+            act(() =>
+              reason === "delivery_failed"
+                ? resolveDeliveryFailure(refId, note)
+                : resolveDeviation(refId, reason ?? "", note),
+            );
           }}
         />
       )}
@@ -618,7 +639,7 @@ function Hierarchy({
       <div className="parent-row">
         <span>Parent</span>
         {parentRef && (
-          <a className="ref" href={href({ view: "issue", ref: parentRef })}>
+          <a className="ref" href={href(issueRoute(parentRef))}>
             {parentRef}
           </a>
         )}
@@ -647,7 +668,7 @@ function Hierarchy({
           <ul className="dep-list">
             {stories.map((s) => (
               <li key={s.ref}>
-                <a className="ref" href={href({ view: "issue", ref: s.ref })}>
+                <a className="ref" href={href(issueRoute(s.ref))}>
                   {s.ref}
                 </a>{" "}
                 {s.title}{" "}
@@ -690,7 +711,7 @@ function Dependencies({
 
   const row = (d: DependencyRef, dir: "blocked-by" | "blocks") => (
     <li key={`${dir}-${d.ref}`}>
-      <a className="ref" href={href({ view: "issue", ref: d.ref })}>
+      <a className="ref" href={href(issueRoute(d.ref))}>
         {d.ref}
       </a>{" "}
       {d.title}{" "}
@@ -856,6 +877,17 @@ export function Event({
     return (
       <p className="event delivery-resolved">
         <ActorLine ev={ev} /> marked the delivery resolved:{" "}
+        {String(ev.payload.note ?? "")} <time>{when}</time>
+      </p>
+    );
+  }
+  // SYD-262: show the note, not just that something was cleared — a required
+  // note is the provenance for silencing a "needs my action" signal, so it has
+  // to be readable in the feed.
+  if (ev.type === "deviation_resolved") {
+    return (
+      <p className="event deviation-resolved">
+        <strong>{ev.actorName}</strong> cleared the {String(ev.payload.reason ?? "process")} flag:{" "}
         {String(ev.payload.note ?? "")} <time>{when}</time>
       </p>
     );
