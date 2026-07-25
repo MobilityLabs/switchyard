@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getMe, ApiError, listProjects, setUnauthorizedHandler } from "./api";
 import type { Actor } from "./types";
-import { isKnownPath, navigate, useRoute } from "./router";
+import { isKnownPath, navigate, scopeProject, useRoute } from "./router";
 import { usePoll } from "./usePoll";
 import Shell from "./Shell";
 import Triage from "./views/Triage";
@@ -11,6 +11,7 @@ import Review from "./views/Review";
 import NewIssue from "./views/NewIssue";
 import Search from "./views/Search";
 import Agents from "./views/Agents";
+import Approvals from "./views/Approvals";
 import Settings from "./views/settings/Settings";
 
 // Intercepts clicks on same-origin anchors that point at a known client
@@ -100,13 +101,18 @@ function ShellRouter({ me }: { me: Actor }) {
   const projects = usePoll(listProjects, []);
   return (
     <Shell me={me} projects={projects.data ?? []}>
-      {route.view === "triage" && <Triage project={route.project} />}
-      {route.view === "board" && <Board project={route.project} />}
+      {route.view === "triage" && <Triage project={scopeProject(route.scope)} />}
+      {route.view === "board" && <Board project={route.scope} />}
       {route.view === "issue" && <IssueDetail refId={route.ref} />}
-      {route.view === "review" && <Review project={route.project} currentRef={route.ref} />}
-      {route.view === "new-issue" && <NewIssue />}
-      {route.view === "search" && <Search query={route.query} />}
-      {route.view === "agents" && <Agents />}
+      {route.view === "review" && (
+        <Review project={scopeProject(route.scope)} currentRef={route.ref} />
+      )}
+      {route.view === "new-issue" && <NewIssue defaultProject={scopeProject(route.scope)} />}
+      {route.view === "search" && (
+        <Search query={route.query} project={scopeProject(route.scope)} />
+      )}
+      {route.view === "agents" && <Agents project={scopeProject(route.scope)} />}
+      {route.view === "approvals" && <Approvals project={scopeProject(route.scope)} />}
       {route.view === "settings" && <Settings tab={route.tab} />}
     </Shell>
   );

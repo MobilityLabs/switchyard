@@ -4,6 +4,7 @@ import {
   integer,
   primaryKey,
   index,
+  uniqueIndex,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
@@ -137,6 +138,9 @@ export const EVENT_KINDS = [
   "delivered",
   "delivery_failed",
   "delivery_resolved",
+  // SYD-262: a human clearing a recorded-once process deviation whose own
+  // resolution path can't reach it (payload carries the reason it clears).
+  "deviation_resolved",
   // GitHub ingestion (webhook + poller)
   "gh_pr_opened",
   "gh_pr_reopened",
@@ -163,6 +167,12 @@ export const events = sqliteTable(
       .$type<Record<string, unknown>>()
       .notNull()
       .default({}),
+    // Supervised-session provenance (dual attribution): viaAgentId names the
+    // agent acting on the human actor's behalf; sessionId ties the event back
+    // to the supervised session it was written under. Both null for ordinary
+    // (non-supervised) writes.
+    viaAgentId: integer("via_agent_id").references(() => actors.id),
+    sessionId: integer("session_id").references(() => sessions.id),
     createdAt: integer("created_at").notNull().default(now()),
   },
   (t) => [index("events_issue_id_idx").on(t.issueId)],
@@ -174,6 +184,15 @@ export const sessions = sqliteTable("sessions", {
   actorId: integer("actor_id")
     .notNull()
     .references(() => actors.id),
+  // Supervised interactive sessions (dual attribution): kind="supervised"
+  // binds the human actorId above to the acting agent in viaAgentId. Plain
+  // sessions leave viaAgentId null. closedAt marks when a supervised session
+  // ended (distinct from expiresAt, which is the credential's own TTL).
+  kind: text("kind", { enum: ["plain", "supervised"] })
+    .notNull()
+    .default("plain"),
+  viaAgentId: integer("via_agent_id").references(() => actors.id),
+  closedAt: integer("closed_at"),
   expiresAt: integer("expires_at").notNull(),
   createdAt: integer("created_at").notNull().default(now()),
 });
@@ -249,7 +268,10 @@ export const prState = sqliteTable(
     lastTransitionEventId: integer("last_transition_event_id"),
     updatedAt: integer("updated_at").notNull().default(now()),
   },
-  (t) => [primaryKey({ columns: [t.repo, t.prNumber] }), index("pr_state_issue_ref_idx").on(t.issueRef)],
+  (t) => [
+    primaryKey({ columns: [t.repo, t.prNumber] }),
+    index("pr_state_issue_ref_idx").on(t.issueRef),
+  ],
 );
 
 // The delivery-side twin of pr_state (SYD-208, spec: docs/2026-07-12-sync-
@@ -375,3 +397,82 @@ export const claimLeaseCutover = sqliteTable("claim_lease_cutover", {
   id: integer("id").primaryKey(),
   completedAt: integer("completed_at").notNull().default(now()),
 });
+
+export const PENDING_ACTION_STATUSES = ["pending", "affirmed", "expired"] as const;
+export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
+
+// Supervised interactive sessions (phase 1 design, docs/superpowers/): a
+// hard-gated action (e.g. moving an issue to done) proposed by the agent side
+// of a supervised session, awaiting the bound human's affirmation before it
+// executes. The partial unique index pending_actions_active_uniq allows only
+// one *pending* row per (session, issue, actionType) tuple at a time — once a
+// row is affirmed or expired it stops blocking a fresh pending proposal for
+// the same tuple, which is what onConflictDoUpdate dedup targets.
+export const pendingActions = sqliteTable(
+  "pending_actions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sessionId: integer("session_id")
+      .notNull()
+      .references(() => sessions.id),
+    issueId: integer("issue_id")
+      .notNull()
+      .references(() => issues.id),
+    actionType: text("action_type").notNull(),
+    payload: text("payload", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    status: text("status", { enum: PENDING_ACTION_STATUSES }).notNull().default("pending"),
+    affirmedById: integer("affirmed_by_id").references(() => actors.id),
+    affirmedAt: integer("affirmed_at"),
+    createdAt: integer("created_at").notNull().default(now()),
+    // Phase 2: signed into the canonical action doc, so it cannot be extended
+    // after the fact. Not nullable — an unbounded affirmation is a bearer token
+    // with extra steps. Enforced in affirmPendingAction, in a block BEFORE its
+    // transaction opens (so the `expired` marking survives its own throw
+    // instead of being rolled back with it) — but still in the one executor, so
+    // BOTH the cookie and signed paths are covered by one check.
+    expiresAt: integer("expires_at").notNull(),
+  },
+  (t) => [
+    uniqueIndex("pending_actions_active_uniq")
+      .on(t.sessionId, t.issueId, t.actionType)
+      .where(sql`status = 'pending'`),
+  ],
+);
+
+// Phase 2 (affirmation relay): the SSH public keys allowed to sign a human's
+// affirmations. A table, not a column, because the design has NO break-glass —
+// recovery is key redundancy (enroll two: one on the keyring, one in a drawer).
+// `publicKey` stores a full authorized-keys-style line, exactly as ssh-keygen
+// emits it: "sk-ssh-ed25519@openssh.com AAAA... comment". That is the real WIRE
+// spelling — "ssh-ed25519-sk" is only the `ssh-keygen -t` argument and never
+// appears in a .pub file. buildAllowedSigners wraps it with the principal and
+// namespace, and nothing else: `verify-required` is NOT an ALLOWED SIGNERS
+// option (only cert-authority, namespaces=, valid-after=, valid-before= are), so
+// the verifier cannot check the user-verification bit. Presence is enforced by
+// the FIDO token at signing time; the only server-side hardware guarantee is
+// enrollAffirmationKey's sk-* key-type check. See the 2026-07-16 affirmation
+// relay design §3 — an earlier draft got this wrong and real ssh-keygen rejected
+// the resulting line outright.
+export const affirmationKeys = sqliteTable(
+  "affirmation_keys",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    actorId: integer("actor_id")
+      .notNull()
+      .references(() => actors.id),
+    publicKey: text("public_key").notNull(),
+    comment: text("comment"),
+    createdAt: integer("created_at").notNull().default(now()),
+    revokedAt: integer("revoked_at"),
+  },
+  (t) => [
+    // Partial: a revoked key may be re-enrolled, but the same key can't be live
+    // twice for one actor. Mirrors pending_actions_active_uniq's shape.
+    uniqueIndex("affirmation_keys_active_uniq")
+      .on(t.actorId, t.publicKey)
+      .where(sql`revoked_at is null`),
+  ],
+);

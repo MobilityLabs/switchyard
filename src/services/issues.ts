@@ -12,14 +12,23 @@ import {
   type EventKind,
 } from "../db/schema.js";
 import type { Actor } from "./actors.js";
-import { SwitchyardError } from "./errors.js";
+import type { Attribution } from "./attribution.js";
+import { SwitchyardError, PendingAffirmation } from "./errors.js";
+import { canonicalizeAction, type CanonicalAction } from "./canonical-action.js";
 import { getProjectByKey, reserveIssueNumber } from "./projects.js";
 import { recordEvent } from "./events.js";
 import { getOpenBlockers } from "./dependencies.js";
 import { getOpenPr, getMergedPr } from "./pr-status.js";
 import { doneWithoutMergedPr } from "./deviation.js";
 import { getSetting } from "./settings.js";
-import { mintLease, validateLease, invalidateLease, getActiveLease, heartbeatLease } from "./leases.js";
+import {
+  mintLease,
+  validateLease,
+  invalidateLease,
+  getActiveLease,
+  heartbeatLease,
+} from "./leases.js";
+import { isHardGated, findOrCreatePendingAction, EXECUTABLE_GATE_ACTIONS } from "./hard-gate.js";
 
 export type Provenance = {
   sourceType: "session" | "todo" | "ci" | "manual";
@@ -48,6 +57,26 @@ const AGENT_STATUS_TRANSITIONS: Partial<Record<Status, { to: Status; assigneeOnl
   };
 
 export const SUMMARY_MAX_LENGTH = 280;
+
+/**
+ * Labels whose work a headless container cannot finish, so an issue carrying
+ * one defaults to a human-attended session (SYD-239).
+ *
+ * `ui` is here because the SYD-183 norm asks for a screenshot of UI work and
+ * the worker images ship no browser to make one — an upload path
+ * (switchyard-attach, SYD-182) with nothing to upload. Rather than bake
+ * chromium into three images, UI work routes to a session that already has a
+ * browser. The refusal itself is worker-select's INTERACTIVE_PREFERENCE skip;
+ * this only sets the field it reads.
+ *
+ * A default, never an override: an explicit workerPreference always wins, so a
+ * `ui` issue that genuinely is headless-doable can still be dispatched.
+ */
+const INTERACTIVE_ONLY_LABELS = ["ui"];
+
+export function defaultWorkerPreference(labels: string[] | undefined): string | null {
+  return labels?.some((l) => INTERACTIVE_ONLY_LABELS.includes(l)) ? "interactive" : null;
+}
 
 function checkSummaryLength(summary: string | null | undefined): void {
   if (summary != null && summary.length > SUMMARY_MAX_LENGTH) {
@@ -136,7 +165,12 @@ export function childCountsByParent(db: DbOrTx): Map<number, number> {
   return map;
 }
 
-export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): IssueView {
+export function createIssue(
+  db: Db,
+  actor: Actor,
+  input: CreateIssueInput,
+  attr: Attribution = {},
+): IssueView {
   // SYD-213: a `service` token is trusted worker-host infra whose mandate is
   // posting PR/delivery events, reading, and commenting — never authoring board
   // work. Denied wholesale (fail-closed) rather than falling through to the
@@ -182,11 +216,17 @@ export function createIssue(db: Db, actor: Actor, input: CreateIssueInput): Issu
         sourceType: input.provenance?.sourceType ?? null,
         sourceDetail: input.provenance?.detail ?? null,
         sourceUrl: input.provenance?.url ?? null,
-        workerPreference: input.workerPreference ?? null,
+        workerPreference: input.workerPreference ?? defaultWorkerPreference(input.labels),
       })
       .returning()
       .get();
-    recordEvent(tx, { issueId: row.id, actorId: actor.id, type: "created" });
+    recordEvent(tx, {
+      issueId: row.id,
+      actorId: actor.id,
+      type: "created",
+      viaAgentId: attr.viaAgentId,
+      sessionId: attr.sessionId,
+    });
     return toView(tx, row);
   });
 }
@@ -263,13 +303,70 @@ function assertAssignee(db: DbOrTx, actor: Actor, current: IssueView, toStatus: 
 export type LeaseChannel = { presented?: string; minted?: { token: string | null } };
 
 export function updateIssue(
-  db: Db,
+  db: DbOrTx,
   actor: Actor,
   ref: string,
   patch: UpdateIssueInput,
   lease: LeaseChannel = {},
+  attr: Attribution = {},
 ): IssueView {
   checkSummaryLength(patch.summary);
+  if (attr.sessionId != null && patch.status !== undefined) {
+    const target = getIssue(db, ref); // real resolver; has .id/.status
+    if (patch.status !== target.status && isHardGated(db, patch.status)) {
+      if (!EXECUTABLE_GATE_ACTIONS.includes(patch.status)) {
+        throw new SwitchyardError(
+          `"${patch.status}" is hard-gated but not an affirmable action in this version — remove it from supervised.hard_gate_actions.`,
+        );
+      }
+      const otherKeys = Object.keys(patch).filter(
+        (k) =>
+          k !== "status" &&
+          k !== "expectedHeadSha" &&
+          (patch as Record<string, unknown>)[k] !== undefined,
+      );
+      if (otherKeys.length > 0) {
+        throw new SwitchyardError(
+          `A hard-gated status change to "${patch.status}" must be its own call — move ${otherKeys.join(", ")} to a separate update.`,
+        );
+      }
+      // TOCTOU note: this read + pend runs outside a transaction, so the issue can
+      // change between here and the human's later affirm. Harmless by construction —
+      // the executor re-drives updateIssue at affirm time, which re-validates every
+      // guard (incl. the SYD-208 head pin) against current state: it either no-ops
+      // (already done) or throws and rolls back, leaving the row pending.
+      const expiresAt =
+        Math.floor(Date.now() / 1000) + getSetting(db, "supervised.affirm_ttl_seconds");
+      const pendingActionId = findOrCreatePendingAction(
+        db,
+        attr.sessionId,
+        target.id,
+        patch.status,
+        {
+          status: patch.status,
+          ...(patch.expectedHeadSha !== undefined
+            ? { expectedHeadSha: patch.expectedHeadSha }
+            : {}),
+        },
+        expiresAt,
+      );
+      const action: CanonicalAction = {
+        v: 1,
+        pendingActionId,
+        sessionId: attr.sessionId,
+        issueRef: target.ref,
+        actionType: patch.status,
+        ...(patch.expectedHeadSha !== undefined ? { expectedHeadSha: patch.expectedHeadSha } : {}),
+        expiresAt,
+      };
+      throw new PendingAffirmation({
+        pendingActionId,
+        canonical: canonicalizeAction(action),
+        action,
+        instructions: `${ref} -> ${patch.status} is hard-gated. Nothing was changed. A human must run: syd affirm ${ref}`,
+      });
+    }
+  }
   return db.transaction((tx) => {
     const current = getIssue(tx, ref);
     // SYD-213: a `service` token posts PR/delivery events, reads, and comments —
@@ -579,7 +676,13 @@ export function updateIssue(
     changes.updatedAt = sql`(unixepoch())`;
     const row = tx.update(issues).set(changes).where(eq(issues.id, current.id)).returning().get();
     for (const e of toRecord) {
-      recordEvent(tx, { issueId: current.id, actorId: actor.id, ...e });
+      recordEvent(tx, {
+        issueId: current.id,
+        actorId: actor.id,
+        ...e,
+        viaAgentId: attr.viaAgentId,
+        sessionId: attr.sessionId,
+      });
     }
     return toView(tx, row);
   });
@@ -612,6 +715,7 @@ export function claimIssue(
   actor: Actor,
   ref: string,
   opts: { takeover?: boolean } = {},
+  attr: Attribution = {},
 ): ClaimResult {
   const current = getIssue(db, ref);
   const blockers = getOpenBlockers(db, current.id);
@@ -646,6 +750,8 @@ export function claimIssue(
           actorId: actor.id,
           type: "lease_taken_over",
           payload: {},
+          viaAgentId: attr.viaAgentId,
+          sessionId: attr.sessionId,
         });
       }
       return mintLease(tx, current.id, actor.id, getSetting(db, "claims.lease_ttl_seconds"));
@@ -658,7 +764,14 @@ export function claimIssue(
   // via the out-channel.
   assertClaimable(db, actor, current);
   const minted: { token: string | null } = { token: null };
-  const issue = updateIssue(db, actor, ref, { status: "in_progress", assigneeName: actor.name }, { minted });
+  const issue = updateIssue(
+    db,
+    actor,
+    ref,
+    { status: "in_progress", assigneeName: actor.name },
+    { minted },
+    attr,
+  );
   if (minted.token === null) {
     // Defensive: the auto-claim mint condition should always fire on a fresh
     // claim. If it didn't, the claim state is inconsistent — fail rather than

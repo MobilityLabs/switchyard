@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue, toView, type IssueView } from "./issues.js";
 import { recordEvent } from "./events.js";
@@ -17,6 +18,7 @@ export function requestHumanInput(
   ref: string,
   question: string,
   leaseToken?: string,
+  attr: Attribution = {},
 ): IssueView {
   if (!question.trim()) {
     throw new SwitchyardError(
@@ -52,8 +54,16 @@ export function requestHumanInput(
       actorId: actor.id,
       type: "comment",
       payload: { body: question },
+      viaAgentId: attr.viaAgentId,
+      sessionId: attr.sessionId,
     });
-    recordEvent(tx, { issueId: issue.id, actorId: actor.id, type: "needs_input_set" });
+    recordEvent(tx, {
+      issueId: issue.id,
+      actorId: actor.id,
+      type: "needs_input_set",
+      viaAgentId: attr.viaAgentId,
+      sessionId: attr.sessionId,
+    });
     return toView(tx, row);
   });
 }

@@ -3,7 +3,8 @@ import { z } from "zod";
 import type { Db } from "../db/index.js";
 import { STATUSES, PRIORITIES } from "../db/schema.js";
 import type { Actor } from "../services/actors.js";
-import { SwitchyardError } from "../services/errors.js";
+import type { Attribution } from "../services/attribution.js";
+import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import { listProjects } from "../services/projects.js";
 import {
   createIssue,
@@ -13,7 +14,7 @@ import {
   heartbeatClaim,
   SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
-import { nextTask, addDependency } from "../services/dependencies.js";
+import { nextTask, addDependency, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
@@ -40,6 +41,10 @@ function guard<A>(fn: (args: A) => unknown): (args: A) => Promise<ToolResult> {
     try {
       return ok(await fn(args));
     } catch (err) {
+      // Parked is a SUCCESS: the agent's job now is to tell its human what to
+      // affirm, not to retry or report a failure. Returning isError here would
+      // invite exactly the retry loop the dedup upsert exists to absorb.
+      if (err instanceof PendingAffirmation) return ok(err.pending);
       if (err instanceof SwitchyardError) {
         return { content: [{ type: "text", text: err.message }], isError: true };
       }
@@ -58,6 +63,17 @@ export function buildMcpServer(
   // claim-scoped tool calls carry the lease WITHOUT the token ever appearing in
   // the LLM transcript. An explicit lease_token tool arg still wins when given.
   connectionLeaseToken?: string,
+  // Supervised interactive sessions: the dual attribution for every write this
+  // connection makes, resolved ONCE by /mcp from the sup_ token and baked into
+  // this closure — exactly like `actor` above. It is deliberately NOT a tool
+  // argument: a client-supplied sessionId would let an agent park a gated
+  // action under another human's session, and affirmPendingAction's owner tie
+  // would then check that victim instead of the attacker. Empty for a plain
+  // (non-supervised) principal, which must never populate events.sessionId.
+  attribution: Attribution = {},
+  // The agent acting on the human's behalf in a supervised session. `actor` is
+  // the accountable human root, so agent-scoped tools act as this instead.
+  viaAgent?: Actor,
 ): McpServer {
   const server = new McpServer({ name: "switchyard", version: "0.1.0" });
 
@@ -185,19 +201,24 @@ export function buildMcpServer(
         source_url?: string;
         worker_preference?: string | null;
       }) =>
-        createIssue(db, actor, {
-          projectKey: a.project_key,
-          title: a.title,
-          summary: a.summary,
-          description: a.description,
-          priority: a.priority,
-          labels: a.labels,
-          parentRef: a.parent_ref,
-          provenance: a.source_type
-            ? { sourceType: a.source_type, detail: a.source_detail, url: a.source_url }
-            : undefined,
-          workerPreference: a.worker_preference,
-        }),
+        createIssue(
+          db,
+          actor,
+          {
+            projectKey: a.project_key,
+            title: a.title,
+            summary: a.summary,
+            description: a.description,
+            priority: a.priority,
+            labels: a.labels,
+            parentRef: a.parent_ref,
+            provenance: a.source_type
+              ? { sourceType: a.source_type, detail: a.source_detail, url: a.source_url }
+              : undefined,
+            workerPreference: a.worker_preference,
+          },
+          attribution,
+        ),
     ),
   );
 
@@ -225,7 +246,7 @@ export function buildMcpServer(
           `${ref} is already claimed for your session — do not call claim_issue; your writes are already authorized. Just proceed with the work.`,
         );
       }
-      const { issue, leaseToken } = claimIssue(db, actor, ref, { takeover });
+      const { issue, leaseToken } = claimIssue(db, actor, ref, { takeover }, attribution);
       return { ...issue, lease_token: leaseToken };
     }),
   );
@@ -299,6 +320,7 @@ export function buildMcpServer(
             expectedHeadSha: a.expected_head_sha,
           },
           { presented: a.lease_token ?? connectionLeaseToken, minted },
+          attribution,
         );
         return minted?.token ? { ...issue, lease_token: minted.token } : issue;
       },
@@ -336,7 +358,7 @@ export function buildMcpServer(
       inputSchema: { ref: z.string(), body: z.string() },
     },
     guard(({ ref, body }: { ref: string; body: string }) => {
-      addComment(db, actor, ref, body);
+      addComment(db, actor, ref, body, attribution);
       return { ok: true };
     }),
   );
@@ -352,7 +374,11 @@ export function buildMcpServer(
       inputSchema: { ref: z.string(), note: z.string() },
     },
     guard(({ ref, note }: { ref: string; note: string }) => {
-      recordProgressNote(db, actor, ref, note);
+      // The one agent-scoped write: recordProgressNote's requireAgent rejects a
+      // human, and in a supervised session `actor` IS the human root — so act as
+      // the bound agent instead of relaxing the guard. For a plain agent session
+      // viaAgent is undefined and `actor` is already the agent (unchanged).
+      recordProgressNote(db, viaAgent ?? actor, ref, note, attribution);
       return { ok: true };
     }),
   );
@@ -367,8 +393,16 @@ export function buildMcpServer(
         "Pass lease_token (returned by claim_issue) — escalating is a claim-scoped action.",
       inputSchema: { ref: z.string(), question: z.string(), lease_token: z.string().optional() },
     },
-    guard(({ ref, question, lease_token }: { ref: string; question: string; lease_token?: string }) =>
-      requestHumanInput(db, actor, ref, question, lease_token ?? connectionLeaseToken),
+    guard(
+      ({ ref, question, lease_token }: { ref: string; question: string; lease_token?: string }) =>
+        requestHumanInput(
+          db,
+          actor,
+          ref,
+          question,
+          lease_token ?? connectionLeaseToken,
+          attribution,
+        ),
     ),
   );
 
@@ -424,6 +458,7 @@ export function buildMcpServer(
           filename,
           data,
           attachmentsDir,
+          attribution,
         );
         return { markdown, url: `/api/attachments/${attachment.id}/${attachment.filename}` };
       },
@@ -439,7 +474,22 @@ export function buildMcpServer(
       inputSchema: { blocker_ref: z.string(), blocked_ref: z.string() },
     },
     guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
-      addDependency(db, actor, blocker_ref, blocked_ref);
+      addDependency(db, actor, blocker_ref, blocked_ref, attribution);
+      return { ok: true };
+    }),
+  );
+
+  server.registerTool(
+    "remove_dependency",
+    {
+      description:
+        "Declare that one issue no longer blocks another (removes a dependency edge). " +
+        "Only humans may remove dependencies directly — if you are an agent, " +
+        "this will propose dependency removal through the hard-gate if configured.",
+      inputSchema: { blocker_ref: z.string(), blocked_ref: z.string() },
+    },
+    guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
+      removeDependency(db, actor, blocker_ref, blocked_ref, attribution);
       return { ok: true };
     }),
   );

@@ -34,7 +34,10 @@ type RedeliverRow = { ref: string; count: number };
  * issue (not delivery_attempts rows), so an issue whose redeliver itself needed
  * a deploy retry isn't double-counted as two redelivers.
  */
-export function getDeliveryHealth(db: Db, windowHours: number = DEFAULT_WINDOW_HOURS): DeliveryHealth {
+export function getDeliveryHealth(
+  db: Db,
+  windowHours: number = DEFAULT_WINDOW_HOURS,
+): DeliveryHealth {
   if (!Number.isFinite(windowHours) || windowHours <= 0) {
     throw new SwitchyardError("hours must be a positive number.");
   }

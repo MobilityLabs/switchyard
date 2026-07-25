@@ -78,6 +78,12 @@ function deliveryEventBodies(): Record<string, unknown>[] {
     .map(([, init]) => JSON.parse(init?.body as string) as Record<string, unknown>);
 }
 
+function commentBodies(): string[] {
+  return fetchMock.mock.calls
+    .filter(([url]) => String(url).endsWith("/api/issues/SYD-9/comments"))
+    .map(([, init]) => (JSON.parse(init?.body as string) as { body: string }).body);
+}
+
 beforeEach(() => {
   active.clear();
   activeMode.clear();
@@ -150,6 +156,34 @@ describe("publish-time pr_opened enrichment (SYD-205)", () => {
       prNumber: 42,
       url: "https://github.com/acme/widgets/pull/42",
     });
+    errorSpy.mockRestore();
+  });
+});
+
+describe("publish failure surfaces on the board (SYD-257)", () => {
+  it("comments the git/gh error and records a delivery_failed event", async () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    publishAgentBranch.mockRejectedValue(
+      new Error("ssh: connect to host github.com: config error"),
+    );
+
+    dispatch(issue, config, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+    child.emit("exit", 0);
+
+    await vi.waitFor(() => expect(deliveryEventBodies()).toHaveLength(1));
+    expect(deliveryEventBodies()[0]).toEqual({
+      type: "delivery_failed",
+      message: "publish failed: ssh: connect to host github.com: config error",
+    });
+
+    await vi.waitFor(() => expect(commentBodies()).toHaveLength(1));
+    expect(commentBodies()[0]).toContain("SYD-9");
+    expect(commentBodies()[0]).toContain("ssh: connect to host github.com: config error");
+
     errorSpy.mockRestore();
   });
 });

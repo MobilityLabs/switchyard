@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx tsx scripts/board-nudge-hook.ts"
+            "command": "npx tsx \"$CLAUDE_PROJECT_DIR/scripts/board-nudge-hook.ts\""
           }
         ]
       }

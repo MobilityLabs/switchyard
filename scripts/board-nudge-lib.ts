@@ -54,8 +54,7 @@ export type NudgeInput = {
 };
 
 export type NudgeDecision =
-  | { nudge: true; ref: string; prNumber: number; message: string }
-  | { nudge: false };
+  { nudge: true; ref: string; prNumber: number; message: string } | { nudge: false };
 
 /** Decide whether to nudge, given purely local signals. Nudges once, only when
  * there is a derivable ref AND an open PR for the branch AND we are not already
@@ -64,7 +63,8 @@ export type NudgeDecision =
 export function decideNudge(input: NudgeInput): NudgeDecision {
   if (input.stopHookActive) return { nudge: false };
   if (input.openPr === null) return { nudge: false };
-  const ref = (input.branch ? refFromBranch(input.branch) : null) ?? refFromCommits(input.commitSubjects);
+  const ref =
+    (input.branch ? refFromBranch(input.branch) : null) ?? refFromCommits(input.commitSubjects);
   if (ref === null) return { nudge: false };
   return {
     nudge: true,

@@ -32,12 +32,7 @@
 
 import { eq, desc, isNull, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
-import {
-  deliveryAttempts,
-  deliveryRollout,
-  events,
-  type DeliveryOutcome,
-} from "../db/schema.js";
+import { deliveryAttempts, deliveryRollout, events, type DeliveryOutcome } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
@@ -132,13 +127,15 @@ export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorizat
       pin === null
         ? []
         : db
-            .all<{ h: string }>(sql`
+            .all<{ h: string }>(
+              sql`
               SELECT DISTINCT derived_head_sha AS h
               FROM delivery_attempts
               WHERE issue_ref = ${r.ref}
                 AND pr_number = ${pin.prNumber}
                 AND derived_head_sha IS NOT NULL
-            `)
+            `,
+            )
             .map((x) => x.h);
     return { authorizationId: r.authorizationId, ref: r.ref, kind: r.kind, pin, priorHeads };
   });
@@ -309,7 +306,11 @@ export function recordDerivedHead(
 export function getDeliveryWork(
   db: Db,
   actor: Actor,
-): { pending: PendingAuthorization[]; unfinished: DeliveryAttemptRow[]; deployRetries: DeployRetry[] } {
+): {
+  pending: PendingAuthorization[];
+  unfinished: DeliveryAttemptRow[];
+  deployRetries: DeployRetry[];
+} {
   requireDeliveryInfra(actor, "read the delivery work queue");
   return {
     pending: listPendingDeliveryAuthorizations(db),
@@ -337,7 +338,11 @@ export const DEPLOY_RETRY_BACKOFF_SECONDS = 300;
  * finished at `finishedAt`? Exponential backoff from DEPLOY_RETRY_BACKOFF_SECONDS,
  * capped at MAX_DEPLOY_RETRIES automatic retries.
  */
-export function deployRetryDue(attemptCount: number, finishedAt: number, nowSeconds: number): boolean {
+export function deployRetryDue(
+  attemptCount: number,
+  finishedAt: number,
+  nowSeconds: number,
+): boolean {
   return (
     attemptCount - 1 < MAX_DEPLOY_RETRIES &&
     nowSeconds >= finishedAt + DEPLOY_RETRY_BACKOFF_SECONDS * 2 ** (attemptCount - 1)

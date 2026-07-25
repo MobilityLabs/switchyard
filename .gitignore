@@ -10,6 +10,20 @@ switchyard-worker.json
 .env
 .tmp/
 
+# Key material and local signing test artifacts — never commit a private key.
+# The anchored names are leftover FIDO/affirmation signing scratch; the patterns
+# are a defensive net so a stray key can't slip in via `git add -A`.
+/k
+/k.pub
+/allowed_signers
+/sig.out
+*.pem
+id_ed25519*
+id_ecdsa*
+id_rsa*
+*_sk
+*_sk.pub
+
 # SYD-189: track only the shared board-process config under .claude/ (the
 # Stop-hook settings + slash commands). Ignore local cruft — git worktrees live
 # under .claude/worktrees/, and settings.local.json is per-developer.
