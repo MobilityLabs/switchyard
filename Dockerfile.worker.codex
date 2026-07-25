@@ -21,7 +21,7 @@ RUN apt-get update \
 # @openai/codex` would silently pick up whatever is newest at build
 # time. Bump via `--build-arg CODEX_CLI_VERSION=x.y.z` or by editing the
 # default below; see README's containerized-mode section for the update steps.
-ARG CODEX_CLI_VERSION=0.144.4
+ARG CODEX_CLI_VERSION=0.145.0
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
     && codex --version
 
