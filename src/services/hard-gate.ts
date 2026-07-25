@@ -198,3 +198,58 @@ export function affirmPendingAction(db: Db, human: Actor, id: number): IssueView
     );
   });
 }
+
+/**
+ * Sweep: for every pending action whose status is 'pending', expires it if its
+ * own TTL has elapsed (independent per-action expiry), OR if its associated
+ * supervised session has been closed or expired.
+ * Returns the number of pending actions expired.
+ */
+export function expirePendingActions(db: Db, now: number = nowSec()): number {
+  const ttl = getSetting(db, "supervised.pending_action_ttl_seconds");
+  const cutoff = now - ttl;
+
+  // Select all pending actions that are currently "pending"
+  const pendingList = db
+    .select({
+      id: pendingActions.id,
+      createdAt: pendingActions.createdAt,
+      sessionId: pendingActions.sessionId,
+    })
+    .from(pendingActions)
+    .where(eq(pendingActions.status, "pending"))
+    .all();
+
+  let expiredCount = 0;
+  for (const pa of pendingList) {
+    let shouldExpire = pa.createdAt <= cutoff;
+
+    if (!shouldExpire) {
+      const session = db
+        .select({ closedAt: sessions.closedAt, expiresAt: sessions.expiresAt })
+        .from(sessions)
+        .where(eq(sessions.id, pa.sessionId))
+        .get();
+      if (session) {
+        if (session.closedAt !== null || session.expiresAt < now) {
+          shouldExpire = true;
+        }
+      } else {
+        shouldExpire = true;
+      }
+    }
+
+    if (shouldExpire) {
+      const result = db
+        .update(pendingActions)
+        .set({ status: "expired" })
+        .where(and(eq(pendingActions.id, pa.id), eq(pendingActions.status, "pending")))
+        .run();
+      if (result.changes > 0) {
+        expiredCount++;
+      }
+    }
+  }
+
+  return expiredCount;
+}

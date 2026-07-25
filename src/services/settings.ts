@@ -78,6 +78,11 @@ export const REGISTRY = {
     default: 300,
     description: "How long a parked action stays affirmable before it expires.",
   },
+  "supervised.pending_action_ttl_seconds": {
+    type: "number",
+    default: 600,
+    description: "Time-to-live in seconds for pending human affirmations.",
+  },
 } satisfies Record<string, RegistryEntry>;
 
 // The gated actions an affirmation can actually carry out. Gating anything else

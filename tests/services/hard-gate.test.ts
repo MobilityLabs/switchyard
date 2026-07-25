@@ -19,6 +19,7 @@ import {
   getPendingAction,
   listPendingActions,
   affirmPendingAction,
+  expirePendingActions,
 } from "../../src/services/hard-gate.js";
 
 const REPO = "acme/widgets";
@@ -258,5 +259,76 @@ describe("affirmPendingAction", () => {
   it("still affirms an unexpired action", () => {
     const id = park(sessionId, issueId, "done", { status: "done" }, nowSec() + 300);
     expect(affirmPendingAction(db, human, id).status).toBe("done");
+  });
+});
+
+// SYD-242 added a required expiresAt to findOrCreatePendingAction. These
+// tests are about the sweep (TTL / closed session), not row expiry, so
+// park it far enough out that it never fires.
+const FAR_FUTURE = Math.floor(Date.now() / 1000) + 86_400;
+
+describe("expirePendingActions", () => {
+  it("expires pending actions that are older than the configured TTL", () => {
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
+
+    // Set pending action creation time to be 1000 seconds in the past
+    db.run(
+      sql`UPDATE pending_actions SET created_at = ${Math.floor(Date.now() / 1000) - 1000} WHERE id = ${id}`,
+    );
+
+    // TTL is 600s by default, so it should expire
+    const count = expirePendingActions(db);
+    expect(count).toBe(1);
+    expect(getPendingAction(db, id)!.status).toBe("expired");
+  });
+
+  it("does not expire pending actions that are within the TTL", () => {
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
+
+    // Within TTL, should not expire
+    const count = expirePendingActions(db);
+    expect(count).toBe(0);
+    expect(getPendingAction(db, id)!.status).toBe("pending");
+  });
+
+  it("expires pending actions if their session is closed", () => {
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
+
+    db.run(sql`UPDATE sessions SET closed_at = 1 WHERE id = ${sessionId}`);
+
+    const count = expirePendingActions(db);
+    expect(count).toBe(1);
+    expect(getPendingAction(db, id)!.status).toBe("expired");
+  });
+
+  it("expires pending actions if their session has expired", () => {
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
+
+    db.run(sql`UPDATE sessions SET expires_at = 1 WHERE id = ${sessionId}`);
+
+    const count = expirePendingActions(db);
+    expect(count).toBe(1);
+    expect(getPendingAction(db, id)!.status).toBe("expired");
+  });
+
+  it("respects customized TTL setting", () => {
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
+
+    setSetting(db, human, "supervised.pending_action_ttl_seconds", 2000);
+
+    db.run(
+      sql`UPDATE pending_actions SET created_at = ${Math.floor(Date.now() / 1000) - 1000} WHERE id = ${id}`,
+    );
+
+    // TTL is now 2000s, so 1000s in the past should NOT expire
+    let count = expirePendingActions(db);
+    expect(count).toBe(0);
+    expect(getPendingAction(db, id)!.status).toBe("pending");
+
+    // Setting it back to 500s should make it expire
+    setSetting(db, human, "supervised.pending_action_ttl_seconds", 500);
+    count = expirePendingActions(db);
+    expect(count).toBe(1);
+    expect(getPendingAction(db, id)!.status).toBe("expired");
   });
 });
