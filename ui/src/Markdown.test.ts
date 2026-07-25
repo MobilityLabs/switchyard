@@ -249,6 +249,68 @@ describe("autolinker", () => {
   });
 });
 
+// Routes are scope-first since SYD-254, and issueRoute derives the scope
+// from the ref itself — so an autolinked ref lands on /<KEY>/issue/<REF>.
+describe("issue refs and PR mentions (SYD-223)", () => {
+  it("links an issue ref to the in-app issue route", () => {
+    const a = toDom("see SYD-83 for details").querySelector("a")!;
+    expect(a).not.toBeNull();
+    expect(a.getAttribute("href")).toBe("/SYD/issue/SYD-83");
+    expect(a.textContent).toBe("SYD-83");
+    expect(a.getAttribute("data-issue-ref")).toBe("SYD-83");
+    expect(a.classList.contains("ref-link")).toBe(true);
+  });
+
+  it("links a multi-letter project ref the same way", () => {
+    const a = toDom("blocked by ACME-12").querySelector("a")!;
+    expect(a.getAttribute("href")).toBe("/ACME/issue/ACME-12");
+  });
+
+  it("links issue refs even for an unconfigured project (no repo needed)", () => {
+    const a = toDom("see NOPE-4", "NOPE").querySelector("a")!;
+    expect(a).not.toBeNull();
+    expect(a.getAttribute("href")).toBe("/NOPE/issue/NOPE-4");
+  });
+
+  it("does not autolink an issue ref inside inline code or a fenced block", () => {
+    const inline = toDom("`SYD-83`");
+    expect(inline.querySelector("a")).toBeNull();
+    expect(inline.querySelector("code")!.textContent).toBe("SYD-83");
+
+    const fenced = toDom("```\nSYD-83\n```");
+    expect(fenced.querySelector("a")).toBeNull();
+  });
+
+  it("links a bare PR mention (#155) to the GitHub PR URL", () => {
+    const a = toDom("fixed in #155").querySelector("a")!;
+    expect(a).not.toBeNull();
+    expect(a.getAttribute("href")).toBe(`${REPO}/pull/155`);
+    expect(a.textContent).toBe("#155");
+    expect(a.classList.contains("pr-link")).toBe(true);
+  });
+
+  it("links only the '#155' token in a 'PR #155' mention, leaving 'PR' as plain text", () => {
+    const el = toDom("see PR #155 for the fix");
+    const a = el.querySelector("a")!;
+    expect(a).not.toBeNull();
+    expect(a.getAttribute("href")).toBe(`${REPO}/pull/155`);
+    expect(a.textContent).toBe("#155");
+    expect(el.textContent).toContain("see PR #155 for the fix");
+  });
+
+  it("falls back to plain text for a PR mention when the project has no configured repo", () => {
+    const el = toDom("see #155", "NOPE");
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toContain("#155");
+  });
+
+  it("does not autolink a PR mention inside inline code", () => {
+    const el = toDom("`#155`");
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.querySelector("code")!.textContent).toBe("#155");
+  });
+});
+
 describe("syntax highlighting (SYD-58)", () => {
   it("wraps a hinted fenced block in hljs-* spans", () => {
     const el = toDom("```ts\nconst x: number = 1;\n```");
