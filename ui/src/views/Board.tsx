@@ -92,7 +92,8 @@ export default function Board({ project }: { project: string }) {
       <PollErrorBar error={error} />
       <div className="board">
         {BOARD_COLUMNS.map((col) => {
-          let cards = data.filter((i) => i.status === col);
+          const allCards = data.filter((i) => i.status === col);
+          let cards = allCards;
           if (col === "done" && doneFilters.size > 0) {
             cards = cards.filter(
               (i) =>
@@ -100,6 +101,10 @@ export default function Board({ project }: { project: string }) {
                 (doneFilters.has("not_merged") && i.openPr != null),
             );
           }
+          const badgeText =
+            col === "done" && cards.length !== allCards.length
+              ? `${cards.length}/${allCards.length}`
+              : String(cards.length);
           return (
             <div
               key={col}
@@ -112,7 +117,10 @@ export default function Board({ project }: { project: string }) {
               }}
             >
               <h3>
-                {LABELS[col]} <span className="badge">{cards.length}</span>
+                {LABELS[col]}{" "}
+                <span className="badge" title={col === "done" ? "visible / total done" : undefined}>
+                  {badgeText}
+                </span>
                 {col === "done" && (
                   <span className="done-filters">
                     <button
