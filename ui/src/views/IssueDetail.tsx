@@ -6,15 +6,19 @@ import {
   listAgentSessions,
   redeliverIssue,
   removeDependency,
+  resolveDeliveryFailure,
+  resolveDeviation,
   updateIssue,
 } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
-import { href } from "../router";
+import { PromptModal } from "../Modal";
+import { href, issueRoute } from "../router";
 import {
   PRIORITIES,
   STATUSES,
+  WORKER_PREFERENCES,
   type Activity,
   type Attachment,
   type DependencyRef,
@@ -82,7 +86,8 @@ export type DeliveryStatus = {
  * over the activity feed (oldest-first) into the latest known PR + delivery
  * state. A delivery_failed only surfaces if nothing has delivered
  * successfully since it fired — a later delivered/gh_pr_merged event (e.g. a
- * re-stamp after a fix) clears it.
+ * re-stamp after a fix), or a delivery_resolved event (SYD-178: a human's
+ * explicit resolution of a flag pr_state could never auto-clear), clears it.
  */
 export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | null {
   let prNumber: number | null = null;
@@ -114,6 +119,11 @@ export function computeDeliveryStatus(activity: Activity[]): DeliveryStatus | nu
     } else if (ev.type === "delivery_failed") {
       failedMessage = String(ev.payload.message ?? "delivery failed");
       lastFailedAt = ev.createdAt;
+    } else if (ev.type === "delivery_resolved") {
+      // SYD-178: a human's explicit "this actually landed" clears the
+      // strip's inline failure banner the same way a later delivered/merged
+      // event would — it just doesn't know a PR/merge SHA to show.
+      lastDeliveredAt = ev.createdAt;
     } else if (ev.type === "gh_checks_passed") {
       checks = "passed";
     } else if (ev.type === "gh_checks_failed") {
@@ -242,12 +252,21 @@ export function ActivityFeed({
 export function AttentionBanner({
   attention,
   onRetry,
+  onResolveClick,
 }: {
   attention: Issue["attention"];
   onRetry?: () => void;
+  onResolveClick?: () => void;
 }) {
   if (!attention) return null;
   const isError = attention.reason === "delivery_failed";
+  // SYD-262: done_without_merged_pr is recorded once and clears only via a
+  // merged pr_state row, which strict agent/<ref> attribution never produces
+  // for the feat/ branches interactive work uses — so it needs the same
+  // explicit "I checked, it landed" affordance. Retry stays exclusive to
+  // delivery_failed: it re-authorizes an attributed agent PR, and a deviation
+  // has none, so offering it here would be a button that cannot work.
+  const canResolve = isError || attention.reason === "done_without_merged_pr";
   return (
     <p className={`banner ${isError ? "danger" : "warn"} issue-attention`}>
       {isError ? "⛔" : "⚠"} {attention.message}
@@ -256,6 +275,38 @@ export function AttentionBanner({
           Retry delivery
         </button>
       )}
+      {canResolve && onResolveClick && (
+        <button className="resolve-delivery" onClick={onResolveClick}>
+          Mark resolved…
+        </button>
+      )}
+    </p>
+  );
+}
+
+/** SYD-230: a done issue with an open agent PR that never delivered — the
+ * pin-less-done case (pr_state was blind to the PR when it was stamped done, so
+ * the done-stamp carried no delivery pin). Offers a one-click re-authorize
+ * without the done→in_review→done round-trip. The delivery_failed case has its
+ * own "Retry delivery" in AttentionBanner, so defer to it and render nothing. */
+export function RestampBanner({
+  status,
+  openPr,
+  attention,
+  onRestamp,
+}: {
+  status: Status;
+  openPr: Issue["openPr"];
+  attention: Issue["attention"];
+  onRestamp: () => void;
+}) {
+  if (status !== "done" || !openPr || attention?.reason === "delivery_failed") return null;
+  return (
+    <p className="banner info restamp-delivery">
+      📦 PR #{openPr.prNumber} is open but hasn’t been delivered yet.{" "}
+      <button className="retry-delivery" onClick={onRestamp}>
+        Re-stamp delivery
+      </button>
     </p>
   );
 }
@@ -330,10 +381,10 @@ export function AgentSessionStrip({ refId }: { refId: string }) {
 export default function IssueDetail({ refId }: { refId: string }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [resolveOpen, setResolveOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
     refId,
-    draft,
     setDraft,
   );
   const actorNames = useActorNames();
@@ -399,6 +450,25 @@ export default function IssueDetail({ refId }: { refId: string }) {
             </option>
           ))}
         </select>
+        <select
+          value={data.workerPreference ?? ""}
+          title="Preferred worker/engine — 'interactive' keeps this issue off headless dispatch"
+          onChange={(e) =>
+            act(() => updateIssue(refId, { workerPreference: e.target.value || null }))
+          }
+        >
+          <option value="">worker: any</option>
+          {WORKER_PREFERENCES.map((w) => (
+            <option key={w} value={w}>
+              {w}
+            </option>
+          ))}
+        </select>
+        {data.children.length > 0 && (
+          <span className="badge epic-badge" title="Child stories under this epic">
+            {data.children.length} {data.children.length === 1 ? "story" : "stories"}
+          </span>
+        )}
         <button
           className={`pill auto-pill${isAuto ? " active" : ""}`}
           title="Opt this issue into unattended agent dispatch (label: auto)"
@@ -410,7 +480,38 @@ export default function IssueDetail({ refId }: { refId: string }) {
       <AttentionBanner
         attention={data.attention}
         onRetry={() => act(() => redeliverIssue(refId, data.deliveryPin?.headSha ?? undefined))}
+        onResolveClick={() => setResolveOpen(true)}
       />
+      <RestampBanner
+        status={data.status}
+        openPr={data.openPr}
+        attention={data.attention}
+        onRestamp={() => act(() => redeliverIssue(refId, data.openPr?.headSha ?? undefined))}
+      />
+      {resolveOpen && (
+        <PromptModal
+          title={
+            data.attention?.reason === "delivery_failed"
+              ? `Mark ${data.ref}'s delivery as resolved — how did you confirm it?`
+              : `Mark ${data.ref}'s deviation as resolved — how did you confirm the work landed?`
+          }
+          placeholder="e.g. merged via feat/SYD-1 PR #124"
+          onCancel={() => setResolveOpen(false)}
+          onSubmit={(note) => {
+            setResolveOpen(false);
+            // SYD-262: two different flags share one "Mark resolved…" button, and
+            // each has its own scoped endpoint — route on the reason so clearing
+            // a deviation never posts to the delivery path (which would 400 with
+            // "no unresolved delivery failure") and vice versa.
+            const reason = data.attention?.reason;
+            act(() =>
+              reason === "delivery_failed"
+                ? resolveDeliveryFailure(refId, note)
+                : resolveDeviation(refId, reason ?? "", note),
+            );
+          }}
+        />
+      )}
       <div className="labels-row">
         {otherLabels.map((label) => (
           <span key={label} className="chip label-chip">
@@ -454,6 +555,8 @@ export default function IssueDetail({ refId }: { refId: string }) {
         </p>
       )}
       <DescriptionSection issue={data} projectKey={projectKey} knownActorNames={actorNames} />
+
+      <Hierarchy refId={refId} parentRef={data.parentRef} stories={data.children} act={act} />
 
       <Dependencies refId={refId} deps={data.dependencies} act={act} />
 
@@ -512,6 +615,77 @@ function AttachmentsStrip({ attachments }: { attachments: Attachment[] }) {
 
 const OPEN_STATUSES: Status[] = ["triage", "backlog", "todo", "in_progress", "in_review"];
 
+function Hierarchy({
+  refId,
+  parentRef,
+  stories,
+  act,
+}: {
+  refId: string;
+  parentRef: string | null;
+  stories: DependencyRef[];
+  act: (fn: () => Promise<unknown>) => void;
+}) {
+  const [parent, setParent] = useState(parentRef ?? "");
+  const saveParent = () => {
+    const ref = parent.trim().toUpperCase();
+    if (ref === (parentRef ?? "")) return;
+    act(() => updateIssue(refId, { parentRef: ref || null }));
+  };
+
+  return (
+    <div className="hierarchy panel">
+      <h3>Epic / stories</h3>
+      <div className="parent-row">
+        <span>Parent</span>
+        {parentRef && (
+          <a className="ref" href={href(issueRoute(parentRef))}>
+            {parentRef}
+          </a>
+        )}
+        <input
+          value={parent}
+          onChange={(e) => setParent(e.target.value)}
+          placeholder="e.g. SYD-1 — nest under an epic"
+        />
+        <button onClick={saveParent}>Save</button>
+        {parentRef && (
+          <button
+            className="chip-remove"
+            title="Detach from parent"
+            onClick={() => {
+              setParent("");
+              act(() => updateIssue(refId, { parentRef: null }));
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {stories.length > 0 ? (
+        <>
+          <h4>Stories ({stories.length})</h4>
+          <ul className="dep-list">
+            {stories.map((s) => (
+              <li key={s.ref}>
+                <a className="ref" href={href(issueRoute(s.ref))}>
+                  {s.ref}
+                </a>{" "}
+                {s.title}{" "}
+                <span className={`badge dep-status dep-${s.status}`}>
+                  {s.status.replace(/_/g, " ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="empty">No child stories.</p>
+      )}
+    </div>
+  );
+}
+
 function Dependencies({
   refId,
   deps,
@@ -537,7 +711,7 @@ function Dependencies({
 
   const row = (d: DependencyRef, dir: "blocked-by" | "blocks") => (
     <li key={`${dir}-${d.ref}`}>
-      <a className="ref" href={href({ view: "issue", ref: d.ref })}>
+      <a className="ref" href={href(issueRoute(d.ref))}>
         {d.ref}
       </a>{" "}
       {d.title}{" "}
@@ -561,8 +735,8 @@ function Dependencies({
       <h3>Dependencies</h3>
       {openBlockers.length > 0 && (
         <p className="banner warn">
-          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents can&apos;t
-          claim this issue.
+          ⛔ Blocked — {openBlockers.map((d) => d.ref).join(", ")} must finish first. Agents
+          can&apos;t claim this issue.
         </p>
       )}
       {deps.blockedBy.length > 0 && (
@@ -626,6 +800,16 @@ function LabelInput({ onAdd }: { onAdd: (value: string) => void }) {
   );
 }
 
+/** Supervised-session provenance (SYD-240): "Sean ✍️ via claude-code" when a delegate agent made the edit. */
+function ActorLine({ ev }: { ev: Activity }) {
+  return (
+    <>
+      <strong>{ev.actorName}</strong>
+      {ev.viaAgentName && <span className="via-agent-chip">✍️ via {ev.viaAgentName}</span>}
+    </>
+  );
+}
+
 export function Event({
   ev,
   projectKey,
@@ -640,7 +824,7 @@ export function Event({
     return (
       <article className="comment panel">
         <header>
-          <strong>{ev.actorName}</strong> <time>{when}</time>
+          <ActorLine ev={ev} /> <time>{when}</time>
         </header>
         <Markdown
           text={String(ev.payload.body ?? "")}
@@ -654,7 +838,7 @@ export function Event({
     const url = String(ev.payload.url ?? "");
     return (
       <p className="event">
-        <strong>{ev.actorName}</strong> opened{" "}
+        <ActorLine ev={ev} /> opened{" "}
         {url ? (
           <a href={safeHref(url)} target="_blank" rel="noreferrer">
             PR #{String(ev.payload.prNumber)}
@@ -676,7 +860,7 @@ export function Event({
         : "deploy FAILED";
     return (
       <p className="event">
-        <strong>{ev.actorName}</strong> delivered PR #{String(ev.payload.prNumber)} at{" "}
+        <ActorLine ev={ev} /> delivered PR #{String(ev.payload.prNumber)} at{" "}
         <code>{sha.slice(0, 7)}</code> · {deployText} <time>{when}</time>
       </p>
     );
@@ -684,8 +868,27 @@ export function Event({
   if (ev.type === "delivery_failed") {
     return (
       <p className="event delivery-failed">
-        <strong>{ev.actorName}</strong> delivery failed: {String(ev.payload.message ?? "")}{" "}
+        <ActorLine ev={ev} /> delivery failed: {String(ev.payload.message ?? "")}{" "}
         <time>{when}</time>
+      </p>
+    );
+  }
+  if (ev.type === "delivery_resolved") {
+    return (
+      <p className="event delivery-resolved">
+        <ActorLine ev={ev} /> marked the delivery resolved: {String(ev.payload.note ?? "")}{" "}
+        <time>{when}</time>
+      </p>
+    );
+  }
+  // SYD-262: show the note, not just that something was cleared — a required
+  // note is the provenance for silencing a "needs my action" signal, so it has
+  // to be readable in the feed.
+  if (ev.type === "deviation_resolved") {
+    return (
+      <p className="event deviation-resolved">
+        <strong>{ev.actorName}</strong> cleared the {String(ev.payload.reason ?? "process")} flag:{" "}
+        {String(ev.payload.note ?? "")} <time>{when}</time>
       </p>
     );
   }
@@ -759,7 +962,7 @@ export function Event({
   if (ev.type === "progress_note") {
     return (
       <p className="event progress-note">
-        <strong>{ev.actorName}</strong> ⏱ {String(ev.payload.note ?? "")} <time>{when}</time>
+        <ActorLine ev={ev} /> ⏱ {String(ev.payload.note ?? "")} <time>{when}</time>
       </p>
     );
   }
@@ -772,14 +975,14 @@ export function Event({
       // to backfill from (e.g. the row was deleted). Don't break the row.
       return (
         <p className="event">
-          <strong>{ev.actorName}</strong> attached {filename || "a file"} <time>{when}</time>
+          <ActorLine ev={ev} /> attached {filename || "a file"} <time>{when}</time>
         </p>
       );
     }
     const url = attachmentUrl(id, filename);
     return (
       <p className="event attachment-event">
-        <strong>{ev.actorName}</strong> attached{" "}
+        <ActorLine ev={ev} /> attached{" "}
         {contentType.startsWith("image/") ? (
           <a href={url} target="_blank" rel="noreferrer">
             <img src={url} alt={filename} className="attachment-thumb" />
@@ -801,7 +1004,7 @@ export function Event({
         : "";
   return (
     <p className="event">
-      <strong>{ev.actorName}</strong> {ev.type.replace(/_/g, " ")}
+      <ActorLine ev={ev} /> {ev.type.replace(/_/g, " ")}
       {fromTo} <time>{when}</time>
     </p>
   );

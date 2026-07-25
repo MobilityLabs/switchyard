@@ -64,14 +64,21 @@ export function validateWorkerConfig(raw: unknown): string[] {
       '`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)',
     );
   }
-  if (c.engine !== undefined && c.engine !== "claude" && c.engine !== "codex") {
-    problems.push('`engine` must be "claude" or "codex"');
+  if (
+    c.engine !== undefined &&
+    c.engine !== "claude" &&
+    c.engine !== "codex" &&
+    c.engine !== "gemini"
+  ) {
+    problems.push('`engine` must be "claude", "codex", or "gemini"');
   }
   if (c.engine === "codex" && c.egress === "open") {
     problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
   }
   if (c.token !== undefined && (typeof c.token !== "string" || c.token.length === 0)) {
-    problems.push("`token` must be a non-empty string (the NAME of the env var holding this worker's token)");
+    problems.push(
+      "`token` must be a non-empty string (the NAME of the env var holding this worker's token)",
+    );
   }
   if (typeof c.intervalSeconds !== "number" || !(c.intervalSeconds > 0)) {
     problems.push("`intervalSeconds` must be a positive number");
@@ -110,6 +117,14 @@ export function validateWorkerConfig(raw: unknown): string[] {
       ) {
         problems.push(`projects.${key}.baseBranch must be a non-empty string when set`);
       }
+      if (project?.requiredChecks !== undefined) {
+        if (
+          !Array.isArray(project.requiredChecks) ||
+          project.requiredChecks.some((c) => typeof c !== "string" || c.trim() === "")
+        ) {
+          problems.push(`projects.${key}.requiredChecks must be an array of non-empty strings`);
+        }
+      }
     }
   }
   if (
@@ -145,7 +160,7 @@ export function validateWorkerConfig(raw: unknown): string[] {
       ) {
         problems.push("`delivery.cloneDir` must be a non-empty path");
       }
-      for (const key of ["openPrs", "deploy"] as const) {
+      for (const key of ["openPrs", "deploy", "requireBranchProtection"] as const) {
         if (d[key] !== undefined && typeof d[key] !== "boolean") {
           problems.push(`\`delivery.${key}\` must be true or false`);
         }
@@ -326,6 +341,7 @@ export const WORKER_LAUNCHD_LABEL = "com.switchyard.worker";
 export const WORKER_CODE_LAUNCHD_LABEL = "com.switchyard.worker-code";
 export const WORKER_ANSWER_LAUNCHD_LABEL = "com.switchyard.worker-answer";
 export const DELIVER_LAUNCHD_LABEL = "com.switchyard.deliver";
+export const POLL_LAUNCHD_LABEL = "com.switchyard.poll";
 
 /** LaunchAgent label for a given worker role (SYD-67) — "all" keeps the pre-split label. */
 export function workerLaunchdLabel(role: WorkerRole): string {
@@ -462,6 +478,22 @@ export function renderDeliverPlist(opts: {
     scriptRelPath: "scripts/deliver.ts",
     logStem: "deliver",
     generatedBy: "npm run init-worker -- --install-launchd-deliver",
+  });
+}
+
+/** Render the LaunchAgent that keeps the GitHub polling fallback alive. */
+export function renderPollPlist(opts: {
+  repoRoot: string;
+  nodeBinDir: string;
+  home: string;
+  extraPathDirs?: string[];
+}): string {
+  return renderLaunchdPlist({
+    ...opts,
+    label: POLL_LAUNCHD_LABEL,
+    scriptRelPath: "scripts/github-poll.ts",
+    logStem: "poll",
+    generatedBy: "npm run init-worker -- --install-launchd-poll",
   });
 }
 
@@ -813,21 +845,34 @@ export function formatDockerfileStackGuidance(
 
 /**
  * argv + stdin payload for `gh api -X PUT .../branches/main/protection`: the
- * standard force-push/deletion block used across onboarded repos (see
- * docs/onboarding-a-project.md step 4). Required reviews stay off until
- * there's a second GitHub identity to review with (SYD-19).
+ * standard protection applied across onboarded repos (see
+ * docs/onboarding-a-project.md step 4) — force-push/deletion blocked, the CI
+ * job required as a status check, and admins held to the same gate.
+ *
+ * SYD-222: this used to ship `required_status_checks: null` and
+ * `enforce_admins: false`, which is exactly the relaxed config
+ * `warnOnRelaxedBranchProtection` alarms on — SYD-209 made CI the sole check
+ * authority for delivery, so a repo protected by the old payload had nothing
+ * actually enforcing it. `ciCheckContext` defaults to "test", the job name in
+ * `.github/workflows/ci.yml`. Required reviews stay off until there's a
+ * second GitHub identity to review with (SYD-19).
  */
 export function buildProtectMainArgs(
   owner: string,
   repo: string,
+  ciCheckContexts: string | string[] = "test",
 ): { args: string[]; input: string } {
+  const contexts = Array.isArray(ciCheckContexts) ? ciCheckContexts : [ciCheckContexts];
   return {
     args: ["api", "-X", "PUT", `repos/${owner}/${repo}/branches/main/protection`, "--input", "-"],
     input:
       JSON.stringify(
         {
-          required_status_checks: null,
-          enforce_admins: false,
+          required_status_checks: {
+            strict: false,
+            checks: contexts.map((c) => ({ context: c })),
+          },
+          enforce_admins: true,
           required_pull_request_reviews: null,
           restrictions: null,
           allow_force_pushes: false,

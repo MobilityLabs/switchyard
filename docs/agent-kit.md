@@ -44,8 +44,11 @@ picks up the conventions automatically:
 - Comment progress as you go (`comment`) — don't go silent on a claimed issue.
 - If you're blocked on a decision only a human can make, use
   `request_human_input` instead of guessing.
-- Before moving an issue to `in_review`, comment the verification evidence:
-  what you did and how you verified it.
+- Before moving an issue to `in_review`: if the change touches UI, attach a
+  screenshot (before/after where relevant) with `attach_file` (or the
+  `switchyard-attach`/`attach.mjs` CLI); if it touches architecture, attach a
+  diagram (e.g. a Mermaid diagram rendered to PNG). Then comment the
+  verification evidence: what you did and how you verified it.
 - NEVER move an issue to `done`. That's a human or review-step call, always.
 ````
 

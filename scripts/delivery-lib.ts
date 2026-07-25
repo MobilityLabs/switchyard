@@ -36,6 +36,11 @@ export type WorkAuthorization = {
   ref: string;
   kind: "done_stamp" | "redeliver";
   pin: WorkPin | null;
+  // SYD-231: rebased heads this worker recorded on prior attempts for the
+  // pinned PR. Seeded into the SHA-chain anchor alongside S0 so a branch left
+  // at one of the worker's own earlier rebases is re-rebased, not disarmed.
+  // Optional so an older server (deploy skew) that omits it still parses.
+  priorHeads?: string[];
 };
 
 export type WorkAttempt = {
@@ -121,9 +126,7 @@ export function resumeActionFor(liveState: "OPEN" | "MERGED" | "CLOSED"): Resume
  */
 export function crashedAttemptComment(ref: string, prNumber: number | null): string {
   const pr =
-    prNumber === null
-      ? "no PR was pinned to the attempt"
-      : `PR #${prNumber} was never merged`;
+    prNumber === null ? "no PR was pinned to the attempt" : `PR #${prNumber} was never merged`;
   return (
     `Delivery FAILED for ${ref}: the delivery worker crashed mid-attempt and ${pr}. ` +
     `No merge landed — re-stamp the issue done or click Retry delivery on the attention banner to re-authorize.`
@@ -193,6 +196,27 @@ export function buildPrListArgs(ref: string, ownerRepo: string): string[] {
   ];
 }
 
+/** SYD-232: looks for a PR on this same agent/<ref> branch that already
+ * MERGED — checked before bouncing a pinned PR that's CLOSED unmerged, since
+ * a fresh dispatch can reuse the branch name and open a replacement PR that
+ * delivers the same work under a different number. */
+export function buildPrListMergedArgs(ref: string, ownerRepo: string): string[] {
+  return [
+    "pr",
+    "list",
+    "-R",
+    ownerRepo,
+    "--head",
+    agentBranch(ref),
+    "--state",
+    "merged",
+    "--json",
+    "number,mergeCommit",
+    "--limit",
+    "10",
+  ];
+}
+
 export function buildPrCreateArgs(
   ref: string,
   issueTitle: string,
@@ -229,6 +253,24 @@ export function buildPrMergeArgs(
 ): string[] {
   const args = ["pr", "merge", String(prNumber), "-R", ownerRepo, "--merge", "--delete-branch"];
   if (matchHeadSha) args.push("--match-head-commit", matchHeadSha);
+  return args;
+}
+
+/**
+ * SYD-165: closes a dead agent PR after a conflict/no-branch bounce —
+ * `agent/<ref>` is dead by definition in both cases (a real conflict, or the
+ * branch no longer existing at all), so regeneration via re-dispatch is the
+ * only path forward, not a hand-fix-and-retry on the same branch/PR. Only the
+ * conflict case has a live branch worth deleting; the no-branch case has
+ * nothing to delete.
+ */
+export function buildPrCloseArgs(
+  prNumber: number,
+  ownerRepo: string,
+  opts: { deleteBranch?: boolean } = {},
+): string[] {
+  const args = ["pr", "close", String(prNumber), "-R", ownerRepo];
+  if (opts.deleteBranch) args.push("--delete-branch");
   return args;
 }
 
@@ -368,6 +410,37 @@ export function shouldKeepWaitingForChecks(
   return state === "pending" && elapsedMs < timeoutMs;
 }
 
+/** SYD-216: how long the wait-for-checks loop waits out a *first* head-moved
+ * verdict before re-reading, to absorb GitHub's read-after-write lag right
+ * after the S1 force-push — deliberately much shorter than
+ * CHECKS_POLL_INTERVAL_MS, since this settles eventual consistency, not CI. */
+export const HEAD_MOVED_SETTLE_MS = 3000;
+
+export type ChecksWaitAction = "stop" | "poll" | "settle-head-moved";
+
+/**
+ * Next action for the wait-for-checks loop (SYD-216). GitHub's PR API is
+ * read-after-write eventually consistent: the very first read right after
+ * `attemptAutoRebase` force-pushes S1 can momentarily still report the
+ * pre-push head, which `evaluateChecks` reports as `head-moved` — the same
+ * verdict a genuine third-party push produces. Give the *first* head-moved
+ * one short settle+re-read (`settle-head-moved`) before treating it as
+ * definitive; `headMovedSettled` tracks whether that grace read has already
+ * happened; if the re-read still shows head-moved (or any occurrence after
+ * the first), it's `stop` and the caller disarms — the fail-safe behavior
+ * stays intact, it just no longer fires on a one-poll consistency lag. Pure
+ * so the state machine is testable without a real clock or shelling out.
+ */
+export function nextChecksWaitAction(
+  state: ChecksState,
+  elapsedMs: number,
+  timeoutMs: number,
+  headMovedSettled: boolean,
+): ChecksWaitAction {
+  if (state === "head-moved") return headMovedSettled ? "stop" : "settle-head-moved";
+  return shouldKeepWaitingForChecks(state, elapsedMs, timeoutMs) ? "poll" : "stop";
+}
+
 export function buildPrViewChecksArgs(prNumber: number, ownerRepo: string): string[] {
   return [
     "pr",
@@ -406,9 +479,10 @@ type BranchProtection = {
  * just the first) so the operator alarm names all of them at once. `null`
  * models the API's 404 for an unprotected branch.
  */
-export function evaluateBranchProtection(
-  protection: BranchProtection | null,
-): { ok: boolean; problems: string[] } {
+export function evaluateBranchProtection(protection: BranchProtection | null): {
+  ok: boolean;
+  problems: string[];
+} {
   const problems: string[] = [];
   if (!protection) {
     return { ok: false, problems: ["no branch protection on main"] };
@@ -428,9 +502,26 @@ export function evaluateBranchProtection(
       ? protection.enforce_admins
       : (protection.enforce_admins?.enabled ?? false);
   if (!adminsEnforced) {
-    problems.push("enforce_admins is off — an admin credential can bypass required checks / push main");
+    problems.push(
+      "enforce_admins is off — an admin credential can bypass required checks / push main",
+    );
   }
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * Whether the SYD-222 startup gate should refuse to run the delivery worker:
+ * only when the operator opted in via `delivery.requireBranchProtection` AND
+ * at least one linked repo actually failed (or couldn't verify) its branch-
+ * protection check. Pure so the gating decision is testable without shelling
+ * out to `gh` — see `warnOnRelaxedBranchProtection` in deliver.ts, which
+ * still warns unconditionally regardless of this gate.
+ */
+export function shouldRefuseUnprotectedMain(
+  requireBranchProtection: boolean | undefined,
+  failingProjectKeys: string[],
+): boolean {
+  return requireBranchProtection === true && failingProjectKeys.length > 0;
 }
 
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */
@@ -587,6 +678,59 @@ export function deliveryFailureComment(ref: string, message: string): string {
   );
 }
 
+/**
+ * Posted when the host-side publish step (SYD-49: `git push` + `gh pr
+ * create`, run by agent-worker.ts right after a containerized session exits)
+ * fails (SYD-257). Distinct from deliveryFailureComment (a merge-time
+ * failure once a PR already exists) — here the session's work is committed
+ * on `agent/<ref>` in the host repo but never reached GitHub, so there is no
+ * PR yet for "Retry delivery" to re-authorize; a human has to fix the
+ * publish problem (e.g. host git/gh auth) and push/open the PR by hand, or
+ * re-dispatch the issue.
+ */
+export function publishFailureComment(ref: string, message: string): string {
+  return (
+    `Publish FAILED for ${ref}: ${message}\n` +
+    `The session's work is committed on ${agentBranch(ref)} in the host repo, but \`git push\` / ` +
+    `\`gh pr create\` did not reach GitHub — there is no PR yet. Check the worker log, fix the ` +
+    `underlying problem, then push ${agentBranch(ref)} and open the PR by hand (or re-dispatch the issue).`
+  );
+}
+
+/**
+ * SYD-232: the pinned PR is closed unmerged, but a later PR on the same
+ * agent/<ref> branch already merged — the closed pin is a ghost, not a real
+ * failure. Reconciles the redeliver instead of bouncing with the same
+ * "closed unmerged" failure on every retry.
+ */
+export function closedPrAlreadyDeliveredComment(
+  ref: string,
+  closedPrNumber: number,
+  mergedPrNumber: number,
+  mergeSha: string,
+): string {
+  return (
+    `Redeliver reconciled for ${ref}: PR #${closedPrNumber} was closed unmerged, but ${agentBranch(ref)} was ` +
+    `already delivered via PR #${mergedPrNumber} (merged at \`${mergeSha}\`) — treating this as delivered, no ` +
+    `merge needed.`
+  );
+}
+
+/**
+ * SYD-232: the pinned PR is closed unmerged AND no later PR on the same
+ * branch merged either — a genuine dead pin. Distinct from
+ * deliveryFailureComment so a human gets a concrete next step instead of the
+ * same generic "closed unmerged" bounce on every retry.
+ */
+export function closedPrDeadEndComment(ref: string, prNumber: number): string {
+  return (
+    `Delivery FAILED for ${ref}: PR #${prNumber} is closed unmerged, and no later PR on ${agentBranch(ref)} has ` +
+    `merged the work either — this pin is a dead end.\n` +
+    `Re-open PR #${prNumber}, or re-run the agent to produce a fresh PR from ${agentBranch(ref)}, then click Retry ` +
+    `delivery on the attention banner.`
+  );
+}
+
 // SYD-209 merge orchestrator (formerly "queue mode", SYD-164): rebase
 // agent/<ref> onto current main, force-push, wait for GitHub's required checks
 // to go green on the rebased head (CI is the sole check authority — no
@@ -615,8 +759,15 @@ export function shouldRetryQueueRebase(
 
 /** Queue-mode rebase hit real conflict hunks — bounced rather than merged, and
  * never handed to a conflict-resolution session (unlike the legacy flow's
- * autoRebaseConflictComment/SYD-100 path). */
-export function queueRebaseConflictComment(ref: string, conflictFiles: string[]): string {
+ * autoRebaseConflictComment/SYD-100 path). SYD-165: `agent/${ref}` is dead by
+ * definition once it's conflicted with main — the worker closes PR #prNumber
+ * and deletes the branch automatically, so the only remediation left is
+ * re-dispatch (there's no branch left to hand-fix and retry). */
+export function queueRebaseConflictComment(
+  ref: string,
+  prNumber: number,
+  conflictFiles: string[],
+): string {
   const fileList =
     conflictFiles.length > 0
       ? conflictFiles.map((f) => `- ${f}`).join("\n")
@@ -624,9 +775,22 @@ export function queueRebaseConflictComment(ref: string, conflictFiles: string[])
   return (
     `Delivery FAILED for ${ref}: rebasing ${agentBranch(ref)} onto ${MAIN_BRANCH} (queue mode) hit real conflicts in:\n` +
     `${fileList}\n` +
-    `Queue mode bounces on conflict rather than repairing in place — ${MAIN_BRANCH} was never touched. Resolve the ` +
-    `conflicts on ${agentBranch(ref)}, push, and click Retry delivery on the attention banner (or re-dispatch the ` +
-    `issue against fresh ${MAIN_BRANCH}).`
+    `${MAIN_BRANCH} was never touched. Closing PR #${prNumber} and deleting ${agentBranch(ref)} automatically — ` +
+    `re-dispatch the issue against fresh ${MAIN_BRANCH} to regenerate the work.`
+  );
+}
+
+/** Queue-mode found PR #prNumber open but its ${agentBranch(ref)} branch gone
+ * from GitHub (SYD-165) — nothing to rebase, verify, or merge. This is a dead
+ * end the same way a real conflict is: the worker closes the PR automatically
+ * (there's no branch left to delete) so the duplicate-work guards (nextTask
+ * exclusion, dispatch-worker skip, claim refusal) stop treating the issue as
+ * "still being worked" and re-dispatch becomes possible again. */
+export function noBranchBounceComment(ref: string, prNumber: number): string {
+  return (
+    `Delivery FAILED for ${ref}: PR #${prNumber} is open, but ${agentBranch(ref)} no longer exists on GitHub — ` +
+    `there is nothing to rebase, verify, or merge. ${MAIN_BRANCH} was never touched. Closing PR #${prNumber} ` +
+    `automatically — re-dispatch the issue against fresh ${MAIN_BRANCH} to regenerate the work.`
   );
 }
 
@@ -659,11 +823,7 @@ export function checksTimeoutComment(ref: string): string {
  * third-party push landed on the branch after the human stamp. The attempt
  * disarms and surfaces the old→new delta so a reflexive Retry doesn't re-pin
  * the very push the disarm just refused. */
-export function shaChainDisarmedComment(
-  ref: string,
-  expected: string,
-  observed: string,
-): string {
+export function shaChainDisarmedComment(ref: string, expected: string, observed: string): string {
   return (
     `Delivery DISARMED for ${ref}: a commit landed on ${agentBranch(ref)} after this delivery was authorized, so ` +
     `the merge was NOT performed — ${MAIN_BRANCH} is untouched.\n` +

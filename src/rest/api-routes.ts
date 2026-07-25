@@ -3,7 +3,7 @@ import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/index.js";
-import { SwitchyardError } from "../services/errors.js";
+import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import {
   authenticate,
   createActor,
@@ -17,7 +17,16 @@ import { createLoginLink, getSessionActor } from "../services/auth.js";
 import { createProject, listProjects, updateProject } from "../services/projects.js";
 import { SESSION_COOKIE } from "./auth-routes.js";
 import type { Status } from "../db/schema.js";
-import { createIssue, getIssue, updateIssue, claimIssue, heartbeatClaim } from "../services/issues.js";
+import {
+  createIssue,
+  getIssue,
+  updateIssue,
+  listChildren,
+  childCountsByParent,
+  issueRefById,
+  claimIssue,
+  heartbeatClaim,
+} from "../services/issues.js";
 import {
   addDependency,
   listBlockedIssueIds,
@@ -42,9 +51,16 @@ import {
   recordDerivedHead,
 } from "../services/delivery-attempts.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
+import { getDeliveryHealth } from "../services/delivery-health.js";
 import { searchIssues, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
-import { snoozeIssue, markDuplicate, redeliverIssue } from "../services/triage-actions.js";
+import {
+  snoozeIssue,
+  markDuplicate,
+  redeliverIssue,
+  resolveDeliveryFailure,
+  resolveDeviation,
+} from "../services/triage-actions.js";
 import {
   addWebhook,
   listWebhooks,
@@ -59,6 +75,7 @@ import {
   type GithubRepo,
 } from "../services/github-repos.js";
 import { handleGithubWebhook } from "../services/github-webhook.js";
+import { buildPendingActionRoutes } from "./pending-actions.js";
 import { listPrState } from "../services/pr-state.js";
 import {
   getAllSettings,
@@ -73,6 +90,7 @@ import {
   listAttachments,
   defaultAttachmentsDir,
   MAX_ATTACHMENT_SIZE,
+  ALLOWED_ATTACHMENT_TYPES,
 } from "../services/attachments.js";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -98,6 +116,8 @@ import {
   duplicateBody,
   settingPutBody,
   redeliverBody,
+  resolveDeliveryBody,
+  resolveDeviationBody,
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
   deliveryAttemptDerivedHeadBody,
@@ -138,6 +158,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.onError((err, c) => {
+    // Unreachable today BY CONSTRUCTION: PendingAffirmation is thrown only by
+    // the diverts in updateIssue and removeDependency (SYD-260), both of which
+    // require attr.sessionId, which only a supervised principal carries — and a
+    // sup_ token resolves ONLY at /mcp (src/server.ts:77). REST never calls
+    // resolveSupervisedPrincipal; PATCH /issues/:ref and DELETE /dependencies
+    // both pass no attr at all. Kept as a tripwire: this class
+    // extends Error, so if REST ever gains supervised attribution, without this
+    // arm the catch-all below turns a parked action into a 500 + stack trace.
+    if (err instanceof PendingAffirmation) return c.json(err.pending, 202);
     if (err instanceof SwitchyardError) return c.json({ error: err.message }, 400);
     if (
       err instanceof SyntaxError ||
@@ -207,12 +236,14 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     const attention = listAttentionByIssueId(db);
     const openPrs = listOpenPrByIssueId(db);
     const blocked = listBlockedIssueIds(db);
+    const childCounts = childCountsByParent(db);
     return c.json(
       results.map((r) => ({
         ...r,
         attention: attention.get(r.id) ?? null,
         openPr: openPrs.get(r.id) ?? null,
         blocked: blocked.has(r.id),
+        childCount: childCounts.get(r.id) ?? 0,
       })),
     );
   });
@@ -232,6 +263,8 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),
+      children: listChildren(db, ref),
+      parentRef: issueRefById(db, issue.parentId),
     });
   });
 
@@ -268,6 +301,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       listAgentSessions(db, {
         active: c.req.query("active") === "true" ? true : undefined,
         ref: c.req.query("ref") || undefined,
+        // `mine=true` scopes to the caller's own sessions — the dispatch worker's
+        // reconcile uses it so a codex/gemini worker only adopts its own
+        // containers, not another engine's (SYD-234-class isolation).
+        actorId: c.req.query("mine") === "true" ? c.var.actor.id : undefined,
       }),
     ),
   );
@@ -348,7 +385,20 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     }
     c.header("Content-Type", row.contentType);
     c.header("X-Content-Type-Options", "nosniff");
-    c.header("Content-Disposition", `inline; filename="${row.filename}"`);
+    // SVG is sanitized on upload, but forcing download (rather than inline
+    // top-level render) on the raw URL is a second layer of defense against
+    // stored XSS — a browser navigated straight to this URL won't execute
+    // whatever the sanitizer missed. The activity feed's inline preview goes
+    // through markdown `![]()` -> <img>, which never executes SVG script
+    // regardless of this header, so that display path is unaffected.
+    const isSvg = row.contentType === ALLOWED_ATTACHMENT_TYPES.svg;
+    c.header(
+      "Content-Disposition",
+      `${isSvg ? "attachment" : "inline"}; filename="${row.filename}"`,
+    );
+    if (isSvg) {
+      c.header("Content-Security-Policy", "script-src 'none'; sandbox");
+    }
     c.header("Cache-Control", "private, max-age=31536000, immutable");
     return c.body(new Uint8Array(data));
   });
@@ -375,11 +425,30 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.post("/issues/:ref/redeliver", body(redeliverBody), (c) =>
     c.json(
-      redeliverIssue(
+      redeliverIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").expectedHeadSha),
+    ),
+  );
+
+  // SYD-178: an explicit human "this is actually resolved" action for a
+  // delivery_failed flag pr_state can never auto-clear (e.g. the fix landed
+  // through a non-agent branch) — Retry is a dead end there since there's no
+  // attributed PR to re-authorize.
+  app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
+    c.json(resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note)),
+  );
+
+  // SYD-262: the same escape hatch for a recorded-once process deviation.
+  // done_without_merged_pr clears only via a merged pr_state row, which strict
+  // agent/<ref> attribution never produces for the feat/ branches interactive
+  // work uses — so without this the banner is lit forever.
+  app.post("/issues/:ref/resolve-deviation", body(resolveDeviationBody), (c) =>
+    c.json(
+      resolveDeviation(
         db,
         c.var.actor,
         c.req.param("ref"),
-        c.req.valid("json").expectedHeadSha,
+        c.req.valid("json").reason,
+        c.req.valid("json").note,
       ),
     ),
   );
@@ -391,13 +460,18 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // same pattern as recordDeliveryEvent — not a route-level requireHumanCaller.
   app.get("/delivery-work", (c) => c.json(getDeliveryWork(db, c.var.actor)));
 
-  app.post(
-    "/issues/:ref/delivery-attempts",
-    body(deliveryAttemptStartBody),
-    (c) =>
-      c.json(
-        startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json")),
-      ),
+  // Delivery health surface (SYD-180): rolling-window aggregate over the
+  // delivery_attempts ledger — first-attempt success rate, how many issues
+  // needed a manual redeliver, and which ones needed it most. Read-only, no
+  // agent gate (unlike /delivery-work): it's an observability rollup, not
+  // trigger-shaped infra state an agent could exploit.
+  app.get("/delivery-health", (c) => {
+    const hoursParam = c.req.query("hours");
+    return c.json(getDeliveryHealth(db, hoursParam !== undefined ? Number(hoursParam) : undefined));
+  });
+
+  app.post("/issues/:ref/delivery-attempts", body(deliveryAttemptStartBody), (c) =>
+    c.json(startDeliveryAttempt(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
   );
 
   const parseAttemptId = (idParam: string): number => {
@@ -420,18 +494,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   // SYD-209: persist the post-rebase head (S1) on an open attempt without
   // finishing it, so a crash between rebase and merge re-anchors on S1.
-  app.patch(
-    "/delivery-attempts/:id/derived-head",
-    body(deliveryAttemptDerivedHeadBody),
-    (c) =>
-      c.json(
-        recordDerivedHead(
-          db,
-          c.var.actor,
-          parseAttemptId(c.req.param("id")),
-          c.req.valid("json").derivedHeadSha,
-        ),
+  app.patch("/delivery-attempts/:id/derived-head", body(deliveryAttemptDerivedHeadBody), (c) =>
+    c.json(
+      recordDerivedHead(
+        db,
+        c.var.actor,
+        parseAttemptId(c.req.param("id")),
+        c.req.valid("json").derivedHeadSha,
       ),
+    ),
   );
 
   app.get("/next-task", (c) =>
@@ -547,6 +618,11 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     const outcome = handleGithubWebhook(db, event, payload, repo);
     return c.json({ ok: true, ...outcome });
   });
+
+  // Mounted under this app's auth middleware and onError, but kept in its own
+  // module: the affirm route resolves its human from the session cookie rather
+  // than c.var.actor, and that divergence deserves to be read in one place.
+  app.route("/", buildPendingActionRoutes(db));
 
   return app;
 }

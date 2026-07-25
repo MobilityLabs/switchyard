@@ -20,6 +20,10 @@ export type Status = (typeof STATUSES)[number];
 export const PRIORITIES = ["none", "low", "medium", "high", "urgent"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 export const SUMMARY_MAX_LENGTH = 280;
+/** Reserved workerPreference selecting a human-attended interactive session (never headless dispatch). */
+export const INTERACTIVE_PREFERENCE = "interactive";
+/** Options for the "preferred worker" dropdown: an engine name, or the interactive sentinel. */
+export const WORKER_PREFERENCES = ["claude", "codex", "gemini", INTERACTIVE_PREFERENCE] as const;
 export type Issue = {
   id: number;
   ref: string;
@@ -31,6 +35,9 @@ export type Issue = {
   assigneeId: number | null;
   creatorId: number;
   labels: string[];
+  workerPreference: string | null;
+  parentId: number | null;
+  childCount?: number;
   sourceType: "session" | "todo" | "ci" | "manual" | null;
   sourceDetail: string | null;
   sourceUrl: string | null;
@@ -43,12 +50,15 @@ export type Issue = {
     | { reason: "merged_pr_not_done"; message: string }
     | { reason: "open_pr_not_in_review"; message: string }
     | { reason: "stale_claim"; message: string }
+    | { reason: "done_without_merged_pr"; message: string }
     | null;
   openPr: { prNumber: number; url: string; repo: string; headSha: string | null } | null;
 };
 export type Activity = {
   type: string;
   actorName: string;
+  /** Supervised-session provenance (SYD-240): the agent that made the edit on the actor's behalf, or null for plain events. */
+  viaAgentName: string | null;
   payload: Record<string, unknown>;
   createdAt: number;
 };
@@ -66,7 +76,16 @@ export type IssueDetail = Issue & {
   activity: Activity[];
   dependencies: { blockedBy: DependencyRef[]; blocks: DependencyRef[] };
   attachments: Attachment[];
-  deliveryPin: { repo: string; prNumber: number; headSha: string | null; status: "open" | "merged" | "closed" } | null;
+  /** Epic → stories: child issues nested under this one. */
+  children: DependencyRef[];
+  /** The parent issue's ref for display/edit, or null if top-level. */
+  parentRef: string | null;
+  deliveryPin: {
+    repo: string;
+    prNumber: number;
+    headSha: string | null;
+    status: "open" | "merged" | "closed";
+  } | null;
 };
 export type AgentSession = {
   id: number;
@@ -79,6 +98,34 @@ export type AgentSession = {
   startedAt: number;
   endedAt: number | null;
   lastNote: { note: string; createdAt: number } | null;
+};
+
+// Supervised-session hard-gate queue (SYD phase 1 task 8): a gated action
+// (currently only "done") parked for the session's accountable human to
+// affirm. Mirrors the pending_actions row shape returned by GET
+// /api/pending-actions (src/rest/pending-actions.ts).
+export const PENDING_ACTION_STATUSES = ["pending", "affirmed", "expired"] as const;
+export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
+export type PendingAction = {
+  id: number;
+  sessionId: number;
+  issueId: number;
+  actionType: string;
+  payload: Record<string, unknown>;
+  status: PendingActionStatus;
+  affirmedById: number | null;
+  affirmedAt: number | null;
+  createdAt: number;
+  expiresAt: number;
+  // Added by GET /api/pending-actions (SYD phase 1 task 8 / phase 2 task 8):
+  // issueRef lets the panel skip the whole-issue-list poll it used to run
+  // just to resolve issueId -> ref (SYD-244). canonical is the signed doc's
+  // exact bytes (phase 2); viaAgentName names the agent that proposed the
+  // action, for display only.
+  issueRef: string | null;
+  issueStatus: string | null;
+  canonical: string | null;
+  viaAgentName: string | null;
 };
 
 export type WebhookView = {

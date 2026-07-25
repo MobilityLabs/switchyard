@@ -8,18 +8,20 @@
 // upsertPrState co-writes — instead of raw event scans.
 import { and, eq, inArray, max, ne, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
-import { events, issues } from "../db/schema.js";
+import { events, issues, type Status } from "../db/schema.js";
 import {
   getOpenPr,
   listOpenPrByIssueId,
   getMergedPr,
   prTransitionEventId,
   type OpenPr,
+  type MergedPr,
 } from "./pr-status.js";
 import { getSetting } from "./settings.js";
 import { recordEvent } from "./events.js";
 
-export type DeviationReason = "open_pr_not_in_review" | "merged_pr_not_done" | "stale_claim";
+export type DeviationReason =
+  "open_pr_not_in_review" | "merged_pr_not_done" | "stale_claim" | "done_without_merged_pr";
 export type DeviationFlag = { reason: DeviationReason; message: string };
 
 // Richer computation shared by the read-path (getDeviation) and the webhook
@@ -98,6 +100,30 @@ export function computeDeviation(
   return null;
 }
 
+// SYD-204: a point-in-time check run inside updateIssue's done transition —
+// unlike the three reasons above (recomputed live from current state on every
+// read), this one captures a fact about the transition itself, at the moment
+// it happens: an issue that went through review (implying real code work,
+// per the claim -> in_progress -> PR -> in_review -> done process) reached
+// done with no PR ever recorded open or merged. Scoped to fromStatus ===
+// "in_review" so a direct triage/backlog closure (no code involved, e.g. a
+// research spike or a duplicate) never flags — those are the legitimate
+// no-merge dones this stays attention-only for. An in-flight open PR isn't a
+// deviation either: stamping done over one is the normal SYD-208 flow that
+// authorizes delivery to merge it shortly after.
+export function doneWithoutMergedPr(
+  fromStatus: Status,
+  openPr: OpenPr | null,
+  merged: MergedPr | null,
+): DeviationFlag | null {
+  if (fromStatus !== "in_review" || openPr !== null || merged !== null) return null;
+  return {
+    reason: "done_without_merged_pr",
+    message:
+      "moved to done from in_review with no PR ever recorded as open or merged — verify the code actually landed",
+  };
+}
+
 export function getDeviation(db: Db, issueId: number): DeviationFlag | null {
   const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
   if (!issue) return null;
@@ -164,7 +190,8 @@ export function emitProcessDeviations(db: Db): number {
       issueId: issue.id,
       actorId: issue.assigneeId ?? issue.creatorId,
       type: "process_deviation",
-      payload: c.prNumber != null ? { reason: c.reason, prNumber: c.prNumber } : { reason: c.reason },
+      payload:
+        c.prNumber != null ? { reason: c.reason, prNumber: c.prNumber } : { reason: c.reason },
     });
     emitted++;
   }

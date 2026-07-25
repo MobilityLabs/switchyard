@@ -176,6 +176,38 @@ describe("handleGithubWebhook / check_suite", () => {
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_checks_failed" });
   });
 
+  it.each(["timed_out", "action_required", "startup_failure"])(
+    "records gh_checks_failed on conclusion %s",
+    (conclusion) => {
+      const db = setup();
+      const outcome = handleGithubWebhook(db, "check_suite", {
+        action: "completed",
+        check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion },
+      });
+      expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_checks_failed" });
+    },
+  );
+
+  it.each(["neutral", "skipped", "cancelled", "stale"])(
+    "does not record gh_checks_failed for the non-failure conclusion %s",
+    (conclusion) => {
+      const db = setup();
+      const outcome = handleGithubWebhook(db, "check_suite", {
+        action: "completed",
+        check_suite: { head_branch: "agent/SYD-1", head_sha: "deadbeef", conclusion },
+      });
+      expect(outcome).toEqual({
+        handled: false,
+        reason: `ignored check_suite conclusion "${conclusion}"`,
+      });
+      expect(
+        getActivity(db, "SYD-1").filter(
+          (a) => a.type === "gh_checks_passed" || a.type === "gh_checks_failed",
+        ),
+      ).toHaveLength(0);
+    },
+  );
+
   it("matches via an associated pull_request's branch when head_branch isn't agent/<ref>", () => {
     const db = setup();
     const outcome = handleGithubWebhook(db, "check_suite", {
@@ -384,11 +416,7 @@ describe("handleGithubWebhook / ingestion groundwork (SYD-205)", () => {
 
   it("records repo, headSha, and ghUpdatedAt from a full webhook payload", () => {
     const db = setup();
-    handleGithubWebhook(
-      db,
-      "pull_request",
-      opened({ repository: { full_name: "acme/widgets" } }),
-    );
+    handleGithubWebhook(db, "pull_request", opened({ repository: { full_name: "acme/widgets" } }));
     const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_opened")!;
     expect(ev.payload).toEqual({
       prNumber: 12,
@@ -631,6 +659,22 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
     });
     expect(findPrState(db, "acme/bound", 33)).toBeUndefined();
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
+  });
+
+  it("attributes and writes pr_state despite a casing mismatch between the linked repo and the payload's repository.full_name (SYD-212)", () => {
+    // Repo linked with a hand-typed lowercase full name...
+    const db = setup(["acme/bound"]);
+    // ...but the real webhook delivery carries GitHub's canonical case.
+    const outcome = handleGithubWebhook(db, "pull_request", {
+      ...opened("opened"),
+      repository: { full_name: "Acme/Bound" },
+    });
+    expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
+    const row = findPrState(db, "acme/bound", 12)!;
+    expect(row).toMatchObject({ status: "open", issueRef: "SYD-1", repo: "acme/bound" });
+    // The stored row itself is normalized, not left as the canonical-case
+    // string the payload happened to carry.
+    expect(findPrState(db, "Acme/Bound", 12)?.repo).toBe("acme/bound");
   });
 
   it("an agent/SYD-1 PR in a repo bound to another project records display events but no pr_state row (cross-repo)", () => {

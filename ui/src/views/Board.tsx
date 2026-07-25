@@ -2,7 +2,7 @@ import { useState } from "react";
 import { listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
-import { href, navigate } from "../router";
+import { href, issueRoute, navigate } from "../router";
 import type { Issue, Status } from "../types";
 import { attentionChip } from "../attention";
 
@@ -173,7 +173,7 @@ export function Card({
   issue: Issue;
   onMove?: (ref: string, status: Status) => void;
 }) {
-  const open = () => navigate({ view: "issue", ref: issue.ref });
+  const open = () => navigate(issueRoute(issue.ref));
   return (
     <article
       className="card"
@@ -196,7 +196,7 @@ export function Card({
         }
       }}
     >
-      <a className="ref" href={href({ view: "issue", ref: issue.ref })}>
+      <a className="ref" href={href(issueRoute(issue.ref))}>
         {issue.ref}
       </a>
       <p>{issue.title}</p>
@@ -211,6 +211,25 @@ export function Card({
           ) : null;
         })()}
       {issue.needsInput && <span className="badge warn">⚠ input</span>}
+      {issue.workerPreference === "interactive" ? (
+        <span
+          className="badge worker-pref interactive"
+          title="Interactive session only — not headless-dispatched"
+        >
+          👤 interactive
+        </span>
+      ) : (
+        issue.workerPreference && (
+          <span className="badge worker-pref" title={`Preferred worker: ${issue.workerPreference}`}>
+            {issue.workerPreference}
+          </span>
+        )
+      )}
+      {!!issue.childCount && (
+        <span className="badge epic-badge" title="Child stories under this epic">
+          {issue.childCount} {issue.childCount === 1 ? "story" : "stories"}
+        </span>
+      )}
       {issue.labels.length > 0 && (
         <div className="label-chips-ro">
           {issue.labels.map((l) => (

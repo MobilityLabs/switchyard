@@ -28,9 +28,12 @@ import {
   buildPrViewChecksArgs,
   evaluateChecks,
   shouldKeepWaitingForChecks,
+  nextChecksWaitAction,
+  HEAD_MOVED_SETTLE_MS,
   CHECKS_WAIT_TIMEOUT_MS,
   deliveryComment,
   deliveryFailureComment,
+  publishFailureComment,
   checksFailedComment,
   checksTimeoutComment,
   shaChainDisarmedComment,
@@ -40,9 +43,15 @@ import {
   shouldRetryQueueRebase,
   MAX_QUEUE_MERGE_ATTEMPTS,
   queueRebaseConflictComment,
+  noBranchBounceComment,
   queueDeliveredNote,
   buildBranchProtectionArgs,
   evaluateBranchProtection,
+  shouldRefuseUnprotectedMain,
+  buildPrListMergedArgs,
+  closedPrAlreadyDeliveredComment,
+  closedPrDeadEndComment,
+  buildPrCloseArgs,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
 
@@ -56,7 +65,9 @@ describe("resolveInfraToken (SYD-213)", () => {
     expect(resolveInfraToken({ SWITCHYARD_TOKEN: "gen" })).toBe("gen");
   });
   it("falls through a blank service token to the general token (|| not ??)", () => {
-    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe("gen");
+    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe(
+      "gen",
+    );
   });
   it("is undefined when neither is set", () => {
     expect(resolveInfraToken({})).toBeUndefined();
@@ -452,6 +463,43 @@ describe("shouldKeepWaitingForChecks (SYD-209)", () => {
   });
 });
 
+describe("nextChecksWaitAction (SYD-216 head-moved settle)", () => {
+  it("gives a first head-moved a settle+re-read instead of stopping immediately", () => {
+    expect(nextChecksWaitAction("head-moved", 0, 1000, false)).toBe("settle-head-moved");
+  });
+
+  it("stops on head-moved once the one grace read has already happened", () => {
+    expect(nextChecksWaitAction("head-moved", 0, 1000, true)).toBe("stop");
+  });
+
+  it("still stops on head-moved even if the timeout has otherwise elapsed", () => {
+    // head-moved is never subject to the pending/timeout clock — only whether
+    // it's had its one settle read.
+    expect(nextChecksWaitAction("head-moved", 999999, 1000, true)).toBe("stop");
+  });
+
+  it("keeps polling on pending regardless of headMovedSettled", () => {
+    expect(nextChecksWaitAction("pending", 0, 1000, false)).toBe("poll");
+    expect(nextChecksWaitAction("pending", 0, 1000, true)).toBe("poll");
+  });
+
+  it("stops immediately on a definitive passing/failing verdict", () => {
+    expect(nextChecksWaitAction("passing", 0, 1000, false)).toBe("stop");
+    expect(nextChecksWaitAction("failing", 0, 1000, false)).toBe("stop");
+  });
+
+  it("stops on pending once the timeout has elapsed", () => {
+    expect(nextChecksWaitAction("pending", 1000, 1000, false)).toBe("stop");
+  });
+});
+
+describe("HEAD_MOVED_SETTLE_MS (SYD-216)", () => {
+  it("is a short settle window, well under the CI checks poll interval", () => {
+    expect(HEAD_MOVED_SETTLE_MS).toBeGreaterThan(0);
+    expect(HEAD_MOVED_SETTLE_MS).toBeLessThan(CHECKS_WAIT_TIMEOUT_MS);
+  });
+});
+
 describe("parsePrNumberFromUrl", () => {
   it("extracts the number from a PR url", () => {
     expect(parsePrNumberFromUrl("https://github.com/acme/widgets/pull/123")).toBe(123);
@@ -546,6 +594,55 @@ describe("comment bodies", () => {
   });
 });
 
+describe("publish-failure comment (SYD-257)", () => {
+  it("names the ref, the agent branch, and the git/gh error", () => {
+    const body = publishFailureComment("SYD-9", "ssh: connect to host github.com: config error");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("agent/SYD-9");
+    expect(body).toContain("ssh: connect to host github.com: config error");
+  });
+
+  it("says there is no PR yet, unlike a merge-time delivery failure", () => {
+    const body = publishFailureComment("SYD-9", "boom");
+    expect(body).toContain("no PR yet");
+  });
+});
+
+describe("closed-unmerged-pin redeliver dead end (SYD-232)", () => {
+  it("buildPrListMergedArgs carries -R and filters to the merged state for the issue's branch", () => {
+    expect(buildPrListMergedArgs("SYD-9", "MobilityLabs/switchyard")).toEqual([
+      "pr",
+      "list",
+      "-R",
+      "MobilityLabs/switchyard",
+      "--head",
+      "agent/SYD-9",
+      "--state",
+      "merged",
+      "--json",
+      "number,mergeCommit",
+      "--limit",
+      "10",
+    ]);
+  });
+
+  it("closedPrAlreadyDeliveredComment names both PRs and the merge SHA, distinct from a failure", () => {
+    const body = closedPrAlreadyDeliveredComment("SYD-9", 61, 124, "abc1234");
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("PR #61");
+    expect(body).toContain("PR #124");
+    expect(body).toContain("abc1234");
+    expect(body).not.toContain("Delivery FAILED");
+  });
+
+  it("closedPrDeadEndComment gives an actionable next step instead of a generic bounce", () => {
+    const body = closedPrDeadEndComment("SYD-9", 61);
+    expect(body).toContain("SYD-9");
+    expect(body).toContain("PR #61");
+    expect(body).toMatch(/re-open|re-run the agent/i);
+  });
+});
+
 describe("branch-protection health check (SYD-209)", () => {
   it("buildBranchProtectionArgs targets the repo's main protection API", () => {
     expect(buildBranchProtectionArgs("MobilityLabs/switchyard")).toEqual([
@@ -602,6 +699,21 @@ describe("branch-protection health check (SYD-209)", () => {
   });
 });
 
+describe("shouldRefuseUnprotectedMain (SYD-222)", () => {
+  it("never refuses when the operator hasn't opted in, even with failing repos", () => {
+    expect(shouldRefuseUnprotectedMain(undefined, ["SYD"])).toBe(false);
+    expect(shouldRefuseUnprotectedMain(false, ["SYD"])).toBe(false);
+  });
+
+  it("never refuses when opted in but nothing is failing", () => {
+    expect(shouldRefuseUnprotectedMain(true, [])).toBe(false);
+  });
+
+  it("refuses only once opted in AND at least one repo is failing", () => {
+    expect(shouldRefuseUnprotectedMain(true, ["SYD", "NOC"])).toBe(true);
+  });
+});
+
 describe("SHA-chain failure comments (SYD-209)", () => {
   it("checksFailedComment says CI failed on the rebased head and main stays green", () => {
     const body = checksFailedComment("SYD-9");
@@ -649,22 +761,64 @@ describe("merge orchestrator (SYD-209, formerly queue mode SYD-164)", () => {
 
   describe("queueRebaseConflictComment", () => {
     it("names the ref, branch, conflicted files, and says main was never touched", () => {
-      const body = queueRebaseConflictComment("SYD-9", ["src/a.ts", "src/b.ts"]);
+      const body = queueRebaseConflictComment("SYD-9", 41, ["src/a.ts", "src/b.ts"]);
       expect(body).toContain("SYD-9");
       expect(body).toContain("agent/SYD-9");
       expect(body).toContain("- src/a.ts");
       expect(body).toContain("- src/b.ts");
       expect(body).toContain("never touched");
-      expect(body).toContain("Retry delivery");
     });
 
     it("never mentions dispatching a conflict-resolution session", () => {
-      const body = queueRebaseConflictComment("SYD-9", ["src/a.ts"]);
+      const body = queueRebaseConflictComment("SYD-9", 41, ["src/a.ts"]);
       expect(body).not.toContain("conflict-resolution worker session");
     });
 
     it("handles an empty file list", () => {
-      expect(queueRebaseConflictComment("SYD-9", [])).toContain("no conflicted files reported");
+      expect(queueRebaseConflictComment("SYD-9", 41, [])).toContain("no conflicted files reported");
+    });
+
+    it("names the closed PR and says re-dispatch is the path (SYD-165)", () => {
+      const body = queueRebaseConflictComment("SYD-9", 41, ["src/a.ts"]);
+      expect(body).toContain("PR #41");
+      expect(body).toContain("Closing PR #41");
+      expect(body).toContain("re-dispatch");
+    });
+  });
+
+  describe("noBranchBounceComment (SYD-165)", () => {
+    it("names the ref, PR, and says re-dispatch is the path", () => {
+      const body = noBranchBounceComment("SYD-9", 41);
+      expect(body).toContain("SYD-9");
+      expect(body).toContain("PR #41");
+      expect(body).toContain("agent/SYD-9");
+      expect(body).toContain("no longer exists");
+      expect(body).toContain("never touched");
+      expect(body).toContain("Closing PR #41");
+      expect(body).toContain("re-dispatch");
+    });
+  });
+
+  describe("buildPrCloseArgs (SYD-165)", () => {
+    it("closes without deleting the branch by default", () => {
+      expect(buildPrCloseArgs(41, "MobilityLabs/switchyard")).toEqual([
+        "pr",
+        "close",
+        "41",
+        "-R",
+        "MobilityLabs/switchyard",
+      ]);
+    });
+
+    it("adds --delete-branch when asked", () => {
+      expect(buildPrCloseArgs(41, "MobilityLabs/switchyard", { deleteBranch: true })).toEqual([
+        "pr",
+        "close",
+        "41",
+        "-R",
+        "MobilityLabs/switchyard",
+        "--delete-branch",
+      ]);
     });
   });
 

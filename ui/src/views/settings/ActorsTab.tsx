@@ -69,11 +69,7 @@ function NewAgentForm(props: { onToken: (label: string, token: string) => void }
       <h3>New agent</h3>
       <label>
         Name
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="claude/worker"
-        />
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="claude/worker" />
       </label>
       {error && <p className="error-bar">{error}</p>}
       <button className="primary" type="submit" disabled={!canSubmit}>
@@ -127,15 +123,14 @@ export default function ActorsTab() {
               <td>
                 <button
                   onClick={() => {
-                    if (!confirm(`Rotate ${a.name}'s token? The old token stops working immediately.`))
+                    if (
+                      !confirm(`Rotate ${a.name}'s token? The old token stops working immediately.`)
+                    )
                       return;
-                    rotateActorToken(a.id).then(
-                      ({ token }) => {
-                        showToken(`New token for ${a.name}`, token);
-                        actors.reload();
-                      },
-                      fail,
-                    );
+                    rotateActorToken(a.id).then(({ token }) => {
+                      showToken(`New token for ${a.name}`, token);
+                      actors.reload();
+                    }, fail);
                   }}
                 >
                   Rotate token
@@ -155,7 +150,8 @@ export default function ActorsTab() {
                   <button
                     onClick={() =>
                       mintLoginLink(a.id).then(
-                        ({ url }) => showToken(`Login link for ${a.name} (single use, 15 min)`, url),
+                        ({ url }) =>
+                          showToken(`Login link for ${a.name} (single use, 15 min)`, url),
                         fail,
                       )
                     }
