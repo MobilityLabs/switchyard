@@ -58,6 +58,26 @@ const AGENT_STATUS_TRANSITIONS: Partial<Record<Status, { to: Status; assigneeOnl
 
 export const SUMMARY_MAX_LENGTH = 280;
 
+/**
+ * Labels whose work a headless container cannot finish, so an issue carrying
+ * one defaults to a human-attended session (SYD-239).
+ *
+ * `ui` is here because the SYD-183 norm asks for a screenshot of UI work and
+ * the worker images ship no browser to make one — an upload path
+ * (switchyard-attach, SYD-182) with nothing to upload. Rather than bake
+ * chromium into three images, UI work routes to a session that already has a
+ * browser. The refusal itself is worker-select's INTERACTIVE_PREFERENCE skip;
+ * this only sets the field it reads.
+ *
+ * A default, never an override: an explicit workerPreference always wins, so a
+ * `ui` issue that genuinely is headless-doable can still be dispatched.
+ */
+const INTERACTIVE_ONLY_LABELS = ["ui"];
+
+export function defaultWorkerPreference(labels: string[] | undefined): string | null {
+  return labels?.some((l) => INTERACTIVE_ONLY_LABELS.includes(l)) ? "interactive" : null;
+}
+
 function checkSummaryLength(summary: string | null | undefined): void {
   if (summary != null && summary.length > SUMMARY_MAX_LENGTH) {
     throw new SwitchyardError(
@@ -196,7 +216,7 @@ export function createIssue(
         sourceType: input.provenance?.sourceType ?? null,
         sourceDetail: input.provenance?.detail ?? null,
         sourceUrl: input.provenance?.url ?? null,
-        workerPreference: input.workerPreference ?? null,
+        workerPreference: input.workerPreference ?? defaultWorkerPreference(input.labels),
       })
       .returning()
       .get();
