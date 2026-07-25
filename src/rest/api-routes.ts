@@ -59,6 +59,7 @@ import {
   markDuplicate,
   redeliverIssue,
   resolveDeliveryFailure,
+  resolveDeviation,
 } from "../services/triage-actions.js";
 import {
   addWebhook,
@@ -116,6 +117,7 @@ import {
   settingPutBody,
   redeliverBody,
   resolveDeliveryBody,
+  resolveDeviationBody,
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
   deliveryAttemptDerivedHeadBody,
@@ -433,6 +435,22 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // attributed PR to re-authorize.
   app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
     c.json(resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note)),
+  );
+
+  // SYD-262: the same escape hatch for a recorded-once process deviation.
+  // done_without_merged_pr clears only via a merged pr_state row, which strict
+  // agent/<ref> attribution never produces for the feat/ branches interactive
+  // work uses — so without this the banner is lit forever.
+  app.post("/issues/:ref/resolve-deviation", body(resolveDeviationBody), (c) =>
+    c.json(
+      resolveDeviation(
+        db,
+        c.var.actor,
+        c.req.param("ref"),
+        c.req.valid("json").reason,
+        c.req.valid("json").note,
+      ),
+    ),
   );
 
   // Task-6 worker contract (SYD-208): human-token-only read of what delivery

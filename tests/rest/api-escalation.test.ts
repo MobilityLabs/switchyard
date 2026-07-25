@@ -395,4 +395,65 @@ describe("escalation, snooze, and duplicate routes", () => {
     expect(again.status).toBe(400);
     expect((await body<{ error: string }>(again)).error).toMatch(/no unresolved delivery failure/i);
   });
+
+  // SYD-262: same dead end as resolve-delivery above, for the deviation flag —
+  // done_without_merged_pr is recorded once and only a merged pr_state row
+  // clears it, which a feat/ branch never produces.
+  it("resolve-deviation is human-only, scoped to the reason, and clears the stuck flag", async () => {
+    const filed = await body<{ ref: string }>(
+      await app.request("/issues", {
+        method: "POST",
+        headers: humanH,
+        body: JSON.stringify({ projectKey: "SYD", title: "Landed on a feat branch" }),
+      }),
+    );
+    const NOTE = "merged as d0073fb via PR #197";
+    const patch = (status: string) =>
+      app.request(`/issues/${filed.ref}`, {
+        method: "PATCH",
+        headers: humanH,
+        body: JSON.stringify({ status }),
+      });
+
+    // Drive it to done from in_review with no PR — that records the deviation.
+    await patch("todo");
+    await patch("in_progress");
+    await patch("in_review");
+    await patch("done");
+
+    const flagged = await body<{ attention: { reason: string } | null }>(
+      await app.request(`/issues/${filed.ref}`, { headers: humanH }),
+    );
+    expect(flagged.attention?.reason).toBe("done_without_merged_pr");
+
+    const noNote = await app.request(`/issues/${filed.ref}/resolve-deviation`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ reason: "done_without_merged_pr" }),
+    });
+    expect(noNote.status).toBe(400);
+
+    const denied = await app.request(`/issues/${filed.ref}/resolve-deviation`, {
+      method: "POST",
+      headers: agentH,
+      body: JSON.stringify({ reason: "done_without_merged_pr", note: NOTE }),
+    });
+    expect(denied.status).toBe(400);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+
+    const ok = await app.request(`/issues/${filed.ref}/resolve-deviation`, {
+      method: "POST",
+      headers: humanH,
+      body: JSON.stringify({ reason: "done_without_merged_pr", note: NOTE }),
+    });
+    expect(ok.status).toBe(200);
+
+    const detail = await body<{
+      attention: unknown;
+      activity: { type: string; payload: Record<string, unknown> }[];
+    }>(await app.request(`/issues/${filed.ref}`, { headers: humanH }));
+    expect(detail.attention).toBeNull();
+    const ev = detail.activity.find((a) => a.type === "deviation_resolved");
+    expect(ev?.payload).toEqual({ reason: "done_without_merged_pr", note: NOTE });
+  });
 });

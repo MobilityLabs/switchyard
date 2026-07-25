@@ -76,6 +76,19 @@ function unresolvedDoneWithoutMerge(db: Db, issueId?: number): Row[] {
         AND ps.status = 'merged'
         AND ps.last_transition_event_id > latest.eventId
     )
+    -- SYD-262: the human escape hatch. pr_state attributes strictly by
+    -- agent/<ref> (SYD-206), so work landed on an interactive feat/ branch
+    -- never produces the merged row above and the flag would stay red
+    -- forever. Scoped to the matching reason so clearing one deviation can't
+    -- silence a different one, and keyed on event id so a LATER deviation
+    -- re-raises (same ordering rule delivery_resolved uses).
+    AND NOT EXISTS (
+      SELECT 1 FROM events r
+      WHERE r.issue_id = latest.issue_id
+        AND r.type = 'deviation_resolved'
+        AND json_extract(r.payload, '$.reason') = 'done_without_merged_pr'
+        AND r.id > latest.eventId
+    )
   `);
 }
 
