@@ -57,6 +57,8 @@ export type Issue = {
 export type Activity = {
   type: string;
   actorName: string;
+  /** Supervised-session provenance (SYD-240): the agent that made the edit on the actor's behalf, or null for plain events. */
+  viaAgentName: string | null;
   payload: Record<string, unknown>;
   createdAt: number;
 };
@@ -114,6 +116,16 @@ export type PendingAction = {
   affirmedById: number | null;
   affirmedAt: number | null;
   createdAt: number;
+  expiresAt: number;
+  // Added by GET /api/pending-actions (SYD phase 1 task 8 / phase 2 task 8):
+  // issueRef lets the panel skip the whole-issue-list poll it used to run
+  // just to resolve issueId -> ref (SYD-244). canonical is the signed doc's
+  // exact bytes (phase 2); viaAgentName names the agent that proposed the
+  // action, for display only.
+  issueRef: string | null;
+  issueStatus: string | null;
+  canonical: string | null;
+  viaAgentName: string | null;
 };
 
 export type WebhookView = {

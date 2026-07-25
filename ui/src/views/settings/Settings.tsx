@@ -20,7 +20,11 @@ export default function Settings({ tab }: { tab: SettingsTab }) {
       <h1>Settings</h1>
       <nav className="tabs">
         {SETTINGS_TABS.map((t) => (
-          <a key={t} href={href({ view: "settings", tab: t })} className={t === tab ? "active" : ""}>
+          <a
+            key={t}
+            href={href({ view: "settings", tab: t })}
+            className={t === tab ? "active" : ""}
+          >
             {TAB_LABELS[t]}
           </a>
         ))}

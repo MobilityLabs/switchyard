@@ -86,10 +86,7 @@ const PR_STATUSES: readonly PrStatus[] = ["open", "merged", "closed"];
 
 /** Read surface for the poller's targeted refresh (and, at SYD-207 cutover,
  * the consumers proper). `status`, when given, must be a valid PrStatus. */
-export function listPrState(
-  db: Db,
-  filter: { repo?: string; status?: string } = {},
-): PrStateRow[] {
+export function listPrState(db: Db, filter: { repo?: string; status?: string } = {}): PrStateRow[] {
   if (filter.status !== undefined && !PR_STATUSES.includes(filter.status as PrStatus)) {
     throw new SwitchyardError(
       `Unknown pr_state status "${filter.status}" — expected one of ${PR_STATUSES.join(", ")}.`,
@@ -144,9 +141,7 @@ const EVENT_KIND: Record<PrTransition, EventKind> = {
   reopened: "gh_pr_reopened",
 };
 
-type Decision =
-  | { apply: true; transition: PrTransition | null }
-  | { apply: false; reason: string };
+type Decision = { apply: true; transition: PrTransition | null } | { apply: false; reason: string };
 
 function decide(existing: PrStateRow | undefined, o: PrObservation, ts: number | null): Decision {
   if (!existing) {

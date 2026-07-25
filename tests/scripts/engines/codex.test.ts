@@ -35,7 +35,9 @@ describe("codex engine builders", () => {
     // Spike (Task 1): codex 0.142.5 dropped --ask-for-approval; headless
     // full-auto is --dangerously-bypass-approvals-and-sandbox.
     expect(buildCodexExecArgs("do the thing")).toEqual([
-      "exec", "--dangerously-bypass-approvals-and-sandbox", "do the thing",
+      "exec",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "do the thing",
     ]);
   });
 

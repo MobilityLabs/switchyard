@@ -44,12 +44,12 @@ const ISSUE: Issue = {
 
 const PROJECTS: Project[] = [{ key: "SYD", name: "Switchyard" } as Project];
 
-async function renderSearch(query: string): Promise<HTMLElement> {
+async function renderSearch(query: string, project: string | null = null): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Search query={query} />);
+    root.render(<Search query={query} project={project} />);
   });
   await act(async () => {}); // flush the usePoll effect
   return container;
@@ -75,7 +75,7 @@ describe("Search view", () => {
     expect(listIssues).toHaveBeenCalledWith(expect.objectContaining({ text: "widget" }));
     const row = container.querySelector(".search-row") as HTMLAnchorElement;
     expect(row).not.toBeNull();
-    expect(row.getAttribute("href")).toBe("/issue/SYD-42");
+    expect(row.getAttribute("href")).toBe("/SYD/issue/SYD-42");
     expect(row.textContent).toContain("SYD-42");
     expect(row.textContent).toContain("Fix the widget");
     expect(row.textContent).toContain("in progress");
@@ -93,20 +93,30 @@ describe("Search view", () => {
     expect(listIssues).not.toHaveBeenCalled();
   });
 
-  it("threads the project filter into listIssues", async () => {
+  // SYD-254: the project filter comes from the URL scope (the topbar scope
+  // switcher), not an in-view dropdown that would fight it.
+  it("threads the URL scope into listIssues as the project filter", async () => {
     vi.mocked(listIssues).mockResolvedValue([]);
-    const container = await renderSearch("widget");
-    const projectSelect = container.querySelector(".search-filters select") as HTMLSelectElement;
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      HTMLSelectElement.prototype,
-      "value",
-    )!.set!;
-    await act(async () => {
-      nativeSetter.call(projectSelect, "SYD");
-      projectSelect.dispatchEvent(new Event("change", { bubbles: true }));
-    });
+    await renderSearch("widget", "SYD");
     expect(listIssues).toHaveBeenLastCalledWith(
       expect.objectContaining({ text: "widget", project: "SYD" }),
     );
+  });
+
+  it("searches all projects when the scope is all", async () => {
+    vi.mocked(listIssues).mockResolvedValue([]);
+    await renderSearch("widget", null);
+    expect(listIssues).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "widget", project: undefined }),
+    );
+  });
+
+  it("no longer renders its own project dropdown", async () => {
+    vi.mocked(listIssues).mockResolvedValue([]);
+    const container = await renderSearch("widget", "SYD");
+    const selects = [...container.querySelectorAll<HTMLSelectElement>(".search-filters select")];
+    // Only the status select remains; scope lives in the topbar switcher.
+    expect(selects).toHaveLength(1);
+    expect([...selects[0].options].map((o) => o.textContent)).toContain("Any status");
   });
 });

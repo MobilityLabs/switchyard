@@ -107,6 +107,42 @@ describe("createIssue", () => {
     ).toBe(atCap);
   });
 
+  // SYD-239: dispatch containers have no browser, so they cannot produce the
+  // screenshot SYD-183 asks for on UI work. Defaulting `ui` issues to
+  // "interactive" routes them to a human-attended session that has one —
+  // worker-select's INTERACTIVE_PREFERENCE skip does the actual refusing.
+  it("defaults workerPreference to interactive for a ui-labelled issue", () => {
+    const issue = createIssue(db, human, {
+      projectKey: "AIPI",
+      title: "Fix the board column widths",
+      labels: ["ui"],
+    });
+    expect(issue.workerPreference).toBe("interactive");
+  });
+
+  // Guard, not a driver: the default must stay a fallback. Swapping the
+  // precedence in createIssue (default ?? input instead of input ?? default)
+  // would make this fail, and would silently un-dispatch UI work a human had
+  // deliberately routed to an engine.
+  it("lets an explicit workerPreference win over the ui-label default", () => {
+    const issue = createIssue(db, human, {
+      projectKey: "AIPI",
+      title: "Mechanical class rename across the views",
+      labels: ["ui"],
+      workerPreference: "codex",
+    });
+    expect(issue.workerPreference).toBe("codex");
+  });
+
+  it("leaves workerPreference unset for an issue with no interactive-only label", () => {
+    const issue = createIssue(db, human, {
+      projectKey: "AIPI",
+      title: "Tighten the dispatch poll",
+      labels: ["dispatch"],
+    });
+    expect(issue.workerPreference).toBeNull();
+  });
+
   it("toView throws SwitchyardError instead of crashing when the issue's project row is missing (SYD-146)", () => {
     const issue = createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
     const orphanRow = { ...issue, projectId: 999999 };

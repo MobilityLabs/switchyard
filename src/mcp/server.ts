@@ -4,7 +4,7 @@ import type { Db } from "../db/index.js";
 import { STATUSES, PRIORITIES } from "../db/schema.js";
 import type { Actor } from "../services/actors.js";
 import type { Attribution } from "../services/attribution.js";
-import { SwitchyardError } from "../services/errors.js";
+import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import { listProjects } from "../services/projects.js";
 import {
   createIssue,
@@ -14,7 +14,7 @@ import {
   heartbeatClaim,
   SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
-import { nextTask, addDependency } from "../services/dependencies.js";
+import { nextTask, addDependency, removeDependency } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
@@ -41,6 +41,10 @@ function guard<A>(fn: (args: A) => unknown): (args: A) => Promise<ToolResult> {
     try {
       return ok(await fn(args));
     } catch (err) {
+      // Parked is a SUCCESS: the agent's job now is to tell its human what to
+      // affirm, not to retry or report a failure. Returning isError here would
+      // invite exactly the retry loop the dedup upsert exists to absorb.
+      if (err instanceof PendingAffirmation) return ok(err.pending);
       if (err instanceof SwitchyardError) {
         return { content: [{ type: "text", text: err.message }], isError: true };
       }
@@ -471,6 +475,21 @@ export function buildMcpServer(
     },
     guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
       addDependency(db, actor, blocker_ref, blocked_ref, attribution);
+      return { ok: true };
+    }),
+  );
+
+  server.registerTool(
+    "remove_dependency",
+    {
+      description:
+        "Declare that one issue no longer blocks another (removes a dependency edge). " +
+        "Only humans may remove dependencies directly — if you are an agent, " +
+        "this will propose dependency removal through the hard-gate if configured.",
+      inputSchema: { blocker_ref: z.string(), blocked_ref: z.string() },
+    },
+    guard(({ blocker_ref, blocked_ref }: { blocker_ref: string; blocked_ref: string }) => {
+      removeDependency(db, actor, blocker_ref, blocked_ref, attribution);
       return { ok: true };
     }),
   );

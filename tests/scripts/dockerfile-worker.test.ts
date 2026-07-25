@@ -11,9 +11,7 @@ describe.each([
   ["Dockerfile.worker.gemini", "../../Dockerfile.worker.gemini"],
 ])("%s native module toolchain (SYD-224)", (_name, relPath) => {
   const raw = readFileSync(path.join(__dirname, relPath), "utf8");
-  const aptInstallLine = raw
-    .split("\n")
-    .find((l) => l.includes("apt-get install"));
+  const aptInstallLine = raw.split("\n").find((l) => l.includes("apt-get install"));
 
   it("installs python3, make, and g++ alongside git/ca-certificates", () => {
     expect(aptInstallLine).toBeDefined();
@@ -61,5 +59,47 @@ describe("Dockerfile.worker attachment uploader (SYD-182)", () => {
 
   it("installs a switchyard-attach launcher on PATH", () => {
     expect(raw).toContain("/usr/local/bin/switchyard-attach");
+  });
+});
+
+// SYD-198: an unpinned `npm install -g @anthropic-ai/claude-code` lets a
+// rebuild silently pick up a different CLI version with no repo diff.
+describe("Dockerfile.worker pinned CLI version (SYD-198)", () => {
+  const raw = readFileSync(path.join(__dirname, "../../Dockerfile.worker"), "utf8");
+
+  it("declares a CLAUDE_CODE_VERSION build arg with a pinned default", () => {
+    const match = raw.match(/^ARG CLAUDE_CODE_VERSION=(\S+)$/m);
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("installs the CLI at the pinned version, not unpinned latest", () => {
+    expect(raw).toContain("npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}");
+    expect(raw).not.toMatch(/npm install -g @anthropic-ai\/claude-code\s*(&&|$)/m);
+  });
+
+  it("records the installed version in build output", () => {
+    expect(raw).toContain("claude --version");
+  });
+});
+
+// SYD-227: the same hole in the codex image — both engines' images now pin,
+// so neither rebuild drifts silently.
+describe("Dockerfile.worker.codex pinned CLI version (SYD-227)", () => {
+  const raw = readFileSync(path.join(__dirname, "../../Dockerfile.worker.codex"), "utf8");
+
+  it("declares a CODEX_CLI_VERSION build arg with a pinned default", () => {
+    const match = raw.match(/^ARG CODEX_CLI_VERSION=(\S+)$/m);
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("installs the CLI at the pinned version, not unpinned latest", () => {
+    expect(raw).toContain("npm install -g @openai/codex@${CODEX_CLI_VERSION}");
+    expect(raw).not.toMatch(/npm install -g @openai\/codex\s*(&&|$)/m);
+  });
+
+  it("records the installed version in build output", () => {
+    expect(raw).toContain("codex --version");
   });
 });

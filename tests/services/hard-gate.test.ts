@@ -24,6 +24,23 @@ import {
 
 const REPO = "acme/widgets";
 
+const nowSec = () => Math.floor(Date.now() / 1000);
+
+/**
+ * Parks a row with a comfortably-future expiry. Task 4 made expiresAt a
+ * required trailing arg on findOrCreatePendingAction; these tests predate it
+ * and none of them are about the TTL — the divert's computation of it is
+ * covered in tests/mcp/pending-affirmation.test.ts, and its *enforcement*
+ * arrives in Task 7. A default keeps each case on the guarantee it names.
+ */
+const park = (
+  session: number,
+  issue: number,
+  actionType: string,
+  payload: Record<string, unknown> = {},
+  expiresAt: number = nowSec() + 300,
+) => findOrCreatePendingAction(db, session, issue, actionType, payload, expiresAt);
+
 let db: Db, human: Actor, issueId: number, sessionId: number;
 beforeEach(() => {
   db = openDb(":memory:");
@@ -49,7 +66,7 @@ describe("isHardGated", () => {
   });
 
   it("only lists actions that have an executor", () => {
-    expect(EXECUTABLE_GATE_ACTIONS).toEqual(["done"]);
+    expect(EXECUTABLE_GATE_ACTIONS).toEqual(["done", "dependency.remove"]);
   });
 });
 
@@ -61,34 +78,42 @@ describe("supervised.hard_gate_actions validation", () => {
   });
 
   it("accepts the executable set", () => {
-    expect(() => setSetting(db, human, "supervised.hard_gate_actions", ["done"])).not.toThrow();
+    expect(() =>
+      setSetting(db, human, "supervised.hard_gate_actions", ["done", "dependency.remove"]),
+    ).not.toThrow();
   });
 });
 
 describe("findOrCreatePendingAction", () => {
   it("dedups on (session, issue, action) and refreshes the stored payload", () => {
-    const first = findOrCreatePendingAction(db, sessionId, issueId, "done", {
-      expectedHeadSha: "aaa",
-    });
-    const second = findOrCreatePendingAction(db, sessionId, issueId, "done", {
-      expectedHeadSha: "bbb",
-    });
+    const first = park(sessionId, issueId, "done", { expectedHeadSha: "aaa" });
+    const second = park(sessionId, issueId, "done", { expectedHeadSha: "bbb" });
     expect(second).toBe(first);
     expect(db.select().from(pendingActions).all()).toHaveLength(1);
     expect(getPendingAction(db, first)!.payload).toEqual({ expectedHeadSha: "bbb" });
   });
 
+  it("refreshes expiresAt on a re-proposal so an early attempt can't strand the row", () => {
+    // The `set` half of the upsert (Task 4). Without it the row keeps the first
+    // proposal's window and becomes unaffirmable past that instant, no matter
+    // how recently the agent re-proposed.
+    const id = park(sessionId, issueId, "done", {}, nowSec() + 10);
+    const later = nowSec() + 3600;
+    expect(park(sessionId, issueId, "done", {}, later)).toBe(id);
+    expect(getPendingAction(db, id)!.expiresAt).toBe(later);
+  });
+
   it("keeps separate rows per issue", () => {
     const other = createIssue(db, human, { projectKey: "SYD", title: "t2" }).id;
-    const a = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
-    const b = findOrCreatePendingAction(db, sessionId, other, "done", {});
+    const a = park(sessionId, issueId, "done");
+    const b = park(sessionId, other, "done");
     expect(b).not.toBe(a);
   });
 
   it("an affirmed row no longer blocks a fresh proposal for the same tuple", () => {
-    const first = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const first = park(sessionId, issueId, "done");
     affirmPendingAction(db, human, first);
-    const second = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const second = park(sessionId, issueId, "done");
     expect(second).not.toBe(first);
     expect(getPendingAction(db, second)!.status).toBe("pending");
   });
@@ -100,7 +125,7 @@ describe("getPendingAction / listPendingActions", () => {
   });
 
   it("lists pending rows and drops them once affirmed", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = park(sessionId, issueId, "done");
     expect(listPendingActions(db, "pending").map((r) => r.id)).toEqual([id]);
     affirmPendingAction(db, human, id);
     expect(listPendingActions(db, "pending")).toEqual([]);
@@ -110,7 +135,7 @@ describe("getPendingAction / listPendingActions", () => {
 
 describe("affirmPendingAction", () => {
   it("executes the gated done transition and marks the row affirmed", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = park(sessionId, issueId, "done");
     const view = affirmPendingAction(db, human, id);
     expect(view.status).toBe("done");
     expect(getIssue(db, "SYD-1").status).toBe("done");
@@ -121,7 +146,7 @@ describe("affirmPendingAction", () => {
   });
 
   it("executes as the human with no supervised attribution on the event", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = park(sessionId, issueId, "done");
     affirmPendingAction(db, human, id);
     const done = db
       .select()
@@ -142,22 +167,20 @@ describe("affirmPendingAction", () => {
       url: `https://github.com/${REPO}/pull/7`,
       headSha: "current-sha",
     });
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {
-      expectedHeadSha: "current-sha",
-    });
+    const id = park(sessionId, issueId, "done", { expectedHeadSha: "current-sha" });
     expect(affirmPendingAction(db, human, id).status).toBe("done");
   });
 
   it("refuses a human who is not the session's accountable human", () => {
     const other = createActor(db, { name: "other", type: "human" }).actor;
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = park(sessionId, issueId, "done");
     expect(() => affirmPendingAction(db, other, id)).toThrow(/only the accountable human/i);
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
   });
 
   it("refuses an agent", () => {
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = park(sessionId, issueId, "done");
     expect(() => affirmPendingAction(db, agent, id)).toThrow(/only a human/i);
   });
 
@@ -166,20 +189,20 @@ describe("affirmPendingAction", () => {
   });
 
   it("refuses an action type with no executor rather than silently no-opping", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "in_review", {});
+    const id = park(sessionId, issueId, "in_review");
     expect(() => affirmPendingAction(db, human, id)).toThrow(/no executor/i);
     expect(getPendingAction(db, id)!.status).toBe("pending");
   });
 
   it("refuses a second affirmation of the same row", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = park(sessionId, issueId, "done");
     affirmPendingAction(db, human, id);
     expect(() => affirmPendingAction(db, human, id)).toThrow(/no longer pending/i);
   });
 
   it("refuses affirmation once the parking session has been closed", () => {
     const closed = openSupervisedSession(db, human, "claude-code-closed");
-    const id = findOrCreatePendingAction(db, closed.sessionId, issueId, "done", {});
+    const id = park(closed.sessionId, issueId, "done");
     closeSupervisedSession(db, closed.sessionToken);
     expect(() => affirmPendingAction(db, human, id)).toThrow(/closed|expired/i);
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
@@ -189,7 +212,7 @@ describe("affirmPendingAction", () => {
   it("refuses affirmation once the parking session has expired", () => {
     const expired = openSupervisedSession(db, human, "claude-code-expired");
     db.run(sql`UPDATE sessions SET expires_at = 1 WHERE id = ${expired.sessionId}`);
-    const id = findOrCreatePendingAction(db, expired.sessionId, issueId, "done", {});
+    const id = park(expired.sessionId, issueId, "done");
     expect(() => affirmPendingAction(db, human, id)).toThrow(/closed|expired/i);
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
     expect(getPendingAction(db, id)!.status).toBe("pending");
@@ -197,7 +220,7 @@ describe("affirmPendingAction", () => {
 
   it("still affirms a pending action from a live (open, unexpired) session", () => {
     const live = openSupervisedSession(db, human, "claude-code-live");
-    const id = findOrCreatePendingAction(db, live.sessionId, issueId, "done", {});
+    const id = park(live.sessionId, issueId, "done");
     expect(affirmPendingAction(db, human, id).status).toBe("done");
   });
 
@@ -208,15 +231,33 @@ describe("affirmPendingAction", () => {
       url: `https://github.com/${REPO}/pull/7`,
       headSha: "current-sha",
     });
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {
-      expectedHeadSha: "stale-sha",
-    });
+    const id = park(sessionId, issueId, "done", { expectedHeadSha: "stale-sha" });
     expect(() => affirmPendingAction(db, human, id)).toThrow(/stale-sha/);
     expect(getPendingAction(db, id)!.status).toBe("pending");
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
 
     // The refreshed payload makes the same row affirmable again.
-    findOrCreatePendingAction(db, sessionId, issueId, "done", { expectedHeadSha: "current-sha" });
+    park(sessionId, issueId, "done", { expectedHeadSha: "current-sha" });
+    expect(affirmPendingAction(db, human, id).status).toBe("done");
+  });
+
+  it("refuses an expired pending action and marks it expired", () => {
+    const id = park(sessionId, issueId, "done", { status: "done" }, nowSec() - 1);
+    expect(() => affirmPendingAction(db, human, id)).toThrow(/expired/i);
+    expect(getPendingAction(db, id)?.status).toBe("expired");
+  });
+
+  it("a non-owner affirming an expired row gets the owner-tie error, not the expired one, and causes no write", () => {
+    const other = createActor(db, { name: "other", type: "human" }).actor;
+    const id = park(sessionId, issueId, "done", {}, nowSec() - 1);
+    expect(() => affirmPendingAction(db, other, id)).toThrow(/only the accountable human/i);
+    // Not the expiry message, and — the actual proof — the row was never
+    // touched: a non-owner can't force a write on someone else's session.
+    expect(getPendingAction(db, id)?.status).toBe("pending");
+  });
+
+  it("still affirms an unexpired action", () => {
+    const id = park(sessionId, issueId, "done", { status: "done" }, nowSec() + 300);
     expect(affirmPendingAction(db, human, id).status).toBe("done");
   });
 });

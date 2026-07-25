@@ -48,7 +48,13 @@ describe("updateIssue", () => {
     expect(getIssue(db, "AIPI-1").assigneeId).toBe(agent.id);
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
 
-    const released = updateIssue(db, agent, "AIPI-1", { status: "todo" }, { presented: leaseToken });
+    const released = updateIssue(
+      db,
+      agent,
+      "AIPI-1",
+      { status: "todo" },
+      { presented: leaseToken },
+    );
     expect(released.status).toBe("todo");
     expect(released.assigneeId).toBe(null);
     expect(listIssueEvents(db, released.id).map((e) => e.type)).toContain("claim_released");
@@ -73,7 +79,9 @@ describe("updateIssue", () => {
 
     const updated = updateIssue(db, human, created.ref, { workerPreference: "claude" });
     expect(updated.workerPreference).toBe("claude");
-    expect(listIssueEvents(db, updated.id).map((e) => e.type)).toContain("worker_preference_changed");
+    expect(listIssueEvents(db, updated.id).map((e) => e.type)).toContain(
+      "worker_preference_changed",
+    );
 
     // Re-setting the same value is a no-op (no second event).
     updateIssue(db, human, created.ref, { workerPreference: "claude" });
@@ -137,9 +145,9 @@ describe("updateIssue", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     const { leaseToken } = claimIssue(db, agent, "AIPI-1");
     updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
-    expect(() => updateIssue(db, agent, "AIPI-1", { status: "done" }, { presented: leaseToken })).toThrowError(
-      /only humans move issues to done/i,
-    );
+    expect(() =>
+      updateIssue(db, agent, "AIPI-1", { status: "done" }, { presented: leaseToken }),
+    ).toThrowError(/only humans move issues to done/i);
     expect(getIssue(db, "AIPI-1").status).toBe("in_review");
     expect(updateIssue(db, human, "AIPI-1", { status: "done" }).status).toBe("done");
   });
@@ -462,7 +470,13 @@ describe("agent assignee changes (SYD-191)", () => {
   it("a no-op assignee patch by an agent (already the assignee) still succeeds with the lease", () => {
     updateIssue(db, human, "AIPI-1", { status: "todo" });
     const { leaseToken } = claimIssue(db, agent, "AIPI-1");
-    const r = updateIssue(db, agent, "AIPI-1", { assigneeName: "claude/worker" }, { presented: leaseToken });
+    const r = updateIssue(
+      db,
+      agent,
+      "AIPI-1",
+      { assigneeName: "claude/worker" },
+      { presented: leaseToken },
+    );
     expect(r.assigneeId).toBe(agent.id);
   });
 
@@ -488,7 +502,13 @@ describe("audit log stays consistent with column state", () => {
       title: "Ship v1 (renamed)",
     });
     const { leaseToken } = claimIssue(db, agent, "AIPI-1");
-    updateIssue(db, agent, "AIPI-1", { status: "in_review", priority: "urgent" }, { presented: leaseToken });
+    updateIssue(
+      db,
+      agent,
+      "AIPI-1",
+      { status: "in_review", priority: "urgent" },
+      { presented: leaseToken },
+    );
 
     const current = getIssue(db, "AIPI-1");
     const events = listIssueEvents(db, current.id);

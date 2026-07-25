@@ -1,16 +1,20 @@
 import { eq } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
+import { STATUSES, type Status } from "../db/schema.js";
 import { settings } from "../db/schema.js";
+import { boardColumnCounts, type BoardColumnCounts } from "./board-column-counts.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 
-type SettingType = "string" | "number" | "string[]";
+type SettingType = "string" | "number" | "string[]" | "boolean";
 
 type ValueOfType<T extends SettingType> = T extends "number"
   ? number
-  : T extends "string[]"
-    ? string[]
-    : string;
+  : T extends "boolean"
+    ? boolean
+    : T extends "string[]"
+      ? string[]
+      : string;
 
 type RegistryEntry<T extends SettingType = SettingType> = {
   type: T;
@@ -49,7 +53,30 @@ export const REGISTRY = {
     type: "string[]",
     default: ["done"],
     description:
-      "Status transitions requiring fresh human affirmation in a supervised session. Only affirmable statuses are allowed (Phase 1: done). Empty = full absorption.",
+      "Actions requiring fresh human affirmation in a supervised session before they execute. Only affirmable actions are allowed (done, dependency.remove). Empty = full absorption.",
+  },
+  "wip.limit.backlog": { type: "number", default: 0 },
+  "wip.limit.todo": { type: "number", default: 0 },
+  "wip.limit.in_progress": { type: "number", default: 0 },
+  "wip.limit.in_review": { type: "number", default: 5 },
+  // Phase 2 (affirmation relay). When true, POST /api/pending-actions/:id/affirm
+  // (the Phase 1 cookie click) is refused and only a signed affirmation releases
+  // a gated action. Default false: merging Phase 2 changes nothing until this is
+  // deliberately switched on. Leaving the click enabled alongside signatures
+  // would BE the break-glass the design rejected — one gate, one strength.
+  "supervised.affirm_requires_signature": {
+    type: "boolean",
+    default: false,
+    description:
+      "Require a hardware-signed affirmation (ssh-keygen -Y sign against an enrolled FIDO key) to release a gated action. When true, the web Approve button is refused.",
+  },
+  // Short by design: an affirmation that outlives the human's attention is a
+  // bearer token with extra steps. Signed into the canonical doc, so it cannot
+  // be extended after the fact.
+  "supervised.affirm_ttl_seconds": {
+    type: "number",
+    default: 300,
+    description: "How long a parked action stays affirmable before it expires.",
   },
   "supervised.pending_action_ttl_seconds": {
     type: "number",
@@ -64,7 +91,7 @@ export const REGISTRY = {
 // hard-gate.ts (which re-exports it as its public name) to keep settings.ts a
 // leaf — hard-gate.ts imports getSetting and updateIssue, so importing it back
 // would close a settings -> hard-gate -> issues -> settings cycle.
-export const EXECUTABLE_GATE_ACTIONS: readonly string[] = ["done"];
+export const EXECUTABLE_GATE_ACTIONS: readonly string[] = ["done", "dependency.remove"];
 
 export type SettingKey = keyof typeof REGISTRY;
 
@@ -105,9 +132,16 @@ function validateValue(key: SettingKey, value: unknown): void {
       typeof value !== "number" ||
       !Number.isFinite(value) ||
       !Number.isInteger(value) ||
-      value <= 0
+      value < 0 ||
+      (value === 0 && !key.startsWith("wip.limit."))
     ) {
-      throw new SwitchyardError(`Setting "${key}" must be a positive integer.`);
+      throw new SwitchyardError(
+        `Setting "${key}" must be ${key.startsWith("wip.limit.") ? "a non-negative" : "a positive"} integer.`,
+      );
+    }
+  } else if (entry.type === "boolean") {
+    if (typeof value !== "boolean") {
+      throw new SwitchyardError(`Setting "${key}" must be true or false.`);
     }
   } else {
     if (!Array.isArray(value) || value.some((v) => typeof v !== "string")) {
@@ -208,6 +242,8 @@ export type DispatchPolicy = {
   // its cancellation cadence (misses × interval) from the SAME value the server
   // expires and grace-gates on — they can't drift if an operator retunes it.
   heartbeatWindowSeconds: number;
+  wipLimits: Partial<Record<Status, number>>;
+  columnCounts: BoardColumnCounts;
 };
 
 // Worker-facing subset of the registry (GET /api/dispatch-policy) — the only
@@ -215,11 +251,19 @@ export type DispatchPolicy = {
 // fields (scripts/worker-select.ts) directly so a worker can overlay this
 // response onto its config with no translation.
 export function getDispatchPolicy(db: Db): DispatchPolicy {
+  const wipLimits = Object.fromEntries(
+    STATUSES.flatMap((status) => {
+      const key = `wip.limit.${status}`;
+      return key in REGISTRY ? [[status, getSetting(db, key as SettingKey)]] : [];
+    }),
+  ) as Partial<Record<Status, number>>;
   return {
     maxConcurrent: getSetting(db, "dispatch.max_concurrent"),
     maxAnswerConcurrent: getSetting(db, "dispatch.max_answer_concurrent"),
     intervalSeconds: getSetting(db, "dispatch.poll_seconds"),
     eventPollSeconds: getSetting(db, "dispatch.event_poll_seconds"),
     heartbeatWindowSeconds: getSetting(db, "claims.heartbeat_window_seconds"),
+    wipLimits,
+    columnCounts: boardColumnCounts(db),
   };
 }

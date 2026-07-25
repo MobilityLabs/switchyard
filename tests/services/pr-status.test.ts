@@ -91,7 +91,11 @@ describe("getOpenPr (pr_state-derived, SYD-207)", () => {
     upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
     upsertPrState(db, human, observe("SYD-1", 41, "closed", "2026-07-13T11:00:00Z"));
     expect(getOpenPr(db, issueId)).toBeNull();
-    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T12:00:00Z", { reopened: true }));
+    upsertPrState(
+      db,
+      human,
+      observe("SYD-1", 41, "open", "2026-07-13T12:00:00Z", { reopened: true }),
+    );
     expect(getOpenPr(db, issueId)?.prNumber).toBe(41);
   });
 
