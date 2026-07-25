@@ -172,18 +172,20 @@ function checkPlistPinnedNode(opts: {
  * would pass a doctor run on a host that happens to have the tool while the
  * container that actually runs sessions doesn't.
  */
-function runsOk(cmd: string, config: WorkerConfig): boolean {
+export function runsOk(cmd: string, config: WorkerConfig): boolean {
   if (config.containerized) {
     const image = config.image ?? "switchyard-worker";
     return (
-      spawnSync("docker", ["run", "--rm", image, "sh", "-c", cmd], { stdio: "ignore" }).status === 0
+      spawnSync("docker", ["run", "--rm", "--entrypoint", "sh", image, "-c", cmd], {
+        stdio: "ignore",
+      }).status === 0
     );
   }
   return spawnSync("sh", ["-c", cmd], { stdio: "ignore" }).status === 0;
 }
 
 /** Doctor checks for a project's declared `stack` (SYD-76): Node version, extra CLIs, declared ports. */
-function checkProjectStack(
+export function checkProjectStack(
   key: string,
   project: WorkerProject,
   config: WorkerConfig,
@@ -196,7 +198,7 @@ function checkProjectStack(
     let actual: string | null;
     if (config.containerized) {
       const image = config.image ?? "switchyard-worker";
-      const out = spawnSync("docker", ["run", "--rm", image, "node", "--version"], {
+      const out = spawnSync("docker", ["run", "--rm", "--entrypoint", "node", image, "--version"], {
         encoding: "utf8",
       });
       actual = out.status === 0 ? out.stdout.trim() : null;
@@ -1405,7 +1407,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
