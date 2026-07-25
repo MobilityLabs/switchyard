@@ -138,6 +138,9 @@ export const EVENT_KINDS = [
   "delivered",
   "delivery_failed",
   "delivery_resolved",
+  // SYD-262: a human clearing a recorded-once process deviation whose own
+  // resolution path can't reach it (payload carries the reason it clears).
+  "deviation_resolved",
   // GitHub ingestion (webhook + poller)
   "gh_pr_opened",
   "gh_pr_reopened",
