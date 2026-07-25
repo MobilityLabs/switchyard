@@ -7,15 +7,18 @@
   },
   "scripts": {
     "dev": "tsx src/server.ts",
+    "affirm": "tsx src/affirm-cli.ts",
     "build:ui": "vite build --config ui/vite.config.ts",
     "dev:ui": "vite --config ui/vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",
+    "verify": "tsx scripts/verify-worker-parity.ts",
     "db:generate": "drizzle-kit generate",
     "deploy": "sh scripts/deploy-nas.sh",
     "init-worker": "tsx scripts/init-worker.ts",
     "build:worker-image": "docker build -f Dockerfile.worker -t switchyard-worker . && docker build -f Dockerfile.egress-proxy -t switchyard-egress-proxy .",
     "build:worker-image-codex": "docker build -f Dockerfile.worker.codex -t switchyard-worker-codex .",
+    "build:worker-image-gemini": "docker build -f Dockerfile.worker.gemini -t switchyard-worker-gemini .",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -39,6 +42,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/jsdom": "^28.0.3",
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

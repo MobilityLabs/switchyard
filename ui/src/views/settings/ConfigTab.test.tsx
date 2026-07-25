@@ -147,6 +147,60 @@ describe("ConfigTab (SYD-158)", () => {
     expect(resetSetting).toHaveBeenCalledWith("dispatch.max_concurrent");
   });
 
+  it("keeps an in-progress edit when a poll refresh changes the value underneath it (SYD-196)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listSettings).mockResolvedValue(SETTINGS);
+      const container = await render();
+
+      const field = fieldFor(container, "dispatch.max_concurrent");
+      const input = field.querySelector("input") as HTMLInputElement;
+      await type(input, "9");
+      expect(input.value).toBe("9");
+
+      // Someone else saved a different value in the meantime; the next poll
+      // picks it up while the local edit is still unsaved.
+      vi.mocked(listSettings).mockResolvedValue([
+        { ...SETTINGS[0] },
+        { ...SETTINGS[1], value: 7 },
+        { ...SETTINGS[2] },
+      ]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000);
+      });
+
+      // The unsaved edit must survive the poll refresh.
+      expect(input.value).toBe("9");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resyncs an untouched field when a poll refresh changes the value", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listSettings).mockResolvedValue(SETTINGS);
+      const container = await render();
+
+      const field = fieldFor(container, "dispatch.max_concurrent");
+      const input = field.querySelector("input") as HTMLInputElement;
+      expect(input.value).toBe("3");
+
+      vi.mocked(listSettings).mockResolvedValue([
+        { ...SETTINGS[0] },
+        { ...SETTINGS[1], value: 7 },
+        { ...SETTINGS[2] },
+      ]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000);
+      });
+
+      expect(input.value).toBe("7");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces a server rejection inline", async () => {
     vi.mocked(listSettings).mockResolvedValue(SETTINGS);
     const { ApiError } = await import("../../api");

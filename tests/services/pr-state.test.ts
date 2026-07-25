@@ -15,6 +15,7 @@ import { recordEvent, listIssueEvents } from "../../src/services/events.js";
 import {
   upsertPrState,
   findPrState,
+  listPrState,
   type PrObservation,
 } from "../../src/services/pr-state.js";
 
@@ -75,6 +76,25 @@ describe("upsertPrState / insert + attribution", () => {
     expect(row.lastTransitionEventId).toBe(ev.id);
   });
 
+  it("normalizes repo casing on write and read: link lowercase, observe canonical case, binding + pr_state both resolve (SYD-212)", () => {
+    const { db, human, github } = setup({ bindRepo: false });
+    addGithubRepo(db, human, { fullName: REPO.toLowerCase(), projectKey: "SYD" });
+
+    const canonicalRepo = "Acme/Widgets";
+    const outcome = upsertPrState(db, github, obs({ repo: canonicalRepo }));
+    expect(outcome).toMatchObject({ applied: true, transition: "opened" });
+
+    // Attribution succeeded (bound repo matched despite differing casing)...
+    const rowByLower = findPrState(db, REPO.toLowerCase(), 12)!;
+    expect(rowByLower.issueRef).toBe("SYD-1");
+    // ...and the stored row itself converged on one (lowercase) casing rather
+    // than splitting into a second row under the canonical-case key.
+    expect(rowByLower.repo).toBe("acme/widgets");
+    expect(findPrState(db, canonicalRepo, 12)?.repo).toBe("acme/widgets");
+    expect(listPrState(db, { repo: canonicalRepo })).toHaveLength(1);
+    expect(listPrState(db, { repo: REPO.toLowerCase() })).toHaveLength(1);
+  });
+
   it("refuses attribution for an agent/<ref> PR in a repo not bound to that ref's project (cross-repo), writing a display-only row and no event", () => {
     const { db, human, github } = setup();
     createProject(db, human, { key: "OTH", name: "Other" });
@@ -103,11 +123,7 @@ describe("upsertPrState / insert + attribution", () => {
 
   it("heals a PR first observed already merged (never-saw-open), co-writing gh_pr_merged", () => {
     const { db, github } = setup();
-    const outcome = upsertPrState(
-      db,
-      github,
-      obs({ status: "merged", mergeSha: "m".repeat(40) }),
-    );
+    const outcome = upsertPrState(db, github, obs({ status: "merged", mergeSha: "m".repeat(40) }));
     expect(outcome).toMatchObject({ applied: true, transition: "merged" });
     expect(findPrState(db, REPO, 12)!.status).toBe("merged");
     const ev = getActivity(db, "SYD-1").find((a) => a.type === "gh_pr_merged")!;
@@ -186,9 +202,9 @@ describe("upsertPrState / terminal states never regress", () => {
   it("allows closed→merged (a merge is more final) but never merged→closed", () => {
     const { db, github } = setup();
     upsertPrState(db, github, obs({ status: "closed", ghUpdatedAt: T1 }));
-    expect(
-      upsertPrState(db, github, obs({ status: "merged", ghUpdatedAt: T2 })).transition,
-    ).toBe("merged");
+    expect(upsertPrState(db, github, obs({ status: "merged", ghUpdatedAt: T2 })).transition).toBe(
+      "merged",
+    );
     expect(upsertPrState(db, github, obs({ status: "closed", ghUpdatedAt: T3 })).applied).toBe(
       false,
     );
@@ -227,15 +243,11 @@ describe("upsertPrState / reopened recency rule", () => {
     const { db, github } = setup();
     upsertPrState(db, github, obs({ status: "closed", ghUpdatedAt: T2 }));
     expect(
-      upsertPrState(db, github, obs({ status: "open", reopened: true, ghUpdatedAt: null }))
-        .applied,
+      upsertPrState(db, github, obs({ status: "open", reopened: true, ghUpdatedAt: null })).applied,
     ).toBe(false);
     expect(
-      upsertPrState(
-        db,
-        github,
-        obs({ status: "open", reopened: true, ghUpdatedAt: "not-a-time" }),
-      ).applied,
+      upsertPrState(db, github, obs({ status: "open", reopened: true, ghUpdatedAt: "not-a-time" }))
+        .applied,
     ).toBe(false);
   });
 });
@@ -245,14 +257,14 @@ describe("upsertPrState / monotonic same-status refresh", () => {
     const { db, github } = setup();
     upsertPrState(db, github, obs({ ghUpdatedAt: T2, headSha: "b".repeat(40) }));
     // Older observation from the eventually-consistent poller: no-op.
-    expect(upsertPrState(db, github, obs({ ghUpdatedAt: T1, headSha: "a".repeat(40) })).applied).toBe(
-      false,
-    );
+    expect(
+      upsertPrState(db, github, obs({ ghUpdatedAt: T1, headSha: "a".repeat(40) })).applied,
+    ).toBe(false);
     expect(findPrState(db, REPO, 12)!.headSha).toBe("b".repeat(40));
     // Newer observation applies.
-    expect(upsertPrState(db, github, obs({ ghUpdatedAt: T3, headSha: "c".repeat(40) })).applied).toBe(
-      true,
-    );
+    expect(
+      upsertPrState(db, github, obs({ ghUpdatedAt: T3, headSha: "c".repeat(40) })).applied,
+    ).toBe(true);
     expect(findPrState(db, REPO, 12)!.headSha).toBe("c".repeat(40));
   });
 
@@ -267,18 +279,18 @@ describe("upsertPrState / monotonic same-status refresh", () => {
   it("fails closed on a refresh with a missing timestamp (no freshness evidence, no update)", () => {
     const { db, github } = setup();
     upsertPrState(db, github, obs({ ghUpdatedAt: T2, headSha: "b".repeat(40) }));
-    expect(upsertPrState(db, github, obs({ ghUpdatedAt: null, headSha: "e".repeat(40) })).applied).toBe(
-      false,
-    );
+    expect(
+      upsertPrState(db, github, obs({ ghUpdatedAt: null, headSha: "e".repeat(40) })).applied,
+    ).toBe(false);
     expect(findPrState(db, REPO, 12)!.headSha).toBe("b".repeat(40));
   });
 
   it("lets a timestamped refresh land on a row that has no stored timestamp yet", () => {
     const { db, github } = setup();
     upsertPrState(db, github, obs({ ghUpdatedAt: null }));
-    expect(upsertPrState(db, github, obs({ ghUpdatedAt: T1, headSha: "f".repeat(40) })).applied).toBe(
-      true,
-    );
+    expect(
+      upsertPrState(db, github, obs({ ghUpdatedAt: T1, headSha: "f".repeat(40) })).applied,
+    ).toBe(true);
     expect(findPrState(db, REPO, 12)!.headSha).toBe("f".repeat(40));
   });
 });

@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildProtectMainArgs,
   DELIVER_LAUNCHD_LABEL,
+  POLL_LAUNCHD_LABEL,
   WORKER_LAUNCHD_LABEL,
   WORKER_CODE_LAUNCHD_LABEL,
   WORKER_ANSWER_LAUNCHD_LABEL,
+  enforceNodeEngines,
   formatChecks,
   formatDockerfileStackGuidance,
   formatUserStackCapture,
@@ -18,6 +20,7 @@ import {
   parseMcpServerNames,
   parsePlistPath,
   renderDeliverPlist,
+  renderPollPlist,
   renderClaudeMdSnippet,
   renderWorkerPlist,
   stackParityGaps,
@@ -209,6 +212,11 @@ describe("validateWorkerConfig", () => {
     expect(validateWorkerConfig({ ...good, engine: "codex" })).toEqual([]);
   });
 
+  it("accepts engine: gemini, including with egress: open (its open mode passes the real key)", () => {
+    expect(validateWorkerConfig({ ...good, engine: "gemini" })).toEqual([]);
+    expect(validateWorkerConfig({ ...good, engine: "gemini", egress: "open" })).toEqual([]);
+  });
+
   it("rejects engine: codex with egress: open, and still accepts codex with the default proxy egress", () => {
     const problems = validateWorkerConfig({ ...good, engine: "codex", egress: "open" });
     expect(problems.join(" ")).toMatch(/codex/);
@@ -265,6 +273,7 @@ describe("validateWorkerConfig", () => {
             pollSeconds: 30,
             cloneDir: "/tmp/clones",
             deploy: false,
+            requireBranchProtection: true,
           },
         }),
       ).toEqual([]);
@@ -286,12 +295,14 @@ describe("validateWorkerConfig", () => {
           pollSeconds: -5,
           cloneDir: "",
           deploy: 1,
+          requireBranchProtection: "yes",
         },
       });
       expect(problems.some((p) => p.includes("delivery.openPrs"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.pollSeconds"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.cloneDir"))).toBe(true);
       expect(problems.some((p) => p.includes("delivery.deploy"))).toBe(true);
+      expect(problems.some((p) => p.includes("delivery.requireBranchProtection"))).toBe(true);
     });
   });
 
@@ -305,6 +316,30 @@ describe("validateWorkerConfig", () => {
 
     it("accepts a project with no stack declared", () => {
       expect(validateWorkerConfig({ ...base, projects: { SYD: { repo: "/repo" } } })).toEqual([]);
+    });
+
+    it("accepts a project with valid requiredChecks", () => {
+      expect(
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", requiredChecks: ["Lint", "Build"] } },
+        }),
+      ).toEqual([]);
+    });
+
+    it("rejects a project with invalid requiredChecks", () => {
+      expect(
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", requiredChecks: "Lint" } },
+        }),
+      ).toHaveLength(1);
+      expect(
+        validateWorkerConfig({
+          ...base,
+          projects: { SYD: { repo: "/repo", requiredChecks: [123] } },
+        }),
+      ).toHaveLength(1);
     });
 
     it("accepts a fully-populated stack block", () => {
@@ -458,6 +493,43 @@ describe("nodeVersionSatisfiesEngines (SYD-97)", () => {
     expect(nodeVersionSatisfiesEngines(">=22", "not-a-version")).toBe(false);
     expect(nodeVersionSatisfiesEngines("not-a-range", "v24.0.0")).toBe(false);
     expect(nodeVersionSatisfiesEngines("", "v24.0.0")).toBe(false);
+  });
+});
+
+describe("enforceNodeEngines (SYD-200)", () => {
+  it("does nothing when the actual version satisfies engines.node", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines(">=22 <25", "v24.13.0", { error, exit });
+    expect(error).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when engines.node is unset", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines(undefined, "v25.4.0", { error, exit });
+    expect(error).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("errors and exits non-zero — instead of just warning — when the version is outside range", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines(">=22 <25", "v25.4.0", { error, exit });
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][0]).toMatch(/v25\.4\.0/);
+    expect(error.mock.calls[0][0]).toMatch(/>=22 <25/);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails closed on an unparseable range, same as nodeVersionSatisfiesEngines", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines("not-a-range", "v24.0.0", { error, exit });
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });
 
@@ -772,6 +844,35 @@ describe("renderDeliverPlist", () => {
   });
 });
 
+describe("renderPollPlist", () => {
+  const plist = renderPollPlist({
+    repoRoot: "/Users/sean/sites/switchyard",
+    nodeBinDir: "/Users/sean/.nvm/versions/node/v24.13.0/bin",
+    home: "/Users/sean",
+  });
+
+  it("execs github-poll.ts under the poll service's own label", () => {
+    expect(plist).toContain(`<string>${POLL_LAUNCHD_LABEL}</string>`);
+    expect(POLL_LAUNCHD_LABEL).not.toBe(DELIVER_LAUNCHD_LABEL);
+    expect(plist).toContain("/node_modules/.bin/tsx</string>");
+    expect(plist).toContain("/scripts/github-poll.ts</string>");
+    expect(plist).not.toContain("deliver.ts");
+    expect(plist).not.toContain("agent-worker.ts");
+  });
+
+  it("records regeneration provenance and dedicated poll logs", () => {
+    expect(plist).toContain("--install-launchd-poll");
+    expect(plist).toContain("worker-logs/poll.out.log");
+    expect(plist).toContain("worker-logs/poll.err.log");
+  });
+
+  it("restarts only after failure without embedding credentials", () => {
+    expect(plist).toMatch(/<key>SuccessfulExit<\/key>\s*<false\/>/);
+    expect(plist).not.toContain(".env");
+    expect(plist).not.toMatch(/syd_|sya_|OAUTH/);
+  });
+});
+
 describe("parseGithubRemote", () => {
   it("parses the SSH form", () => {
     expect(parseGithubRemote("git@github.com:seanperkins/nocturne.git")).toEqual({
@@ -826,16 +927,31 @@ describe("buildProtectMainArgs", () => {
     ]);
   });
 
-  it("blocks force-push and deletion, leaves required reviews off", () => {
+  it("blocks force-push and deletion, requires the CI check, enforces admins, leaves required reviews off (SYD-222)", () => {
     const { input } = buildProtectMainArgs("seanperkins", "nocturne");
     const body = JSON.parse(input);
     expect(body).toEqual({
-      required_status_checks: null,
-      enforce_admins: false,
+      required_status_checks: { strict: false, checks: [{ context: "test" }] },
+      enforce_admins: true,
       required_pull_request_reviews: null,
       restrictions: null,
       allow_force_pushes: false,
       allow_deletions: false,
+    });
+  });
+
+  it("lets the caller name a different CI check context", () => {
+    const { input } = buildProtectMainArgs("seanperkins", "nocturne", "build");
+    const body = JSON.parse(input);
+    expect(body.required_status_checks).toEqual({ strict: false, checks: [{ context: "build" }] });
+  });
+
+  it("lets the caller name multiple required check contexts as an array", () => {
+    const { input } = buildProtectMainArgs("seanperkins", "nocturne", ["Lint", "Build"]);
+    const body = JSON.parse(input);
+    expect(body.required_status_checks).toEqual({
+      strict: false,
+      checks: [{ context: "Lint" }, { context: "Build" }],
     });
   });
 });

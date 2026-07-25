@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { usePasteUpload } from "./usePasteUpload";
+import type { useDeferredPasteUpload, usePasteUpload } from "./usePasteUpload";
 
 /** Comment composer shared by IssueDetail/Triage/Review/NewIssue (SYD-132):
  * textarea + paste-upload wiring + its error bar. `children` renders inline
@@ -15,7 +15,7 @@ export function Composer({
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
-  paste: ReturnType<typeof usePasteUpload>;
+  paste: ReturnType<typeof usePasteUpload> | ReturnType<typeof useDeferredPasteUpload>;
   children?: ReactNode;
 }) {
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = paste;

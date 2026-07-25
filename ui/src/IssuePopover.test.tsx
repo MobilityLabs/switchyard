@@ -36,12 +36,18 @@ const ISSUE: IssueDetail = {
   sourceUrl: null,
   needsInput: false,
   snoozedUntil: null,
+  // Added to Issue after this branch was written: workerPreference (SYD-159)
+  // and parentId (issue hierarchy).
+  workerPreference: null,
+  parentId: null,
   createdAt: 1,
   updatedAt: 1,
   attention: null,
   openPr: null,
   activity: [],
   dependencies: { blockedBy: [], blocks: [] },
+  children: [],
+  parentRef: null,
   attachments: [],
   deliveryPin: null,
 };

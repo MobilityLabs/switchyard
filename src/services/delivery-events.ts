@@ -9,7 +9,7 @@ import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
-import { boundRepoFullNames } from "./github-repos.js";
+import { boundRepoFullNames, normalizeRepoFullName } from "./github-repos.js";
 import { parseGhTimestamp } from "./github-webhook.js";
 import { upsertPrState, attributedRef } from "./pr-state.js";
 
@@ -58,7 +58,7 @@ export function recordDeliveryEvent(
   }
   const issue = getIssue(db, ref);
   const { type, ...rest } = input;
-  let repo = input.repo ?? null;
+  let repo = input.repo !== undefined ? normalizeRepoFullName(input.repo) : null;
   if (repo === null) {
     // SYD-205 deploy-skew rule: infer only when it's unambiguous.
     const bound = boundRepoFullNames(db, issue.projectId);

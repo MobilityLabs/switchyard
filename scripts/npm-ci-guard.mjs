@@ -34,19 +34,21 @@ if (!workspace) {
   process.exit(1);
 }
 
-const hasLockfile =
+const hasNpmLock =
   existsSync(`${workspace}/package-lock.json`) || existsSync(`${workspace}/npm-shrinkwrap.json`);
+const hasYarnLock = existsSync(`${workspace}/yarn.lock`);
+const hasPnpmLock = existsSync(`${workspace}/pnpm-lock.yaml`);
 
-if (!hasLockfile) {
+if (!hasNpmLock && !hasYarnLock && !hasPnpmLock) {
   console.error(
-    "WARNING: npm ci skipped -- no package-lock.json or npm-shrinkwrap.json in this clone " +
+    "WARNING: dependency installation skipped -- no package-lock.json, npm-shrinkwrap.json, yarn.lock, or pnpm-lock.yaml in this clone " +
       "(git clone only carries committed files, so an untracked lockfile in the target repo " +
       "disappears here) -- continuing without installed dependencies",
   );
   process.exit(0);
 }
 
-// SYD-110: npm ci runs third-party lifecycle scripts before the session
+// SYD-110: dependency installation runs third-party lifecycle scripts before the session
 // starts — with the worker's secrets still in env, one compromised
 // transitive dep exfiltrates them with zero agent involvement. Strip the
 // secrets for the install; native-module builds (the reason we don't use
@@ -55,18 +57,36 @@ const SECRET_VARS = ["SWITCHYARD_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_A
 const sanitizedEnv = { ...process.env };
 for (const key of SECRET_VARS) delete sanitizedEnv[key];
 
+let packageManager = "npm";
+let installArgs = ["ci"];
+
+if (hasNpmLock) {
+  packageManager = "npm";
+  installArgs = ["ci"];
+} else if (hasYarnLock) {
+  packageManager = "yarn";
+  installArgs = ["install", "--frozen-lockfile"];
+} else if (hasPnpmLock) {
+  packageManager = "pnpm";
+  installArgs = ["install", "--frozen-lockfile"];
+}
+
 try {
-  execFileSync("npm", ["ci"], { cwd: workspace, stdio: "inherit", env: sanitizedEnv });
+  execFileSync(packageManager, installArgs, {
+    cwd: workspace,
+    stdio: "inherit",
+    env: sanitizedEnv,
+  });
 } catch {
-  let npmVersion = "unknown";
+  let pmVersion = "unknown";
   try {
-    npmVersion = execFileSync("npm", ["--version"], { cwd: workspace }).toString().trim();
+    pmVersion = execFileSync(packageManager, ["--version"], { cwd: workspace }).toString().trim();
   } catch {
-    // npm --version failing too is itself informative -- leave "unknown".
+    // version command failing too is itself informative -- leave "unknown".
   }
   console.error(
-    `WARNING: npm ci failed (node ${process.version}, npm ${npmVersion}) -- continuing without ` +
+    `WARNING: ${packageManager} install failed (node ${process.version}, ${packageManager} ${pmVersion}) -- continuing without ` +
       "installed dependencies. Compare the target repo's package.json engines/packageManager " +
-      "field against this image's node/npm version (see Dockerfile.worker).",
+      "field against this image's node/npm/yarn/pnpm version (see Dockerfile.worker).",
   );
 }

@@ -13,7 +13,7 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import DOMPurify from "dompurify";
 import { PROJECT_REPOS } from "./config";
-import { href } from "./router";
+import { href, issueRoute } from "./router";
 import { IssueRefPopover, useIssueRefHover } from "./IssuePopover";
 
 // Small, deliberate language subset (SYD-58) — not hljs's full bundle, so
@@ -30,13 +30,14 @@ hljs.registerLanguage("diff", diff);
 hljs.registerLanguage("markdown", markdownLang); // covers md alias
 
 // Matches, in priority order: a repo-relative file path (optionally with a
-// ":<line>" suffix), an issue ref (SYD-83), a PR mention (#155 — the "PR "
-// prefix, if any, is left as plain text; only the "#123" token is linked), a
-// standalone commit SHA (7-40 hex chars), or an @mention (word chars plus
-// "./-" so actor names like "claude/dev" match). Applied only to plain-text
-// token leaves from the markdown parser, so fenced/inline code is never
-// touched (those go through marked's separate code/codespan renderers, which
-// we leave untouched).
+// ":<line>" suffix), an issue ref (SYD-83), a GitHub PR/issue reference
+// ("#<number>", SYD-236 — the "PR " prefix, if any, stays plain text; only the
+// "#123" token is linked), a standalone commit SHA (7-40 hex chars), or an
+// @mention (word chars plus "./-" so actor names like "claude/dev" match).
+// Applied only to plain-text token leaves from the markdown parser, so
+// fenced/inline code is never touched (those go through marked's separate
+// code/codespan renderers, which we leave untouched). Switchyard's own refs
+// are "SYD-20", never "#20", so the two branches can't collide.
 //
 // The issue-ref pattern is a bare heuristic (2-10 uppercase letters, a
 // hyphen, digits) with no cross-check against real project keys — it will
@@ -50,6 +51,7 @@ const TOKEN_RE = new RegExp(
     "|(?<issueRef>\\b[A-Z]{2,10}-\\d+\\b)" +
     "|#(?<pr>\\d+)\\b" +
     "|(?<sha>\\b[0-9a-f]{7,40}\\b)" +
+    "|#(?<pr>\\d+)\\b" +
     "|@(?<mention>[A-Za-z0-9_]+(?:[./-][A-Za-z0-9_]+)*)",
   "g",
 );
@@ -102,7 +104,9 @@ function autolink(
       return `<a href="${linkHref}"><code>${groups.path}</code></a>`;
     }
     if (groups.issueRef) {
-      const issueHref = href({ view: "issue", ref: groups.issueRef });
+      // SYD-254 made routes scope-first; issueRoute derives the scope from the
+      // ref itself, so an autolinked SYD-83 lands on /SYD/issue/SYD-83.
+      const issueHref = href(issueRoute(groups.issueRef));
       return `<a href="${issueHref}" class="ref-link" data-issue-ref="${groups.issueRef}">${groups.issueRef}</a>`;
     }
     if (groups.pr) {
@@ -112,6 +116,12 @@ function autolink(
     if (groups.sha) {
       if (!repo) return `<code>${groups.sha}</code>`;
       return `<a href="${repo}/commit/${groups.sha}"><code>${groups.sha}</code></a>`;
+    }
+    if (groups.pr) {
+      // GitHub redirects /pull/N to /issues/N (and vice versa), so a single
+      // /pull/ target is correct whether N is a PR or a plain issue.
+      if (!repo) return match;
+      return `<a href="${repo}/pull/${groups.pr}">#${groups.pr}</a>`;
     }
     if (groups.mention) {
       const lower = groups.mention.toLowerCase();

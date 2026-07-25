@@ -103,7 +103,9 @@ describe("fetchLinearExport", () => {
           issue: {
             comments: {
               pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [{ id: "c2", body: "second", user: null, createdAt: "2025-05-01T12:00:00.000Z" }],
+              nodes: [
+                { id: "c2", body: "second", user: null, createdAt: "2025-05-01T12:00:00.000Z" },
+              ],
             },
           },
         };
@@ -116,7 +118,12 @@ describe("fetchLinearExport", () => {
               comments: {
                 pageInfo: { hasNextPage: true, endCursor: "cc1" },
                 nodes: [
-                  { id: "c1", body: "first", user: { id: "u1" }, createdAt: "2025-05-01T11:00:00.000Z" },
+                  {
+                    id: "c1",
+                    body: "first",
+                    user: { id: "u1" },
+                    createdAt: "2025-05-01T11:00:00.000Z",
+                  },
                 ],
               },
             }),

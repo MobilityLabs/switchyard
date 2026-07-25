@@ -2,6 +2,12 @@
 // Kept separate from the polling/spawning loop so it's trivially unit-testable.
 
 import { DEFAULT_CODEX_IMAGE } from "./engines/codex.js";
+import {
+  DEFAULT_GEMINI_IMAGE,
+  GEMINI_API_KEY_VAR,
+  GEMINI_DEFAULT_AUTH_TYPE_VAR,
+  GEMINI_API_KEY_AUTH_TYPE,
+} from "./engines/gemini.js";
 
 /** The subset of an /api/issues row the selector needs. */
 export type WorkerIssue = {
@@ -85,6 +91,8 @@ export type WorkerProject = {
   stack?: WorkerStack;
   /** Integration branch containerized dispatch bases agent/<ref> on (default "main"). */
   baseBranch?: string;
+  /** Required check run/status context names for branch protection. */
+  requiredChecks?: string[];
 };
 
 export type DeliveryConfig = {
@@ -96,6 +104,13 @@ export type DeliveryConfig = {
   cloneDir?: string;
   /** Run the merged project's `npm run deploy` after merging (default true). */
   deploy?: boolean;
+  /**
+   * Refuse to start (log + exit 1) instead of only warning when a linked
+   * repo's `main` branch protection is relaxed (SYD-222). Default false —
+   * `warnOnRelaxedBranchProtection` stays a loud but non-blocking startup
+   * alarm, matching its existing best-effort/never-blocks-delivery contract.
+   */
+  requireBranchProtection?: boolean;
 };
 
 export type GithubPollConfig = {
@@ -113,6 +128,10 @@ export type WorkerConfig = {
    * host derives its miss-limit from it. Undefined until first policy fetch. */
   heartbeatWindowSeconds?: number;
   maxConcurrent: number;
+  /** Per-status board back-pressure limits (0 or absent means unlimited). */
+  wipLimits?: Record<string, number>;
+  /** Live per-project board counts supplied with the dispatch policy. */
+  columnCounts?: Record<string, Record<string, number>>;
   projects: Record<string, WorkerProject>;
   allowedTools?: string[];
   dispatchPolicy?: "labeled" | "all-todo";
@@ -126,8 +145,8 @@ export type WorkerConfig = {
    * SDK (worker-sdk/ must be installed; incompatible with `containerized`).
    */
   runner?: "cli" | "sdk";
-  /** Which agent engine this worker drives: "claude" (default) or "codex". Selected per-worker-process. */
-  engine?: "claude" | "codex";
+  /** Which agent engine this worker drives: "claude" (default), "codex", or "gemini". Selected per-worker-process. */
+  engine?: "claude" | "codex" | "gemini";
   /**
    * NAME of the env var holding this worker's switchyard bearer token (default
    * "SWITCHYARD_TOKEN"). Lets a second worker process (e.g. a codex worker via
@@ -200,6 +219,8 @@ export type DispatchPolicy = {
   // miss-limit from it so the two can't diverge. Optional so an un-upgraded
   // tracker (no field) falls back to the host default.
   heartbeatWindowSeconds?: number;
+  wipLimits: Record<string, number>;
+  columnCounts: Record<string, Record<string, number>>;
 };
 
 /**
@@ -219,6 +240,26 @@ export function applyDispatchPolicy(config: WorkerConfig, policy: DispatchPolicy
   if (policy.heartbeatWindowSeconds !== undefined) {
     config.heartbeatWindowSeconds = policy.heartbeatWindowSeconds;
   }
+  config.wipLimits = policy.wipLimits;
+  config.columnCounts = policy.columnCounts;
+}
+
+/** Projects where any configured board column is at or above its nonzero limit. */
+export function projectsBlockedByWip(
+  columnCounts: Record<string, Record<string, number>>,
+  wipLimits: Record<string, number>,
+): Set<string> {
+  const blocked = new Set<string>();
+  for (const [projectKey, counts] of Object.entries(columnCounts)) {
+    if (
+      Object.entries(wipLimits).some(
+        ([status, limit]) => limit > 0 && (counts[status] ?? 0) >= limit,
+      )
+    ) {
+      blocked.add(projectKey);
+    }
+  }
+  return blocked;
 }
 
 /**
@@ -290,9 +331,19 @@ export function configPathFromArgs(args: string[], defaultPath: string, repoRoot
   return value.startsWith("/") ? value : `${repoRoot}/${value}`;
 }
 
-/** Pidfile basename for a role's single-instance lock — kept distinct so "code" and "answer" can run side by side. */
-export function workerPidFileName(role: WorkerRole): string {
-  return role === "all" ? "worker.pid" : `worker-${role}.pid`;
+/**
+ * Pidfile basename for a role's single-instance lock — kept distinct so "code"
+ * and "answer" can run side by side. A `label` (SYD-234) namespaces the file so
+ * multiple engine workers (claude/codex/gemini, each with a unique config
+ * `label`) get independent role locks instead of fighting over one
+ * machine-global `worker-<role>.pid`. Omit `label` for the legacy names — the
+ * label is folded into the filename, so it's sanitized to stay path-safe.
+ */
+export function workerPidFileName(role: WorkerRole, label?: string): string {
+  const roleSuffix = role === "all" ? "" : `-${role}`;
+  if (!label) return `worker${roleSuffix}.pid`;
+  const safeLabel = label.replace(/[^A-Za-z0-9._-]/g, "_");
+  return `worker-${safeLabel}${roleSuffix}.pid`;
 }
 
 /**
@@ -331,6 +382,15 @@ export function checkRoleLockConflict(
  * oldest-first within a priority (SYD-160), so capacity is filled by priority
  * rather than by the feed's arrival order.
  */
+/**
+ * Reserved `workerPreference` value: an issue that must be handled by a
+ * human-attended interactive session, never auto-dispatched to a headless
+ * worker (e.g. it needs live credentials, a real provider CLI, or a mid-task
+ * human decision — the exact case that stranded SYD-220/225's headless workers).
+ * Disjoint from the engine names the soft-affinity sort understands.
+ */
+export const INTERACTIVE_PREFERENCE = "interactive";
+
 export function selectDispatchable<T extends WorkerIssue>(
   issues: T[],
   config: WorkerConfig,
@@ -342,6 +402,21 @@ export function selectDispatchable<T extends WorkerIssue>(
   // and must not eat into it.
   const capacity = config.maxConcurrent - countWorkActive(active);
   if (capacity <= 0) return [];
+
+  const counts = config.columnCounts ?? {};
+  const limits = config.wipLimits ?? {};
+  const wipBlocked = projectsBlockedByWip(counts, limits);
+  for (const projectKey of wipBlocked) {
+    const full = Object.entries(limits).find(
+      ([status, limit]) => limit > 0 && (counts[projectKey]?.[status] ?? 0) >= limit,
+    );
+    if (full) {
+      const [status, limit] = full;
+      console.log(
+        `WIP limit: pausing ${projectKey} dispatch — ${status} ${counts[projectKey]?.[status] ?? 0}/${limit}`,
+      );
+    }
+  }
 
   // Soft routing (SYD-201): this worker's classification is its engine. An
   // issue matching it sorts first, neutral (no preference) next, another
@@ -377,8 +452,13 @@ export function selectDispatchable<T extends WorkerIssue>(
       // all-todo: every vetted-ready issue is fair game unless held back.
       if (issue.labels.includes("hold")) continue;
     }
-    if (!(projectKeyOf(issue.ref) in config.projects)) continue;
+    const projectKey = projectKeyOf(issue.ref);
+    if (!(projectKey in config.projects)) continue;
+    if (wipBlocked.has(projectKey)) continue;
     if (issue.assigneeId !== null) continue;
+    // Human-attended-only: never headless-dispatch an interactive-marked issue,
+    // regardless of engine/dispatchPolicy (a human/interactive session takes it).
+    if (issue.workerPreference === INTERACTIVE_PREFERENCE) continue;
     if (issue.needsInput) continue;
     if (issue.blocked) continue; // SYD-160: an open dependency; claimIssue would refuse it anyway.
     if (issue.openPr) {
@@ -704,7 +784,19 @@ export function buildContainerizedPrompt(
     // holds its lease — do NOT call claim_issue (a re-claim would fail); your
     // claim-scoped writes are authorized automatically. Call get_issue to read it.
     `This issue is already claimed for your session — do not call claim_issue; call get_issue to read it. ` +
-    `Implement the work with tests. Comment verification ` +
+    `Implement the work with tests. ` +
+    // SYD-239: SYD-183 asks agents to attach a screenshot for UI work, but the
+    // worker images (Dockerfile.worker/.codex/.gemini) ship switchyard-attach
+    // and no browser — there is nothing here to render the app with. Say that
+    // outright so a session doesn't burn a turn discovering it, and name the
+    // evidence it CAN produce. UI issues now default to workerPreference
+    // "interactive" (defaultWorkerPreference in src/services/issues.ts) so the
+    // visual check happens in a session that actually has a browser. A Mermaid
+    // diagram still works here — that renders without one.
+    `This container has no browser, so you cannot take a screenshot: describe any visual ` +
+    `change in words in your verification comment instead. A diagram (e.g. Mermaid rendered ` +
+    `to PNG) can still be attached with switchyard-attach. ` +
+    `Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
@@ -895,9 +987,11 @@ export async function ensureEgressGuard(
   // kickstart together — observed live 2026-07-11): every mutating step below
   // races an identical twin, so a failure only counts if the desired state
   // genuinely isn't there when we look again.
-  const inspectProxy = async (): Promise<
-    { running: boolean; sameDomains: boolean; sameKeys: boolean } | null
-  > => {
+  const inspectProxy = async (): Promise<{
+    running: boolean;
+    sameDomains: boolean;
+    sameKeys: boolean;
+  } | null> => {
     try {
       const { stdout } = await exec("docker", [
         "inspect",
@@ -1014,11 +1108,22 @@ export function buildDockerArgs(
       "containerized Codex dispatch requires CODEX_OAUTH_TOKEN in the worker's environment (the injector's ChatGPT token)",
     );
   }
+  if (engine === "gemini" && !env.GEMINI_API_KEY) {
+    throw new Error(
+      "containerized Gemini dispatch requires GEMINI_API_KEY in the worker's environment (the injector's AI-Studio key)",
+    );
+  }
 
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   const baseBranch = project.baseBranch ?? DEFAULT_BASE_BRANCH;
   const prompt = buildContainerizedPrompt(issue.ref, { ...opts, baseBranch });
-  const image = config.image ?? (engine === "codex" ? DEFAULT_CODEX_IMAGE : DEFAULT_WORKER_IMAGE);
+  const image =
+    config.image ??
+    (engine === "codex"
+      ? DEFAULT_CODEX_IMAGE
+      : engine === "gemini"
+        ? DEFAULT_GEMINI_IMAGE
+        : DEFAULT_WORKER_IMAGE);
   const stackChecks = stackChecksEnv(project.stack);
 
   // Provider-credential handling depends on the egress mode (SYD-186) and,
@@ -1029,18 +1134,41 @@ export function buildDockerArgs(
   // - open: no injecting sidecar, so the real credential must reach the
   //   container — bare `-e VAR` (value from the worker env, never argv).
   // Codex additionally always gets the non-secret CODEX_ACCOUNT_ID (needed for
-  // the placeholder/real auth.json's chatgpt-account-id) in both modes.
+  // the placeholder/real auth.json's chatgpt-account-id) in both modes. Gemini
+  // (SYD-225) is a static AI-Studio key: proxy mode gets a placeholder key + CA
+  // mount (the sidecar injects the real x-goog-api-key), open mode gets the real
+  // key bare; both select API-key auth non-interactively and disable gemini's
+  // own sandbox (the container is the sandbox).
   const proxy = egressMode(config) === "proxy";
-  const credArgs =
-    engine === "codex"
-      ? [
-          "-e",
-          "CODEX_ACCOUNT_ID",
-          ...(proxy ? ["-v", `${EGRESS_CA_VOLUME}:/ca:ro`] : ["-e", "CODEX_OAUTH_TOKEN"]),
-        ]
-      : proxy
-        ? ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
-        : ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
+  let credArgs: string[];
+  if (engine === "codex") {
+    credArgs = [
+      "-e",
+      "CODEX_ACCOUNT_ID",
+      ...(proxy ? ["-v", `${EGRESS_CA_VOLUME}:/ca:ro`] : ["-e", "CODEX_OAUTH_TOKEN"]),
+    ];
+  } else if (engine === "gemini") {
+    credArgs = [
+      ...(proxy
+        ? ["-e", `${GEMINI_API_KEY_VAR}=placeholder`, "-v", `${EGRESS_CA_VOLUME}:/ca:ro`]
+        : ["-e", GEMINI_API_KEY_VAR]),
+      "-e",
+      `${GEMINI_DEFAULT_AUTH_TYPE_VAR}=${GEMINI_API_KEY_AUTH_TYPE}`,
+      "-e",
+      "GEMINI_SANDBOX=false",
+      // gemini-cli 0.x refuses to run in an "untrusted" folder — even under
+      // --yolo it downgrades to the interactive approval picker and then exits
+      // 55 headless ("not running in a trusted directory"). The container IS the
+      // sandbox and /work is a fresh disposable clone, so trust it up front
+      // (SYD-225 go-live: every gemini session died here otherwise).
+      "-e",
+      "GEMINI_CLI_TRUST_WORKSPACE=true",
+    ];
+  } else if (proxy) {
+    credArgs = ["-e", "CLAUDE_CODE_OAUTH_TOKEN=placeholder", "-v", `${EGRESS_CA_VOLUME}:/ca:ro`];
+  } else {
+    credArgs = ["-e", "CLAUDE_CODE_OAUTH_TOKEN", "-e", "ANTHROPIC_API_KEY"];
+  }
 
   return [
     "run",
@@ -1068,15 +1196,15 @@ export function buildDockerArgs(
     "-e",
     "SWITCHYARD_TOKEN",
     // SYD-210 Layer B: the session-scoped lease, passed bare (value from the
-    // spawn env, never argv) exactly like SWITCHYARD_TOKEN — container-entry.sh
+    // spawn env, never argv) exactly like SWITCHYARD_TOKEN — the entry script
     // adds it as the X-Switchyard-Lease MCP header so the session's
     // claim-scoped writes carry the lease without it entering the transcript.
-    // Claude engine ONLY: container-entry.codex.sh has no header mechanism yet
-    // (codex config.toml exposes bearer_token_env_var but header support is
-    // unverified on codex 0.142.5), so injecting the env there would be a no-op
-    // that only misleads. Leased codex dispatch is a tracked follow-up; until
-    // then codex claim-scoped writes are not lease-authorized.
-    ...(opts.leaseToken && engine === "claude" ? ["-e", "SWITCHYARD_LEASE"] : []),
+    // Both engines now consume it: container-entry.sh writes it into the claude
+    // MCP headers file; container-entry.codex.sh names it via codex's
+    // env_http_headers (verified on codex 0.144.x — parity with
+    // bearer_token_env_var), so codex reads the value from the env at runtime
+    // (SYD-220). Absent for answer/non-lease sessions.
+    ...(opts.leaseToken ? ["-e", "SWITCHYARD_LEASE"] : []),
     ...credArgs,
     "-e",
     `WORKER_PROMPT=${prompt}`,

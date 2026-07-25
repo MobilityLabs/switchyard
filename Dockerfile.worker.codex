@@ -9,11 +9,21 @@
 # installing the cert into the system trust store.
 FROM node:24-slim
 
+# python3/make/g++ (SYD-224): node-gyp's toolchain, so native modules like
+# better-sqlite3 build from source via its `node-gyp rebuild` fallback --
+# prebuild-install's GitHub Releases fetch isn't reachable inside the
+# session's egress allowlist (EGRESS_BASELINE in scripts/worker-select.ts).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @openai/codex
+# Pinned so image rebuilds are reproducible (SYD-227) -- a plain `npm install -g
+# @openai/codex` would silently pick up whatever is newest at build
+# time. Bump via `--build-arg CODEX_CLI_VERSION=x.y.z` or by editing the
+# default below; see README's containerized-mode section for the update steps.
+ARG CODEX_CLI_VERSION=0.145.0
+RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
+    && codex --version
 
 COPY scripts/container-entry.codex.sh /entry.sh
 COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
