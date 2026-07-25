@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, getIssue, claimIssue } from "../../src/services/issues.js";
+import { createIssue, getIssue, claimIssue, updateIssue } from "../../src/services/issues.js";
 import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 import { addComment } from "../../src/services/comments.js";
@@ -28,6 +28,9 @@ beforeEach(() => {
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "t", description: "d" });
+  // An agent can only claim from "todo" (AGENT_STATUS_TRANSITIONS); a human
+  // files into "backlog", so queue it first or claimIssue throws.
+  updateIssue(db, human, "SYD-1", { status: "todo" });
   sessionId = openSupervisedSession(db, human, "claude-code").sessionId;
 });
 
@@ -37,13 +40,15 @@ function gateTodo() {
   // scenario the issue calls out: "it starts to matter if someone gates
   // todo." Confirms the choke point holds even for a value the product
   // doesn't allow configuring yet.
-  db.insert(settings).values({ key: "supervised.hard_gate_actions", value: ["todo"] }).run();
+  db.insert(settings)
+    .values({ key: "supervised.hard_gate_actions", value: ["todo"] })
+    .run();
 }
 
 describe("addComment's answer-path status write vs the hard-gate", () => {
   it("diverts a supervised self-answer instead of silently writing a gated status", () => {
-    claimIssue(db, agent, "SYD-1");
-    requestHumanInput(db, agent, "SYD-1", "Which approach?");
+    const { leaseToken } = claimIssue(db, agent, "SYD-1");
+    requestHumanInput(db, agent, "SYD-1", "Which approach?", leaseToken);
     gateTodo();
     expect(isHardGated(db, "todo")).toBe(true);
 
@@ -58,12 +63,10 @@ describe("addComment's answer-path status write vs the hard-gate", () => {
   });
 
   it("still answers normally when the target status is not gated (baseline)", () => {
-    claimIssue(db, agent, "SYD-1");
-    requestHumanInput(db, agent, "SYD-1", "Which approach?");
+    const { leaseToken } = claimIssue(db, agent, "SYD-1");
+    requestHumanInput(db, agent, "SYD-1", "Which approach?", leaseToken);
 
-    expect(() =>
-      addComment(db, human, "SYD-1", "Go with option B.", { sessionId }),
-    ).not.toThrow();
+    expect(() => addComment(db, human, "SYD-1", "Go with option B.", { sessionId })).not.toThrow();
 
     const after = getIssue(db, "SYD-1");
     expect(after.status).toBe("todo");
@@ -72,8 +75,8 @@ describe("addComment's answer-path status write vs the hard-gate", () => {
   });
 
   it("does not divert a non-supervised (plain) human self-answer", () => {
-    claimIssue(db, agent, "SYD-1");
-    requestHumanInput(db, agent, "SYD-1", "Which approach?");
+    const { leaseToken } = claimIssue(db, agent, "SYD-1");
+    requestHumanInput(db, agent, "SYD-1", "Which approach?", leaseToken);
     gateTodo();
 
     // No sessionId in the attribution: this is a plain human comment, not a
