@@ -67,6 +67,44 @@ describe("runGit", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  // SYD-266: the unit tests cover gitSshCommand's choice; this proves the
+  // choice actually reaches the git subprocess. Uses a fake ssh that writes a
+  // marker: if git honours GIT_SSH_COMMAND, the marker never appears, because
+  // the pinned /usr/bin/ssh is used instead of anything on PATH.
+  it("pins GIT_SSH_COMMAND so git does not resolve ssh off PATH", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "delivery-exec-ssh-"));
+    const marker = path.join(dir, "path-ssh-ran");
+    writeFileSync(path.join(dir, "ssh"), `#!/bin/sh\ntouch ${marker}\nexit 1\n`, { mode: 0o755 });
+
+    const prevPath = process.env.PATH;
+    process.env.PATH = `${dir}:${prevPath}`;
+    try {
+      // A remote git can only reach over ssh; it must fail, but the question
+      // is *which* ssh it tried.
+      await runGit(["ls-remote", "git@example.invalid:acme/widgets.git"]).catch(() => {});
+    } finally {
+      process.env.PATH = prevPath;
+    }
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("control: without the pin, git does resolve ssh off PATH (proves the methodology)", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "delivery-exec-ssh-ctl-"));
+    const marker = path.join(dir, "path-ssh-ran");
+    writeFileSync(path.join(dir, "ssh"), `#!/bin/sh\ntouch ${marker}\nexit 1\n`, { mode: 0o755 });
+
+    const prevPath = process.env.PATH;
+    process.env.PATH = `${dir}:${prevPath}`;
+    try {
+      await run("git", ["ls-remote", "git@example.invalid:acme/widgets.git"]).catch(() => {});
+    } finally {
+      process.env.PATH = prevPath;
+    }
+
+    expect(existsSync(marker)).toBe(true);
+  });
+
   it("control: the planted hook does fire on a plain git push (proves the marker methodology)", async () => {
     const { repo, remote, marker } = await makeRepoWithPlantedHook();
 

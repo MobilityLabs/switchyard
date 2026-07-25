@@ -8,6 +8,34 @@ import { projectKeyOf } from "./worker-select.js";
 
 export const MAIN_BRANCH = "main";
 
+/**
+ * The ssh binary git subprocesses should use, or undefined to leave git's own
+ * resolution alone (SYD-266).
+ *
+ * Two deliveries died at the first `git fetch origin main` — before any rebase,
+ * check or merge — with `~/.ssh/config: Bad configuration option: usekeychain`.
+ * `UseKeychain` is Apple-OpenSSH-only, so the subprocess had resolved some other
+ * ssh off PATH. That is ambient state: on this host `which -a ssh` lists
+ * Homebrew's OpenSSH before /usr/bin/ssh, so which one git gets depends on who
+ * launched it, and an interactive shell and a launchd service can disagree.
+ * Pinning it is the same move as `-c core.hooksPath=/dev/null`: don't inherit
+ * an environment the delivery path didn't choose.
+ *
+ * An operator-set GIT_SSH_COMMAND always wins — someone who configured a jump
+ * host or an explicit identity means it. Blank is treated as unset. If the
+ * system ssh isn't at the expected path we pin nothing rather than hand git a
+ * command that doesn't exist.
+ */
+export const SYSTEM_SSH = "/usr/bin/ssh";
+
+export function gitSshCommand(
+  env: NodeJS.ProcessEnv,
+  exists: (path: string) => boolean,
+): string | undefined {
+  if (env.GIT_SSH_COMMAND?.trim()) return undefined;
+  return exists(SYSTEM_SSH) ? SYSTEM_SSH : undefined;
+}
+
 export function agentBranch(ref: string): string {
   return `agent/${ref}`;
 }

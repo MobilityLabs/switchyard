@@ -46,6 +46,7 @@ import {
   type MergeableState,
   type ChecksRollup,
   type ChecksState,
+  gitSshCommand,
 } from "./delivery-lib.js";
 
 const execFileP = promisify(execFile);
@@ -75,8 +76,18 @@ export async function run(
  * rebase, ...) would execute the planted hook as the host/worker user, which
  * holds GitHub push credentials — container-to-host RCE (SYD-109).
  */
-export async function runGit(args: string[], opts: { cwd?: string } = {}): Promise<string> {
-  return run("git", ["-c", "core.hooksPath=/dev/null", ...args], opts);
+export async function runGit(
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+  // SYD-266: pin ssh too. core.hooksPath stops the repo choosing our
+  // executables; this stops PATH choosing them. Both are the same principle —
+  // the delivery path should not inherit an environment it didn't pick.
+  const sshCommand = gitSshCommand(process.env, existsSync);
+  return run("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+    ...opts,
+    ...(sshCommand ? { env: { ...opts.env, GIT_SSH_COMMAND: sshCommand } } : {}),
+  });
 }
 
 // Every gh call below runs with -R <owner>/<repo> from GH_CWD — a directory
