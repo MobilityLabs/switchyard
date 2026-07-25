@@ -290,6 +290,92 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
     expect(getAttention(db, getIssue(db, "SYD-1").id)?.reason).toBe("delivery_failed");
   });
 
+  // SYD-267: the flag reads pr_state, which strict agent/<ref> attribution
+  // (SYD-206) leaves empty for a feat/ branch — but the webhook still records
+  // gh_pr_merged as a display event, and the issue page renders it. So the
+  // banner claimed "no PR ever recorded" on issues whose merged PR was one
+  // click away. Trust that event.
+  it("clears when a gh_pr_merged event is recorded after the deviation", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    const id = getIssue(db, "SYD-1").id;
+    expect(getAttention(db, id)?.reason).toBe("done_without_merged_pr");
+
+    recordEvent(db, {
+      issueId: id,
+      actorId: human.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 197, mergeSha: "d0073fb", repo: REPO },
+    });
+
+    expect(getAttention(db, id)).toBeNull();
+  });
+
+  // Deliberately NOT event-id ordered, unlike the pr_state and
+  // deviation_resolved arms. Whether the merge event lands before or after the
+  // deviation is an accident of poller lag: stamp done before the poller
+  // catches up and it's after; wait for the board to show merged and it's
+  // before. Both are the same real situation — the work landed — so ordering
+  // here would leave half the cases falsely flagged (SYD-267).
+  it("clears when the gh_pr_merged event predates the deviation", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    const id = getIssue(db, "SYD-1").id;
+
+    // Poller observed the merge first; the human stamps done afterwards.
+    recordEvent(db, {
+      issueId: id,
+      actorId: human.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 197, mergeSha: "d0073fb", repo: REPO },
+    });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+
+    expect(getAttention(db, id)).toBeNull();
+  });
+
+  it("still flags a done issue with no merge event at all", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    // A PR that opened but never merged is not evidence the work landed.
+    recordEvent(db, {
+      issueId: getIssue(db, "SYD-1").id,
+      actorId: human.id,
+      type: "gh_pr_opened",
+      payload: { prNumber: 197, repo: REPO },
+    });
+    expect(getAttention(db, getIssue(db, "SYD-1").id)?.reason).toBe("done_without_merged_pr");
+  });
+
+  // delivery_failed keeps the strict pr_state-only rule (SYD-206/207): clearing
+  // it re-authorizes a real merge+deploy, so a display-only event must not do
+  // it. Only done_without_merged_pr relaxes, because it authorizes nothing.
+  it("does not clear a delivery_failed flag from a gh_pr_merged event", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    recordDeliveryEvent(db, human, "SYD-1", { type: "delivery_failed", message: "boom" });
+
+    recordEvent(db, {
+      issueId: getIssue(db, "SYD-1").id,
+      actorId: human.id,
+      type: "gh_pr_merged",
+      payload: { prNumber: 197, mergeSha: "d0073fb", repo: REPO },
+    });
+
+    expect(getAttention(db, getIssue(db, "SYD-1").id)?.reason).toBe("delivery_failed");
+  });
+
   it("includes done_without_merged_pr issues in the bulk map", () => {
     const { db, human, agent } = setup();
     createIssue(db, human, { projectKey: "SYD", title: "Clean" }); // SYD-2
