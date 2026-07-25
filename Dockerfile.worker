@@ -15,7 +15,7 @@ RUN apt-get update \
 # @anthropic-ai/claude-code` would silently pick up whatever is newest at build
 # time. Bump via `--build-arg CLAUDE_CODE_VERSION=x.y.z` or by editing the
 # default below; see README's containerized-mode section for the update steps.
-ARG CLAUDE_CODE_VERSION=2.1.207
+ARG CLAUDE_CODE_VERSION=2.1.220
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && claude --version
 
