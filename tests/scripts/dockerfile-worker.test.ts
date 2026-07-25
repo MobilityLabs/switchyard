@@ -62,8 +62,29 @@ describe("Dockerfile.worker attachment uploader (SYD-182)", () => {
   });
 });
 
-// SYD-227: an unpinned `npm install -g @openai/codex` lets a
+// SYD-198: an unpinned `npm install -g @anthropic-ai/claude-code` lets a
 // rebuild silently pick up a different CLI version with no repo diff.
+describe("Dockerfile.worker pinned CLI version (SYD-198)", () => {
+  const raw = readFileSync(path.join(__dirname, "../../Dockerfile.worker"), "utf8");
+
+  it("declares a CLAUDE_CODE_VERSION build arg with a pinned default", () => {
+    const match = raw.match(/^ARG CLAUDE_CODE_VERSION=(\S+)$/m);
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  it("installs the CLI at the pinned version, not unpinned latest", () => {
+    expect(raw).toContain("npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}");
+    expect(raw).not.toMatch(/npm install -g @anthropic-ai\/claude-code\s*(&&|$)/m);
+  });
+
+  it("records the installed version in build output", () => {
+    expect(raw).toContain("claude --version");
+  });
+});
+
+// SYD-227: the same hole in the codex image — both engines' images now pin,
+// so neither rebuild drifts silently.
 describe("Dockerfile.worker.codex pinned CLI version (SYD-227)", () => {
   const raw = readFileSync(path.join(__dirname, "../../Dockerfile.worker.codex"), "utf8");
 

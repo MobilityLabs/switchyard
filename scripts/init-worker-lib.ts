@@ -329,6 +329,27 @@ export function nodeVersionSatisfiesEngines(range: string, actual: string): bool
   return true;
 }
 
+/**
+ * Enforces `engines.node` before a caller proceeds (SYD-200, used by
+ * vitest.config.ts): a bare warning let an unsupported Node version continue
+ * into a noisy, unrelated jsdom/native-module failure log instead of
+ * stopping on the actual root cause. `io` is injected so this is
+ * unit-testable without spawning a real process or depending on the
+ * runner's actual `process.version`.
+ */
+export function enforceNodeEngines(
+  enginesNode: string | undefined,
+  actualVersion: string,
+  io: { error: (message: string) => void; exit: (code: number) => void },
+): void {
+  if (!enginesNode || nodeVersionSatisfiesEngines(enginesNode, actualVersion)) return;
+  io.error(
+    `\n✗ running tests under node ${actualVersion}, outside the supported engines.node range "${enginesNode}". ` +
+      `See .nvmrc and SYD-97 — install a supported Node version before running tests.\n`,
+  );
+  io.exit(1);
+}
+
 function escapeXml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
