@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildProtectMainArgs,
   DELIVER_LAUNCHD_LABEL,
@@ -6,6 +6,7 @@ import {
   WORKER_LAUNCHD_LABEL,
   WORKER_CODE_LAUNCHD_LABEL,
   WORKER_ANSWER_LAUNCHD_LABEL,
+  enforceNodeEngines,
   formatChecks,
   formatDockerfileStackGuidance,
   formatUserStackCapture,
@@ -492,6 +493,43 @@ describe("nodeVersionSatisfiesEngines (SYD-97)", () => {
     expect(nodeVersionSatisfiesEngines(">=22", "not-a-version")).toBe(false);
     expect(nodeVersionSatisfiesEngines("not-a-range", "v24.0.0")).toBe(false);
     expect(nodeVersionSatisfiesEngines("", "v24.0.0")).toBe(false);
+  });
+});
+
+describe("enforceNodeEngines (SYD-200)", () => {
+  it("does nothing when the actual version satisfies engines.node", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines(">=22 <25", "v24.13.0", { error, exit });
+    expect(error).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when engines.node is unset", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines(undefined, "v25.4.0", { error, exit });
+    expect(error).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("errors and exits non-zero — instead of just warning — when the version is outside range", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines(">=22 <25", "v25.4.0", { error, exit });
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][0]).toMatch(/v25\.4\.0/);
+    expect(error.mock.calls[0][0]).toMatch(/>=22 <25/);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("fails closed on an unparseable range, same as nodeVersionSatisfiesEngines", () => {
+    const error = vi.fn();
+    const exit = vi.fn();
+    enforceNodeEngines("not-a-range", "v24.0.0", { error, exit });
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
   });
 });
 
