@@ -66,7 +66,10 @@ describe("needsInput clearing", () => {
     const events = listIssueEvents(db, after.id);
     const released = events.filter((e) => e.type === "claim_released");
     expect(released).toHaveLength(1);
-    expect(released[0].payload).toEqual({ reason: "needs_input_cleared" });
+    // SYD-241: this release now runs through updateIssue's generic
+    // todo-releases-claim path (shared with a plain PATCH to todo), so it
+    // carries that path's reason rather than a bespoke one.
+    expect(released[0].payload).toEqual({ reason: "moved_to_todo" });
   });
 
   it("a human answer on an issue that is not in_progress clears the flag without touching status", () => {

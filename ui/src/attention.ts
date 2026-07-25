@@ -16,5 +16,7 @@ export function attentionChip(
       return { label: "⚠ PR open — move to review", className: "badge warn" };
     case "stale_claim":
       return { label: "⚠ claim going stale", className: "badge warn" };
+    case "done_without_merged_pr":
+      return { label: "⚠ done — no merged PR on record", className: "badge warn" };
   }
 }

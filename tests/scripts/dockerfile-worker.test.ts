@@ -2,6 +2,25 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+// SYD-224: better-sqlite3's prebuild-install fetch can't reach github.com
+// inside the worker egress allowlist, so it must fall back to `node-gyp
+// rebuild --release` -- which needs a C/C++ toolchain baked into the image.
+describe.each([
+  ["Dockerfile.worker", "../../Dockerfile.worker"],
+  ["Dockerfile.worker.codex", "../../Dockerfile.worker.codex"],
+  ["Dockerfile.worker.gemini", "../../Dockerfile.worker.gemini"],
+])("%s native module toolchain (SYD-224)", (_name, relPath) => {
+  const raw = readFileSync(path.join(__dirname, relPath), "utf8");
+  const aptInstallLine = raw.split("\n").find((l) => l.includes("apt-get install"));
+
+  it("installs python3, make, and g++ alongside git/ca-certificates", () => {
+    expect(aptInstallLine).toBeDefined();
+    expect(aptInstallLine).toContain("python3");
+    expect(aptInstallLine).toContain("make");
+    expect(aptInstallLine).toContain("g++");
+  });
+});
+
 // SYD-117: the dispatch image must drop root before the entrypoint runs, so
 // a compromised session (and any host-side writes through the /origin bind
 // mount) never run as root.

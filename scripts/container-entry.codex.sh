@@ -105,6 +105,19 @@ cat > "$CODEX_HOME/config.toml" <<TOMLEOF
 url = "$SWITCHYARD_URL/mcp"
 bearer_token_env_var = "SWITCHYARD_TOKEN"
 TOMLEOF
+# SYD-220: under lease enforcement (SYD-210) the host mints a session-scoped
+# lease the session must present as the X-Switchyard-Lease MCP header on its
+# claim-scoped writes (update_issue / in_review / request_human_input). codex
+# 0.144.x's env_http_headers names an env var (never its value) to source a
+# custom header -- exact parity with bearer_token_env_var above. Unlike the
+# Claude path (container-entry.sh bakes the value into a 0600 headers file, then
+# unsets the env), codex reads SWITCHYARD_LEASE from the ENV at connect time, so
+# it must stay exported below -- the NAME lives in config.toml, the value never
+# touches the file or argv (same property as SWITCHYARD_TOKEN). Absent for
+# answer/non-lease sessions, so codex sends no lease header then.
+if [ -n "${SWITCHYARD_LEASE:-}" ]; then
+  printf 'env_http_headers = { "X-Switchyard-Lease" = "SWITCHYARD_LEASE" }\n' >> "$CODEX_HOME/config.toml"
+fi
 chmod 600 "$CODEX_HOME/config.toml"
 
 # codex PARSES the tokens in auth.json as JWTs locally before sending them, so a

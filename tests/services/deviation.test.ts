@@ -7,7 +7,11 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
-import { getDeviation, listDeviationByIssueId } from "../../src/services/deviation.js";
+import {
+  getDeviation,
+  listDeviationByIssueId,
+  doneWithoutMergedPr,
+} from "../../src/services/deviation.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { emitProcessDeviations } from "../../src/services/deviation.js";
 import { releaseStaleClaims } from "../../src/services/stale-claims.js";
@@ -31,7 +35,6 @@ function ageAllEvents(db: Db, issueId: number, secondsAgo: number) {
   const old = Math.floor(Date.now() / 1000) - secondsAgo;
   db.update(events).set({ createdAt: old }).where(eq(events.issueId, issueId)).run();
 }
-
 
 describe("getDeviation — open_pr_not_in_review", () => {
   it("flags an in_progress issue with an open PR", () => {
@@ -310,11 +313,109 @@ describe("process_deviation does not reset the idle clock (SYD-188 seam)", () =>
     claimIssue(db, agent, "SYD-1");
     // SYD-210: releaseStaleClaims only handles lease-less claims now; strip the
     // lease so this exercises the legacy idle-release path.
-    db.delete(claimLeases).where(eq(claimLeases.issueId, getIssue(db, "SYD-1").id)).run();
+    db.delete(claimLeases)
+      .where(eq(claimLeases.issueId, getIssue(db, "SYD-1").id))
+      .run();
     ageAllEvents(db, getIssue(db, "SYD-1").id, 5 * 3600); // past both 1h deviation + 4h stale
     expect(emitProcessDeviations(db)).toBe(1); // records a process_deviation at ~now
     // without the fix, that event resets MAX(createdAt) and blocks release:
     expect(releaseStaleClaims(db)).toBe(1);
     expect(getIssue(db, "SYD-1").status).toBe("todo");
+  });
+});
+
+// SYD-204: a point-in-time check (not a live-recomputed one) run inside
+// updateIssue's done transition — see doneWithoutMergedPr's own doc comment
+// for why fromStatus/openPr/merged are checked instead of re-deriving state.
+describe("doneWithoutMergedPr", () => {
+  it("flags a done transition from in_review with no open or merged PR on record", () => {
+    const flag = doneWithoutMergedPr("in_review", null, null);
+    expect(flag).toEqual({
+      reason: "done_without_merged_pr",
+      message:
+        "moved to done from in_review with no PR ever recorded as open or merged — verify the code actually landed",
+    });
+  });
+
+  it("does NOT flag when the transition is not from in_review", () => {
+    expect(doneWithoutMergedPr("todo", null, null)).toBeNull();
+    expect(doneWithoutMergedPr("in_progress", null, null)).toBeNull();
+    expect(doneWithoutMergedPr("backlog", null, null)).toBeNull();
+  });
+
+  it("does NOT flag when there is a merged PR on record", () => {
+    const merged = { prNumber: 7, eventId: 1 };
+    expect(doneWithoutMergedPr("in_review", null, merged)).toBeNull();
+  });
+
+  it("does NOT flag when there is still an open PR (the normal SYD-208 delivery-authorizing flow)", () => {
+    const open = {
+      prNumber: 7,
+      url: "https://github.com/acme/widgets/pull/7",
+      repo: "acme/widgets",
+      headSha: "abc",
+    };
+    expect(doneWithoutMergedPr("in_review", open, null)).toBeNull();
+  });
+});
+
+describe("updateIssue done transition — done_without_merged_pr (SYD-204)", () => {
+  function deviationEventsFor(db: Db, ref: string) {
+    return listIssueEvents(db, getIssue(db, ref).id).filter(
+      (e) => e.type === "process_deviation" && e.payload.reason === "done_without_merged_pr",
+    );
+  }
+
+  it("records the deviation when a human stamps done from in_review with no PR ever recorded", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    const updated = updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(updated.status).toBe("done"); // attention-only, never blocks the stamp
+    const evs = deviationEventsFor(db, "SYD-1");
+    expect(evs).toHaveLength(1);
+    expect(evs[0].payload).toMatchObject({ reason: "done_without_merged_pr" });
+  });
+
+  it("does NOT record the deviation when the PR already merged before the stamp", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "delivered",
+      prNumber: 41,
+      mergeSha: "abc",
+      deploy: { ran: false },
+    });
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(deviationEventsFor(db, "SYD-1")).toHaveLength(0);
+  });
+
+  it("does NOT record the deviation for a direct todo -> done stamp (no code work implied)", () => {
+    const { db, human } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Research spike" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(deviationEventsFor(db, "SYD-1")).toHaveLength(0);
+  });
+
+  it("does NOT record the deviation when stamping done over a still-open PR (delivery authorized, not a deviation)", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    recordDeliveryEvent(db, human, "SYD-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "sha1",
+    });
+    updateIssue(db, human, "SYD-1", { status: "done", expectedHeadSha: "sha1" });
+    expect(deviationEventsFor(db, "SYD-1")).toHaveLength(0);
   });
 });

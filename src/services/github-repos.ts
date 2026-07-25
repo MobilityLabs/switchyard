@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { githubRepos } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -8,6 +8,17 @@ import { getProjectByKey } from "./projects.js";
 export type GithubRepo = typeof githubRepos.$inferSelect;
 
 const FULL_NAME_RE = /^[\w.-]+\/[\w.-]+$/;
+
+/**
+ * GitHub owner/repo names are case-insensitive, but producers disagree on
+ * casing (real webhook payloads carry canonical case, a hand-typed link may
+ * not). Normalize to lowercase at every write/ingestion boundary so
+ * `github_repos.fullName` and `pr_state.repo` converge on one casing instead
+ * of splitting rows across `Owner/Repo` and `owner/repo` (SYD-212).
+ */
+export function normalizeRepoFullName(fullName: string): string {
+  return fullName.toLowerCase();
+}
 
 function requireHuman(actor: Actor): void {
   if (actor.type !== "human") {
@@ -26,18 +37,15 @@ export function addGithubRepo(
   if (!FULL_NAME_RE.test(input.fullName)) {
     throw new SwitchyardError(`GitHub repo must be "owner/repo" — got "${input.fullName}".`);
   }
-  const existing = db
-    .select()
-    .from(githubRepos)
-    .where(eq(githubRepos.fullName, input.fullName))
-    .get();
+  const fullName = normalizeRepoFullName(input.fullName);
+  const existing = findGithubRepo(db, fullName);
   if (existing) {
     throw new SwitchyardError(`GitHub repo "${input.fullName}" is already linked.`);
   }
   const projectId = input.projectKey ? getProjectByKey(db, input.projectKey).id : null;
   return db
     .insert(githubRepos)
-    .values({ fullName: input.fullName, projectId, secret: input.secret ?? null })
+    .values({ fullName, projectId, secret: input.secret ?? null })
     .returning()
     .get();
 }
@@ -63,7 +71,11 @@ export function removeGithubRepo(db: Db, actor: Actor, id: number): void {
  * null, meaning "linked but shares the global secret").
  */
 export function findGithubRepo(db: Db, fullName: string): GithubRepo | undefined {
-  return db.select().from(githubRepos).where(eq(githubRepos.fullName, fullName)).get();
+  return db
+    .select()
+    .from(githubRepos)
+    .where(sql`lower(${githubRepos.fullName}) = lower(${fullName})`)
+    .get();
 }
 
 /**

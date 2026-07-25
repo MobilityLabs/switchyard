@@ -155,6 +155,27 @@ describe("POST /webhooks/github with a per-repo secret", () => {
     expect(res.status).toBe(401);
   });
 
+  it("resolves the linked repo's secret despite a casing mismatch (hand-typed lowercase link, canonical-case payload) (SYD-212)", async () => {
+    const repoSecret = "repo-only-secret";
+    addGithubRepo(db, human, { fullName: "acme/widgets", secret: repoSecret });
+    const raw = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "Acme/Widgets" },
+      pull_request: { number: 7, head: { ref: "agent/SYD-1" } },
+    });
+    const res = await app.request("/webhooks/github", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-hub-signature-256": sign(raw, repoSecret),
+      },
+      body: raw,
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, handled: true, ref: "SYD-1" });
+  });
+
   it("falls back to the global secret for a repo linked without its own", async () => {
     addGithubRepo(db, human, { fullName: "acme/widgets" });
     const raw = JSON.stringify({

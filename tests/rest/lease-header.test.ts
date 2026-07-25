@@ -59,7 +59,10 @@ describe("REST X-Switchyard-Lease", () => {
     });
     expect(beat.status).toBe(200);
     expect((await beat.json()).ok).toBe(true);
-    const noHeader = await app.request("/issues/AIPI-1/heartbeat", { method: "POST", headers: auth() });
+    const noHeader = await app.request("/issues/AIPI-1/heartbeat", {
+      method: "POST",
+      headers: auth(),
+    });
     expect(noHeader.status).toBe(400);
   });
 });

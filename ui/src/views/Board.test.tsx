@@ -37,6 +37,8 @@ function issue(o: Partial<Issue> = {}): Issue {
     sourceDetail: null,
     sourceUrl: null,
     needsInput: false,
+    workerPreference: null,
+    parentId: null,
     snoozedUntil: null,
     createdAt: 0,
     updatedAt: 0,
@@ -98,7 +100,7 @@ describe("Board Card keyboard accessibility", () => {
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
     });
-    expect(location.pathname).toBe("/issue/SYD-7");
+    expect(location.pathname).toBe("/SYD/issue/SYD-7");
   });
 
   it("opens the issue on Space", async () => {
@@ -109,7 +111,7 @@ describe("Board Card keyboard accessibility", () => {
         new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
       );
     });
-    expect(location.pathname).toBe("/issue/SYD-8");
+    expect(location.pathname).toBe("/SYD/issue/SYD-8");
   });
 
   it("ignores Enter/Space originating from the ref link or move select", async () => {
@@ -199,6 +201,10 @@ describe("Board done-column filter chips", () => {
     return [...column.querySelectorAll(".card .ref")].map((el) => el.textContent);
   }
 
+  function columnBadge(column: Element): string | null {
+    return column.querySelector("h3 > .badge")?.textContent ?? null;
+  }
+
   beforeEach(() => {
     localStorage.clear();
     vi.mocked(listIssues).mockClear();
@@ -252,6 +258,88 @@ describe("Board done-column filter chips", () => {
       c.querySelector("h3")?.textContent?.includes("Todo"),
     )!;
     expect(todoColumn.querySelector(".done-filters")).toBeNull();
+  });
+});
+
+// SYD-197: with the default done filters ON, the column badge previously
+// showed cards.length — the filtered subset — making completed history look
+// smaller (or empty) than it really is. The badge must reflect the true
+// total, with the filtered count shown alongside it when a filter narrows
+// the view.
+describe("Board done-column badge reflects total, not just filtered, count (SYD-197)", () => {
+  const DONE_ISSUES: Issue[] = [
+    issue({ ref: "SYD-1", title: "Clean ship" }),
+    issue({
+      ref: "SYD-2",
+      title: "Bounced",
+      attention: { reason: "delivery_failed", message: "merge conflict" },
+    }),
+    issue({
+      ref: "SYD-3",
+      title: "Not merged yet",
+      openPr: {
+        prNumber: 41,
+        url: "https://github.com/acme/widgets/pull/41",
+        repo: "acme/widgets",
+        headSha: "deadbeef",
+      },
+    }),
+  ];
+
+  async function renderBoard(): Promise<HTMLElement> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<Board project="SYD" />);
+    });
+    await act(async () => {}); // flush the usePoll effect
+    return container;
+  }
+
+  function doneColumn(container: HTMLElement): Element {
+    return [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Done"),
+    )!;
+  }
+
+  function chip(column: Element, label: string): HTMLButtonElement {
+    return [...column.querySelectorAll("button")].find(
+      (b) => b.textContent === label,
+    )! as HTMLButtonElement;
+  }
+
+  function columnBadge(column: Element): string | null {
+    return column.querySelector("h3 > .badge")?.textContent ?? null;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.mocked(listIssues).mockClear();
+    vi.mocked(listIssues).mockResolvedValue(DONE_ISSUES);
+  });
+
+  it("shows visible/total when the default filters hide bounced/not-merged cards from the rest", async () => {
+    const container = await renderBoard();
+    const done = doneColumn(container);
+    // Default filters show SYD-2 and SYD-3 (2 of 3 total done cards).
+    expect(columnBadge(done)).toBe("2/3");
+  });
+
+  it("shows the plain total once the all pill clears every filter", async () => {
+    const container = await renderBoard();
+    const done = doneColumn(container);
+    await act(async () => chip(done, "all").click());
+    expect(columnBadge(done)).toBe("3");
+  });
+
+  it("shows the plain total in other columns, which have no filters", async () => {
+    vi.mocked(listIssues).mockResolvedValue([issue({ ref: "SYD-9", status: "todo" })]);
+    const container = await renderBoard();
+    const todoColumn = [...container.querySelectorAll(".column")].find((c) =>
+      c.querySelector("h3")?.textContent?.includes("Todo"),
+    )!;
+    expect(columnBadge(todoColumn)).toBe("1");
   });
 });
 

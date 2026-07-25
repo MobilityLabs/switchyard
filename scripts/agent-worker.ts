@@ -10,10 +10,12 @@
 // Role split (SYD-67): "code" and "answer" are independently enableable — the
 // answerer is cheap, read-only, and safe to leave running everywhere; the code
 // role spawns containers that produce PRs and consume real capacity. Each role
-// takes its own pidfile lock (worker.pid / worker-code.pid / worker-answer.pid)
-// so "code" and "answer" can run side by side, but neither can double-run
-// itself, and an "all" worker refuses to start while either single-role worker
-// is running (and vice versa) — see checkRoleLockConflict.
+// takes its own pidfile lock (worker-<label>.pid / worker-<label>-code.pid /
+// worker-<label>-answer.pid, namespaced by the config `label` since SYD-234) so
+// "code" and "answer" can run side by side, but neither can double-run itself,
+// and an "all" worker refuses to start while either single-role worker of the
+// same label is running (and vice versa) — see checkRoleLockConflict. Different
+// labels (claude/codex/gemini engine workers) never collide.
 //
 // Besides the main issue poll (intervalSeconds), a lightweight event-feed poll
 // (eventPollSeconds, default 15s) watches for needs_input_cleared — a human
@@ -110,7 +112,12 @@ import {
 } from "./worker-select.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
 import { publishAgentBranch, prFreshness, originOwnerRepo } from "./delivery-exec.js";
-import { agentBranch, formatPublishOutcome, type DeliveryEventInput } from "./delivery-lib.js";
+import {
+  agentBranch,
+  formatPublishOutcome,
+  publishFailureComment,
+  type DeliveryEventInput,
+} from "./delivery-lib.js";
 
 type ApiIssue = WorkerIssue & { title: string };
 
@@ -176,6 +183,47 @@ function loadConfig(configPath: string): WorkerConfig {
     throw new Error(`invalid ${configPath}:\n  - ${problems.join("\n  - ")}`);
   }
   return raw as WorkerConfig;
+}
+
+/** Posts a prose comment on an issue (SYD-257) — same retry/logging shape as
+ * postDeliveryEvent below, for callers (currently: the publish-failure
+ * handler in finishSessionExit) that need actor-visible provenance text
+ * alongside a structured event. */
+async function postComment(
+  config: WorkerConfig,
+  token: string,
+  ref: string,
+  body: string,
+): Promise<void> {
+  const url = `${config.url.replace(/\/$/, "")}/api/issues/${ref}/comments`;
+  const label = `POST comment on ${ref}`;
+  try {
+    await withRetry(
+      async () => {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ body }),
+        });
+        if (!res.ok)
+          throw new HttpStatusError(
+            res.status,
+            `${label} failed: ${res.status} ${await res.text()}`,
+          );
+      },
+      {
+        onRetry: (attempt, err, delayMs) =>
+          console.error(
+            `retrying ${label} (attempt ${attempt}, in ${delayMs}ms): ${(err as Error).message}`,
+          ),
+      },
+    );
+  } catch (err) {
+    console.error(
+      `giving up on ${label} after retries: ${(err as Error).message}\n  body: ${body}`,
+    );
+    throw err;
+  }
 }
 
 /** Records a structured delivery event (SYD-54) so the issue UI can render a
@@ -446,7 +494,8 @@ async function releaseClaimHost(
       body: JSON.stringify({ status: "todo" }),
       signal: AbortSignal.timeout(HEARTBEAT_FETCH_TIMEOUT_MS),
     });
-    if (!res.ok) console.error(`could not release ${ref} after a dispatch failure: HTTP ${res.status}`);
+    if (!res.ok)
+      console.error(`could not release ${ref} after a dispatch failure: HTTP ${res.status}`);
   } catch (err) {
     console.error(`could not release ${ref} after a dispatch failure: ${(err as Error).message}`);
   }
@@ -587,7 +636,15 @@ export function buildPrompt(ref: string, opts: { resumed?: boolean } = {}): stri
     `Record a one-line note with the progress_note tool each time you start a new ` +
     `step (reading code, writing tests, implementing, verifying) so humans can ` +
     `watch progress live. ` +
-    `Implement the work with tests. Comment verification ` +
+    `Implement the work with tests. ` +
+    // SYD-183: a rendered image lets a human sign off at a glance instead of
+    // reading a diff — attach_file/switchyard-attach stream it without
+    // spending output tokens base64-encoding through the model (SYD-182).
+    `If this issue touches UI, attach a screenshot of the change (before/after where ` +
+    `relevant) with attach_file (or the switchyard-attach/attach.mjs CLI) before moving ` +
+    `to in_review. If it touches architecture, attach a diagram (e.g. a Mermaid diagram ` +
+    `rendered to PNG) the same way. ` +
+    `Comment verification ` +
     `evidence describing what you did and how you verified it, then move the issue ` +
     `to in_review. Never move it to done — a human or review step does that. ` +
     `If you are blocked on a decision only a human can make, call request_human_input ` +
@@ -697,6 +754,25 @@ function finishSessionExit(
       .catch((err: Error) => {
         console.error(`publish failed for ${ref}: ${err.message}`);
         logLine(`[worker] publish failed: ${err.message}\n`);
+        // SYD-257: previously this failure lived only in the local worker
+        // log — the issue itself, already moved to in_review by the session,
+        // showed no sign anything was wrong. Post actor-visible provenance
+        // (the git/gh stderr) and a delivery_failed event so the attention
+        // banner lights up instead of deliver.ts (and any human) waiting on
+        // a PR that was never opened.
+        postComment(config, token, ref, publishFailureComment(ref, err.message)).catch(
+          (e: Error) => {
+            console.error(`could not comment publish failure for ${ref}: ${e.message}`);
+            logLine(`[worker] could not comment publish failure: ${e.message}\n`);
+          },
+        );
+        postDeliveryEvent(config, token, ref, {
+          type: "delivery_failed",
+          message: `publish failed: ${err.message}`,
+        }).catch((e: Error) => {
+          console.error(`could not record delivery_failed event for ${ref}: ${e.message}`);
+          logLine(`[worker] could not record delivery_failed event: ${e.message}\n`);
+        });
       });
   }
 }
@@ -764,13 +840,23 @@ export function dispatch(
       child = spawn("docker", dockerArgs, {
         detached: true,
         stdio: ["ignore", fd, fd],
-        // SYD-210 Layer B: hand the lease to the container via the spawn env
-        // (bare -e SWITCHYARD_LEASE in dockerArgs reads it here) so it never
-        // appears in argv. Per-spawn env avoids collisions across concurrent
-        // containers.
-        env: opts.leaseToken
-          ? { ...process.env, SWITCHYARD_LEASE: opts.leaseToken }
-          : process.env,
+        // Secrets ride the spawn env (bare -e passthroughs in dockerArgs), so
+        // they never appear in argv. Per-spawn env avoids collisions across
+        // concurrent containers.
+        //
+        // SYD-258: SWITCHYARD_TOKEN must be the token THIS worker resolved
+        // (config.token names the env var — SWITCHYARD_GEMINI_TOKEN etc.),
+        // not whatever the shared .env's SWITCHYARD_TOKEN holds. Otherwise
+        // the claim actor (the worker's token) and the in-container actor
+        // diverge, and the assignee guard strands the finished session at
+        // its in_review hand-off.
+        //
+        // SYD-210 Layer B: the session-scoped lease rides the same way.
+        env: {
+          ...process.env,
+          SWITCHYARD_TOKEN: token,
+          ...(opts.leaseToken ? { SWITCHYARD_LEASE: opts.leaseToken } : {}),
+        },
       });
     } else {
       // Headless sessions can't answer permission prompts — grant the tools the
@@ -842,9 +928,14 @@ export function dispatch(
   // renewals, kill it (honest liveness — a dead/wedged session loses its claim
   // within the window instead of holding it out to the 8h TTL).
   const stopHeartbeat = opts.leaseToken
-    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () =>
-        killSession(child, config.containerized ? `syd-${issue.ref}` : null),
-      logLine)
+    ? startLeaseHeartbeat(
+        config,
+        token,
+        opts.leaseToken,
+        issue.ref,
+        () => killSession(child, config.containerized ? `syd-${issue.ref}` : null),
+        logLine,
+      )
     : () => {};
 
   // Watchdog (SYD-115): a hung `claude -p` or stuck `docker run` would
@@ -953,8 +1044,13 @@ function dispatchSdk(
   // re-dispatch. Stopped when the session settles (finally, below).
   const sdkAbort = new AbortController();
   const stopHeartbeat = opts.leaseToken
-    ? startLeaseHeartbeat(config, token, opts.leaseToken, issue.ref, () => sdkAbort.abort(), (m) =>
-        safeAppend(m),
+    ? startLeaseHeartbeat(
+        config,
+        token,
+        opts.leaseToken,
+        issue.ref,
+        () => sdkAbort.abort(),
+        (m) => safeAppend(m),
       )
     : () => {};
 
@@ -1218,17 +1314,12 @@ export async function runTick(
             );
             continue;
           }
-          // SYD-210 review (codex): leased dispatch requires the session to
-          // present its lease as an MCP header. The codex container can't yet
-          // (SYD-220), so a codex worker would claim host-side and then dispatch
-          // a session whose every claim-scoped write is rejected — stranding the
-          // issue in_progress. Skip BEFORE claiming so nothing is stranded.
-          if ((config.engine ?? "claude") === "codex") {
-            console.log(
-              `skipping ${issue.ref}: codex leased dispatch not yet supported — see SYD-220`,
-            );
-            continue;
-          }
+          // SYD-220 wired codex's session-scoped lease end-to-end: buildDockerArgs
+          // passes -e SWITCHYARD_LEASE for every engine, and container-entry.codex.sh
+          // names it via codex's env_http_headers so the container presents it as
+          // the X-Switchyard-Lease MCP header (parity with claude/gemini). The old
+          // "codex leased dispatch not yet supported" skip that guarded this spot is
+          // therefore stale and removed — codex now claims + dispatches like the others.
           const leaseToken = await claimIssueHost(config, token, issue.ref);
           if (!leaseToken) continue;
           recordAttempt(retryState, issue.ref, issue.updatedAt);
@@ -1375,11 +1466,14 @@ async function fetchRunningContainerSessions(
   config: WorkerConfig,
   token: string,
 ): Promise<RunningContainerSessionRow[]> {
-  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true`;
+  // mine=true: reconcile only THIS worker's own sessions (SYD-234-class
+  // isolation) — otherwise a codex/gemini worker adopts a claude container
+  // (names aren't engine-scoped) and then 400s reporting its end.
+  const url = `${config.url.replace(/\/$/, "")}/api/agent-sessions?active=true&mine=true`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
     throw new Error(
-      `GET /api/agent-sessions?active=true failed: ${res.status} ${await res.text()}`,
+      `GET /api/agent-sessions?active=true&mine=true failed: ${res.status} ${await res.text()}`,
     );
   }
   return (await res.json()) as RunningContainerSessionRow[];
@@ -1429,9 +1523,14 @@ export function adoptContainerSession(
   // exists (pre-upgrade container, or non-lease dispatch), skip — same as today.
   const leaseToken = readPersistedLeaseToken(project.repo, session.ref);
   const stopHeartbeat = leaseToken
-    ? startLeaseHeartbeat(config, token, leaseToken, session.ref, () =>
-        killSession(child, containerNameFor(session.ref)),
-      logLine)
+    ? startLeaseHeartbeat(
+        config,
+        token,
+        leaseToken,
+        session.ref,
+        () => killSession(child, containerNameFor(session.ref)),
+        logLine,
+      )
     : () => {};
 
   let output = "";
@@ -1531,13 +1630,21 @@ export async function reconcileContainerSessions(
  * "code" and "answer" workers can run side by side, but an "all" worker and
  * any single-role worker refuse to start together — see
  * checkRoleLockConflict for the exclusion rule.
+ *
+ * `label` (SYD-234) namespaces all three pidfiles by the worker's config
+ * `label`, so a codex worker (auto-codex) and a gemini worker (auto-gemini)
+ * hold independent locks instead of colliding on the same role — that's what
+ * lets multiple engine workers run on one checkout. The all-vs-single-role
+ * exclusion then applies *within* a label's namespace: checkRoleLockConflict
+ * only ever sees this label's three locks, so a different engine's lock is
+ * invisible to it (no cross-engine false conflict) and needs no change.
  */
-function acquireRoleLock(role: WorkerRole): () => void {
+function acquireRoleLock(role: WorkerRole, label?: string): () => void {
   const dir = path.join(repoRoot(), ".superpowers");
   const paths = {
-    all: path.join(dir, workerPidFileName("all")),
-    code: path.join(dir, workerPidFileName("code")),
-    answer: path.join(dir, workerPidFileName("answer")),
+    all: path.join(dir, workerPidFileName("all", label)),
+    code: path.join(dir, workerPidFileName("code", label)),
+    answer: path.join(dir, workerPidFileName("answer", label)),
   };
   const conflict = checkRoleLockConflict(role, {
     all: isLocked(paths.all),
@@ -1581,7 +1688,7 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error(
         `FATAL: could not set up the egress guard (SYD-110): ${(err as Error).message}\n` +
-          "Build the proxy image with `npm run build:worker-image`, or set egress: \"open\" " +
+          'Build the proxy image with `npm run build:worker-image`, or set egress: "open" ' +
           "in switchyard-worker.json to explicitly opt out of the allowlist.",
       );
       process.exit(1);
@@ -1595,7 +1702,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const releaseLock = acquireRoleLock(role);
+  const releaseLock = acquireRoleLock(role, config.label);
   if (!dryRun) {
     await reconcileContainerSessions(config, token).catch((err: Error) =>
       console.error(`startup reconciliation failed: ${err.message}`),

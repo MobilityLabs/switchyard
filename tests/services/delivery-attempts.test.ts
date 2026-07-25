@@ -3,12 +3,13 @@ import { eq } from "drizzle-orm";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, getIssue } from "../../src/services/issues.js";
+import { createIssue, getIssue, claimIssue } from "../../src/services/issues.js";
 import { updateIssue } from "../../src/services/issues.js";
 import { recordEvent } from "../../src/services/events.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
+import { getAttention } from "../../src/services/attention.js";
 import { deliveryAttempts, deliveryRollout, DELIVERY_OUTCOMES } from "../../src/db/schema.js";
 import {
   listPendingDeliveryAuthorizations,
@@ -45,7 +46,11 @@ function setup() {
  * testing. Tests that specifically exercise the pin-less/interactive-skip
  * path call updateIssue directly instead of this helper. */
 let stampDonePinSeq = 0;
-function stampDone(db: ReturnType<typeof openDb>, human: ReturnType<typeof createActor>["actor"], ref: string) {
+function stampDone(
+  db: ReturnType<typeof openDb>,
+  human: ReturnType<typeof createActor>["actor"],
+  ref: string,
+) {
   const issue = getIssue(db, ref);
   updateIssue(db, human, ref, { status: "done" });
   stampDonePinSeq += 1;
@@ -130,7 +135,77 @@ describe("listPendingDeliveryAuthorizations", () => {
       ref: issue.ref,
       kind: "done_stamp",
       pin: { repo: REPO, prNumber: 7, headSha: "abc" },
+      priorHeads: [],
     });
+  });
+
+  // SYD-231: a delivery whose prior attempt already force-pushed a rebased
+  // head S1 leaves the branch at S1. A re-stamp still pins the original S0, so
+  // the worker's SHA-chain anchor [S0] would reject its OWN rebase as a
+  // "moved head" and disarm. Carrying the prior attempts' recorded derived
+  // heads lets the worker recognize S1 as authorized and re-rebase instead.
+  it("carries the worker's prior recorded derived heads for the PR (SYD-231)", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    updateIssue(db, human, issue.ref, { status: "done" });
+    // First re-stamp: its attempt force-pushed a rebased head "S1" and bounced.
+    const auth1 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 7, headSha: "S0" } },
+    });
+    const attempt1 = startDeliveryAttempt(db, human, issue.ref, {
+      authorizationId: auth1,
+      prNumber: 7,
+      headSha: "S0",
+    });
+    finishDeliveryAttempt(db, human, attempt1.id, {
+      outcome: "sha_chain_disarmed",
+      derivedHeadSha: "S1",
+    });
+    // Second re-stamp: still pinned to S0, but the branch now sits at S1.
+    const auth2 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 7, headSha: "S0" } },
+    });
+
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending.map((p) => p.authorizationId)).toEqual([auth2]);
+    expect(pending[0].priorHeads).toContain("S1");
+  });
+
+  it("does not carry derived heads recorded for a different PR number (SYD-231)", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    updateIssue(db, human, issue.ref, { status: "done" });
+    const auth1 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 8, headSha: "other-S0" } },
+    });
+    const attempt1 = startDeliveryAttempt(db, human, issue.ref, {
+      authorizationId: auth1,
+      prNumber: 8,
+      headSha: "other-S0",
+    });
+    finishDeliveryAttempt(db, human, attempt1.id, {
+      outcome: "sha_chain_disarmed",
+      derivedHeadSha: "other-S1",
+    });
+    const auth2 = recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: { pin: { repo: REPO, prNumber: 7, headSha: "S0" } },
+    });
+
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending.map((p) => p.authorizationId)).toEqual([auth2]);
+    expect(pending[0].priorHeads).not.toContain("other-S1");
   });
 
   it("no-spin: once an attempt row exists for the authorization, it is not pending", () => {
@@ -173,8 +248,18 @@ describe("listPendingDeliveryAuthorizations", () => {
     const { db, human } = setup();
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
     stampDone(db, human, issue.ref);
-    recordEvent(db, { issueId: issue.id, actorId: human.id, type: "redeliver_requested", payload: {} });
-    recordEvent(db, { issueId: issue.id, actorId: human.id, type: "redeliver_requested", payload: {} });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: {},
+    });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "redeliver_requested",
+      payload: {},
+    });
 
     const pending = listPendingDeliveryAuthorizations(db);
     expect(pending).toHaveLength(3);
@@ -259,6 +344,72 @@ describe("listPendingDeliveryAuthorizations", () => {
     // The newest stamp governs, and it's pin-less — nothing pending, even
     // though an OLDER pinned stamp exists earlier in this issue's history.
     expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
+  });
+});
+
+// SYD-228: getOpenPr reads pr_state, which only the webhook/poller populate —
+// if a done-stamp lands while both are behind, the stamp gets no pin and is
+// silently excluded from delivery forever (this is what happened to SYD-194
+// and ten other PRs when the poller was down). SYD-204's done_without_merged_pr
+// deviation makes that gap visible instead of silent; this traces the full
+// incident-and-recovery narrative end to end: pin-less stamp -> excluded from
+// delivery + flagged for a human -> poller catches up -> human re-stamps ->
+// now pinned and pending, exactly the "recovery" the original bug report
+// says is the only way out.
+describe("poller-down done-stamp then recovery (SYD-228)", () => {
+  it("flags the gap instead of silently losing the delivery, and recovers once pr_state catches up", () => {
+    const { db, human, agent } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
+    updateIssue(db, human, issue.ref, { status: "todo" });
+    claimIssue(db, agent, issue.ref);
+    updateIssue(db, human, issue.ref, { status: "in_review" });
+
+    // The agent's PR is open on GitHub, but neither the webhook nor the
+    // poller has recorded it yet — pr_state has no row for this issue.
+    updateIssue(db, human, issue.ref, { status: "done" });
+
+    // Silent no more: the stamp succeeded, but a human sees an attention flag...
+    expect(getAttention(db, issue.id)?.reason).toBe("done_without_merged_pr");
+    // ...and the pin-less stamp is correctly excluded from delivery.
+    expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
+
+    // The poller recovers and observes the still-open PR.
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 41,
+      status: "open",
+      branch: `agent/${issue.ref}`,
+      url: `https://github.com/${REPO}/pull/41`,
+      headSha: "sha-recovered",
+    });
+
+    // A human notices the flag and follows the documented recovery: retract
+    // and re-stamp, now that pr_state has caught up.
+    updateIssue(db, human, issue.ref, { status: "in_review" });
+    updateIssue(db, human, issue.ref, {
+      status: "done",
+      expectedHeadSha: "sha-recovered",
+    });
+
+    // The re-stamp is properly pinned and picked up for delivery.
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].pin).toEqual({ repo: REPO, prNumber: 41, headSha: "sha-recovered" });
+
+    // The stale attention flag persists until the PR actually merges — it's
+    // not the re-stamp that clears it, but real delivery.
+    expect(getAttention(db, issue.id)?.reason).toBe("done_without_merged_pr");
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 41,
+      status: "merged",
+      branch: `agent/${issue.ref}`,
+      url: `https://github.com/${REPO}/pull/41`,
+      ghUpdatedAt: "2026-07-14T12:00:00Z",
+      mergeSha: "sha-recovered",
+    });
+    expect(getAttention(db, issue.id)).toBeNull();
   });
 });
 

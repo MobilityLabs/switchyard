@@ -7,6 +7,7 @@ import { and, desc, eq, gt, gte, lt, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { agentSessions, events, issues, projects } from "../db/schema.js";
 import type { Actor } from "./actors.js";
+import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
@@ -149,11 +150,17 @@ export function endAgentSession(
 
 export function listAgentSessions(
   db: Db,
-  filters: { active?: boolean; ref?: string } = {},
+  filters: { active?: boolean; ref?: string; actorId?: number } = {},
   nowSeconds: number = Math.floor(Date.now() / 1000),
 ): AgentSessionView[] {
   const conditions: SQL[] = [];
   if (filters.ref) conditions.push(eq(agentSessions.issueId, getIssue(db, filters.ref).id));
+  // Scope to one actor's own sessions — the worker's startup reconcile passes
+  // its actor so a codex/gemini worker only adopts/closes ITS containers, not a
+  // different engine's (container names aren't engine-scoped, so an unscoped
+  // list cross-adopts and then 400s on the other actor's session). Unset for the
+  // UI panel, which shows every engine's sessions.
+  if (filters.actorId) conditions.push(eq(agentSessions.actorId, filters.actorId));
   if (filters.active) {
     conditions.push(eq(agentSessions.status, "running"));
     conditions.push(
@@ -188,7 +195,13 @@ export function sweepOrphanedAgentSessions(
   return swept.length;
 }
 
-export function recordProgressNote(db: Db, actor: Actor, ref: string, note: string): void {
+export function recordProgressNote(
+  db: Db,
+  actor: Actor,
+  ref: string,
+  note: string,
+  attr: Attribution = {},
+): void {
   requireAgent(actor, "record progress notes");
   const trimmed = note.trim();
   if (!trimmed) throw new SwitchyardError("A progress note must not be empty.");
@@ -198,5 +211,7 @@ export function recordProgressNote(db: Db, actor: Actor, ref: string, note: stri
     actorId: actor.id,
     type: "progress_note",
     payload: { note: trimmed },
+    viaAgentId: attr.viaAgentId,
+    sessionId: attr.sessionId,
   });
 }

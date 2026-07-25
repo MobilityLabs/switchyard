@@ -1,8 +1,4 @@
-import type {
-  LinearComment,
-  LinearExport,
-  LinearIssue,
-} from "../src/services/linear-import.js";
+import type { LinearComment, LinearExport, LinearIssue } from "../src/services/linear-import.js";
 
 const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 const ISSUE_PAGE_SIZE = 50;
@@ -106,11 +102,9 @@ async function fetchRemainingComments(
   const out: LinearComment[] = [];
   let cursor = after;
   for (;;) {
-    const data = await gql<{ issue: { comments: { pageInfo: GqlPageInfo; nodes: GqlCommentNode[] } } }>(
-      opts,
-      MORE_COMMENTS_QUERY,
-      { issueId, after: cursor },
-    );
+    const data = await gql<{
+      issue: { comments: { pageInfo: GqlPageInfo; nodes: GqlCommentNode[] } };
+    }>(opts, MORE_COMMENTS_QUERY, { issueId, after: cursor });
     const page = data.issue.comments;
     out.push(...page.nodes.map(toComment));
     if (!page.pageInfo.hasNextPage) return out;
@@ -131,7 +125,9 @@ export async function fetchLinearExport(opts: FetchLinearOptions): Promise<Linea
 
   const teams = org.teams.nodes.filter((t) => !opts.teamKey || t.key === opts.teamKey);
   if (opts.teamKey && teams.length === 0) {
-    throw new Error(`No Linear team with key "${opts.teamKey}" — teams: ${org.teams.nodes.map((t) => t.key).join(", ")}.`);
+    throw new Error(
+      `No Linear team with key "${opts.teamKey}" — teams: ${org.teams.nodes.map((t) => t.key).join(", ")}.`,
+    );
   }
   const teamKeys = new Set(teams.map((t) => t.key));
 

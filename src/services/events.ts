@@ -1,14 +1,31 @@
 import { and, asc, desc, eq, gt, lt, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import type { Db, DbOrTx } from "../db/index.js";
 import { events, actors, issues, projects, type EventKind } from "../db/schema.js";
 
+const viaAgents = alias(actors, "via_agents");
+
 export function recordEvent(
   db: DbOrTx,
-  e: { issueId: number; actorId: number; type: EventKind; payload?: Record<string, unknown> },
+  e: {
+    issueId: number;
+    actorId: number;
+    type: EventKind;
+    payload?: Record<string, unknown>;
+    viaAgentId?: number;
+    sessionId?: number;
+  },
 ): number {
   return db
     .insert(events)
-    .values({ issueId: e.issueId, actorId: e.actorId, type: e.type, payload: e.payload ?? {} })
+    .values({
+      issueId: e.issueId,
+      actorId: e.actorId,
+      type: e.type,
+      payload: e.payload ?? {},
+      viaAgentId: e.viaAgentId ?? null,
+      sessionId: e.sessionId ?? null,
+    })
     .returning({ id: events.id })
     .get().id;
 }
@@ -36,6 +53,14 @@ export function findEventIdByPayload(
   return row?.id ?? null;
 }
 
+/**
+ * Events for an issue's activity feed, with dual attribution (SYD-240): a
+ * supervised-session event's actorName is the accountable human, while
+ * viaAgentName (nullable — plain events have no delegate) names the agent
+ * that actually made the edit. Joined with a LEFT join on the aliased actors
+ * table, not an inner join — an inner join would silently drop every
+ * non-supervised event (viaAgentId null) from the feed.
+ */
 export function listIssueEvents(db: Db, issueId: number) {
   return db
     .select({
@@ -44,9 +69,12 @@ export function listIssueEvents(db: Db, issueId: number) {
       payload: events.payload,
       createdAt: events.createdAt,
       actorName: actors.name,
+      viaAgentName: viaAgents.name,
+      sessionId: events.sessionId,
     })
     .from(events)
     .innerJoin(actors, eq(events.actorId, actors.id))
+    .leftJoin(viaAgents, eq(events.viaAgentId, viaAgents.id))
     .where(eq(events.issueId, issueId))
     .orderBy(asc(events.id))
     .all();
@@ -71,11 +99,12 @@ function queryRecentEvents(db: Db, filters: RecentEventsFilters, fetchLimit: num
   if (filters.since !== undefined) conditions.push(gt(events.createdAt, filters.since));
   if (filters.beforeId !== undefined) conditions.push(lt(events.id, filters.beforeId));
   const rows = db
-    .select({ e: events, i: issues, p: projects, a: actors })
+    .select({ e: events, i: issues, p: projects, a: actors, via: viaAgents })
     .from(events)
     .innerJoin(issues, eq(events.issueId, issues.id))
     .innerJoin(projects, eq(issues.projectId, projects.id))
     .innerJoin(actors, eq(events.actorId, actors.id))
+    .leftJoin(viaAgents, eq(events.viaAgentId, viaAgents.id))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(events.id))
     .limit(fetchLimit)
@@ -89,6 +118,8 @@ function queryRecentEvents(db: Db, filters: RecentEventsFilters, fetchLimit: num
     issueTitle: r.i.title,
     projectKey: r.p.key,
     actorName: r.a.name,
+    viaAgentName: r.via?.name ?? null,
+    sessionId: r.e.sessionId,
   }));
 }
 

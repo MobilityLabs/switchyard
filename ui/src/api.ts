@@ -5,6 +5,8 @@ import type {
   Attachment,
   Issue,
   IssueDetail,
+  PendingAction,
+  PendingActionStatus,
   Priority,
   Project,
   Status,
@@ -101,6 +103,8 @@ export const updateIssue = (
     summary: string | null;
     assigneeName: string | null;
     labels: string[];
+    workerPreference: string | null;
+    parentRef: string | null;
     expectedHeadSha: string;
   }>,
 ) => api<Issue>(`/api/issues/${ref}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -110,6 +114,8 @@ export const createIssue = (input: {
   description?: string;
   summary?: string;
   priority?: Priority;
+  workerPreference?: string | null;
+  parentRef?: string;
 }) => api<Issue>("/api/issues", { method: "POST", body: JSON.stringify(input) });
 export const claimIssue = (ref: string) =>
   api<Issue>(`/api/issues/${ref}/claim`, { method: "POST" });
@@ -131,6 +137,19 @@ export const redeliverIssue = (ref: string, expectedHeadSha?: string) =>
   api<Issue>(`/api/issues/${ref}/redeliver`, {
     method: "POST",
     body: JSON.stringify({ expectedHeadSha }),
+  });
+export const resolveDeliveryFailure = (ref: string, note?: string) =>
+  api<Issue>(`/api/issues/${ref}/resolve-delivery`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+// SYD-262: sibling of resolveDeliveryFailure for a recorded-once process
+// deviation. The reason is explicit so the server can scope the clear — one
+// deviation resolving must never silence a different signal on the issue.
+export const resolveDeviation = (ref: string, reason: string, note?: string) =>
+  api<Issue>(`/api/issues/${ref}/resolve-deviation`, {
+    method: "POST",
+    body: JSON.stringify({ reason, note }),
   });
 export const addDependency = (blockerRef: string, blockedRef: string) =>
   api<{ ok: true }>("/api/dependencies", {
@@ -163,6 +182,14 @@ export async function uploadAttachment(
   if (!res.ok) throw await toApiError(res);
   return (await res.json().catch(() => ({}))) as { id: number; url: string; markdown: string };
 }
+
+export const listPendingActions = (status: PendingActionStatus = "pending") =>
+  api<PendingAction[]>(`/api/pending-actions?status=${status}`);
+// Cookie-only by design (src/rest/pending-actions.ts): resolves the human from
+// the switchyard_session cookie a same-origin fetch sends automatically, not
+// from a bearer — never add an Authorization header here.
+export const affirmPendingAction = (id: number) =>
+  api<Issue>(`/api/pending-actions/${id}/affirm`, { method: "POST" });
 
 export const listWebhooks = () => api<WebhookView[]>("/api/webhooks");
 export const addWebhook = (input: { url: string; projectKey?: string; secret?: string }) =>

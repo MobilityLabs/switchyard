@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError, listSettings, putSetting, resetSetting } from "../../api";
 import type { SettingView } from "../../types";
 import { usePoll } from "../../usePoll";
@@ -45,16 +45,21 @@ function parse(text: string, kind: Kind): unknown | null {
 
 function SettingField({ setting, onChanged }: { setting: SettingView; onChanged: () => void }) {
   const kind = kindOf(setting);
-  const [text, setText] = useState(display(setting.value, kind));
+  const [text, setText] = useState(() => display(setting.value, kind));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Baseline the editor was last synced to — lets the resync effect below
+  // tell "user hasn't touched this since the last known value" apart from
+  // "user has an unsaved edit", instead of comparing against the new value.
+  const syncedTextRef = useRef(text);
 
   // A poll refresh (or someone else's save) changes the underlying value —
   // resync the editor unless the user is mid-edit of the same value.
   useEffect(() => {
-    setText(display(setting.value, kind));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setting.value]);
+    const next = display(setting.value, kind);
+    setText((current) => (current === syncedTextRef.current ? next : current));
+    syncedTextRef.current = next;
+  }, [setting.value, kind]);
 
   const parsed = parse(text, kind);
   const dirty = text !== display(setting.value, kind);
@@ -68,9 +73,7 @@ function SettingField({ setting, onChanged }: { setting: SettingView; onChanged:
         <input value={text} onChange={(e) => setText(e.target.value)} />
       </label>
       {setting.description && <p className="hint">{setting.description}</p>}
-      {kind === "number" && dirty && parsed === null && (
-        <p className="hint">Must be a number.</p>
-      )}
+      {kind === "number" && dirty && parsed === null && <p className="hint">Must be a number.</p>}
       {error && <p className="error-bar">{error}</p>}
       <button
         className="primary"
