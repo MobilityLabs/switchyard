@@ -262,9 +262,14 @@ describe("affirmPendingAction", () => {
   });
 });
 
+// SYD-242 added a required expiresAt to findOrCreatePendingAction. These
+// tests are about the sweep (TTL / closed session), not row expiry, so
+// park it far enough out that it never fires.
+const FAR_FUTURE = Math.floor(Date.now() / 1000) + 86_400;
+
 describe("expirePendingActions", () => {
   it("expires pending actions that are older than the configured TTL", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
 
     // Set pending action creation time to be 1000 seconds in the past
     db.run(
@@ -278,7 +283,7 @@ describe("expirePendingActions", () => {
   });
 
   it("does not expire pending actions that are within the TTL", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
 
     // Within TTL, should not expire
     const count = expirePendingActions(db);
@@ -287,7 +292,7 @@ describe("expirePendingActions", () => {
   });
 
   it("expires pending actions if their session is closed", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
 
     db.run(sql`UPDATE sessions SET closed_at = 1 WHERE id = ${sessionId}`);
 
@@ -297,7 +302,7 @@ describe("expirePendingActions", () => {
   });
 
   it("expires pending actions if their session has expired", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
 
     db.run(sql`UPDATE sessions SET expires_at = 1 WHERE id = ${sessionId}`);
 
@@ -307,7 +312,7 @@ describe("expirePendingActions", () => {
   });
 
   it("respects customized TTL setting", () => {
-    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {});
+    const id = findOrCreatePendingAction(db, sessionId, issueId, "done", {}, FAR_FUTURE);
 
     setSetting(db, human, "supervised.pending_action_ttl_seconds", 2000);
 
