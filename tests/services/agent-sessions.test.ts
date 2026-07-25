@@ -57,13 +57,13 @@ describe("startAgentSession", () => {
     const codex = createActor(db, { name: "auto-codex", type: "agent" }).actor;
     const s1 = startAgentSession(db, agent, { ref: "SYD-1", mode: "cli" });
     const s2 = startAgentSession(db, codex, { ref: "SYD-1", mode: "cli" });
-    
+
     expect(s1.actor).toBe("claude/worker");
     expect(s2.actor).toBe("auto-codex");
 
     const views = listAgentSessions(db);
-    const view1 = views.find(v => v.id === s1.id);
-    const view2 = views.find(v => v.id === s2.id);
+    const view1 = views.find((v) => v.id === s1.id);
+    const view2 = views.find((v) => v.id === s2.id);
 
     expect(view1?.actor).toBe("claude/worker");
     expect(view2?.actor).toBe("auto-codex");

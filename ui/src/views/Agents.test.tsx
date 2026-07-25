@@ -70,7 +70,12 @@ describe("formatElapsed", () => {
 describe("Agents view", () => {
   it("splits running sessions from exited ones, links the ref, and displays the actor name", async () => {
     vi.mocked(listAgentSessions).mockResolvedValue([
-      session({ id: 2, status: "running", actor: "gemini/dev", lastNote: { note: "writing tests", createdAt: 0 } }),
+      session({
+        id: 2,
+        status: "running",
+        actor: "gemini/dev",
+        lastNote: { note: "writing tests", createdAt: 0 },
+      }),
       session({
         id: 1,
         ref: "SYD-9",
