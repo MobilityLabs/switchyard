@@ -876,8 +876,8 @@ export function Event({
   if (ev.type === "delivery_resolved") {
     return (
       <p className="event delivery-resolved">
-        <ActorLine ev={ev} /> marked the delivery resolved:{" "}
-        {String(ev.payload.note ?? "")} <time>{when}</time>
+        <ActorLine ev={ev} /> marked the delivery resolved: {String(ev.payload.note ?? "")}{" "}
+        <time>{when}</time>
       </p>
     );
   }

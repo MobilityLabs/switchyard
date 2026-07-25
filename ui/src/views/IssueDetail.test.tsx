@@ -671,6 +671,9 @@ describe("Event rendering for deviation_resolved (SYD-262)", () => {
           ev={{
             type: "deviation_resolved",
             actorName: "sean",
+            // SYD-240 made viaAgentName a required field on Activity; a human
+            // clearing a flag directly has no delegate agent behind it.
+            viaAgentName: null,
             createdAt: 1,
             payload: { reason: "done_without_merged_pr", note: "merged as d0073fb via PR #197" },
           }}
