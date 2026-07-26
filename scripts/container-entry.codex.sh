@@ -81,7 +81,7 @@ git config user.name "switchyard-worker"
 git config user.email "worker@switchyard.local"
 
 if [ -f package.json ]; then
-  node /npm-ci-guard.mjs /work
+  node /install-guard.mjs /work
 fi
 
 # Stack guarantee (SYD-76): fail fast with a clear message if this project

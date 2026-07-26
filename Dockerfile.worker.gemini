@@ -21,9 +21,17 @@ RUN apt-get update \
 
 RUN npm install -g @google/gemini-cli
 
+# SYD-253: pnpm for target repos that commit pnpm-lock.yaml (yarn is bundled
+# in the base image; the --version call asserts it) -- see the matching block
+# in Dockerfile.worker for why this is a pinned binary, not `corepack enable`.
+ARG PNPM_VERSION=11.17.0
+RUN npm install -g pnpm@${PNPM_VERSION} \
+    && pnpm --version \
+    && yarn --version
+
 COPY scripts/container-entry.gemini.sh /entry.sh
 COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
-COPY scripts/npm-ci-guard.mjs /npm-ci-guard.mjs
+COPY scripts/install-guard.mjs /install-guard.mjs
 RUN chmod +x /entry.sh
 
 # Out-of-band attachment uploader (SYD-182): baked in so any dispatched worker
