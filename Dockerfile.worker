@@ -19,9 +19,29 @@ ARG CLAUDE_CODE_VERSION=2.1.220
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && claude --version
 
+# SYD-253: install-guard.mjs dispatches to pnpm for target repos that commit
+# pnpm-lock.yaml, but node:24-slim has no pnpm -- the dispatch died on ENOENT
+# and the session started with no node_modules, the same silent failure the
+# hexdi/HEX yarn report hit. (yarn needs no install: the official node image
+# bundles classic 1.22.22 at /usr/local/bin/yarn. The `yarn --version` below
+# asserts that, so a base-image bump that drops it breaks the build here
+# rather than every pnpm/yarn dispatch at runtime.)
+#
+# A concrete pinned binary rather than `corepack enable` on purpose: corepack
+# shims fetch whatever version a repo pins in "packageManager" lazily, at
+# session start, from repo.yarnpkg.com as well as registry.npmjs.org -- only
+# the latter is in the sidecar's allowlist (EGRESS_BASELINE in
+# scripts/worker-select.ts), so a shim would reintroduce the same silent
+# no-dependencies failure behind a network block. Pinned for reproducible
+# rebuilds, same as CLAUDE_CODE_VERSION above.
+ARG PNPM_VERSION=11.17.0
+RUN npm install -g pnpm@${PNPM_VERSION} \
+    && pnpm --version \
+    && yarn --version
+
 COPY scripts/container-entry.sh /entry.sh
 COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
-COPY scripts/npm-ci-guard.mjs /npm-ci-guard.mjs
+COPY scripts/install-guard.mjs /install-guard.mjs
 RUN chmod +x /entry.sh
 
 # Out-of-band attachment uploader (SYD-182): baked in so any dispatched worker

@@ -328,10 +328,15 @@ this:
    external names (a covert exfil channel), and allowlisted hosts themselves
    could in principle relay.
 
-2. **Secret-free `npm ci`.** `scripts/npm-ci-guard.mjs` strips the three
-   secret vars from the install's environment, so third-party lifecycle
+2. **Secret-free dependency install.** `scripts/install-guard.mjs` strips the
+   three secret vars from the install's environment, so third-party lifecycle
    scripts never see them (native-module builds still work — the reason we
-   don't use `--ignore-scripts`).
+   don't use `--ignore-scripts`). It runs whichever frozen install the target
+   repo's lockfile calls for — `npm ci`, `yarn install --frozen-lockfile` or
+   `--immutable` for berry, or `pnpm install --frozen-lockfile` — and the
+   worker images bake in a pinned `pnpm` so that dispatch has something to run
+   (SYD-253; bump via `--build-arg PNPM_VERSION=…`. yarn classic comes with
+   the `node:24-slim` base image).
 
 ## Delivery gate
 
