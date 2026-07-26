@@ -1,7 +1,85 @@
 # `approved`: separating "I authorized this" from "this shipped"
 
-**Status:** design, revised after two rounds of multi-model review (2026-07-26)
+**Status:** DESIGN — **NOT ready to implement.** Revised through three rounds of
+multi-model review (2026-07-26); round 3 returned REVISE 4/4. Read "Known-open
+findings" below before acting on anything here.
 **Author:** interactive session with Sean, 2026-07-26
+
+## Known-open findings (round-3 review, unaddressed in this document)
+
+Every item below was verified in source by a reviewer, and several were
+independently found by two or more. They are listed here rather than fixed
+because the 3-round review budget was exhausted; the fixes are focused but
+unreviewed, and this design's track record is that each round's fix opened a new
+hole of similar severity.
+
+**The unresolved core: what proves that *this issue's* code landed?** All three
+candidate proofs fail.
+
+1. **Display-path merge records are bound by free text.**
+   `resolveRef([pr.head?.ref], [pr.title, pr.body])`
+   (`src/services/github-webhook.ts:194`) takes the **first** `\b[A-Z]{2,10}-\d+\b`
+   match in a PR title or body (`REF_RE` at `:82`), with no repo-binding check on
+   the display path (`:150`). So any merged PR that merely *mentions* an
+   `approved` issue would auto-complete it, dequeue its real delivery, and escape
+   the sweep. Real example from this repo's history: `62763cc "fix: rehabilitate
+   SYD-245's tests against the SYD-242 expiresAt param (SYD-265)"` first-mentions
+   SYD-245. §3b rule 3 is additionally a **tautology** for pin-less issues ("equals
+   the merge record's own PR number").
+2. **A second, non-HMAC ingress mints indistinguishable merge records.**
+   `POST /api/github-events` (`src/rest/api-routes.ts:611-620`) refuses agents
+   only; any `human` or `service` token supplies the whole payload and the `repo`
+   override, and the recorded actor is always the synthetic `github` agent — so
+   §0's "both arrive HMAC-verified, therefore equally trustworthy" is false, and
+   nothing on the event distinguishes origin. The worker host holds such a token
+   (`resolveInfraToken`, `scripts/delivery-lib.ts:23-25`).
+3. **The attested `→ done` exits are un-gateable as specified.** §2a.5 removes
+   `done` from `EXECUTABLE_GATE_ACTIONS`, so `isHardGated("done")` is permanently
+   false and the divert at `src/services/issues.ts:316` can never fire. Supervised
+   sessions resolve an agent to the bound human
+   (`src/services/supervised-sessions.ts:72`), and the "required note" is written
+   by the agent — so an absorbed agent could self-close unmerged work, ungated.
+   This is reachable on 100% of the motivating population, which takes the note
+   path by design.
+
+**Convergent fix direction (unreviewed):** bind completion — and the approval CAS —
+to the **approved head SHA**, so a mention on an unrelated PR can never complete an
+issue; require repo-binding plus exactly-one-ref for display records; label ingress
+and require HMAC origin for automatic completion; give the attested exit its own
+gated action kind (and/or refuse it when `sessionId != null`); keep `done` gated.
+
+**Also open:**
+
+- §6's swept predicate still reads `pr_state` (`getOpenPr`/`getMergedPr`), not §0's
+  merge record, so it would fire `done_without_merged_pr` on every *successful*
+  interactive completion — ~35 of 37 merges. Its axis is right; its inputs must move
+  to the event log too. (Found independently by two reviewers.)
+- §1b.3 claims `startDeliveryAttempt` is "the one chokepoint every attempt class
+  passes through." It is not — `resumeAttempt` bypasses it, so the staleness check
+  misses the `unfinished` class. Separately, applying approval-age to `deployRetry`
+  attempts is the wrong clock: the merge already landed, so a deploy failing past
+  the window could never retry.
+- The swept detector is unspecified on cost (an unbounded scan over `done` rows on a
+  hot read path), has no first-sweep fence, and leaves `episodeStartId` undefined
+  though `DeviationComputation` requires it (`src/services/deviation.ts:30-33`).
+- §3c's live-GitHub read would put a repo credential on the tracker for the first
+  time — it holds none today, and `resumeAttempt`'s live read runs on the *worker*.
+  That inverts the deployment split CLAUDE.md prescribes. Keep the read on the
+  worker and post the observation in.
+- §3c and the Testing section contradict each other on whether completion is
+  refused when no merge record exists.
+- No recency binding: §3b never requires the merge record to postdate the newest
+  authorization, so a stale record from a prior cycle satisfies rule 1.
+- Sweep sites still missing: `src/services/delivery-attempts.ts:105` (the
+  `pin.prNumber IS NOT NULL` requirement, which §2c's "any issue in `approved` is
+  deliverable" contradicts), `:180-183` (the authorization-type allowlist the new
+  badge-clear event must join), `src/services/issues.ts:407`/`:413`,
+  `EVENT_KINDS` (`src/db/schema.ts:106-153`), and the IssueDetail event renderer.
+- Badge-clear has no divert site; the only diverts today live in `updateIssue`
+  (keyed on `patch.status`) and `removeDependency`.
+- Settings migration must ship *before* the code that removes `"done"`, or a stored
+  `["done"]` row makes `isHardGated` true while the executor throws "not an
+  affirmable action" — blocking every supervised `→ done`.
 
 > **Round-3 note.** Rounds 1–2 established one structural lesson that now governs
 > the whole design: **`pr_state` is not the system of record for "this issue has
