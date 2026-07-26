@@ -90,29 +90,19 @@ export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorizat
     SELECT e.id AS authorizationId,
            p.key || '-' || i.number AS ref,
            CASE e.type WHEN 'redeliver_requested' THEN 'redeliver' ELSE 'done_stamp' END AS kind,
-           COALESCE(json_extract(e.payload, '$.pin.repo'), ps.repo) AS pinRepo,
-           COALESCE(json_extract(e.payload, '$.pin.prNumber'), ps.pr_number) AS pinPrNumber,
-           COALESCE(json_extract(e.payload, '$.pin.headSha'), ps.head_sha) AS pinHeadSha
+           json_extract(e.payload, '$.pin.repo') AS pinRepo,
+           json_extract(e.payload, '$.pin.prNumber') AS pinPrNumber,
+           json_extract(e.payload, '$.pin.headSha') AS pinHeadSha
     FROM events e
     JOIN issues i ON i.id = e.issue_id
     JOIN projects p ON p.id = i.project_id
-    LEFT JOIN pr_state ps ON ps.issue_ref = p.key || '-' || i.number
-      AND ps.status = 'open'
-      AND ps.pr_number = (
-        SELECT MAX(ps2.pr_number) FROM pr_state ps2
-        WHERE ps2.issue_ref = p.key || '-' || i.number
-          AND ps2.status = 'open'
-      )
     WHERE i.status = 'done'
       AND (
         e.type = 'redeliver_requested'
         OR (
           e.type = 'status_changed'
           AND json_extract(e.payload, '$.to') = 'done'
-          AND (
-            json_extract(e.payload, '$.pin.prNumber') IS NOT NULL
-            OR ps.pr_number IS NOT NULL
-          )
+          AND json_extract(e.payload, '$.pin.prNumber') IS NOT NULL
           AND e.id = (
             SELECT MAX(e2.id) FROM events e2
             WHERE e2.issue_id = e.issue_id
