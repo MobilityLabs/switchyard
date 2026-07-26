@@ -201,17 +201,42 @@ changes after authorization, the authorization is void."* §9 requires delivery 
 *"bring it up to date with `main` as it is now."* A rebase changes every SHA, so
 delivery voids its own authorization on the literal reading.
 
-This is not hypothetical: the prior design's "SHA-chain disarm" is this
-contradiction left unresolved, and it produced 4 of 16 sampled delivery failures
-(`"a commit landed … after its checks started — disarmed"`). `priorHeads`
-(`delivery-attempts.ts:126-139`) is the workaround — the worker remembers heads it
-force-pushed itself so it can recognise its own work.
+**Correction to an earlier revision of this document.** It cited the 4 sampled
+`"a commit landed … after its checks started — disarmed"` failures as evidence
+that SHA-binding is broken. That is wrong, and it inverts the conclusion. The
+prior design attributes those failures to **SYD-216 — read-after-write lag,
+"unlanded 11 days"** — and SYD-264 states it directly: *"SYD-216's head-moved
+settle fix was stamped done but never landed — it caused all 8 spurious delivery
+disarms last night."* Those were gap 1 striking delivery: a fix stamped `done`
+that never reached `main`. The binding model did not misfire; the observation was
+stale.
 
-**The decision being hidden:** does authorization bind to the *SHA* or to the
-*reviewed content*? A rebase that produces the same diff preserves the human's
-decision; a third-party push does not. Whoever specs this must say which, and the
-`priorHeads` mechanism suggests the answer is already content-in-practice,
-SHA-in-theory.
+**The decision, and the answer.** Authorization binds to the **head SHA**.
+
+1. It is the only binding that is exact, cheap, and unforgeable. Diff equality
+   has no canonical form — whitespace handling, rename detection, merge-base
+   choice — and every ambiguity is a place unreviewed code lands under a stale
+   approval, which is precisely the risk SYD-208 exists to close.
+2. The rebase contradiction is resolved by making delivery's transformation an
+   **attested link in a chain**, not by weakening the binding: the human
+   authorizes S0; delivery records that it derived S1 from S0; S1 is authorized
+   *by derivation*. A head that appears with no recorded derivation step disarms
+   and demands a fresh human act.
+3. **This is already built.** `priorHeads` (`delivery-attempts.ts:126-139`) is
+   that chain — `DISTINCT derived_head_sha` scoped to `(issueRef, prNumber)`,
+   holding only heads the worker force-pushed itself, never a third-party push.
+   The mechanism is right; only its description is wrong. §8's *"the
+   authorization is void"* sentence should be replaced by the derivation rule.
+
+**What is genuinely missing:** delivery *asserts* that S1 is a rebase of S0, and
+nothing verifies it. Tolerable while delivery is trusted host automation, but it
+should be an explicit trust assumption rather than an implicit one — and it is
+cheap to make auditable. Record **patch-ids** at authorization time: the SHA
+stays the gate, and the patch-id set becomes the audit. A rebase that preserves
+patch-ids is provably content-preserving; one that does not resolved a conflict,
+which is exactly the case that should escalate to a human rather than land
+silently. `git patch-id` is already the tool this repo reaches for — SYD-265's
+audit identified the 12 unlanded issues by patch-id.
 
 ## 3.3 "Delivery may not author or alter issues" contradicts delivery writing `done`
 
@@ -437,8 +462,8 @@ authorization record C introduces.
 
 # 6. What this analysis deliberately does not decide
 
-- **Whether authorization binds to SHA or to content** (§3.2). It names the
-  contradiction; the choice belongs to the spec, and to Sean.
+- ~~Whether authorization binds to SHA or to content~~ — **decided in §3.2**:
+  the SHA, extended by attested derivation, with patch-ids as the audit record.
 - **The shape of the declaration API** — tool surface, revocation, whether a
   human may declare on an agent's behalf. That is project A's design work.
 - **Branch strategy** (production/staging/main), out of scope in the prior design
