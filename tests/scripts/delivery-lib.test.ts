@@ -51,6 +51,7 @@ import {
   buildPrListMergedArgs,
   closedPrAlreadyDeliveredComment,
   closedPrDeadEndComment,
+  gitSshCommand,
   buildPrCloseArgs,
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
@@ -890,5 +891,31 @@ describe("tailOf", () => {
   it("keeps non-noise lines that merely resemble noise in ordinary output", () => {
     const text = "Running deploy...\nAll good.";
     expect(tailOf(text, 20)).toBe(text);
+  });
+});
+
+// SYD-266: two deliveries died at `git fetch origin main` because the poller's
+// PATH resolved a non-Apple ssh that rejects ~/.ssh/config's UseKeychain. The
+// host's `which -a ssh` puts Homebrew's OpenSSH ahead of Apple's, so which ssh
+// git gets depends on who launched it — an interactive shell and a launchd
+// service can disagree. Pin it, same reasoning as core.hooksPath.
+describe("gitSshCommand (SYD-266)", () => {
+  const present = (p: string) => p === "/usr/bin/ssh";
+  const absent = () => false;
+
+  it("pins the system ssh when it exists and nothing is configured", () => {
+    expect(gitSshCommand({}, present)).toBe("/usr/bin/ssh");
+  });
+
+  it("defers to an operator-set GIT_SSH_COMMAND rather than overriding it", () => {
+    expect(gitSshCommand({ GIT_SSH_COMMAND: "ssh -i /custom/key" }, present)).toBeUndefined();
+  });
+
+  it("ignores a blank GIT_SSH_COMMAND and still pins", () => {
+    expect(gitSshCommand({ GIT_SSH_COMMAND: "   " }, present)).toBe("/usr/bin/ssh");
+  });
+
+  it("pins nothing when the system ssh is absent, rather than breaking git", () => {
+    expect(gitSshCommand({}, absent)).toBeUndefined();
   });
 });
