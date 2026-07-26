@@ -56,6 +56,15 @@ that engine name (`claude` / `codex` / `gemini`) — it's a soft sort, not a har
 filter, so the issue still gets picked up if that engine's worker is busy.
 Leave it unset (**Any**) for ordinary work.
 
+**The `ui` label routes to interactive automatically (SYD-239).** `createIssue`
+defaults `workerPreference` to `"interactive"` for any issue labeled `ui`, so you
+don't need to set it by hand. The reason: SYD-183 asks for a screenshot on UI
+work, and the worker images ship the upload path (`switchyard-attach`) but no
+browser to produce one — so visual verification only really happens in a
+human-attended session. It's a *default*, not an override: pass an explicit
+`workerPreference` if a particular `ui` issue genuinely is headless-doable (a
+mechanical rename, a pure test change) and it wins.
+
 ## 3. What is it about? (topic tags — required)
 
 **Every issue carries at least one topic label** naming its area, so the board
