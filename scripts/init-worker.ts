@@ -68,7 +68,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerConfig, WorkerProject, WorkerRole } from "./worker-select.js";
 import { workerPidFileName } from "./worker-select.js";
-import { resolvePollerToken, tokenSourceName } from "./delivery-lib.js";
+import { resolveDeliveryToken, resolvePollerToken, tokenSourceName } from "./delivery-lib.js";
 import { isLocked } from "./pidfile.js";
 import {
   buildProtectMainArgs,
@@ -664,6 +664,14 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   const pollPlistInstalled = existsSync(
     path.join(os.homedir(), "Library", "LaunchAgents", `${POLL_LAUNCHD_LABEL}.plist`),
   );
+  // A `human`-typed infra token passes every human-only gate in the tracker —
+  // triage exit, done, dependency removal, PR-link confirmation. It authenticates
+  // fine, so only the doctor will ever say so. That is SYD-213's whole point,
+  // and `github-poller` sat human-typed long after `deliver-poller` moved.
+  const serviceActorNote = (actor: { name: string; type: string }): string =>
+    actor.type === "service"
+      ? `${actor.name} (${actor.type})`
+      : `${actor.name} (${actor.type}) — works, but a human-typed infra token passes every human-only gate; prefer a \`service\` actor (SYD-213)`;
   const pollRequested = process.argv.includes("--install-launchd-poll");
   if (config?.delivery || config?.githubPoll || pollPlistInstalled || pollRequested) {
     const hasGh = commandExists("gh");
@@ -825,11 +833,53 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
           results.push({
             name: "GitHub poll token is a non-agent actor",
             ok: actor.type !== "agent",
-            note: `${actor.name} (${actor.type})`,
+            note: serviceActorNote(actor),
           });
         }
       } catch (err) {
         results.push({ name: "GitHub poll token valid", ok: false, note: (err as Error).message });
+      }
+    }
+  }
+
+  // The delivery worker runs on this same host, off the same .env, and had no
+  // check at all — so the SWITCHYARD_SERVICE_TOKEN rename was caught for the
+  // poller and missed entirely for delivery. Same three checks, same reasons.
+  if (config?.delivery) {
+    const deliveryToken = resolveDeliveryToken(env);
+    const deliverySource = tokenSourceName(env, "SWITCHYARD_DELIVER_POLLER_TOKEN");
+    results.push({
+      name: "delivery service token",
+      ok: Boolean(deliveryToken),
+      note: !deliveryToken
+        ? "set SWITCHYARD_DELIVER_POLLER_TOKEN (a `service` actor's token)"
+        : deliverySource === "SWITCHYARD_DELIVER_POLLER_TOKEN"
+          ? undefined
+          : `using legacy ${deliverySource} — rename it to SWITCHYARD_DELIVER_POLLER_TOKEN`,
+    });
+    if (deliveryToken && config) {
+      const base = config.url.replace(/\/$/, "");
+      try {
+        const me = await fetch(`${base}/api/me`, {
+          headers: { authorization: `Bearer ${deliveryToken}` },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!me.ok) {
+          results.push({
+            name: "delivery token valid",
+            ok: false,
+            note: `/api/me returned ${me.status}`,
+          });
+        } else {
+          const actor = (await me.json()) as { name: string; type: string };
+          results.push({
+            name: "delivery token is a non-agent actor",
+            ok: actor.type !== "agent",
+            note: serviceActorNote(actor),
+          });
+        }
+      } catch (err) {
+        results.push({ name: "delivery token valid", ok: false, note: (err as Error).message });
       }
     }
   }
