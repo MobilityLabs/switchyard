@@ -10,17 +10,20 @@
 //      but can never make its own link prove that its work landed.
 import { describe, it, expect } from "vitest";
 import { openDb } from "../../src/db/index.js";
+import { prState } from "../../src/db/schema.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, claimIssue, updateIssue } from "../../src/services/issues.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { handleGithubWebhook } from "../../src/services/github-webhook.js";
+import { getMergedPr } from "../../src/services/pr-status.js";
 import {
   declarePrLink,
   confirmPrLink,
   revokePrLink,
   listLiveLinks,
+  backfillPrLinksFromPrState,
 } from "../../src/services/pr-links.js";
 
 const REPO = "acme/widgets";
@@ -206,6 +209,76 @@ describe("revokePrLink", () => {
     const kinds = listIssueEvents(db, 1).map((e) => e.type);
     expect(kinds.filter((k) => k === "pr_link_declared")).toHaveLength(2);
     expect(kinds.filter((k) => k === "pr_link_revoked")).toHaveLength(1);
+  });
+});
+
+describe("backfillPrLinksFromPrState — the cutover", () => {
+  /** A pre-migration pr_state row: attributed, but with no link, which is what
+   * every existing row looks like the moment before the backfill runs. */
+  function legacyAttributedRow(db: ReturnType<typeof openDb>, prNumber: number, updatedAt: number) {
+    db.insert(prState)
+      .values({
+        repo: REPO,
+        prNumber,
+        branch: "agent/SYD-1",
+        issueRef: "SYD-1",
+        status: "merged",
+        headSha: "a".repeat(40),
+        ghUpdatedAt: 1_700_000_000,
+        url: `https://github.com/${REPO}/pull/${prNumber}`,
+        updatedAt,
+      })
+      .run();
+  }
+
+  it("creates one confirmed delivers link per attributed row", () => {
+    const { db, human } = setup();
+    legacyAttributedRow(db, 7, 1_700_000_500);
+    expect(backfillPrLinksFromPrState(db, human)).toEqual({
+      created: 1,
+      alreadyLinked: 0,
+      skipped: 0,
+    });
+    const [link] = listLiveLinks(db, 1);
+    expect(link.role).toBe("delivers");
+    // Confirmed by the HUMAN operator, not the github actor — otherwise §5a
+    // recency would retroactively fail historical merges.
+    expect(link.confirmedBy).toBe(human.id);
+    // declared_at from the row's own updated_at, never wall-clock.
+    expect(link.declaredAt).toBe(1_700_000_500);
+  });
+
+  it("keeps historical merges proof-bearing (the regression the migration must not cause)", () => {
+    const { db, human } = setup();
+    // gh_updated_at (1_700_000_000) is BEFORE declared_at (1_700_000_500), so
+    // this row only stays proof-bearing because a human confirmed it.
+    legacyAttributedRow(db, 7, 1_700_000_500);
+    backfillPrLinksFromPrState(db, human);
+    expect(getMergedPr(db, 1)).not.toBeNull();
+  });
+
+  it("is idempotent — a second run creates nothing", () => {
+    const { db, human } = setup();
+    legacyAttributedRow(db, 7, 1_700_000_500);
+    backfillPrLinksFromPrState(db, human);
+    expect(backfillPrLinksFromPrState(db, human)).toEqual({
+      created: 0,
+      alreadyLinked: 1,
+      skipped: 0,
+    });
+  });
+
+  it("--dry-run counts without writing", () => {
+    const { db, human } = setup();
+    legacyAttributedRow(db, 7, 1_700_000_500);
+    expect(backfillPrLinksFromPrState(db, human, { dryRun: true }).created).toBe(1);
+    expect(listLiveLinks(db, 1)).toHaveLength(0);
+  });
+
+  it("refuses to run as anything but a human — it asserts trust over existing data", () => {
+    const { db, infra } = setup();
+    legacyAttributedRow(db, 7, 1_700_000_500);
+    expect(() => backfillPrLinksFromPrState(db, infra)).toThrow(/human/i);
   });
 });
 

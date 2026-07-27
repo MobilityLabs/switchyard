@@ -284,6 +284,86 @@ export function confirmPrLink(
   });
 }
 
+export type BackfillResult = { created: number; alreadyLinked: number; skipped: number };
+
+/**
+ * One-time cutover backfill (design §10 step 2): one confirmed `delivers` link
+ * per attributed pr_state row, so existing agent work keeps its attribution
+ * when the readers swap over. **Must run before the join swap ships** — without
+ * it every existing agent PR silently loses its link, which would make
+ * in-flight work claimable again (the SYD-93/177 class).
+ *
+ * Two deliberate departures from the ordinary declaration rules, because
+ * reading this as a normal declaration produces the wrong result:
+ *
+ * 1. **`confirmed_by` is set explicitly, not derived.** These rows were trusted
+ *    under the old model — pr_state.issue_ref gated claims and proved landing —
+ *    so leaving them unconfirmed would strip proof from all existing agent work
+ *    and turn the migration into a regression.
+ * 2. **The confirmer is the human operator, not the `github` actor.** The
+ *    github actor is type `agent` (github-webhook.ts:176), so deriving the
+ *    confirmer from the declarer would both fail rule 1 and, via §5a, subject
+ *    every historical row to recency binding — retroactively failing merges
+ *    that legitimately predate their pr_state row. Requiring an operator
+ *    identity also means this cannot run unattended, which is correct for a
+ *    one-time trust assertion over existing data.
+ *
+ * `declared_at` comes from the row's own `updated_at`, never wall-clock, for
+ * the same reason.
+ */
+export function backfillPrLinksFromPrState(
+  db: Db,
+  operator: Actor,
+  opts: { dryRun?: boolean } = {},
+): BackfillResult {
+  if (operator.type !== "human") {
+    throw new SwitchyardError(
+      "The pr_links backfill asserts trust over existing data on a human's behalf — run it as a human actor, not as an agent or service token.",
+    );
+  }
+  const rows = db.all<{
+    issueId: number;
+    repo: string;
+    prNumber: number;
+    updatedAt: number;
+  }>(sql`
+    SELECT i.id AS issueId, ps.repo AS repo, ps.pr_number AS prNumber,
+           ps.updated_at AS updatedAt
+    FROM pr_state ps, issues i, projects p
+    WHERE ps.issue_ref IS NOT NULL
+      AND i.project_id = p.id
+      AND ps.issue_ref = p.key || '-' || i.number
+    ORDER BY ps.repo ASC, ps.pr_number ASC
+  `);
+
+  const result: BackfillResult = { created: 0, alreadyLinked: 0, skipped: 0 };
+  for (const row of rows) {
+    const repo = normalizeRepoFullName(row.repo);
+    if (findLiveLink(db, row.issueId, repo, row.prNumber)) {
+      result.alreadyLinked++;
+      continue;
+    }
+    if (opts.dryRun) {
+      result.created++;
+      continue;
+    }
+    db.insert(prLinks)
+      .values({
+        issueId: row.issueId,
+        repo,
+        prNumber: row.prNumber,
+        role: "delivers",
+        declaredBy: operator.id,
+        declaredAt: row.updatedAt,
+        confirmedBy: operator.id,
+        confirmedAt: row.updatedAt,
+      })
+      .run();
+    result.created++;
+  }
+  return result;
+}
+
 /**
  * Soft-revoke a link. Never DELETEs — "who un-linked this, and why" is exactly
  * what the audit is for, and a soft revoke is what lets the same PR be
