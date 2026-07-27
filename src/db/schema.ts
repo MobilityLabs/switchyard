@@ -141,6 +141,11 @@ export const EVENT_KINDS = [
   // SYD-262: a human clearing a recorded-once process deviation whose own
   // resolution path can't reach it (payload carries the reason it clears).
   "deviation_resolved",
+  // Declared issue<->PR attribution (SYD-280). declared/confirmed carry
+  // {repo, prNumber, role}; revoked additionally carries a required reason.
+  "pr_link_declared",
+  "pr_link_confirmed",
+  "pr_link_revoked",
   // GitHub ingestion (webhook + poller)
   "gh_pr_opened",
   "gh_pr_reopened",
@@ -271,6 +276,67 @@ export const prState = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.repo, t.prNumber] }),
     index("pr_state_issue_ref_idx").on(t.issueRef),
+  ],
+);
+
+// Declared issue<->PR attribution (SYD-280, spec: docs/superpowers/specs/
+// 2026-07-27-declared-pr-attribution-design.md).
+//
+// ATTRIBUTION — which issue a PR belongs to — is a DECLARATION made by an
+// authenticated actor, never a string parse. OBSERVATION — what GitHub did to
+// that PR — stays in pr_state, whose write path is untouched. "This issue's
+// code landed" is a JOIN of the two, which is the whole point: the three
+// inference sites this replaces (agent/<ref> branch match, first free-text ref
+// in a PR title/body, and a reconstructed branch name) each answered it only
+// partially and none of them could be held accountable.
+//
+// Two predicates, not one (design §5):
+//   claim-gating  = live AND role='delivers'          -> blocks a second claim
+//   proof-bearing = claim-gating AND confirmed_by set -> may prove landing,
+//                   AND (the confirmer is human OR the merge postdates
+//                   declared_at — design §5a)
+//
+// An agent may DECLARE (presenting the claim lease that proves it holds the
+// issue) but may never CONFIRM. So an agent-declared link can over-block —
+// which is safe, and revocable — but can never prove its own work landed.
+//
+// Revocation is SOFT (revoked_at, never DELETE) so "who un-linked this, and
+// why" survives; the reason rides the pr_link_revoked event. The unique index
+// is therefore PARTIAL, over live rows only, which is exactly what lets the
+// same PR be re-declared after a revoke without destroying the first
+// declaration's history.
+export const PR_LINK_ROLES = ["delivers", "references"] as const;
+export type PrLinkRole = (typeof PR_LINK_ROLES)[number];
+
+export const prLinks = sqliteTable(
+  "pr_links",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    issueId: integer("issue_id")
+      .notNull()
+      .references(() => issues.id),
+    // Normalized via normalizeRepoFullName at every write (SYD-212) so the
+    // live-uniqueness index can't be defeated by casing.
+    repo: text("repo").notNull(),
+    prNumber: integer("pr_number").notNull(),
+    role: text("role", { enum: PR_LINK_ROLES }).notNull(),
+    declaredBy: integer("declared_by")
+      .notNull()
+      .references(() => actors.id),
+    declaredAt: integer("declared_at").notNull().default(now()),
+    // NULL = unconfirmed. A non-agent declaration is auto-confirmed at the
+    // write, which collapses "who is trusted" into one predicate at the reads
+    // instead of scattering actor-type tests across them.
+    confirmedBy: integer("confirmed_by").references(() => actors.id),
+    confirmedAt: integer("confirmed_at"),
+    revokedAt: integer("revoked_at"),
+  },
+  (t) => [
+    uniqueIndex("pr_links_live_idx")
+      .on(t.issueId, t.repo, t.prNumber)
+      .where(sql`${t.revokedAt} IS NULL`),
+    index("pr_links_pr_idx").on(t.repo, t.prNumber),
+    index("pr_links_issue_idx").on(t.issueId),
   ],
 );
 
