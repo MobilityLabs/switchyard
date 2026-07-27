@@ -52,7 +52,7 @@ import {
   filterWorkToProjects,
   resumeActionFor,
   agentBranch,
-  resolveInfraToken,
+  resolveDeliveryToken,
   shouldRefuseUnprotectedMain,
   type DeliveryEventInput,
   type DeliveryWork,
@@ -999,10 +999,12 @@ async function main(): Promise<void> {
   const dryRun = args.includes("--dry-run");
 
   loadDotEnv();
-  const token = resolveInfraToken();
+  const token = resolveDeliveryToken();
   if (!token) {
     console.error(
-      "SWITCHYARD_SERVICE_TOKEN (preferred) or SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)",
+      "SWITCHYARD_DELIVER_POLLER_TOKEN is required (set it in the environment or the repo .env). " +
+        "It must belong to a `service` actor — delivery records outcomes, it never authors issues. " +
+        "Legacy SWITCHYARD_SERVICE_TOKEN / SWITCHYARD_TOKEN are still read for back-compat.",
     );
     process.exit(1);
   }

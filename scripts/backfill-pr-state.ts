@@ -37,6 +37,7 @@ import {
   postGithubEvent,
 } from "./github-poll.js";
 import { preflightRepoBindings } from "./github-poll-lib.js";
+import { resolvePollerToken } from "./delivery-lib.js";
 
 // High enough to cover any repo this tracker has driven so far; when a repo
 // genuinely has this many PRs, the per-branch lookups cover the tail.
@@ -103,7 +104,7 @@ async function main(): Promise<void> {
   const dryRun = process.argv.slice(2).includes("--dry-run");
 
   loadDotEnv();
-  const token = process.env.SWITCHYARD_TOKEN;
+  const token = resolvePollerToken();
   if (!token) {
     console.error("SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)");
     process.exit(1);

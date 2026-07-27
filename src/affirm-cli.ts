@@ -15,7 +15,11 @@ import { join } from "node:path";
 import { AFFIRM_NAMESPACE } from "./services/canonical-action.js";
 
 const BASE = process.env.SWITCHYARD_URL ?? "http://localhost:3300";
-const TOKEN = process.env.SWITCHYARD_TOKEN;
+// Affirming is the human act the hard gate exists to require, so this prefers
+// the human's own token. SWITCHYARD_TOKEN remains as a fallback for
+// single-token installs, but on a normal one it is the dispatch worker's AGENT
+// token — which the affirm endpoint refuses, correctly.
+const TOKEN = process.env.SWITCHYARD_HUMAN_TOKEN || process.env.SWITCHYARD_TOKEN;
 // homedir() rather than reading the HOME environment variable directly:
 // tests/env-example.test.ts (SYD-141) scans this directory's source TEXT for
 // env-var reads and requires each one to be documented in .env.example, so

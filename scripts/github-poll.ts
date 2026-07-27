@@ -49,7 +49,7 @@ import {
   resolveConfiguredRepos,
 } from "./github-poll-exec.js";
 import { acquirePidLock } from "./pidfile.js";
-import { resolveInfraToken } from "./delivery-lib.js";
+import { resolvePollerToken } from "./delivery-lib.js";
 
 const DEFAULT_POLL_SECONDS = 120;
 
@@ -276,10 +276,12 @@ async function main(): Promise<void> {
   const dryRun = args.includes("--dry-run");
 
   loadDotEnv();
-  const token = resolveInfraToken();
+  const token = resolvePollerToken();
   if (!token) {
     console.error(
-      "SWITCHYARD_SERVICE_TOKEN (preferred) or SWITCHYARD_TOKEN is required (set it in the environment or the repo .env)",
+      "SWITCHYARD_GITHUB_POLLER_TOKEN is required (set it in the environment or the repo .env). " +
+        "It must belong to a `service` actor — the poller posts observations, never board state. " +
+        "Legacy SWITCHYARD_SERVICE_TOKEN / SWITCHYARD_TOKEN are still read for back-compat.",
     );
     process.exit(1);
   }

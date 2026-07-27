@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   agentBranch,
   resolveInfraToken,
+  resolveDeliveryToken,
+  resolvePollerToken,
+  tokenSourceName,
   filterWorkToProjects,
   resumeActionFor,
   crashedAttemptComment,
@@ -56,22 +59,63 @@ import {
   type DeliveryWork,
 } from "../../scripts/delivery-lib.js";
 
-describe("resolveInfraToken (SYD-213)", () => {
-  it("prefers the dedicated service token over the general token", () => {
-    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "svc", SWITCHYARD_TOKEN: "gen" })).toBe(
-      "svc",
+// Delivery and the GitHub poller are separate least-privilege `service`
+// actors (deliver-poller / github-poller-svc), so they resolve their own
+// tokens. The legacy tail exists because the worker host's .env is deployed
+// separately from the tracker, so a host still carrying the old shared names
+// must keep working through the rollout.
+describe("resolveDeliveryToken / resolvePollerToken", () => {
+  const legacy = { SWITCHYARD_SERVICE_TOKEN: "svc", SWITCHYARD_TOKEN: "gen" };
+
+  it("each prefers its own descriptive variable", () => {
+    expect(resolveDeliveryToken({ ...legacy, SWITCHYARD_DELIVER_POLLER_TOKEN: "deliver" })).toBe(
+      "deliver",
+    );
+    expect(resolvePollerToken({ ...legacy, SWITCHYARD_GITHUB_POLLER_TOKEN: "poll" })).toBe("poll");
+  });
+
+  it("does not read the other consumer's variable", () => {
+    expect(resolveDeliveryToken({ SWITCHYARD_GITHUB_POLLER_TOKEN: "poll" })).toBeUndefined();
+    expect(resolvePollerToken({ SWITCHYARD_DELIVER_POLLER_TOKEN: "deliver" })).toBeUndefined();
+  });
+
+  it("falls back to the legacy shared names, in order", () => {
+    expect(resolveDeliveryToken(legacy)).toBe("svc");
+    expect(resolvePollerToken(legacy)).toBe("svc");
+    expect(resolveDeliveryToken({ SWITCHYARD_TOKEN: "gen" })).toBe("gen");
+    expect(resolvePollerToken({ SWITCHYARD_TOKEN: "gen" })).toBe("gen");
+  });
+
+  it('falls through blank values rather than authenticating as "" (|| not ??)', () => {
+    expect(resolveDeliveryToken({ SWITCHYARD_DELIVER_POLLER_TOKEN: "", ...legacy })).toBe("svc");
+    expect(
+      resolvePollerToken({ SWITCHYARD_GITHUB_POLLER_TOKEN: "", SWITCHYARD_TOKEN: "gen" }),
+    ).toBe("gen");
+  });
+
+  it("is undefined when nothing is set", () => {
+    expect(resolveDeliveryToken({})).toBeUndefined();
+    expect(resolvePollerToken({})).toBeUndefined();
+  });
+
+  it("keeps resolveInfraToken working as a deprecated alias for delivery", () => {
+    expect(resolveInfraToken({ SWITCHYARD_DELIVER_POLLER_TOKEN: "deliver" })).toBe("deliver");
+  });
+});
+
+describe("tokenSourceName", () => {
+  it("names the preferred variable when it is set", () => {
+    expect(
+      tokenSourceName({ SWITCHYARD_GITHUB_POLLER_TOKEN: "p" }, "SWITCHYARD_GITHUB_POLLER_TOKEN"),
+    ).toBe("SWITCHYARD_GITHUB_POLLER_TOKEN");
+  });
+  it("names the legacy variable actually in use, so the doctor can nag precisely", () => {
+    expect(tokenSourceName({ SWITCHYARD_TOKEN: "g" }, "SWITCHYARD_GITHUB_POLLER_TOKEN")).toBe(
+      "SWITCHYARD_TOKEN",
     );
   });
-  it("falls back to SWITCHYARD_TOKEN when no service token is set", () => {
-    expect(resolveInfraToken({ SWITCHYARD_TOKEN: "gen" })).toBe("gen");
-  });
-  it("falls through a blank service token to the general token (|| not ??)", () => {
-    expect(resolveInfraToken({ SWITCHYARD_SERVICE_TOKEN: "", SWITCHYARD_TOKEN: "gen" })).toBe(
-      "gen",
-    );
-  });
-  it("is undefined when neither is set", () => {
-    expect(resolveInfraToken({})).toBeUndefined();
+  it("is undefined when nothing is set", () => {
+    expect(tokenSourceName({}, "SWITCHYARD_GITHUB_POLLER_TOKEN")).toBeUndefined();
   });
 });
 

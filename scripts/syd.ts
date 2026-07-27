@@ -57,7 +57,11 @@ function loadDotEnv(): void {
 }
 
 const HUMAN_TOKEN_KEYS = ["SWITCHYARD_HUMAN_TOKEN", "SWITCHYARD_TOKEN"] as const;
-const FALLBACK_TOKEN_KEYS = ["SWITCHYARD_SERVICE_TOKEN"] as const;
+const FALLBACK_TOKEN_KEYS = [
+  "SWITCHYARD_GITHUB_POLLER_TOKEN",
+  "SWITCHYARD_DELIVER_POLLER_TOKEN",
+  "SWITCHYARD_SERVICE_TOKEN",
+] as const;
 const ALL_TOKEN_KEYS = [...HUMAN_TOKEN_KEYS, ...FALLBACK_TOKEN_KEYS];
 
 export type TokenChoice = { token: string; key: string; humanPreferred: boolean };

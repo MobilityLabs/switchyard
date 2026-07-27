@@ -68,6 +68,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerConfig, WorkerProject, WorkerRole } from "./worker-select.js";
 import { workerPidFileName } from "./worker-select.js";
+import { resolvePollerToken, tokenSourceName } from "./delivery-lib.js";
 import { isLocked } from "./pidfile.js";
 import {
   buildProtectMainArgs,
@@ -795,11 +796,16 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
   }
 
   if (config?.githubPoll || pollInstalled || pollRequested) {
-    const infraToken = env.SWITCHYARD_SERVICE_TOKEN || env.SWITCHYARD_TOKEN;
+    const infraToken = resolvePollerToken(env);
+    const infraSource = tokenSourceName(env, "SWITCHYARD_GITHUB_POLLER_TOKEN");
     results.push({
       name: "GitHub poll service token",
       ok: Boolean(infraToken),
-      note: infraToken ? undefined : "set SWITCHYARD_SERVICE_TOKEN (preferred) or SWITCHYARD_TOKEN",
+      note: !infraToken
+        ? "set SWITCHYARD_GITHUB_POLLER_TOKEN (a `service` actor's token)"
+        : infraSource === "SWITCHYARD_GITHUB_POLLER_TOKEN"
+          ? undefined
+          : `using legacy ${infraSource} — rename it to SWITCHYARD_GITHUB_POLLER_TOKEN`,
     });
     if (infraToken && config) {
       const base = config.url.replace(/\/$/, "");

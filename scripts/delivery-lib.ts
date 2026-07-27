@@ -41,15 +41,59 @@ export function agentBranch(ref: string): string {
 }
 
 /**
- * The bearer token a trusted-infra worker (deliver.ts / github-poll.ts) posts
- * with. Prefers the dedicated, least-privilege `service` actor token
- * (`SWITCHYARD_SERVICE_TOKEN`, SYD-213) and falls back to `SWITCHYARD_TOKEN`
- * for back-compat / single-token setups. Kept pure (takes an env bag) so the
- * precedence is unit-testable. `||` (not `??`) so an empty/blank service var
- * falls through to the general token instead of authenticating as "".
+ * Trusted-infra bearer tokens, one resolver per consumer.
+ *
+ * These used to share a single `resolveInfraToken` reading
+ * `SWITCHYARD_SERVICE_TOKEN || SWITCHYARD_TOKEN`. That was fine while one
+ * `service` actor covered both, but delivery and the GitHub poller are now
+ * separate least-privilege actors (`deliver-poller`, `github-poller-svc`), so
+ * one shared variable can no longer name them both.
+ *
+ * Precedence per resolver: the **descriptive, per-consumer variable** first,
+ * then the legacy shared names for back-compat. The legacy tail matters
+ * because these run on the worker host, whose `.env` is deployed separately
+ * from the tracker (`npm run deploy` does not touch it) — so a host still
+ * carrying the old names keeps working through the rollout rather than dying
+ * mid-flight.
+ *
+ * `||` (not `??`) throughout, so an empty/blank variable falls through instead
+ * of authenticating as "".
+ *
+ * A note on the last fallback, because it is a trap: `SWITCHYARD_TOKEN` is the
+ * *dispatch worker's* AGENT token on a normal install, and both of these
+ * endpoints refuse agents. So when the descriptive variable is missing, this
+ * resolves to a token that authenticates fine and is then rejected by the
+ * server — an authorization failure wearing the costume of a config error.
+ * That is exactly what happened when SWITCHYARD_SERVICE_TOKEN was renamed out
+ * from under these resolvers. The fallback is kept anyway, because a
+ * single-token install is legitimate and losing it would break more than it
+ * fixes; `init-worker --self-test` names which variable was actually used
+ * (tokenSourceName) so the misconfiguration is visible before it bites.
+ */
+export function resolveDeliveryToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return (
+    env.SWITCHYARD_DELIVER_POLLER_TOKEN || env.SWITCHYARD_SERVICE_TOKEN || env.SWITCHYARD_TOKEN
+  );
+}
+
+export function resolvePollerToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.SWITCHYARD_GITHUB_POLLER_TOKEN || env.SWITCHYARD_SERVICE_TOKEN || env.SWITCHYARD_TOKEN;
+}
+
+/**
+ * @deprecated Use resolveDeliveryToken / resolvePollerToken. Retained so any
+ * out-of-tree caller keeps resolving something rather than `undefined`.
  */
 export function resolveInfraToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.SWITCHYARD_SERVICE_TOKEN || env.SWITCHYARD_TOKEN;
+  return resolveDeliveryToken(env);
+}
+
+/** Which variable a resolver actually used — for doctor output and errors. */
+export function tokenSourceName(env: NodeJS.ProcessEnv, preferred: string): string | undefined {
+  for (const key of [preferred, "SWITCHYARD_SERVICE_TOKEN", "SWITCHYARD_TOKEN"]) {
+    if (env[key]) return key;
+  }
+  return undefined;
 }
 
 // Delivery-work queue shapes (SYD-208): the JSON GET /api/delivery-work
