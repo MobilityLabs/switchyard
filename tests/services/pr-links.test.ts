@@ -17,7 +17,7 @@ import { createIssue, claimIssue, updateIssue } from "../../src/services/issues.
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { handleGithubWebhook } from "../../src/services/github-webhook.js";
-import { getMergedPr } from "../../src/services/pr-status.js";
+import { getMergedPr, getOpenPr } from "../../src/services/pr-status.js";
 import {
   declarePrLink,
   confirmPrLink,
@@ -273,6 +273,33 @@ describe("backfillPrLinksFromPrState — the cutover", () => {
     legacyAttributedRow(db, 7, 1_700_000_500);
     expect(backfillPrLinksFromPrState(db, human, { dryRun: true }).created).toBe(1);
     expect(listLiveLinks(db, 1)).toHaveLength(0);
+  });
+
+  // Correcting an overstatement in the design doc (§10) and in the SYD-280
+  // notes: the backfill was described as making interactive issues visible to
+  // getOpenPr, so an open feat/ PR would start refusing new claims. It does
+  // not. A display-only PR never touches pr_state at all
+  // (github-webhook.ts:221), so the backfill — which reads pr_state — creates
+  // nothing for it, and free-text ingestion yields a references link, which
+  // LIVE_DELIVERS excludes. Interactive work starts gating only when someone
+  // DECLARES, which is opt-in per PR. Pinned here so the claim is checkable
+  // rather than asserted.
+  it("does not make an undeclared interactive feat/ PR gate claims", () => {
+    const { db, human } = setup();
+    handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: 99,
+        html_url: `https://github.com/${REPO}/pull/99`,
+        head: { ref: "feat/some-topic", sha: "a".repeat(40) },
+        title: "SYD-1: interactive work",
+        updated_at: "2026-07-12T11:00:00Z",
+      },
+    });
+    expect(backfillPrLinksFromPrState(db, human).created).toBe(0);
+    expect(listLiveLinks(db, 1).map((l) => l.role)).toEqual(["references"]);
+    expect(getOpenPr(db, 1)).toBeNull();
   });
 
   it("refuses to run as anything but a human — it asserts trust over existing data", () => {
