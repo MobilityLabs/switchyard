@@ -46,6 +46,8 @@ Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-proj
 
 **Claim before you touch code.** For any board-tracked issue, call `claim_issue` before editing files — even in an interactive/coordinating session, not just dispatched workers. This is what lets the server (and the dispatch worker) see your claim and refuse to double-work the same issue; skipping it is exactly how SYD-93 got fixed twice in parallel (worker PR #41 vs a coordinating session's PR #42, opened without ever claiming).
 
+**Declare your PR when you open it.** Call `declare_pr_link` (MCP) or `POST /issues/:ref/pr-links` as soon as a PR exists, on any branch. The issue↔PR link is a *declaration*, not a guess: nothing infers it from the branch name or from mentioning the ref in the PR title. Skip it and the board cannot tell your work exists — the PR won't gate a second claim, won't be deliverable, and won't clear `done_without_merged_pr`. Dispatched workers get this for free (the host declares at publish); interactive sessions must do it themselves, which is exactly the gap that made `feat/` work invisible. Your declaration blocks other claimants but does **not** prove the work landed — a human confirms that at review (SYD-280).
+
 **Mutate issues only through services** — core issue state lives in mutable columns on the `issues` table, with `events` a co-written append-only audit log (not a fold/replay source — see `src/services/issues.ts`); a direct DB write would skip that log. Only the auxiliary attention/open-PR/unanswered-questions signals are actually derived by querying `events` (see `src/services/attention.ts`, `pr-status.ts`, `events.ts`), so those can't drift from what happened.
 
 **Security invariants:**
@@ -53,6 +55,6 @@ Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-proj
 - Tokens must never appear in argv — pass via env or file handoff (see `buildDockerArgs` in `scripts/worker-select.ts` and the sdk runner).
 - Worker containers get no GitHub credentials and can only push `agent/<ref>` branches; merging is a human decision.
 
-**Branches:** `feat/<topic>` for interactive work; `agent/<REF>` (e.g. `agent/SYD-42`) is reserved for dispatched worker sessions. Commit messages reference the issue ref, e.g. `feat: containerized dispatch mode in the worker (SYD-30)`.
+**Branches:** `feat/<topic>` for interactive work; `agent/<REF>` (e.g. `agent/SYD-42`) is reserved for dispatched worker sessions. Commit messages reference the issue ref, e.g. `feat: containerized dispatch mode in the worker (SYD-30)`. Since SYD-280 the branch name is a **convention, not attribution** — it triggers auto-declaration for dispatched work, but the link itself is the `pr_links` row. Never add a rule that reads a ref out of a branch or a PR title to decide what a PR belongs to.
 
 **MCP transport gotcha:** in `src/server.ts`, never pre-read the `/mcp` request body — the transport consumes the stream itself; reading it twice throws "ReadableStream is locked".

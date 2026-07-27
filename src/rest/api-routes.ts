@@ -36,6 +36,7 @@ import {
 } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
+import { declarePrLink, confirmPrLink, revokePrLink, listLiveLinks } from "../services/pr-links.js";
 import {
   startAgentSession,
   endAgentSession,
@@ -112,6 +113,9 @@ import {
   githubRepoCreateBody,
   githubEventBody,
   requestInputBody,
+  prLinkDeclareBody,
+  prLinkTargetBody,
+  prLinkRevokeBody,
   snoozeBody,
   duplicateBody,
   settingPutBody,
@@ -260,6 +264,10 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       attention: getAttention(db, issue.id),
       openPr: getOpenPr(db, issue.id),
       deliveryPin: deliveryPinFor(db, issue.id),
+      // SYD-280: additive. openPr/deliveryPin keep their exact shape, so the UI
+      // is unaffected; this exposes the attribution behind them so a human can
+      // see what is linked and confirm or revoke it.
+      prLinks: listLiveLinks(db, issue.id),
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),
@@ -401,6 +409,24 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     }
     c.header("Cache-Control", "private, max-age=31536000, immutable");
     return c.body(new Uint8Array(data));
+  });
+
+  // SYD-280: declared issue<->PR attribution. Declaring is claim-scoped for
+  // agents (the service demands the lease); confirming is human-only, and is
+  // what makes a link proof-bearing.
+  app.post("/issues/:ref/pr-links", body(prLinkDeclareBody), (c) =>
+    c.json(
+      declarePrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), c.var.leaseToken),
+    ),
+  );
+
+  app.post("/issues/:ref/pr-links/confirm", body(prLinkTargetBody), (c) =>
+    c.json(confirmPrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
+  );
+
+  app.post("/issues/:ref/pr-links/revoke", body(prLinkRevokeBody), (c) => {
+    revokePrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), c.var.leaseToken);
+    return c.json({ ok: true });
   });
 
   app.post("/issues/:ref/request-input", body(requestInputBody), (c) =>
