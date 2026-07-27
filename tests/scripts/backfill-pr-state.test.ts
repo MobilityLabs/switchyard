@@ -37,6 +37,31 @@ describe("preflightRepoBindings (SYD-207)", () => {
     ).toEqual([]);
   });
 
+  // SYD-212, missed site. Bindings are stored normalized (lower case) while
+  // the configured repo arrives as GitHub spells it, so a case-sensitive
+  // compare called a correctly-linked repo "not linked" — 1219 times in one
+  // poll log, against a repo whose attribution was working fine because
+  // attributedRef compares with SQL lower().
+  it("matches a linked repo case-insensitively", () => {
+    expect(
+      preflightRepoBindings(
+        [{ projectKey: "SYD", repo: "Acme/Widgets" }],
+        [{ fullName: "acme/widgets", projectId: 1 }],
+        serverProjects,
+      ),
+    ).toEqual([]);
+  });
+
+  it("still detects a genuinely wrong project binding regardless of casing", () => {
+    const problems = preflightRepoBindings(
+      [{ projectKey: "SYD", repo: "Acme/Widgets" }],
+      [{ fullName: "acme/widgets", projectId: 2 }],
+      serverProjects,
+    );
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/bound to a different project/);
+  });
+
   it("fails loud when the repo is not linked at all", () => {
     const problems = preflightRepoBindings(
       [{ projectKey: "SYD", repo: "acme/widgets" }],

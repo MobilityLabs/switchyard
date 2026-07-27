@@ -179,7 +179,17 @@ export function preflightRepoBindings(
       problems.push(`project "${projectKey}" (repo ${repo}) does not exist on the server`);
       continue;
     }
-    const row = linked.find((l) => l.fullName === repo);
+    // Case-insensitive, matching every other repo comparison in the system
+    // (SYD-212). Stored bindings are normalized to lower case by
+    // normalizeRepoFullName, while `repo` arrives as GitHub spells it — so a
+    // strict === reported "MobilityLabs/hexdi-web is not linked" about a repo
+    // that was linked as mobilitylabs/hexdi-web and attributing correctly,
+    // because attributedRef compares with SQL lower(). SYD-212 fixed the
+    // ingestion and attribution paths and missed this preflight, which then
+    // cried wolf 1219 times in one log — the exact "a warning that fires on
+    // ordinary success" failure mode, and it also made backfill-pr-state
+    // refuse to run, since it treats any preflight problem as a hard stop.
+    const row = linked.find((l) => l.fullName.toLowerCase() === repo.toLowerCase());
     if (!row) {
       problems.push(
         `project "${projectKey}": repo ${repo} is not linked — add it via POST /api/github-repos with projectKey "${projectKey}"`,
