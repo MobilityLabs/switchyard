@@ -160,6 +160,77 @@ export function declarePrLink(
 }
 
 /**
+ * Ingestion's declaration path — webhook/poller and the worker's publish.
+ *
+ * Separate from declarePrLink because ingestion is not an actor staking a
+ * claim: it is the system recording an attribution it observed, attributed to
+ * the synthetic `github` actor (which is type `agent`,
+ * src/services/github-webhook.ts:176, and so could never satisfy the
+ * claim+lease rules). Runs inside the caller's transaction.
+ *
+ * **Scope discipline — this is parity, not a widening.** Only the
+ * branch-attributed path (a strict agent/<ref> match in a repo bound to that
+ * ref's project) may pass `role: "delivers"`, because that is precisely the
+ * signal that gates claims and proves landing *today*. Free-text ref matches
+ * must pass `role: "references"`, which gates nothing and proves nothing — a
+ * narrowing of today's behaviour, and the fix for the false-clear hole where
+ * an unrelated PR that merely mentions an issue silences its warning.
+ *
+ * Note the untrusted-ingress caveat: POST /api/github-events accepts any
+ * human/service token and is indistinguishable from an HMAC-verified delivery
+ * (design "Scope", analysis §3.7). That is true of today's attribution too, so
+ * this is not a regression — it is SYD-282's to fix, and this function must
+ * not be read as making ingested merges trustworthy.
+ *
+ * Idempotent: a redelivery finds the live link and returns it unchanged.
+ *
+ * **Records no event, deliberately.** The row itself carries the full audit
+ * (declared_by, declared_at, role), and the observation that prompted it is
+ * already on the timeline as gh_pr_opened/gh_pr_merged. Emitting an event too
+ * would put a "pr_link_declared" line above every single PR in every activity
+ * feed — a signal that fires on ordinary success, which is the noise class the
+ * intent document's principle 5 warns about. Actor-initiated declarations
+ * (declarePrLink/confirmPrLink/revokePrLink) DO record events, because those
+ * are decisions someone made rather than bookkeeping the system did.
+ */
+export function recordIngestedPrLink(
+  tx: DbOrTx,
+  input: {
+    issueId: number;
+    repo: string;
+    prNumber: number;
+    role: PrLinkRole;
+    actorId: number;
+  },
+): PrLink {
+  const repo = normalizeRepoFullName(input.repo);
+  const existing = findLiveLink(tx, input.issueId, repo, input.prNumber);
+  if (existing) return existing;
+
+  const now = nowSeconds();
+  // A `delivers` link from the branch-attributed path is confirmed, matching
+  // the authority pr_state.issue_ref carries today — its confirmer is not a
+  // human, so §5a's recency binding still applies to it. A `references` link
+  // is never confirmed: it is a suggestion for a human to promote.
+  const confirmed = input.role === "delivers";
+  const row = tx
+    .insert(prLinks)
+    .values({
+      issueId: input.issueId,
+      repo,
+      prNumber: input.prNumber,
+      role: input.role,
+      declaredBy: input.actorId,
+      declaredAt: now,
+      confirmedBy: confirmed ? input.actorId : null,
+      confirmedAt: confirmed ? now : null,
+    })
+    .returning()
+    .get();
+  return row;
+}
+
+/**
  * Confirm a link, making it proof-bearing (design §5).
  *
  * Agents can never confirm — that is the whole reason declaring is safe to

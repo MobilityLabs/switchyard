@@ -15,6 +15,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, claimIssue, updateIssue } from "../../src/services/issues.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { listIssueEvents } from "../../src/services/events.js";
+import { handleGithubWebhook } from "../../src/services/github-webhook.js";
 import {
   declarePrLink,
   confirmPrLink,
@@ -223,9 +224,65 @@ describe("the DoS the previous design died on", () => {
     expect(listLiveLinks(db, 1)).toHaveLength(0);
   });
 
-  // The other half — that an unauthenticated PR body cannot reach this module
-  // at all — is a property of the ingestion path, not of this service. It is
-  // asserted where it is actually enforceable, once free-text ingestion is
-  // demoted to `references` links (design §8).
-  it.todo("a fork PR body naming an issue creates no delivers link (webhook ingestion)");
+  // The other half: a PR body is writable by anyone on a public repo, so the
+  // free-text ingestion path must never mint a link that gates or proves.
+  it("a PR body naming an issue creates only a references link, never delivers", () => {
+    const { db } = setup();
+    handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: 3,
+        html_url: `https://github.com/${REPO}/pull/3`,
+        // Not agent/<ref> — so this is the free-text path, the one a fork PR
+        // author controls entirely.
+        head: { ref: "attacker/whatever" },
+        title: "SYD-1: I hereby claim this issue",
+        body: null,
+      },
+    });
+    const links = listLiveLinks(db, 1);
+    expect(links).toHaveLength(1);
+    expect(links[0].role).toBe("references");
+    expect(links[0].confirmedBy).toBeNull();
+  });
+
+  it("the agent/<ref> branch path still declares delivers — parity with today", () => {
+    const { db } = setup();
+    handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: 12,
+        html_url: `https://github.com/${REPO}/pull/12`,
+        head: { ref: "agent/SYD-1", sha: "a".repeat(40) },
+        title: "whatever",
+        body: null,
+        updated_at: "2026-07-12T11:00:00Z",
+      },
+    });
+    const links = listLiveLinks(db, 1);
+    expect(links).toHaveLength(1);
+    expect(links[0].role).toBe("delivers");
+    // Confirmed, matching the authority pr_state.issue_ref carries today — but
+    // by a non-human, so §5a recency binding still applies at the read sites.
+    expect(links[0].confirmedBy).not.toBeNull();
+  });
+
+  it("ingestion records no timeline event — the link row is the audit", () => {
+    const { db } = setup();
+    handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: 12,
+        html_url: `https://github.com/${REPO}/pull/12`,
+        head: { ref: "agent/SYD-1", sha: "a".repeat(40) },
+        updated_at: "2026-07-12T11:00:00Z",
+      },
+    });
+    const kinds = listIssueEvents(db, 1).map((e) => e.type);
+    expect(kinds).not.toContain("pr_link_declared");
+    expect(kinds).toContain("gh_pr_opened");
+  });
 });
