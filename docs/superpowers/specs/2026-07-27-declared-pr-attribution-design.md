@@ -316,12 +316,21 @@ Four steps, each independently revertible.
 
 `ensureRolloutBackfill`'s fence (`delivery-attempts.ts:402-423`) is untouched —
 this design changes no status and adds no delivery authorization, so nothing
-becomes newly deliverable by migration alone. **Verify this rather than assume
-it:** the backfill makes interactive issues visible to `getOpenPr` for the first
-time, and `assertClaimable` reads `getOpenPr` — so an interactive issue with an
-open `feat/` PR will start refusing new claims the moment step 3 lands. That is
-the intended fix, but it is a live behaviour change on existing issues and
-should be counted before shipping.
+becomes newly deliverable by migration alone.
+
+**Correction (2026-07-27, during implementation).** An earlier revision of this
+section claimed the backfill would make interactive issues visible to
+`getOpenPr`, so an open `feat/` PR would start refusing new claims the moment
+step 3 landed, and that this needed counting before shipping. **That is wrong,
+and it overstated the deploy risk.** A display-only PR never touches `pr_state`
+at all (`github-webhook.ts:221`), so the backfill — which reads `pr_state` —
+creates nothing for it; and free-text ingestion yields a `references` link,
+which `LIVE_DELIVERS` excludes. Interactive work starts gating claims only when
+someone **declares**, which is opt-in per PR.
+
+The claim was checked by running it, not by re-reading the code, and is now
+pinned by a test (`tests/services/pr-links.test.ts`, "does not make an
+undeclared interactive feat/ PR gate claims") so it cannot silently drift.
 
 ## 11. Consistency sweep
 

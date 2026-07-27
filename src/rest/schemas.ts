@@ -138,6 +138,20 @@ export const agentSessionEndBody = z.object({ exitCode: z.number().int().nullabl
 export const progressNoteBody = z.object({ note: z.string().min(1) });
 export const dependencyBody = z.object({ blockerRef: z.string(), blockedRef: z.string() });
 export const requestInputBody = z.object({ question: z.string() });
+// SYD-280 declared attribution. `role` is accepted but ignored for agents (the
+// service forces `delivers`) — a references link is a suggestion, and
+// suggestions come from humans or free-text ingestion, never from an actor
+// asserting its own work.
+export const prLinkDeclareBody = z.object({
+  repo: z.string(),
+  prNumber: z.number().int().positive(),
+  role: z.enum(["delivers", "references"]).optional(),
+});
+export const prLinkTargetBody = z.object({
+  repo: z.string(),
+  prNumber: z.number().int().positive(),
+});
+export const prLinkRevokeBody = prLinkTargetBody.extend({ reason: z.string() });
 export const snoozeBody = z.object({ until: z.number().int().positive() });
 export const duplicateBody = z.object({ of: z.string() });
 export const webhookCreateBody = z.object({

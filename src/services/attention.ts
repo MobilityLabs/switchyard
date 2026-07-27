@@ -59,10 +59,12 @@ function unresolvedDeliveryFailures(db: Db, issueId?: number): Row[] {
         AND e2.id > latest.eventId
     )
     AND NOT EXISTS (
-      SELECT 1 FROM pr_state ps, issues i, projects p
-      WHERE i.id = latest.issue_id
-        AND i.project_id = p.id
-        AND ps.issue_ref = p.key || '-' || i.number
+      SELECT 1 FROM pr_links pl
+      JOIN pr_state ps
+        ON lower(ps.repo) = lower(pl.repo) AND ps.pr_number = pl.pr_number
+      WHERE pl.issue_id = latest.issue_id
+        AND pl.revoked_at IS NULL
+        AND pl.role = 'delivers'
         AND ps.status = 'merged'
         AND ps.last_transition_event_id > latest.eventId
     )
@@ -82,32 +84,41 @@ function unresolvedDoneWithoutMerge(db: Db, issueId?: number): Row[] {
     ) latest
     JOIN events f ON f.id = latest.eventId
     JOIN issues i ON i.id = latest.issue_id AND i.status = 'done'
-    WHERE NOT EXISTS (
-      SELECT 1 FROM pr_state ps, projects p
-      WHERE i.project_id = p.id
-        AND ps.issue_ref = p.key || '-' || i.number
-        AND ps.status = 'merged'
-        AND ps.last_transition_event_id > latest.eventId
-    )
-    -- SYD-267: a merge the webhook could only record as a display event still
-    -- proves the work landed. For a feat/ branch, handlePr's free-text match
-    -- (src/services/github-webhook.ts) writes gh_pr_merged but deliberately
-    -- never touches pr_state, so the row above stays empty and this flag fired
-    -- on issues whose merged PR the issue page was already rendering — the
-    -- banner's own "no PR ever recorded" was false.
+    -- SYD-280: one arm, where there used to be two.
     --
-    -- Deliberately NOT event-id ordered, unlike every other arm here. Whether
-    -- the merge event lands before or after the deviation is an accident of
-    -- poller lag: stamp done before the poller catches up and it's after; wait
-    -- for the board to show merged and it's before. Both describe the same
-    -- situation, so ordering would leave half the cases falsely flagged. The
-    -- cost is that a reopen-and-re-stamp can't re-raise past an old merge —
-    -- acceptable because this flag authorizes nothing, it only asks a human to
-    -- look, and a merged PR is what it would have them look at.
-    AND NOT EXISTS (
-      SELECT 1 FROM events m
-      WHERE m.issue_id = latest.issue_id
-        AND m.type = 'gh_pr_merged'
+    -- The old pair was (a) a merged pr_state row for this ref, event-ordered,
+    -- and (b) SYD-267's unordered "ANY gh_pr_merged event on this issue".
+    -- (b) existed because a feat/ branch's merge was only ever a display
+    -- event, so (a) could never see it — but display events come from the
+    -- first REF_RE match in a PR title or body, so a PR that merely MENTIONED
+    -- an issue cleared its warning permanently. The safety net could be
+    -- silenced by the same loose matching it was built to catch. This repo's
+    -- own history has the shape: 62763cc, "fix: rehabilitate SYD-245's tests
+    -- against the SYD-242 expiresAt param (SYD-265)", first-mentions SYD-245.
+    --
+    -- Now a merge clears the flag only through a PROOF-BEARING declared link
+    -- (declared and confirmed by someone accountable), which both arms'
+    -- intents reduce to. A free-text match now yields a references-role link,
+    -- which is not proof-bearing, so a passing mention clears nothing.
+    --
+    -- Deliberately NOT event-id ordered, keeping SYD-267's reasoning: whether
+    -- the merge lands before or after the deviation is an accident of poller
+    -- lag, and both orders describe the same situation. The cost is that a
+    -- reopen-and-re-stamp can't re-raise past an old merge — acceptable
+    -- because this flag authorizes nothing, it only asks a human to look.
+    WHERE NOT EXISTS (
+      SELECT 1 FROM pr_links pl
+      JOIN pr_state ps
+        ON lower(ps.repo) = lower(pl.repo) AND ps.pr_number = pl.pr_number
+      WHERE pl.issue_id = latest.issue_id
+        AND pl.revoked_at IS NULL
+        AND pl.role = 'delivers'
+        AND pl.confirmed_by IS NOT NULL
+        AND (
+          EXISTS (SELECT 1 FROM actors ca WHERE ca.id = pl.confirmed_by AND ca.type = 'human')
+          OR (ps.gh_updated_at IS NOT NULL AND ps.gh_updated_at >= pl.declared_at)
+        )
+        AND ps.status = 'merged'
     )
     -- SYD-262: the human escape hatch, for work that landed with no PR at all
     -- (so nothing above can vouch for it). Scoped to the matching reason so

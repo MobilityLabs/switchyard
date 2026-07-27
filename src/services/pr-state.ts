@@ -42,6 +42,7 @@ import { getProjectByKey } from "./projects.js";
 import { normalizeRepoFullName } from "./github-repos.js";
 import { recordEvent, findEventIdByPayload } from "./events.js";
 import { parseGhTimestamp, refFromBranch } from "./github-webhook.js";
+import { recordIngestedPrLink } from "./pr-links.js";
 
 export type PrStateRow = typeof prState.$inferSelect;
 export type PrStatus = "open" | "merged" | "closed";
@@ -194,6 +195,21 @@ export function upsertPrState(db: Db, actor: Actor, input: PrObservation): Upser
     if (!decision.apply) return { applied: false, transition: null, reason: decision.reason };
 
     const issueRef = attributedRef(tx, o.repo, o.branch) ?? existing?.issueRef ?? null;
+
+    // SYD-280: the branch-attributed path co-declares the issue<->PR link.
+    // Done here rather than at each caller because upsertPrState is the ONLY
+    // pr_state writer, so this one site covers webhook, poller, the worker's
+    // publish and the delivery merge. Idempotent, so refreshes and
+    // redeliveries are no-ops.
+    if (issueRef !== null) {
+      recordIngestedPrLink(tx, {
+        issueId: getIssue(tx, issueRef).id,
+        repo: o.repo,
+        prNumber: o.prNumber,
+        role: "delivers",
+        actorId: actor.id,
+      });
+    }
 
     let lastTransitionEventId = existing?.lastTransitionEventId ?? null;
     if (decision.transition !== null && issueRef !== null) {

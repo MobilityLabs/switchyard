@@ -14,6 +14,7 @@ import {
   listAffirmationKeys,
   revokeAffirmationKey,
 } from "./services/affirmation-keys.js";
+import { backfillPrLinksFromPrState } from "./services/pr-links.js";
 import { SwitchyardError } from "./services/errors.js";
 
 // The CLI operates directly on the db file with no HTTP auth, so it stands
@@ -54,6 +55,7 @@ if (!dbPath || !cmd) {
   );
   console.log("       tsx src/cli.ts <db-path> list-affirm-keys <humanName>");
   console.log("       tsx src/cli.ts <db-path> rm-affirm-key <humanName> <id>");
+  console.log("       tsx src/cli.ts <db-path> backfill-pr-links <humanName> [--dry-run]");
   process.exit(1);
 }
 const db = openDb(dbPath);
@@ -190,6 +192,26 @@ try {
     const human = requireHumanActor(db, name);
     revokeAffirmationKey(db, human, Number(id));
     console.log(`Revoked affirmation key ${id}.`);
+  } else if (cmd === "backfill-pr-links") {
+    // SYD-280 cutover. MUST run before the pr_links readers go live, or every
+    // existing agent PR loses its attribution and its issue becomes claimable
+    // again (the SYD-93/177 class). Idempotent, so re-running is safe.
+    const [name, ...rest] = args;
+    if (!name) {
+      console.error("backfill-pr-links needs: <humanName> [--dry-run]");
+      process.exit(1);
+    }
+    const dryRun = rest.includes("--dry-run");
+    // Deliberately a named human, not the `cli` stand-in: the backfill asserts
+    // trust over existing data, and confirmed_by must be a real human for the
+    // §5a recency exception to keep historical merges proof-bearing.
+    const human = requireHumanActor(db, name);
+    const r = backfillPrLinksFromPrState(db, human, { dryRun });
+    console.log(
+      dryRun
+        ? `[dry-run] would create ${r.created} link(s); ${r.alreadyLinked} already linked.`
+        : `Created ${r.created} link(s); ${r.alreadyLinked} already linked.`,
+    );
   } else {
     console.error(`unknown command "${cmd}"`);
     process.exit(1);

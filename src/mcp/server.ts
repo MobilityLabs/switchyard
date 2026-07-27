@@ -24,6 +24,7 @@ import {
   MAX_RECENT_EVENTS_LIMIT,
 } from "../services/events.js";
 import { requestHumanInput } from "../services/needs-input.js";
+import { declarePrLink, revokePrLink } from "../services/pr-links.js";
 import { recordProgressNote, listAgentSessions } from "../services/agent-sessions.js";
 import { saveAttachment, defaultAttachmentsDir } from "../services/attachments.js";
 
@@ -403,6 +404,74 @@ export function buildMcpServer(
           lease_token ?? connectionLeaseToken,
           attribution,
         ),
+    ),
+  );
+
+  server.registerTool(
+    "declare_pr_link",
+    {
+      description:
+        "Record that a pull request carries this issue's work. Call this right after you open a PR, " +
+        "on ANY branch — this is what links the PR to the issue, and without it the board cannot tell " +
+        "that your work exists. Do not rely on the branch name or on mentioning the ref in the PR " +
+        "title: those are guesses, and only a declared link counts. " +
+        "You must hold the claim, so pass lease_token (returned by claim_issue). " +
+        "Your declaration blocks anyone else claiming this issue, but it does NOT by itself prove the " +
+        "work landed — a human confirms that when they review. If you linked the wrong PR, call " +
+        "revoke_pr_link and declare the right one.",
+      inputSchema: {
+        ref: z.string(),
+        repo: z.string().describe("owner/name, e.g. MobilityLabs/switchyard"),
+        pr_number: z.number().int().positive(),
+        lease_token: z.string().optional(),
+      },
+    },
+    guard((a: { ref: string; repo: string; pr_number: number; lease_token?: string }) =>
+      declarePrLink(
+        db,
+        actor,
+        a.ref,
+        { repo: a.repo, prNumber: a.pr_number },
+        a.lease_token ?? connectionLeaseToken,
+        attribution,
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "revoke_pr_link",
+    {
+      description:
+        "Withdraw a PR link you declared on this issue — use it when you linked the wrong PR, or the " +
+        "PR was abandoned. A reason is required and is recorded. You can only withdraw your own link, " +
+        "and only while it is still unconfirmed: once a human has confirmed it, only a human can " +
+        "revoke it. Pass lease_token (returned by claim_issue).",
+      inputSchema: {
+        ref: z.string(),
+        repo: z.string(),
+        pr_number: z.number().int().positive(),
+        reason: z.string(),
+        lease_token: z.string().optional(),
+      },
+    },
+    guard(
+      (a: {
+        ref: string;
+        repo: string;
+        pr_number: number;
+        reason: string;
+        lease_token?: string;
+      }) => {
+        revokePrLink(
+          db,
+          actor,
+          a.ref,
+          { repo: a.repo, prNumber: a.pr_number, reason: a.reason },
+          a.lease_token ?? connectionLeaseToken,
+          attribution,
+        );
+        return { ok: true };
+      },
     ),
   );
 

@@ -21,6 +21,7 @@ import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
 import { boundRepoFullNames, normalizeRepoFullName } from "./github-repos.js";
 import { upsertPrState, attributedRef, type PrObservation } from "./pr-state.js";
+import { recordIngestedPrLink } from "./pr-links.js";
 
 const GITHUB_ACTOR_NAME = "github";
 
@@ -180,6 +181,23 @@ function record(
     type,
     payload: { ...payload, repo: resolvedRepo },
   });
+  // SYD-280: this is the display/free-text path — the ref came from the first
+  // REF_RE match in a PR title or body, which anyone can write. It records a
+  // `references` link: a suggestion a human may promote, which gates no claim
+  // and proves no landing. Never `delivers`.
+  //
+  // This is the narrowing that closes the false-clear hole: before, ANY
+  // gh_pr_merged event cleared done_without_merged_pr (attention.ts), so a PR
+  // that merely mentioned an issue silenced its warning permanently.
+  if (resolvedRepo !== null && typeof payload.prNumber === "number") {
+    recordIngestedPrLink(db, {
+      issueId: issue.id,
+      repo: resolvedRepo,
+      prNumber: payload.prNumber,
+      role: "references",
+      actorId: actor.id,
+    });
+  }
   return { handled: true, ref, type };
 }
 

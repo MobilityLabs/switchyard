@@ -8,6 +8,7 @@ import { recordEvent } from "../../src/services/events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
 import { getAttention, listAttentionByIssueId } from "../../src/services/attention.js";
+import { declarePrLink } from "../../src/services/pr-links.js";
 import { resolveDeliveryFailure } from "../../src/services/triage-actions.js";
 
 const REPO = "acme/widgets";
@@ -295,7 +296,11 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
   // gh_pr_merged as a display event, and the issue page renders it. So the
   // banner claimed "no PR ever recorded" on issues whose merged PR was one
   // click away. Trust that event.
-  it("clears when a gh_pr_merged event is recorded after the deviation", () => {
+  // SYD-267's intent, re-expressed for SYD-280. It used to be satisfied by ANY
+  // gh_pr_merged event, which is why a PR that merely mentioned an issue could
+  // clear its warning permanently. The intent — interactive work that really
+  // landed should clear — is now carried by a declared, human-confirmed link.
+  it("clears when a declared, confirmed link's PR is merged (interactive work)", () => {
     const { db, human, agent } = setup();
     updateIssue(db, human, "SYD-1", { status: "todo" });
     claimIssue(db, agent, "SYD-1");
@@ -304,6 +309,32 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
     const id = getIssue(db, "SYD-1").id;
     expect(getAttention(db, id)?.reason).toBe("done_without_merged_pr");
 
+    // A feat/ branch: no agent/<ref> to infer from, so a human states the link.
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 197 });
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 197,
+      status: "merged",
+      branch: "feat/interactive",
+      ghUpdatedAt: "2026-07-12T11:00:00Z",
+      mergeSha: "d0073fb",
+    });
+
+    expect(getAttention(db, id)).toBeNull();
+  });
+
+  // The false-clear hole, closed. This is the exact shape of 62763cc in this
+  // repo's history: a PR whose title first-mentions an unrelated issue.
+  it("does NOT clear on a merge event for a PR that merely mentions the issue", () => {
+    const { db, human, agent } = setup();
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    const id = getIssue(db, "SYD-1").id;
+
+    // A bare merge event with no declared link — what free-text ingestion used
+    // to produce, and what used to silence this flag forever.
     recordEvent(db, {
       issueId: id,
       actorId: human.id,
@@ -311,7 +342,7 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
       payload: { prNumber: 197, mergeSha: "d0073fb", repo: REPO },
     });
 
-    expect(getAttention(db, id)).toBeNull();
+    expect(getAttention(db, id)?.reason).toBe("done_without_merged_pr");
   });
 
   // Deliberately NOT event-id ordered, unlike the pr_state and
@@ -320,19 +351,25 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
   // catches up and it's after; wait for the board to show merged and it's
   // before. Both are the same real situation — the work landed — so ordering
   // here would leave half the cases falsely flagged (SYD-267).
-  it("clears when the gh_pr_merged event predates the deviation", () => {
+  it("clears when the merge predates the deviation", () => {
     const { db, human, agent } = setup();
     updateIssue(db, human, "SYD-1", { status: "todo" });
     claimIssue(db, agent, "SYD-1");
     updateIssue(db, human, "SYD-1", { status: "in_review" });
     const id = getIssue(db, "SYD-1").id;
 
-    // Poller observed the merge first; the human stamps done afterwards.
-    recordEvent(db, {
-      issueId: id,
-      actorId: human.id,
-      type: "gh_pr_merged",
-      payload: { prNumber: 197, mergeSha: "d0073fb", repo: REPO },
+    // Poller observed the merge first; the human stamps done afterwards. This
+    // is also the hand-merge-then-update-the-board flow, which is why §5a's
+    // recency binding must not apply to a human-confirmed link — under a
+    // blanket rule this issue could never prove it landed.
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 197 });
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 197,
+      status: "merged",
+      branch: "feat/interactive",
+      ghUpdatedAt: "2020-01-01T00:00:00Z", // deliberately long before declaration
+      mergeSha: "d0073fb",
     });
     updateIssue(db, human, "SYD-1", { status: "done" });
 
