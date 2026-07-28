@@ -53,7 +53,8 @@ import {
   resumeActionFor,
   agentBranch,
   resolveDeliveryToken,
-  shouldRefuseUnprotectedMain,
+  deliverableProjectKeys,
+  refsHeldBackByProtection,
   type DeliveryEventInput,
   type DeliveryWork,
   type WorkAuthorization,
@@ -931,16 +932,32 @@ async function tick(
   token: string,
   gate: ReturnType<typeof newTickGate>,
   dryRun: boolean,
+  // SYD-284: the projects branch protection allows us to deliver for. Defaults
+  // to every configured project, so a caller that doesn't opt into the gate
+  // behaves exactly as before.
+  deliverableKeys: string[] = Object.keys(config.projects),
 ): Promise<void> {
   await runGated(gate, async () => {
     const url = `${apiBase(config)}/api/delivery-work`;
     const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
     if (!res.ok)
       throw new Error(`GET /api/delivery-work failed: ${res.status} ${await res.text()}`);
-    const work = filterWorkToProjects(
-      (await res.json()) as DeliveryWork,
-      Object.keys(config.projects),
-    );
+    const allWork = (await res.json()) as DeliveryWork;
+
+    // Name what is being withheld, every tick it is still owed. Delivering
+    // nothing for a repo is indistinguishable from having no work for it, so
+    // silence here would reproduce the failure this gate exists to prevent.
+    const withheld = Object.keys(config.projects).filter((k) => !deliverableKeys.includes(k));
+    const heldBack = refsHeldBackByProtection(allWork, withheld);
+    if (heldBack.length > 0) {
+      console.error(
+        `ERROR: holding back delivery for ${heldBack.join(", ")} — main's branch protection on ` +
+          `${withheld.join(", ")} is relaxed or unverifiable, and CI is the sole check authority ` +
+          `(SYD-209). Fix with: npm run init-worker -- --protect-main ${withheld.join(" ")}`,
+      );
+    }
+
+    const work = filterWorkToProjects(allWork, deliverableKeys);
 
     // Crash resumption first: reconcile any attempt a prior crash left open
     // against live GitHub before starting anything new. Sequential on purpose
@@ -1018,14 +1035,26 @@ async function main(): Promise<void> {
   // it runs in dry-run too and never blocks the tick loop by itself.
   const unprotected = await warnOnRelaxedBranchProtection(config);
 
-  // SYD-222: an operator can opt a repo into refusing to start at all, rather
-  // than merging with the warning alarm as the only signal.
-  if (shouldRefuseUnprotectedMain(config.delivery?.requireBranchProtection, unprotected)) {
+  // SYD-222, narrowed by SYD-284: an operator can opt into refusing to deliver
+  // for a repo whose main is unprotected. Originally this exited the process,
+  // so ONE misconfigured repo stopped delivery for every project on the host —
+  // a config problem in one place became an outage everywhere. Now the refusal
+  // is scoped to the offending repo and the worker keeps serving the rest;
+  // tick() names the withheld refs on every pass.
+  const deliverableKeys = deliverableProjectKeys(
+    Object.keys(config.projects),
+    config.delivery?.requireBranchProtection,
+    unprotected,
+  );
+  const withheld = Object.keys(config.projects).filter((k) => !deliverableKeys.includes(k));
+  if (withheld.length > 0) {
     console.error(
-      `refusing to start: delivery.requireBranchProtection is set and main's branch protection ` +
-        `could not be verified as safe for: ${unprotected.join(", ")}`,
+      `delivery.requireBranchProtection is set — NOT delivering for ${withheld.join(", ")} ` +
+        `until main's branch protection is verified. Other projects are unaffected.`,
     );
-    process.exit(1);
+  }
+  if (deliverableKeys.length === 0) {
+    console.error("no project has verified branch protection — nothing is deliverable");
   }
 
   // Dry runs are non-mutating (never start/finish an attempt, merge, deploy,
@@ -1037,14 +1066,14 @@ async function main(): Promise<void> {
 
   if (once) {
     try {
-      await tick(config, token, gate, dryRun);
+      await tick(config, token, gate, dryRun, deliverableKeys);
     } finally {
       releaseLock?.();
     }
     return;
   }
 
-  await tick(config, token, gate, dryRun);
+  await tick(config, token, gate, dryRun, deliverableKeys);
 
   const pollSeconds = config.delivery?.pollSeconds ?? DEFAULT_POLL_SECONDS;
   console.log(

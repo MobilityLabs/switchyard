@@ -50,7 +50,8 @@ import {
   queueDeliveredNote,
   buildBranchProtectionArgs,
   evaluateBranchProtection,
-  shouldRefuseUnprotectedMain,
+  deliverableProjectKeys,
+  refsHeldBackByProtection,
   buildPrListMergedArgs,
   closedPrAlreadyDeliveredComment,
   closedPrDeadEndComment,
@@ -744,18 +745,47 @@ describe("branch-protection health check (SYD-209)", () => {
   });
 });
 
-describe("shouldRefuseUnprotectedMain (SYD-222)", () => {
-  it("never refuses when the operator hasn't opted in, even with failing repos", () => {
-    expect(shouldRefuseUnprotectedMain(undefined, ["SYD"])).toBe(false);
-    expect(shouldRefuseUnprotectedMain(false, ["SYD"])).toBe(false);
+describe("deliverableProjectKeys (SYD-222, narrowed per-repo by SYD-284)", () => {
+  const ALL = ["SYD", "NOC", "HEX"];
+
+  it("delivers for everything when the operator hasn't opted in, even with failing repos", () => {
+    expect(deliverableProjectKeys(ALL, undefined, ["SYD"])).toEqual(ALL);
+    expect(deliverableProjectKeys(ALL, false, ["SYD"])).toEqual(ALL);
   });
 
-  it("never refuses when opted in but nothing is failing", () => {
-    expect(shouldRefuseUnprotectedMain(true, [])).toBe(false);
+  it("delivers for everything when opted in but nothing is failing", () => {
+    expect(deliverableProjectKeys(ALL, true, [])).toEqual(ALL);
   });
 
-  it("refuses only once opted in AND at least one repo is failing", () => {
-    expect(shouldRefuseUnprotectedMain(true, ["SYD", "NOC"])).toBe(true);
+  // The SYD-284 change: SYD-222's gate exited the process, so ONE unprotected
+  // repo stopped delivery for every project on the host. The risk is per-repo,
+  // so the refusal is too.
+  it("withholds ONLY the failing repo, leaving the others deliverable", () => {
+    expect(deliverableProjectKeys(ALL, true, ["NOC"])).toEqual(["SYD", "HEX"]);
+  });
+
+  it("can withhold everything when every repo fails, without special-casing", () => {
+    expect(deliverableProjectKeys(ALL, true, ALL)).toEqual([]);
+  });
+});
+
+describe("refsHeldBackByProtection (SYD-284)", () => {
+  const work = {
+    pending: [{ ref: "NOC-1" }, { ref: "SYD-2" }],
+    unfinished: [{ issueRef: "NOC-3" }],
+    deployRetries: [{ ref: "NOC-1" }, { ref: "HEX-9" }],
+  } as unknown as Parameters<typeof refsHeldBackByProtection>[0];
+
+  it("names every withheld ref across all three work kinds, deduped and sorted", () => {
+    expect(refsHeldBackByProtection(work, ["NOC"])).toEqual(["NOC-1", "NOC-3"]);
+  });
+
+  it("is empty when nothing is withheld — no noise on the happy path", () => {
+    expect(refsHeldBackByProtection(work, [])).toEqual([]);
+  });
+
+  it("reports nothing for a withheld project that happens to have no work owed", () => {
+    expect(refsHeldBackByProtection(work, ["OTHER"])).toEqual([]);
   });
 });
 
