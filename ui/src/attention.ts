@@ -18,5 +18,9 @@ export function attentionChip(
       return { label: "⚠ claim going stale", className: "badge warn" };
     case "done_without_merged_pr":
       return { label: "⚠ done — no merged PR on record", className: "badge warn" };
+    // SYD-261: the PR exists and is fine — nothing delivered it. Distinct from
+    // the line above, where no PR is on record at all.
+    case "done_pr_not_delivered":
+      return { label: "⚠ done — PR not delivered", className: "badge warn" };
   }
 }

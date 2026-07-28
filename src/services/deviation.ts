@@ -21,7 +21,11 @@ import { getSetting } from "./settings.js";
 import { recordEvent } from "./events.js";
 
 export type DeviationReason =
-  "open_pr_not_in_review" | "merged_pr_not_done" | "stale_claim" | "done_without_merged_pr";
+  | "open_pr_not_in_review"
+  | "merged_pr_not_done"
+  | "stale_claim"
+  | "done_without_merged_pr"
+  | "done_pr_not_delivered";
 export type DeviationFlag = { reason: DeviationReason; message: string };
 
 // Richer computation shared by the read-path (getDeviation) and the webhook
@@ -34,7 +38,10 @@ export type DeviationComputation = DeviationFlag & {
 
 type IssueRow = typeof issues.$inferSelect;
 
-const CANDIDATE_STATUSES = ["todo", "in_progress", "in_review"] as const;
+// `done` earns its place here for done_pr_not_delivered only (SYD-261) — the
+// three older rules all require todo/in_progress/in_review and stay inert for
+// it, so widening the scan cannot make them fire on finished work.
+const CANDIDATE_STATUSES = ["todo", "in_progress", "in_review", "done"] as const;
 
 // process_deviation events are excluded so the monitoring signal itself can't
 // reset the idle clock it's monitoring (SYD-188): recording one at ~now would
@@ -46,6 +53,19 @@ function newestEventAt(db: Db, issue: IssueRow): number {
     .where(and(eq(events.issueId, issue.id), ne(events.type, "process_deviation")))
     .get();
   return row?.createdAt ?? issue.createdAt;
+}
+
+/** The newest done-stamp: when the clock starts, and the episode key so the
+ * webhook fires once per done episode rather than once per sweep (SYD-261). */
+function lastDoneStamp(db: Db, issueId: number): { id: number; at: number } | null {
+  const row = db.all<{ id: number; at: number }>(sql`
+    SELECT id, created_at AS at FROM events
+    WHERE issue_id = ${issueId}
+      AND type = 'status_changed'
+      AND json_extract(payload, '$.to') = 'done'
+    ORDER BY id DESC LIMIT 1
+  `)[0];
+  return row ?? null;
 }
 
 function claimStartEventId(db: Db, issueId: number): number {
@@ -74,6 +94,33 @@ export function computeDeviation(
         message: `PR #${merged.prNumber} is merged — a human can stamp this done`,
         episodeStartId: merged.eventId,
         prNumber: merged.prNumber,
+      };
+    }
+  }
+  // SYD-261: done, with an agent PR still open and nothing delivering it.
+  //
+  // The done-stamp only authorizes delivery when it carried a pin — the head a
+  // human actually approved — so a PR that registered AFTER the stamp is
+  // correctly not auto-delivered (see delivery-attempts.ts's header; changing
+  // that would let the worker merge a head nobody reviewed). But the resulting
+  // state had no signal whatsoever: done_without_merged_pr cannot fire because
+  // a PR is open, and SYD-230's re-stamp affordance is an info banner on the
+  // issue page. HEX-1's #304 sat green for 30+ minutes and was merged by hand.
+  //
+  // Delayed rather than immediate, because stamp-then-deliver-seconds-later is
+  // the NORMAL flow and firing on it would make the signal meaningless.
+  if (issue.status === "done" && openPr !== null) {
+    const stamp = lastDoneStamp(db, issue.id);
+    const undeliveredFor = stamp === null ? 0 : now - stamp.at;
+    if (stamp !== null && undeliveredFor > getSetting(db, "delivery.undelivered_seconds")) {
+      const mins = Math.max(1, Math.round(undeliveredFor / 60));
+      return {
+        reason: "done_pr_not_delivered",
+        message:
+          `PR #${openPr.prNumber} has been open and undelivered for ~${mins}m since this was ` +
+          `stamped done — re-stamp delivery to authorize its current head`,
+        episodeStartId: stamp.id,
+        prNumber: openPr.prNumber,
       };
     }
   }

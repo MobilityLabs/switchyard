@@ -96,17 +96,48 @@ describe("AttentionBanner", () => {
     attention: Issue["attention"],
     onRetry?: () => void,
     onResolveClick?: () => void,
+    onRestamp?: () => void,
   ): Promise<HTMLElement> {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
       root.render(
-        <AttentionBanner attention={attention} onRetry={onRetry} onResolveClick={onResolveClick} />,
+        <AttentionBanner
+          attention={attention}
+          onRetry={onRetry}
+          onRestamp={onRestamp}
+          onResolveClick={onResolveClick}
+        />,
       );
     });
     return container;
   }
+
+  // SYD-261: the flag's whole point is to be actionable where a human looks,
+  // so it carries the action that resolves it.
+  it("offers Re-stamp delivery for done_pr_not_delivered", async () => {
+    let clicked = 0;
+    const container = await render(
+      { reason: "done_pr_not_delivered", message: "PR #304 has been open and undelivered" },
+      undefined,
+      undefined,
+      () => {
+        clicked += 1;
+      },
+    );
+    const button = container.querySelector(".retry-delivery") as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toContain("Re-stamp");
+    await act(async () => button!.click());
+    expect(clicked).toBe(1);
+  });
+
+  it("renders done_pr_not_delivered as a warn, not a hard error", async () => {
+    const container = await render({ reason: "done_pr_not_delivered", message: "undelivered" });
+    expect(container.querySelector(".banner.warn")).not.toBeNull();
+    expect(container.querySelector(".banner.danger")).toBeNull();
+  });
 
   it("renders nothing when the issue is clean", async () => {
     const container = await render(null);
@@ -248,6 +279,22 @@ describe("RestampBanner", () => {
       attention: { reason: "delivery_failed", message: "merge conflict" },
     });
     expect(container.querySelector(".retry-delivery")).toBeNull();
+  });
+
+  // SYD-261: once the state goes stale it gets an attention flag that carries
+  // its own Re-stamp button, so this banner steps aside rather than doubling up.
+  it("renders nothing when done_pr_not_delivered is flagged (AttentionBanner owns that action)", async () => {
+    const container = await render({
+      status: "done",
+      openPr,
+      attention: { reason: "done_pr_not_delivered", message: "undelivered" },
+    });
+    expect(container.querySelector(".retry-delivery")).toBeNull();
+  });
+
+  it("still covers the fresh window before the flag arms", async () => {
+    const container = await render({ status: "done", openPr, attention: null });
+    expect(container.querySelector(".retry-delivery")).not.toBeNull();
   });
 
   it("renders a Re-stamp delivery button naming the PR that calls onRestamp when clicked", async () => {
