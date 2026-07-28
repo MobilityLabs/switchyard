@@ -5,6 +5,14 @@ four-value enum, dependencies express hard blocks, and neither captures "do this
 one before that one" between two unblocked `high` issues. This is that ordering,
 written down so it survives the session that produced it.
 
+**This file is meant to become unnecessary.** SYD-293 (with stories SYD-294
+server, SYD-295 drag-to-reorder UI) adds a manual rank that `next_task` honours,
+which is where a working order belongs — a doc is an order nothing enforces, and
+agents calling `next_task` will keep ignoring it. The tiers below are the seed
+data for that initial ordering. When SYD-295 ships, retire this file or cut it
+down to the *reasoning*, keeping the order itself in one place so the two cannot
+drift.
+
 **Status:** a recommendation, not a commitment. Re-derive it rather than trust it
 if the board has moved much — the counts below are measurements taken on
 2026-07-28 and will drift. Where an ordering decision rests on a fact, the fact
