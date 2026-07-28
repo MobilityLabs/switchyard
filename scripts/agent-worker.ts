@@ -1688,8 +1688,10 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error(
         `FATAL: could not set up the egress guard (SYD-110): ${(err as Error).message}\n` +
-          'Build the proxy image with `npm run build:worker-image`, or set egress: "open" ' +
-          "in switchyard-worker.json to explicitly opt out of the allowlist.",
+          "If the sidecar image is missing, build it with `npm run build:worker-image`; if a " +
+          "stale syd-egress container is wedged, `docker rm -f syd-egress` and restart. Set " +
+          'egress: "open" in switchyard-worker.json only to deliberately opt out of the ' +
+          "allowlist — it gives sessions full egress.",
       );
       process.exit(1);
     }
