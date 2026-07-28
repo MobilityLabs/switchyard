@@ -25,11 +25,24 @@ npm run db:generate    # drizzle-kit generate — run after editing src/db/schem
 npm run deploy         # ship working tree to the NAS + rebuild container (scripts/deploy-nas.sh)
 npm run init-worker    # doctor for the auto-dispatch worker (--self-test, --install-launchd)
 npm run build:worker-image   # docker image for containerized dispatch
+npx tsx scripts/syd.ts       # authenticated API client — see below
 ```
 
 Before opening a PR, run `npm run lint && npm run format:check && npm run typecheck && npm test` — CI (`.github/workflows/ci.yml`) runs the same checks and fails the build on any of them.
 
-Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-project|add-actor|mint-login|add-webhook ...`
+Admin CLI (first arg is the db path): `npx tsx src/cli.ts switchyard.db add-project|add-actor|mint-login|add-webhook|backfill-pr-links ...`
+
+**`scripts/syd.ts` — talk to the API without hand-assembling a curl.** Reads the token from `.env`, puts it only in a request header (never argv, per the security invariant below).
+
+```bash
+npx tsx scripts/syd.ts whoami                                  # which actor your token is
+npx tsx scripts/syd.ts pr-link list SYD-280                    # an issue's declared links
+npx tsx scripts/syd.ts pr-link confirm SYD-280 226             # human-only: make a link proof-bearing
+npx tsx scripts/syd.ts api GET /issues/SYD-280                 # anything else
+npx tsx scripts/syd.ts whoami --as SWITCHYARD_TOKEN            # pick a credential explicitly
+```
+
+Before any write it prints `acting as <name> (<type>) via <KEY>`. Read that line. Variable names describe the *actor*, not the tier — `SWITCHYARD_HUMAN_TOKEN` is a person, `SWITCHYARD_GITHUB_POLLER_TOKEN` and `SWITCHYARD_DELIVER_POLLER_TOKEN` are `service` actors, and `SWITCHYARD_TOKEN` is the dispatch worker's *agent* token, which the delivery and GitHub-ingestion endpoints refuse on purpose.
 
 `worker-sdk/` has isolated dependencies (`npm install --prefix worker-sdk`) because the Claude Agent SDK needs zod@4 while the app is on zod@3.
 
