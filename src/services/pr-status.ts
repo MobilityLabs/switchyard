@@ -11,13 +11,17 @@
 // an issue exactly when that issue holds a live `delivers` link (SYD-280).
 // pr_state.issue_ref is not consulted here and has not been since the swap.
 //
-// Ingestion writes a pr_state row on the same predicate (SYD-287,
-// github-webhook.ts), so the join has both halves for interactive `feat/` work
-// too. It did not before: only an agent/<ref> branch produced a row, so a
+// Ingestion writes a pr_state row for EVERY PR in a bound repo (SYD-287,
+// github-webhook.ts), so the join always has its observation half waiting and
+// a declaration completes it whenever it arrives — including long after a
+// merge. It did not before: only an agent/<ref> branch produced a row, so a
 // declared link on any other branch INNER JOINed to nothing and every reader
 // here returned null — no claim gate, no delivery pin, no proof of landing.
-// Free-text title matches yield a `references` link, which LIVE_DELIVERS
-// excludes: audit history, never claim-gating state.
+//
+// The corollary is that a pr_state row means nothing on its own. Rows for
+// undeclared PRs are inert here by construction, because the join is what
+// carries the attribution. Free-text title matches yield a `references` link,
+// which LIVE_DELIVERS excludes: audit history, never claim-gating state.
 //
 // claimIssue and updateIssue's in_progress gate (src/services/issues.ts) use
 // getOpenPr to refuse a second claim while one is already in flight — the gap

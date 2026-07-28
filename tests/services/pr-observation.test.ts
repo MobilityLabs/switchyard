@@ -27,7 +27,12 @@ import { handleGithubWebhook } from "../../src/services/github-webhook.js";
 import { findPrState } from "../../src/services/pr-state.js";
 import { getOpenPr, getMergedPr, deliveryPinFor } from "../../src/services/pr-status.js";
 import { getAttention } from "../../src/services/attention.js";
-import { declarePrLink, revokePrLink, listLiveLinks } from "../../src/services/pr-links.js";
+import {
+  declarePrLink,
+  revokePrLink,
+  listLiveLinks,
+  backfillPrLinksFromPrState,
+} from "../../src/services/pr-links.js";
 
 const REPO = "acme/widgets";
 const PR = 226;
@@ -166,10 +171,12 @@ describe("declaring after ingestion — the production ordering (SYD-287)", () =
   it("promotes the references link free-text ingestion already minted", () => {
     const { db, human } = setup();
     // The webhook lands FIRST, as it does in production: the PR title carries
-    // the ref, so ingestion mints an unconfirmed `references` suggestion.
+    // the ref, so ingestion mints an unconfirmed `references` suggestion. The
+    // observation is recorded regardless; the suggestion attributes nothing.
     handleGithubWebhook(db, "pull_request", featPr("opened"));
     expect(listLiveLinks(db, 1).map((l) => l.role)).toEqual(["references"]);
-    expect(findPrState(db, REPO, PR)).toBeUndefined();
+    expect(findPrState(db, REPO, PR)!.status).toBe("open");
+    expect(getOpenPr(db, 1)).toBeNull();
 
     // The session then declares. Before SYD-287 this threw "already has a live
     // link — revoke it before declaring a different role", which made the
@@ -178,19 +185,22 @@ describe("declaring after ingestion — the production ordering (SYD-287)", () =
     expect(link.role).toBe("delivers");
     expect(link.confirmedBy).toBe(human.id);
     expect(listLiveLinks(db, 1).map((l) => l.role)).toEqual(["delivers"]);
+    // The row was already waiting, so the declaration alone completes the join
+    // — no second observation, no poll tick, no healing step.
+    expect(getOpenPr(db, 1)?.prNumber).toBe(PR);
   });
 
-  it("heals a PR that merged before anyone declared, on the poller's next re-observation", () => {
+  it("proves a PR that merged BEFORE anyone declared, with no re-observation at all", () => {
     const { db, human } = setup();
-    // Merged with nothing declared: no row, exactly as before.
-    handleGithubWebhook(db, "pull_request", merged());
-    expect(findPrState(db, REPO, PR)).toBeUndefined();
-
-    declare(db, human);
-    // observeRepoState re-emits every PR in its window on every tick
-    // (scripts/github-poll-lib.ts), so the next tick carries the observation.
+    // The order that used to be unrecoverable: merged, then declared. An
+    // earlier cut of SYD-287 observed only attributed PRs, so this left no row
+    // and depended on the poller re-emitting the PR within its 50-wide window
+    // to heal — which a PR that had aged out never would.
     handleGithubWebhook(db, "pull_request", merged());
     expect(findPrState(db, REPO, PR)!.status).toBe("merged");
+    expect(getMergedPr(db, 1)).toBeNull(); // observed, not yet attributed
+
+    declare(db, human);
     expect(getMergedPr(db, 1)?.prNumber).toBe(PR);
   });
 
@@ -224,28 +234,35 @@ describe("what a declaration still cannot do (SYD-287)", () => {
     expect(other.id).not.toBe(agent.id);
   });
 
-  it("a references link — the only thing free text can mint — observes nothing", () => {
+  it("a references link — the only thing free text can mint — attributes nothing", () => {
     const { db } = setup();
     handleGithubWebhook(db, "pull_request", featPr("opened"));
     handleGithubWebhook(db, "pull_request", merged());
     expect(listLiveLinks(db, 1).map((l) => l.role)).toEqual(["references"]);
-    expect(findPrState(db, REPO, PR)).toBeUndefined();
+    // Observed — a merge is a fact about the PR regardless of who claims it...
+    expect(findPrState(db, REPO, PR)!.status).toBe("merged");
+    // ...and completely inert, which is the property that matters: a PR body
+    // is writable by anyone on a public repo, so free text must never gate a
+    // claim or prove a landing.
     expect(getOpenPr(db, 1)).toBeNull();
     expect(getMergedPr(db, 1)).toBeNull();
+    expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_merged")).toHaveLength(1);
   });
 
-  it("a revoked link stops observing — the row stays, the interpretation goes", () => {
+  it("a revoked link stops attributing — the row stays, the interpretation goes", () => {
     const { db, human } = setup();
     declare(db, human);
     handleGithubWebhook(db, "pull_request", featPr("opened"));
     revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: PR, reason: "mis-linked" });
 
-    // The observation survives a revoke (it is not evidence being deleted)...
+    // The observation survives a revoke — a revoke removes an interpretation,
+    // never an observation, and deleting the evidence would be the wrong move.
     expect(findPrState(db, REPO, PR)!.status).toBe("open");
-    // ...but nothing reads it for this issue any more, and a later merge
-    // observation attributes to no one.
+    // Nothing reads it for this issue any more, and a later merge observation
+    // is attributed to no one.
     expect(getOpenPr(db, 1)).toBeNull();
     handleGithubWebhook(db, "pull_request", merged());
+    expect(findPrState(db, REPO, PR)!.status).toBe("merged");
     expect(getMergedPr(db, 1)).toBeNull();
   });
 
@@ -288,13 +305,25 @@ describe("the SYD-280 regression fence still holds (SYD-287)", () => {
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 
-  it("an UNDECLARED feat/ PR still gates nothing and observes nothing", () => {
+  it("an UNDECLARED feat/ PR is observed but gates nothing — over-blocking stays opt-in", () => {
     const { db, agent } = setup();
     handleGithubWebhook(db, "pull_request", featPr("opened"));
-    expect(findPrState(db, REPO, PR)).toBeUndefined();
+    // A row now exists for every PR in a bound repo...
+    expect(findPrState(db, REPO, PR)).toMatchObject({ status: "open", issueRef: null });
+    // ...and it is inert. This is the claim the SYD-280 design doc corrected
+    // itself on: interactive work starts gating claims only when someone
+    // DECLARES, which is opt-in per PR — not when a PR merely exists.
     expect(getOpenPr(db, 1)).toBeNull();
-    // Claimable, because nobody declared anything: over-blocking is opt-in.
     expect(() => claimIssue(db, agent, "SYD-1")).not.toThrow();
+  });
+
+  it("leaves an unattributed row out of the cutover backfill (issue_ref IS NOT NULL)", () => {
+    const { db, human } = setup();
+    handleGithubWebhook(db, "pull_request", merged());
+    // backfillPrLinksFromPrState reads `WHERE ps.issue_ref IS NOT NULL`, so
+    // observing every PR cannot retroactively mint links for undeclared work.
+    expect(backfillPrLinksFromPrState(db, human).created).toBe(0);
+    expect(listLiveLinks(db, 1).map((l) => l.role)).toEqual(["references"]);
   });
 
   it("never writes issueRef from a link — that column stays branch-derived until it is dropped", () => {

@@ -10,10 +10,14 @@
 //   first, then a bare ref in free text (PR title/body, or commit messages for
 //   push). This is display, and a string may decide it.
 // - IS THE PR ATTRIBUTED to an issue's work? DECLARED, never parsed: a live
-//   `delivers` row in pr_links. handlePullRequest writes pr_state on that
-//   signal, so the observation half exists for any branch — an interactive
-//   `feat/` PR included. An agent/<ref> branch still auto-declares its own
-//   link (pr-state.ts), which is why that path's behaviour is unchanged.
+//   `delivers` row in pr_links (SYD-280). An `agent/<ref>` branch auto-declares
+//   its own link inside upsertPrState, which is why dispatched work needs no
+//   extra step; everyone else calls declare_pr_link.
+//
+// pull_request ingestion answers NEITHER question before writing `pr_state`:
+// since SYD-287 every PR in a bound repo is observed, because pr_state records
+// what GitHub did to a PR and never whose work it is. An unattributed row is
+// inert — see handlePullRequest.
 //
 // Nothing here may read a ref out of a branch or a PR title to decide what a
 // PR *belongs to*. That is the rule SYD-280 exists to enforce (CLAUDE.md).
@@ -30,7 +34,7 @@ import type { EventKind } from "../db/schema.js";
 import { getOrCreateActor } from "./actors.js";
 import { getIssue, issueRefById } from "./issues.js";
 import { recordEvent } from "./events.js";
-import { boundRepoFullNames, normalizeRepoFullName } from "./github-repos.js";
+import { boundRepoFullNames, findGithubRepo, normalizeRepoFullName } from "./github-repos.js";
 import { upsertPrState, attributedRef, type PrObservation } from "./pr-state.js";
 import { recordIngestedPrLink, deliversLinkIssueIds } from "./pr-links.js";
 
@@ -116,7 +120,10 @@ function resolveRef(branchCandidates: unknown[], textCandidates: unknown[] = [])
 }
 
 export type GithubWebhookOutcome =
-  | { handled: true; ref: string; type: string; duplicate?: true; recorded?: false }
+  // `ref` is null when nothing attributes the PR to an issue — since SYD-287 a
+  // PR in a bound repo is observed regardless, so "handled" no longer implies
+  // "belongs to someone". Naming an issue anyway would be a guess.
+  | { handled: true; ref: string | null; type: string; duplicate?: true; recorded?: false }
   | { handled: false; reason: string };
 
 /**
@@ -158,6 +165,15 @@ const AMBIGUOUS_REPO_REASON =
 /** Fills in `repo` when the delivery didn't name one (SYD-205 deploy-skew
  * rule): a sole bound repo is unambiguous, several bound repos reject rather
  * than guess, none bound records null (nothing to attribute to). */
+/** Whether a repo is linked AND bound to a project — the line SYD-287 draws
+ * around observation, and the same one `declarePrLink` draws around
+ * declaration (`assertRepoBound`). A linked-but-unbound repo is the SYD-207
+ * preflight's warning case, deliberately left un-observed so it stays visible
+ * rather than silently accruing rows. */
+function isBoundRepo(db: Db, repo: string): boolean {
+  return findGithubRepo(db, repo)?.projectId != null;
+}
+
 function resolveRepo(db: Db, projectId: number, repo: string | null): string | null | "ambiguous" {
   if (repo !== null) return repo;
   const bound = boundRepoFullNames(db, projectId);
@@ -228,14 +244,12 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
   // it decides nothing about attribution.
   const textRef = resolveRef([branch], [pr.title, pr.body]);
 
-  // SYD-287: attribution is DECLARED, so a PR can carry an issue's work while
-  // naming it nowhere — not in the branch, not in the title, not in the body.
-  // A live `delivers` link is keyed on (repo, prNumber) alone, so looking one
-  // up is what makes "no ref in the text" survivable instead of a dead end.
-  // It needs a repo the delivery named: resolveRepo's sole-bound-repo
-  // inference (SYD-205) needs a project, which only a ref can supply.
-  const namedRepoLinks = repo !== null ? deliversLinkIssueIds(db, repo, prNumber) : [];
-  if (textRef === null && namedRepoLinks.length === 0) {
+  // SYD-287: a PR in a bound repo is worth observing whether or not anything
+  // attributes it, so "the text names no issue" stops being a dead end. It is
+  // only one when we cannot even identify the repo — resolveRepo's
+  // sole-bound-repo inference (SYD-205) needs a project, which only a ref can
+  // supply.
+  if (textRef === null && !(repo !== null && isBoundRepo(db, repo))) {
     return { handled: false, reason: "no issue ref found in branch, title, or body" };
   }
   const action = payload.action ?? "";
@@ -255,9 +269,9 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
     try {
       issue = { ...getIssue(db, textRef), ref: textRef };
     } catch {
-      // A ref naming no issue is a dead end only when nothing declared this
-      // PR either: a declaration outranks a string that matched nothing.
-      if (namedRepoLinks.length === 0) {
+      // A ref naming no issue is a dead end only if there is nothing to
+      // observe either — a bound repo still has an observation worth keeping.
+      if (!(repo !== null && isBoundRepo(db, repo))) {
         return { handled: false, reason: `no Switchyard issue matches ref ${textRef}` };
       }
     }
@@ -265,28 +279,41 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
   const resolvedRepo = issue ? resolveRepo(db, issue.projectId, repo) : repo;
   if (resolvedRepo === "ambiguous") return { handled: false, reason: AMBIGUOUS_REPO_REASON };
 
-  // Re-read against the RESOLVED repo: a legacy producer that omitted `repo`
-  // (the SYD-205 deploy-skew path) only learns which repo it meant after the
+  // Resolved rather than named: a legacy producer that omitted `repo` (the
+  // SYD-205 deploy-skew path) only learns which repo it meant after the
   // sole-bound-repo inference above.
   const linkedIssueIds =
     resolvedRepo === null ? [] : deliversLinkIssueIds(db, resolvedRepo, prNumber);
   const branchAttributed =
     resolvedRepo !== null && attributedRef(db, resolvedRepo, branch) !== null;
 
-  // OBSERVATION (SYD-206, widened by SYD-287). pr_state is keyed
-  // (repo, prNumber) and carries no issue identity, so it is worth writing
-  // whenever something accountable attributes this PR: a strict agent/<ref>
-  // branch in a bound repo (which auto-declares its own link inside
-  // upsertPrState), or a live `delivers` link someone declared. upsertPrState
-  // owns the state row AND co-writes the canonical transition event, so
-  // nothing is written directly here and one physical transition never
-  // appears twice.
+  // OBSERVATION (SYD-206, widened by SYD-287). Every PR in a bound repo, full
+  // stop — no branch test, no link test.
   //
-  // Before SYD-287 this was the branch test alone, which is why a declared
-  // feat/ PR got a declaration and never an observation — while every reader
-  // in pr-status.ts INNER JOINs the two.
-  const observed = branchAttributed || linkedIssueIds.length > 0;
-  const ref = textRef ?? issueRefById(db, linkedIssueIds[0] ?? null) ?? "";
+  // `pr_state` is keyed (repo, prNumber) and carries no issue identity: it
+  // records what GitHub did to a PR, never whose work it is. Gating that on
+  // who the PR is attributed to is the same conflation SYD-280 removed one
+  // layer up, and it is what made attribution ORDER-DEPENDENT — declare then
+  // observe worked, observe then declare needed a later re-observation to
+  // heal, and a PR that had dropped out of the poller's window never healed at
+  // all. Observing unconditionally retires that class: the row is already
+  // there whenever someone declares.
+  //
+  // Observing is not attributing, and nothing downstream confuses the two. An
+  // unattributed row is INERT: every reader in pr-status.ts joins through a
+  // live `delivers` link, upsertPrState co-writes its transition event per
+  // linked issue, and the cutover backfill reads `issue_ref IS NOT NULL`. So
+  // an undeclared PR gets a row, gates nothing, proves nothing, and lands on
+  // no issue's timeline.
+  //
+  // Bound-to-a-project is the line, matching what declarePrLink already
+  // enforces. An unbound repo is exactly the misconfiguration the SYD-207
+  // preflight warns about, and quietly accumulating rows for one would paper
+  // over it.
+  const observed = resolvedRepo !== null && isBoundRepo(db, resolvedRepo);
+  // Null when nothing attributes the PR: there is genuinely no issue to name,
+  // and naming one anyway would be the inference this epic exists to delete.
+  const ref = textRef ?? issueRefById(db, linkedIssueIds[0] ?? null);
 
   let observedOutcome: GithubWebhookOutcome | null = null;
   if (observed) {

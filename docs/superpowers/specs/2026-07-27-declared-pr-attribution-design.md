@@ -353,7 +353,27 @@ constructs its own precondition proves nothing about whether anything constructs
 it.** `tests/services/pr-observation.test.ts` therefore drives
 `handleGithubWebhook` throughout and constructs no `pr_state` row by hand.
 
-Two things SYD-287 settled that this document left open:
+**Where the observation predicate landed.** The first cut mirrored the
+declaration — observe when the branch attributes the PR *or* a live `delivers`
+link exists. Review (Sean, on SYD-287) pushed back: that still lets an
+attribution question decide whether to record an observation, which is the same
+conflation this design removes one layer up, and it leaves attribution
+**order-dependent** — declare-then-observe works, observe-then-declare needs a
+later re-observation to heal, and a PR that has aged out of the poller's window
+never heals at all.
+
+Ingestion now observes **every PR in a repo bound to a project**, full stop.
+Observing is not attributing: an unattributed row is inert, because every reader
+in §9 joins through a live `delivers` link, `upsertPrState` co-writes its
+transition event per linked issue, and the backfill reads `issue_ref IS NOT
+NULL`. Bound-to-a-project is the line — the same one `declarePrLink` enforces —
+so a linked-but-unbound repo stays un-observed and the SYD-207 preflight's
+warning keeps meaning something. Cost measured before the change, not assumed:
+the poll window bounds write volume (not the row count), and the targeted
+refresh's GitHub-API burn scales with *open* rows outside that window, which is
+worth narrowing `GET /api/pr-state` for on a busy repo.
+
+Two more things SYD-287 settled that this document left open:
 
 - **Open question §13.4 / step 4 — `pr_state.issue_ref` keeps its
   branch-derived dual-write and is never written from a link.** Deriving it from
