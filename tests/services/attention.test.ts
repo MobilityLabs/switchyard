@@ -8,7 +8,8 @@ import { recordEvent } from "../../src/services/events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
 import { getAttention, listAttentionByIssueId } from "../../src/services/attention.js";
-import { declarePrLink } from "../../src/services/pr-links.js";
+import { declarePrLink, listLiveLinks } from "../../src/services/pr-links.js";
+import { handleGithubWebhook } from "../../src/services/github-webhook.js";
 import { resolveDeliveryFailure } from "../../src/services/triage-actions.js";
 
 const REPO = "acme/widgets";
@@ -241,6 +242,42 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
     });
 
     expect(getAttention(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+
+  // SYD-274 guard. Widening WHICH refs get a `references` suggestion must not
+  // widen what a suggestion is worth. This is the SYD-243/SYD-244 shape: their
+  // work landed under SYD-242's PR, so ingestion now links that PR to them —
+  // but a link minted from PR prose is exactly what SYD-280 stripped of
+  // clearing power, and it must stay inert here. A human confirming it (or
+  // SYD-262's resolve) is what clears the flag.
+  it("a sibling references link from PR text does not clear the flag (SYD-274)", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "landed under a sibling's PR" });
+    updateIssue(db, human, "SYD-2", { status: "todo" });
+    claimIssue(db, agent, "SYD-2");
+    updateIssue(db, human, "SYD-2", { status: "in_review" });
+    updateIssue(db, human, "SYD-2", { status: "done" });
+    expect(getAttention(db, getIssue(db, "SYD-2").id)?.reason).toBe("done_without_merged_pr");
+
+    handleGithubWebhook(db, "pull_request", {
+      action: "closed",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: 206,
+        html_url: `https://github.com/${REPO}/pull/206`,
+        head: { ref: "feat/sibling-carrier", sha: "a".repeat(40) },
+        updated_at: "2026-07-27T10:00:00Z",
+        merged: true,
+        merge_commit_sha: "0ae22a9".padEnd(40, "0"),
+        title: "feat: the carrier (SYD-1)",
+        body: "closes SYD-2",
+      },
+    });
+
+    // The evidence is now reachable from SYD-2...
+    expect(listLiveLinks(db, getIssue(db, "SYD-2").id).map((l) => l.role)).toEqual(["references"]);
+    // ...but reachable is not vouched-for. Still lit.
+    expect(getAttention(db, getIssue(db, "SYD-2").id)?.reason).toBe("done_without_merged_pr");
   });
 
   // Guard: keyed on event id, so an earlier resolve can't mask a deviation

@@ -107,6 +107,29 @@ export function refFromText(text: unknown): string | null {
   return REF_RE.exec(text)?.[1] ?? null;
 }
 
+/**
+ * EVERY ref the given strings name, deduped, first-seen order (SYD-274).
+ *
+ * `refFromText` deliberately takes only the first match, because exactly one
+ * ref can own the activity-feed line. But one PR routinely carries several
+ * issues' work — `0ae22a9` closed SYD-243 and SYD-244 under SYD-242's PR — and
+ * for the refs after the first, the first-match rule meant the board held
+ * *nothing at all*: no event, no link, no trace the PR existed. Their
+ * `done_without_merged_pr` warnings then had no evidence to reach, which is
+ * what left them lit with no path to resolution but archaeology.
+ *
+ * Same regex, same trust: what this feeds is the `references` suggestion,
+ * which gates nothing and proves nothing.
+ */
+export function refsFromText(texts: unknown[]): string[] {
+  const seen = new Set<string>();
+  for (const text of texts) {
+    if (typeof text !== "string") continue;
+    for (const [, ref] of text.matchAll(new RegExp(REF_RE, "g"))) seen.add(ref);
+  }
+  return [...seen];
+}
+
 function resolveRef(branchCandidates: unknown[], textCandidates: unknown[] = []): string | null {
   for (const c of branchCandidates) {
     const ref = refFromBranch(c);
@@ -395,6 +418,46 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
         resolvedRepo,
         { jsonPath: "$.ghUpdatedAt", value: ghUpdatedAt },
       );
+    }
+  }
+
+  // SIBLING SUGGESTIONS (SYD-274). The display path above serves exactly one
+  // ref — the first the text names. Every other ref the PR names got nothing,
+  // so an issue whose work landed under a sibling's PR (SYD-243 and SYD-244
+  // under SYD-242's, merged as 0ae22a9) showed no trace of that PR anywhere,
+  // and its done_without_merged_pr warning had no evidence a human could even
+  // navigate to.
+  //
+  // This mints the same inert `references` suggestion the primary ref has
+  // always had, for the rest of them. Deliberately NOT `delivers`, and
+  // deliberately not a gh_pr_merged event: recording either from PR prose is
+  // the false-clear hole SYD-280 closed, and it would let anyone silence a
+  // safety net by typing a ref. What clears the warning is unchanged — a
+  // human-confirmed `delivers` link, or SYD-262's human resolve. The point is
+  // to make the evidence reachable, not to decide on the human's behalf.
+  //
+  // Same project only. A ref from another project would carry its own repo
+  // binding, and minting a link across that boundary from free text is a
+  // guess this epic exists to delete.
+  if (issue !== undefined && resolvedRepo !== null) {
+    const primaryIssue = issue;
+    const actor = getOrCreateActor(db, GITHUB_ACTOR_NAME, "agent");
+    for (const siblingRef of refsFromText([pr.title, pr.body])) {
+      if (siblingRef === primaryIssue.ref) continue;
+      let sibling;
+      try {
+        sibling = getIssue(db, siblingRef);
+      } catch {
+        continue; // names no real issue
+      }
+      if (sibling.projectId !== primaryIssue.projectId) continue;
+      recordIngestedPrLink(db, {
+        issueId: sibling.id,
+        repo: resolvedRepo,
+        prNumber,
+        role: "references",
+        actorId: actor.id,
+      });
     }
   }
 
