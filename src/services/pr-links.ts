@@ -48,6 +48,34 @@ export function listLiveLinks(db: DbOrTx, issueId: number): PrLink[] {
     .all();
 }
 
+/**
+ * The issues holding a live `delivers` link to a PR — the (repo, prNumber)
+ * direction of the same predicate pr-status.ts reads issue-first as
+ * LIVE_DELIVERS. Oldest declaration first, so a caller that must pick one
+ * (pr_state's single lastTransitionEventId column) picks deterministically.
+ *
+ * This is what makes ingestion link-aware (SYD-287): a PR is worth observing
+ * when someone accountable has said it carries an issue's work, which is a
+ * fact about (repo, prNumber) alone — no branch name, no PR text.
+ */
+export function deliversLinkIssueIds(db: DbOrTx, repo: string, prNumber: number): number[] {
+  if (!Number.isInteger(prNumber) || prNumber <= 0) return [];
+  return db
+    .select({ issueId: prLinks.issueId })
+    .from(prLinks)
+    .where(
+      and(
+        sql`lower(${prLinks.repo}) = lower(${normalizeRepoFullName(repo)})`,
+        eq(prLinks.prNumber, prNumber),
+        eq(prLinks.role, "delivers"),
+        isNull(prLinks.revokedAt),
+      ),
+    )
+    .orderBy(sql`${prLinks.declaredAt} ASC, ${prLinks.id} ASC`)
+    .all()
+    .map((r) => r.issueId);
+}
+
 function findLiveLink(
   db: DbOrTx,
   issueId: number,
@@ -124,14 +152,32 @@ export function declarePrLink(
     // an actor asserting its own work.
     const role: PrLinkRole = isAgent ? "delivers" : (input.role ?? "delivers");
 
+    const now = nowSeconds();
+
+    // Promotion (SYD-287). Free-text ingestion mints an unconfirmed
+    // `references` suggestion the moment the webhook sees a PR whose title
+    // carries the ref — which, for interactive work, lands BEFORE the session
+    // gets to declare. Rejecting the declaration outright made the declared
+    // path unreachable in the only order production actually produces, so a
+    // `references` -> `delivers` declaration supersedes the suggestion instead
+    // of colliding with it. Design §8 already calls this "a 'did you mean?' a
+    // human may promote"; this is the promotion.
+    //
+    // Authority is unchanged, not widened: the declarer has just passed §4's
+    // rules above, and the same actor could already reach this state by
+    // revoking and re-declaring. Superseding is a soft revoke plus a fresh
+    // row, so both statements survive — the suggestion is not rewritten into
+    // an assertion it never made.
     const existing = findLiveLink(tx, issue.id, repo, input.prNumber);
     if (existing) {
-      throw new SwitchyardError(
-        `${ref} already has a live link to ${repo}#${input.prNumber} — revoke it before declaring a different role.`,
-      );
+      if (!(existing.role === "references" && role === "delivers")) {
+        throw new SwitchyardError(
+          `${ref} already has a live link to ${repo}#${input.prNumber} — revoke it before declaring a different role.`,
+        );
+      }
+      tx.update(prLinks).set({ revokedAt: now }).where(eq(prLinks.id, existing.id)).run();
     }
 
-    const now = nowSeconds();
     const row = tx
       .insert(prLinks)
       .values({
@@ -151,7 +197,15 @@ export function declarePrLink(
       issueId: issue.id,
       actorId: actor.id,
       type: "pr_link_declared",
-      payload: { repo, prNumber: input.prNumber, role, confirmed: !isAgent },
+      payload: {
+        repo,
+        prNumber: input.prNumber,
+        role,
+        confirmed: !isAgent,
+        // Names what this superseded, so "where did the references link go"
+        // is answerable from the timeline and not only from the revoked row.
+        ...(existing ? { promotedFrom: existing.role } : {}),
+      },
       viaAgentId: attr.viaAgentId,
       sessionId: attr.sessionId,
     });
@@ -182,7 +236,11 @@ export function declarePrLink(
  * this is not a regression — it is SYD-282's to fix, and this function must
  * not be read as making ingested merges trustworthy.
  *
- * Idempotent: a redelivery finds the live link and returns it unchanged.
+ * Idempotent: a redelivery finds the live link and returns it unchanged. The
+ * one exception is the upgrade below — a branch-attributed observation
+ * supersedes a `references` suggestion an earlier free-text match minted for
+ * the same (issue, repo, PR), because otherwise ingestion order would decide
+ * whether a PR gates claims.
  *
  * **Records no event, deliberately.** The row itself carries the full audit
  * (declared_by, declared_at, role), and the observation that prompted it is
@@ -204,10 +262,19 @@ export function recordIngestedPrLink(
   },
 ): PrLink {
   const repo = normalizeRepoFullName(input.repo);
-  const existing = findLiveLink(tx, input.issueId, repo, input.prNumber);
-  if (existing) return existing;
-
   const now = nowSeconds();
+  const existing = findLiveLink(tx, input.issueId, repo, input.prNumber);
+  if (existing) {
+    // Upgrade only, never downgrade (SYD-287). The branch-attributed path is
+    // strictly more authoritative than the free-text one, so it supersedes a
+    // `references` suggestion the same way an actor's declaration does —
+    // otherwise a PR that happened to be ingested by text first would keep a
+    // suggestion where a claim-gating link belongs, and lose its co-written
+    // transition event with it.
+    if (!(existing.role === "references" && input.role === "delivers")) return existing;
+    tx.update(prLinks).set({ revokedAt: now }).where(eq(prLinks.id, existing.id)).run();
+  }
+
   // A `delivers` link from the branch-attributed path is confirmed, matching
   // the authority pr_state.issue_ref carries today — its confirmer is not a
   // human, so §5a's recency binding still applies to it. A `references` link

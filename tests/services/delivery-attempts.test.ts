@@ -54,6 +54,18 @@ function stampDone(
   const issue = getIssue(db, ref);
   updateIssue(db, human, ref, { status: "done" });
   stampDonePinSeq += 1;
+  // The observation the pin refers to. Production derives a pin from
+  // getOpenPr, which cannot return a PR without a pr_state row, so a pin
+  // pointing at nothing is a state the system never produces — and since
+  // SYD-287 the trigger predicate checks the PR is on agent/<ref>, because a
+  // pinned PR the worker cannot rebase is not an authorization.
+  upsertPrState(db, human, {
+    repo: REPO,
+    prNumber: stampDonePinSeq,
+    status: "open",
+    branch: `agent/${ref}`,
+    headSha: `sha-${stampDonePinSeq}`,
+  });
   recordEvent(db, {
     issueId: issue.id,
     actorId: human.id,
@@ -148,6 +160,15 @@ describe("listPendingDeliveryAuthorizations", () => {
     const { db, human } = setup();
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
     updateIssue(db, human, issue.ref, { status: "done" });
+    // A redeliver pin comes from deliveryPinFor in production, so the PR it
+    // names always has a pr_state row behind it (SYD-287's trigger guard).
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 7,
+      status: "open",
+      branch: `agent/${issue.ref}`,
+      headSha: "S0",
+    });
     // First re-stamp: its attempt force-pushed a rebased head "S1" and bounced.
     const auth1 = recordEvent(db, {
       issueId: issue.id,
@@ -181,6 +202,15 @@ describe("listPendingDeliveryAuthorizations", () => {
     const { db, human } = setup();
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
     updateIssue(db, human, issue.ref, { status: "done" });
+    for (const prNumber of [7, 8]) {
+      upsertPrState(db, human, {
+        repo: REPO,
+        prNumber,
+        status: "open",
+        branch: `agent/${issue.ref}`,
+        headSha: `head-${prNumber}`,
+      });
+    }
     const auth1 = recordEvent(db, {
       issueId: issue.id,
       actorId: human.id,

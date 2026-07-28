@@ -2,10 +2,11 @@ import { describe, it, expect } from "vitest";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue } from "../../src/services/issues.js";
+import { createIssue, getIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { findPrState } from "../../src/services/pr-state.js";
+import { getOpenPr } from "../../src/services/pr-status.js";
 import {
   handleGithubWebhook,
   refFromBranch,
@@ -643,7 +644,7 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 
-  it("a text-matched PR (non-agent branch) records display events but never touches pr_state", () => {
+  it("a text-matched PR (non-agent branch) records display events and an UNATTRIBUTED pr_state row", () => {
     const db = setup(["acme/bound"]);
     handleGithubWebhook(db, "pull_request", {
       action: "opened",
@@ -657,7 +658,11 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
         body: null,
       },
     });
-    expect(findPrState(db, "acme/bound", 33)).toBeUndefined();
+    // SYD-287: every PR in a bound repo is observed, because pr_state records
+    // what GitHub did and never whose work it is. The row carries no
+    // attribution — issueRef null, no delivers link — so it gates nothing.
+    // Attribution is tested through pr-status.ts in pr-observation.test.ts.
+    expect(findPrState(db, "acme/bound", 33)).toMatchObject({ status: "open", issueRef: null });
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 
@@ -677,7 +682,7 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
     expect(findPrState(db, "Acme/Bound", 12)?.repo).toBe("acme/bound");
   });
 
-  it("an agent/SYD-1 PR in a repo bound to another project records display events but no pr_state row (cross-repo)", () => {
+  it("an agent/SYD-1 PR in a repo bound to another project is never attributed to SYD-1 (cross-repo)", () => {
     const db = setup(["acme/bound"]);
     const human = createActor(db, { name: "sean2", type: "human" }).actor;
     createProject(db, human, { key: "OTH", name: "Other" });
@@ -687,8 +692,29 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
       ...opened("opened"),
       repository: { full_name: "acme/other" },
     });
-    expect(findPrState(db, "acme/other", 12)).toBeUndefined();
+    // acme/other is bound (to OTH), so the PR is observed — but the branch
+    // says SYD-1 while the repo belongs to OTH, so attributedRef refuses and
+    // the row stays unattributed. This is the cross-project hole SYD-206
+    // closed, and observing everything must not reopen it.
+    expect(findPrState(db, "acme/other", 12)).toMatchObject({ issueRef: null });
+    expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toBeNull();
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
+  });
+
+  it("a PR in a linked-but-UNBOUND repo is not observed at all", () => {
+    const db = setup(["acme/bound"]);
+    const human = createActor(db, { name: "sean3", type: "human" }).actor;
+    // Linked with no projectKey — the SYD-207 preflight's warning case.
+    addGithubRepo(db, human, { fullName: "acme/unbound" });
+
+    handleGithubWebhook(db, "pull_request", {
+      ...opened("opened"),
+      repository: { full_name: "acme/unbound" },
+    });
+    // Bound-to-a-project is the line SYD-287 draws: an unbound repo silently
+    // accruing rows would paper over exactly the misconfiguration the
+    // preflight exists to surface.
+    expect(findPrState(db, "acme/unbound", 12)).toBeUndefined();
   });
 });
 

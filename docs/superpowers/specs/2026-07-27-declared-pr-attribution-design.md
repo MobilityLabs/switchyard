@@ -332,6 +332,65 @@ The claim was checked by running it, not by re-reading the code, and is now
 pinned by a test (`tests/services/pr-links.test.ts`, "does not make an
 undeclared interactive feat/ PR gate claims") so it cannot silently drift.
 
+**Second correction (2026-07-28, SYD-287): step 3 shipped only its declaring
+half.** The join needs two sides, and only `pr_links` gained one. `pr_state` is
+written solely by `upsertPrState`, which `handlePullRequest` reached only on the
+strict `agent/<ref>` path — so a declared `feat/` PR had a declaration and never
+an observation, and all four readers in §9 INNER JOIN the two. Production held
+**zero** non-agent `pr_state` rows, all time; SYD-280 itself was `done`, merged
+as PR #226, and could not prove it landed.
+
+The design said this and the implementation did not read it that way: §11's
+sweep lists `github-webhook.ts:222` (the `attributed` test) as needing a change,
+and §1 says proof is "a join of the two, never a parse" — but leaving the
+observation side parsed keeps the parse load-bearing by omission.
+
+Why the SYD-280 suite passed anyway is the more useful lesson: every test that
+covered the `feat/` case called `upsertPrState` directly to stand up the
+observation half. Production never does that for a `feat/` branch, so the tests
+validated the reader while the producer was missing entirely. **A test that
+constructs its own precondition proves nothing about whether anything constructs
+it.** `tests/services/pr-observation.test.ts` therefore drives
+`handleGithubWebhook` throughout and constructs no `pr_state` row by hand.
+
+**Where the observation predicate landed.** The first cut mirrored the
+declaration — observe when the branch attributes the PR *or* a live `delivers`
+link exists. Review (Sean, on SYD-287) pushed back: that still lets an
+attribution question decide whether to record an observation, which is the same
+conflation this design removes one layer up, and it leaves attribution
+**order-dependent** — declare-then-observe works, observe-then-declare needs a
+later re-observation to heal, and a PR that has aged out of the poller's window
+never heals at all.
+
+Ingestion now observes **every PR in a repo bound to a project**, full stop.
+Observing is not attributing: an unattributed row is inert, because every reader
+in §9 joins through a live `delivers` link, `upsertPrState` co-writes its
+transition event per linked issue, and the backfill reads `issue_ref IS NOT
+NULL`. Bound-to-a-project is the line — the same one `declarePrLink` enforces —
+so a linked-but-unbound repo stays un-observed and the SYD-207 preflight's
+warning keeps meaning something. Cost measured before the change, not assumed:
+the poll window bounds write volume (not the row count), and the targeted
+refresh's GitHub-API burn scales with *open* rows outside that window, which is
+worth narrowing `GET /api/pr-state` for on a busy repo.
+
+Two more things SYD-287 settled that this document left open:
+
+- **Open question §13.4 / step 4 — `pr_state.issue_ref` keeps its
+  branch-derived dual-write and is never written from a link.** Deriving it from
+  a link would re-couple observation to attribution, which is the coupling this
+  design removes; and step 3's revertibility guarantee depends on the column
+  still being populated. Dropping it stays step 4's, unchanged and now
+  independent of ingestion.
+- **§8's "a 'did you mean?' a human may promote" needed an actual promotion.**
+  Free-text ingestion mints the `references` link the moment the poller sees a
+  PR whose title carries the ref — *before* an interactive session declares —
+  and `declarePrLink` rejected the collision outright. The declared path was
+  therefore unreachable in the only order production produces. A
+  `references` → `delivers` declaration now supersedes the suggestion (soft
+  revoke + fresh row, so both statements survive); every other role collision
+  still refuses. Authority is unchanged: the same actor could already reach that
+  state by revoking and re-declaring.
+
 ## 11. Consistency sweep
 
 **Server:** `src/db/schema.ts:263` and `:273` (the column and its index),

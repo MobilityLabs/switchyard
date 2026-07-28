@@ -6,10 +6,22 @@
 // the ordering discipline, so a read here can never disagree with the claim
 // gate or the poller's observations.
 //
-// Only *attributed* rows (issueRef set — strict agent/<ref> branch match on a
-// repo bound to that ref's project) ever reach these results. Display-only
-// rows, and legacy event-log-only PRs (the old free-text title matches),
-// are audit history, never claim-gating state.
+// Which rows reach these results is decided by pr_links, not by pr_state:
+// every query below joins the two on (repo, pr_number), so a row is visible to
+// an issue exactly when that issue holds a live `delivers` link (SYD-280).
+// pr_state.issue_ref is not consulted here and has not been since the swap.
+//
+// Ingestion writes a pr_state row for EVERY PR in a bound repo (SYD-287,
+// github-webhook.ts), so the join always has its observation half waiting and
+// a declaration completes it whenever it arrives — including long after a
+// merge. It did not before: only an agent/<ref> branch produced a row, so a
+// declared link on any other branch INNER JOINed to nothing and every reader
+// here returned null — no claim gate, no delivery pin, no proof of landing.
+//
+// The corollary is that a pr_state row means nothing on its own. Rows for
+// undeclared PRs are inert here by construction, because the join is what
+// carries the attribution. Free-text title matches yield a `references` link,
+// which LIVE_DELIVERS excludes: audit history, never claim-gating state.
 //
 // claimIssue and updateIssue's in_progress gate (src/services/issues.ts) use
 // getOpenPr to refuse a second claim while one is already in flight — the gap

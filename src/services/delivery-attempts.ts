@@ -81,9 +81,26 @@ type PendingRow = {
  * live delivery worker and the one-time rollout backfill both call it, so
  * they can never see a different set of "what's owed a delivery attempt".
  *
- * Pin-less done-stamps are interactive work, never delivery authorizations —
- * they are excluded from the status_changed arm entirely (see file header).
- * Redelivers always count, pin or no pin.
+ * Pin-less done-stamps are excluded from the status_changed arm entirely (see
+ * file header). Redelivers always count, pin or no pin.
+ *
+ * **The pinned PR must be on `agent/<ref>` (SYD-287).** That used to be
+ * implied rather than checked: interactive work could never produce a pin,
+ * because `getOpenPr` only saw branch-attributed pr_state rows — which is the
+ * assumption the line above USED to state as "pin-less done-stamps are
+ * interactive work". SYD-287 made interactive work observable, so it now gets
+ * pins, and the first interactive issue stamped `done` was queued, sent to a
+ * worker whose entire contract is "fetch, rebase and force-push agent/<ref>",
+ * and took deliver.ts's dead-PR path — which auto-CLOSED the open PR
+ * (SYD-165's remediation for a branch that no longer exists). That is SYD-283
+ * ("delivery must never close a PR it did not open") going from latent to
+ * reachable.
+ *
+ * So the queue is now explicitly bounded by what the worker can act on. This
+ * is branch coupling, deliberately, in the one layer where the branch really
+ * is load-bearing — the worker force-pushes it — rather than in a reader.
+ * SYD-279 story D lifts it when delivery learns to use the PR's real head
+ * branch instead of reconstructing one (SYD-292).
  */
 export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorization[] {
   const rows = db.all<PendingRow>(sql`
@@ -112,6 +129,18 @@ export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorizat
         )
       )
       AND NOT EXISTS (SELECT 1 FROM delivery_attempts da WHERE da.authorization_id = e.id)
+      -- SYD-287: a pinned PR the worker cannot act on is not an authorization.
+      -- Pin-less redelivers are unaffected; they never reached the rebase path
+      -- on a pin in the first place.
+      AND (
+        json_extract(e.payload, '$.pin.prNumber') IS NULL
+        OR EXISTS (
+          SELECT 1 FROM pr_state ps
+          WHERE lower(ps.repo) = lower(json_extract(e.payload, '$.pin.repo'))
+            AND ps.pr_number = json_extract(e.payload, '$.pin.prNumber')
+            AND ps.branch = 'agent/' || p.key || '-' || i.number
+        )
+      )
     ORDER BY e.id ASC
   `);
   return rows.map((r) => {
