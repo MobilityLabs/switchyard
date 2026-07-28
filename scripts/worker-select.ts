@@ -1033,7 +1033,10 @@ export async function ensureEgressGuard(
   config: WorkerConfig,
   exec: ExecFn,
   env: NodeJS.ProcessEnv,
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<void> {
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // Several processes ensure concurrently at boot (deliver + both workers
   // kickstart together — observed live 2026-07-11): every mutating step below
   // races an identical twin, so a failure only counts if the desired state
@@ -1058,6 +1061,27 @@ export async function ensureEgressGuard(
     } catch {
       return null;
     }
+  };
+  /**
+   * Re-inspects until a lost `rm -f` race resolves one way or the other
+   * (SYD-297), returning the last state seen. Settles early on either outcome
+   * that means we're fine — the container is gone (null, ours to recreate) or
+   * a twin replaced it with one that already covers us — and otherwise keeps
+   * looking until the schedule runs out, at which point a still-standing
+   * sidecar is a genuine failure rather than a removal in flight.
+   *
+   * Sub-second in practice: a docker removal plus recreate is far quicker than
+   * this schedule, which totals ~3s only to leave room for a loaded host.
+   */
+  const settleAfterLostRm = async (): Promise<Awaited<ReturnType<typeof inspectProxy>>> => {
+    const waitsMs = [100, 200, 400, 800, 1600];
+    let seen = await inspectProxy();
+    for (const ms of waitsMs) {
+      if (seen === null || satisfied(seen)) return seen;
+      await sleep(ms);
+      seen = await inspectProxy();
+    }
+    return seen;
   };
   const networkExists = async (): Promise<boolean> => {
     try {
@@ -1121,9 +1145,19 @@ export async function ensureEgressGuard(
       // there first (SYD-270). This was the one mutating step with no
       // race handling, so it turned a won race into a FATAL. Only a real
       // failure if a wrong sidecar is still standing when we look again.
-      proxy = await inspectProxy();
-      if (satisfied(proxy)) return;
-      if (proxy) throw err;
+      //
+      // Look REPEATEDLY, not once (SYD-297). A twin mid-`rm` keeps answering
+      // `docker inspect` with the container it is still tearing down, and that
+      // container carries the twin's allowlist rather than ours — so a single
+      // look sees a non-null, non-satisfying proxy and takes the throw below.
+      // Both engine workers exited 1 that way during the SYD-269 go-live, and
+      // only launchd's relaunch got them back; anything without a supervisor
+      // (a manual run, init-worker) would simply have died. Waiting resolves
+      // the ambiguity the single look couldn't: a removal in flight ends, a
+      // genuinely stuck sidecar doesn't.
+      proxy = await settleAfterLostRm();
+      if (satisfied(proxy)) return; // the twin stood up one that covers us
+      if (proxy) throw err; // still there after the whole schedule — real
     }
   }
   try {

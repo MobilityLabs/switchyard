@@ -742,6 +742,8 @@ describe("ensureEgressGuard (SYD-110)", () => {
   // SYD-186: the sidecar now also injects provider creds; env supplies them and
   // seeds the INJECT_KEYS freshness sentinel (CLAUDE_CODE_OAUTH_TOKEN here).
   const egressEnv = { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv;
+  /** Runs the SYD-297 wait schedule without spending its wall-clock. */
+  const noSleep = async () => {};
 
   it("creates the internal network and starts+connects the proxy when both are missing", async () => {
     const { calls, exec } = mockExec(({ args }) => {
@@ -867,7 +869,12 @@ describe("ensureEgressGuard (SYD-110)", () => {
       return "";
     });
     // Nothing healed it, so this is a real failure and must not be swallowed.
-    await expect(ensureEgressGuard(config, exec, egressEnv)).rejects.toThrow(/removal/i);
+    // SYD-297 made the re-inspect a schedule rather than a single look, so this
+    // now throws only after that schedule is exhausted — noSleep runs it
+    // without spending the wall-clock.
+    await expect(ensureEgressGuard(config, exec, egressEnv, { sleep: noSleep })).rejects.toThrow(
+      /removal/i,
+    );
   });
 
   it("survives losing the network-create race to a concurrently starting worker", async () => {
@@ -915,6 +922,59 @@ describe("ensureEgressGuard (SYD-110)", () => {
     });
     await ensureEgressGuard(config, exec, egressEnv);
     expect(calls.some((c) => c.args[0] === "network" && c.args[1] === "connect")).toBe(false);
+  });
+
+  // SYD-297: the sibling of the run-race above, for `docker rm -f`. SYD-270
+  // added handling here but the re-inspect fires ONCE — and a twin mid-removal
+  // still answers `docker inspect` with its own (unsatisfying) sidecar, so the
+  // single look took `if (proxy) throw err` and the worker exited 1. Observed
+  // live on both engine workers during the SYD-269 go-live.
+  const rmInProgress = () =>
+    new Error("Error response from daemon: removal of container syd-egress is already in progress");
+
+  it("survives losing the proxy-rm race: waits out a twin's in-flight removal", async () => {
+    let proxyInspects = 0;
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") {
+        proxyInspects++;
+        // 1: the stale sidecar we want gone. 2-3: the twin's removal is still
+        // in flight, so it keeps answering. 4+: gone.
+        return proxyInspects <= 3
+          ? "true ALLOWED_DOMAINS=api.anthropic.com INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN"
+          : new Error("no such container");
+      }
+      if (args[0] === "rm") return rmInProgress();
+      return "";
+    });
+    await expect(
+      ensureEgressGuard(config, exec, egressEnv, { sleep: noSleep }),
+    ).resolves.toBeUndefined();
+    // It still has to create the replacement — waiting out the twin is not the
+    // same as accepting whatever it left behind.
+    expect(calls.some((c) => c.args[0] === "run")).toBe(true);
+  });
+
+  it("survives losing the proxy-rm race: accepts the twin's replacement if it satisfies", async () => {
+    let proxyInspects = 0;
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") {
+        proxyInspects++;
+        if (proxyInspects === 1)
+          return "true ALLOWED_DOMAINS=api.anthropic.com INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN";
+        // The twin finished and stood up a sidecar that covers what we need.
+        return proxyInspects === 2
+          ? "true ALLOWED_DOMAINS=api.anthropic.com INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN"
+          : `true ALLOWED_DOMAINS=${domainsCsv} INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN`;
+      }
+      if (args[0] === "rm") return rmInProgress();
+      return "";
+    });
+    await expect(
+      ensureEgressGuard(config, exec, egressEnv, { sleep: noSleep }),
+    ).resolves.toBeUndefined();
+    expect(calls.some((c) => c.args[0] === "run")).toBe(false);
   });
 
   it("tolerates an already-connected proxy on network connect", async () => {
