@@ -1,0 +1,71 @@
+#!/bin/sh
+# Operator path for the admin CLI on the NAS (SYD-291).
+#
+# Installed root-owned at /usr/local/bin/switchyard-admin and invoked
+# passwordless through a scoped sudoers rule, exactly like switchyard-deploy
+# beside it. It exists because none of the obvious routes work on that host:
+# there is no node or npx (so the CLI cannot run outside the container), the
+# database only exists at /data/switchyard.db inside it, and /var/run/docker.sock
+# is root:root 0660 (so `docker exec` needs sudo, which prompts over a non-tty
+# ssh and fails). The result was that a shipped migration could only be
+# completed by one person sitting at a terminal -- see SYD-280, whose readers
+# went live while pr_links was still empty.
+#
+# WHAT BELONGS HERE, AND WHAT DOES NOT (the SYD-291 rule):
+#
+#   Mechanical migration -- the result is a pure function of data already in
+#   the database, encoding nobody's judgement. Run it at STARTUP instead, the
+#   way ensureRolloutBackfill does (src/services/delivery-attempts.ts). Deploy
+#   is then the migration and there is no degraded window at all.
+#
+#   Attesting migration -- it writes something meaning "a human vouched for
+#   this". backfill-pr-links is the worked example: it sets confirmed_by to a
+#   NAMED human, which is what makes 179 links proof-bearing. Running that
+#   automatically at startup would fabricate human attestation, which is the
+#   exact property SYD-280 exists to protect. So it stays operator-run -- this
+#   wrapper removes the sudo-password friction, never the human.
+#
+# Subcommands are allowlisted rather than passed through. Credential-minting
+# verbs are refused on purpose: add-actor prints a fresh API token, and
+# mint-login / mint-supervised-session hand out sessions. Any of those behind a
+# NOPASSWD rule would turn "can ssh to the NAS" into "can obtain full API
+# credentials", which is a bigger grant than this wrapper is meant to make.
+set -e
+
+CONTAINER="${SWITCHYARD_CONTAINER:-switchyard}"
+DB="${SWITCHYARD_DB:-/data/switchyard.db}"
+DOCKER="${DOCKER_BIN:-/usr/local/bin/docker}"
+
+usage() {
+    cat >&2 <<EOF
+usage: switchyard-admin <subcommand> [args...]
+
+allowed:
+  backfill-pr-links <humanName> [--dry-run]   SYD-280 cutover (attesting)
+  list-webhooks
+  list-github-repos
+  list-affirm-keys <humanName>
+
+refused (mint credentials -- run these interactively, not through sudo):
+  add-actor, mint-login, mint-supervised-session
+EOF
+    exit 2
+}
+
+[ $# -ge 1 ] || usage
+SUBCOMMAND="$1"
+
+case "$SUBCOMMAND" in
+    backfill-pr-links | list-webhooks | list-github-repos | list-affirm-keys) ;;
+    add-actor | mint-login | mint-supervised-session)
+        echo "switchyard-admin: refusing '$SUBCOMMAND' — it mints credentials, so it is" >&2
+        echo "  deliberately outside this wrapper. Run it with an interactive docker exec." >&2
+        exit 3
+        ;;
+    *)
+        echo "switchyard-admin: '$SUBCOMMAND' is not in the allowlist." >&2
+        usage
+        ;;
+esac
+
+exec "$DOCKER" exec "$CONTAINER" npx tsx src/cli.ts "$DB" "$@"
