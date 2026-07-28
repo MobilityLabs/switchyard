@@ -608,12 +608,39 @@ async function deliverPending(
 
     if (live.state === "CLOSED") {
       // SYD-232: a closed-unmerged pin dead-ends every retry with an
-      // identical failure unless we check whether a replacement PR on the
-      // same branch already delivered the work (e.g. SYD-108's #61 → #124).
-      const merged = await findMergedAgentPr(project.repo, ref).catch((e: Error) => {
-        console.error(`could not check for a merged replacement PR on ${ref}: ${e.message}`);
-        return null;
-      });
+      // identical failure unless we check whether a replacement PR already
+      // delivered the work (e.g. SYD-108's #61 → #124).
+      //
+      // SYD-273: ask the TRACKER first, and only then GitHub. The branch query
+      // below asks "did anything merge on agent/<ref>?", which is a guess
+      // about where work lives rather than a fact about what delivered it —
+      // and it is wrong for exactly the case that produced this bug: SYD-108's
+      // #124 merged from `feat/syd-108-gate-delivery-events`, so 8 retries
+      // over 15 days each reported "no later merged PR" about work that was on
+      // main the whole time. `deliveredByPrNumber` is the issue's proof-bearing
+      // declared link joined to a merged pr_state row, on whatever branch.
+      //
+      // The tracker gives a PR number but no merge SHA (pr_state has no such
+      // column), so GitHub still supplies the SHA — a targeted lookup of one
+      // known PR, not a search.
+      const declared = auth.deliveredByPrNumber ?? null;
+      const merged =
+        declared !== null && declared !== auth.pin.prNumber
+          ? await prLiveState(project.repo, declared)
+              .then((live) =>
+                live.mergeCommit ? { prNumber: declared, mergeSha: live.mergeCommit } : null,
+              )
+              .catch((e: Error) => {
+                console.error(`could not resolve declared merged PR #${declared}: ${e.message}`);
+                return null;
+              })
+          : // No declared evidence — fall back to the branch-scoped question,
+            // which still covers the re-dispatch case it was written for (a
+            // fresh session reusing agent/<ref> and opening a replacement).
+            await findMergedAgentPr(project.repo, ref).catch((e: Error) => {
+              console.error(`could not check for a merged replacement PR on ${ref}: ${e.message}`);
+              return null;
+            });
       const id = attemptId;
       attemptId = null;
       if (merged) {
@@ -637,7 +664,9 @@ async function deliverPending(
         return;
       }
       await finishAttempt(config, token, id, { outcome: "merge_failed" });
-      const message = `PR #${auth.pin.prNumber} is closed unmerged, with no later merged PR on ${agentBranch(ref)}`;
+      const message =
+        `PR #${auth.pin.prNumber} is closed unmerged, with no PR declared as delivering this issue ` +
+        `and no later merged PR on ${agentBranch(ref)}`;
       await postComment(config, token, ref, closedPrDeadEndComment(ref, auth.pin.prNumber)).catch(
         (e: Error) => console.error(`could not comment the failure on ${ref}: ${e.message}`),
       );

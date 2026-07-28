@@ -8,6 +8,7 @@ import { updateIssue } from "../../src/services/issues.js";
 import { recordEvent } from "../../src/services/events.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
+import { declarePrLink, recordIngestedPrLink } from "../../src/services/pr-links.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { getAttention } from "../../src/services/attention.js";
 import { deliveryAttempts, deliveryRollout, DELIVERY_OUTCOMES } from "../../src/db/schema.js";
@@ -148,7 +149,93 @@ describe("listPendingDeliveryAuthorizations", () => {
       kind: "done_stamp",
       pin: { repo: REPO, prNumber: 7, headSha: "abc" },
       priorHeads: [],
+      // SYD-273: null when the tracker holds no proof-bearing merged PR.
+      deliveredByPrNumber: null,
     });
+  });
+
+  // SYD-273: the worker's closed-pin reconcile used to ask GitHub for merged
+  // PRs on agent/<ref> and nothing else, so work that landed through an
+  // interactive feat/ branch was invisible -- SYD-108's #124 merged from
+  // feat/syd-108-gate-delivery-events and 8 retries over 15 days each reported
+  // "no later merged PR". The authorization now carries what the tracker
+  // already knows.
+  it("carries the issue's proof-bearing merged PR, whatever branch it merged from", () => {
+    const { db, human } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
+    // The dead pin: an agent-branch PR that closed unmerged.
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 61,
+      status: "closed",
+      branch: `agent/${issue.ref}`,
+      headSha: "abc",
+    });
+    // The replacement, merged from an interactive branch the old query could
+    // never have found, declared and confirmed by a human.
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 124,
+      status: "merged",
+      branch: "feat/some-interactive-branch",
+      headSha: "def",
+      ghUpdatedAt: "2026-07-14T10:00:00Z",
+    });
+    declarePrLink(db, human, issue.ref, { repo: REPO, prNumber: 124 });
+    // Pinned stamp must be the NEWEST done transition — latest-stamp-per-issue
+    // is what picks the live authorization.
+    updateIssue(db, human, issue.ref, { status: "done" });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "status_changed",
+      payload: { from: "done", to: "done", pin: { repo: REPO, prNumber: 61, headSha: "abc" } },
+    });
+
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending.at(-1)!.deliveredByPrNumber).toBe(124);
+  });
+
+  // A merely-referenced PR proves nothing, so it must not reconcile a
+  // delivery -- this value makes the worker record `delivered`.
+  it("ignores a references suggestion — that is not evidence the work landed", () => {
+    const { db, human, agent } = setup();
+    const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 61,
+      status: "closed",
+      branch: `agent/${issue.ref}`,
+      headSha: "abc",
+    });
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 124,
+      status: "merged",
+      branch: "feat/some-interactive-branch",
+      headSha: "def",
+      ghUpdatedAt: "2026-07-14T10:00:00Z",
+    });
+    recordIngestedPrLink(db, {
+      issueId: issue.id,
+      repo: REPO,
+      prNumber: 124,
+      role: "references",
+      actorId: agent.id,
+    });
+    // Pinned stamp must be the NEWEST done transition — latest-stamp-per-issue
+    // is what picks the live authorization.
+    updateIssue(db, human, issue.ref, { status: "done" });
+    recordEvent(db, {
+      issueId: issue.id,
+      actorId: human.id,
+      type: "status_changed",
+      payload: { from: "done", to: "done", pin: { repo: REPO, prNumber: 61, headSha: "abc" } },
+    });
+
+    expect(listPendingDeliveryAuthorizations(db).at(-1)!.deliveredByPrNumber).toBeNull();
   });
 
   // SYD-231: a delivery whose prior attempt already force-pushed a rebased

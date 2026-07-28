@@ -17,6 +17,7 @@ import {
 } from "../../src/services/triage-actions.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
+import { upsertPrState } from "../../src/services/pr-state.js";
 
 const REPO = "acme/widgets";
 
@@ -153,6 +154,100 @@ describe("redeliverIssue", () => {
     const requested = events.at(-1)!;
     expect(requested.type).toBe("redeliver_requested");
     expect(requested.actorName).toBe(human.name);
+  });
+});
+
+// SYD-273: SYD-108 accumulated 8 redeliver_requested events over 15 days, each
+// answered by a byte-identical delivery_failed, two of them 25 minutes apart.
+// Re-running a poll that already dead-ended on this exact pin costs a GitHub
+// round-trip and re-asserts "work never landed" on an issue whose work is on
+// main. Nothing about the pin changed between clicks, so nothing about the
+// outcome could.
+describe("redeliverIssue repeat-pin guard (SYD-273)", () => {
+  /** An issue with a closed PR pinned and a prior redeliver that dead-ended. */
+  function deadEnded(headSha = "sha1") {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "AIPI" });
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "pr_opened",
+      prNumber: 7,
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha,
+    });
+    recordDeliveryEvent(db, human, "AIPI-1", { type: "delivery_failed", message: "boom" });
+    redeliverIssue(db, human, "AIPI-1", headSha);
+    recordDeliveryEvent(db, human, "AIPI-1", {
+      type: "delivery_failed",
+      message: `PR #7 is closed unmerged, with no later merged PR on agent/AIPI-1`,
+    });
+  }
+
+  /** Drives the PR to closed, the state a dead-ended pin is actually in. */
+  function closePr(headSha = "sha1") {
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 7,
+      status: "closed",
+      branch: "agent/AIPI-1",
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha,
+      ghUpdatedAt: "2026-07-25T10:00:00Z",
+    });
+  }
+
+  it("refuses a pin that already dead-ended, instead of re-running the same poll", () => {
+    deadEnded();
+    closePr();
+    expect(() => redeliverIssue(db, human, "AIPI-1", "sha1")).toThrowError(/already/i);
+  });
+
+  it("says what to do instead rather than just refusing", () => {
+    deadEnded();
+    closePr();
+    expect(() => redeliverIssue(db, human, "AIPI-1", "sha1")).toThrowError(
+      /declare|resolve-delivery/i,
+    );
+  });
+
+  it("records nothing when it refuses — no 9th identical authorization", () => {
+    deadEnded();
+    closePr();
+    const before = listIssueEvents(db, getIssue(db, "AIPI-1").id).length;
+    expect(() => redeliverIssue(db, human, "AIPI-1", "sha1")).toThrow();
+    expect(listIssueEvents(db, getIssue(db, "AIPI-1").id)).toHaveLength(before);
+  });
+
+  // The guard must not become a wall. Reopening the PR is the case where
+  // retrying the SAME pin is exactly right -- the situation genuinely changed,
+  // and pr_state knows it did.
+  it("allows the retry once the PR is reopened — same pin, changed situation", () => {
+    deadEnded();
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 7,
+      status: "open",
+      branch: "agent/AIPI-1",
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "sha1",
+      ghUpdatedAt: "2026-07-25T11:00:00Z",
+    });
+    const updated = redeliverIssue(db, human, "AIPI-1", "sha1");
+    expect(listIssueEvents(db, updated.id).at(-1)!.type).toBe("redeliver_requested");
+  });
+
+  // A new push is a different pin, so it was never the doomed one.
+  it("allows the retry when the head moved — a different pin entirely", () => {
+    deadEnded("old-sha");
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 7,
+      status: "closed",
+      branch: "agent/AIPI-1",
+      url: `https://github.com/${REPO}/pull/7`,
+      headSha: "new-sha",
+      ghUpdatedAt: "2026-07-25T11:00:00Z",
+    });
+    const updated = redeliverIssue(db, human, "AIPI-1", "new-sha");
+    expect(listIssueEvents(db, updated.id).at(-1)!.type).toBe("redeliver_requested");
   });
 });
 
