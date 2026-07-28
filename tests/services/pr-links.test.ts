@@ -13,7 +13,7 @@ import { openDb } from "../../src/db/index.js";
 import { prState } from "../../src/db/schema.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, claimIssue, updateIssue } from "../../src/services/issues.js";
+import { createIssue, claimIssue, updateIssue, getIssue } from "../../src/services/issues.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { listIssueEvents } from "../../src/services/events.js";
 import { handleGithubWebhook } from "../../src/services/github-webhook.js";
@@ -23,6 +23,7 @@ import {
   confirmPrLink,
   revokePrLink,
   listLiveLinks,
+  recordIngestedPrLink,
   backfillPrLinksFromPrState,
 } from "../../src/services/pr-links.js";
 
@@ -152,6 +153,66 @@ describe("confirmPrLink", () => {
     expect(() => confirmPrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
       /confirm/i,
     );
+  });
+
+  // Found live: Sean confirmed the ingested #194 link on SYD-243 to clear its
+  // done_without_merged_pr flag. The call succeeded, recorded a
+  // pr_link_confirmed event -- and changed nothing, because every reader of
+  // proof joins on role='delivers'. A confirmed `references` row satisfies no
+  // one. Silent success on a no-op is worse than a refusal.
+  //
+  // Refusing rather than promoting is deliberate. `references` links are
+  // minted from PR prose -- since SYD-274, on EVERY ref a PR names -- so
+  // letting one confirm click turn a passing mention into delivery-grade
+  // evidence would reopen SYD-280's hole from the other side. declare is the
+  // assertion of what a PR carries; confirm vouches for an assertion someone
+  // already made. There is no assertion here to vouch for.
+  it("refuses to confirm a references suggestion, and says what to do instead", () => {
+    const { db, human, agent } = setup();
+    recordIngestedPrLink(db, {
+      issueId: getIssue(db, "SYD-1").id,
+      repo: REPO,
+      prNumber: 7,
+      role: "references",
+      actorId: agent.id,
+    });
+    expect(() => confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
+      /references/i,
+    );
+    expect(() => confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
+      /declare/i,
+    );
+  });
+
+  it("leaves the suggestion untouched when it refuses — no half-applied confirm", () => {
+    const { db, human, agent } = setup();
+    recordIngestedPrLink(db, {
+      issueId: getIssue(db, "SYD-1").id,
+      repo: REPO,
+      prNumber: 7,
+      role: "references",
+      actorId: agent.id,
+    });
+    expect(() => confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow();
+    const [link] = listLiveLinks(db, getIssue(db, "SYD-1").id);
+    expect(link.role).toBe("references");
+    expect(link.confirmedBy).toBeNull();
+  });
+
+  // The one-step path the refusal points at: declaring supersedes the
+  // suggestion AND confirms, so a human never needs both verbs.
+  it("declaring delivers over the suggestion promotes and confirms in one step", () => {
+    const { db, human, agent } = setup();
+    recordIngestedPrLink(db, {
+      issueId: getIssue(db, "SYD-1").id,
+      repo: REPO,
+      prNumber: 7,
+      role: "references",
+      actorId: agent.id,
+    });
+    const promoted = declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    expect(promoted.role).toBe("delivers");
+    expect(promoted.confirmedBy).toBe(human.id);
   });
 
   it("refuses to confirm a link that does not exist", () => {
