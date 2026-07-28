@@ -120,13 +120,24 @@ export function computeDeviation(
 // exactly the signal that code work started. Stamping such an issue straight
 // to done with no PR is the same lost-work shape as from in_review, and
 // skipping review makes it likelier to go unnoticed, not less.
+// SYD-275: an epic is excluded too, on the same "no code involved" ground as
+// triage/backlog — an issue with children is a container, and the code lives in
+// the children, each of which carries its own PR and its own flag. SYD-248 is
+// the case that surfaced it: "Umbrella for the Touch ID affirmation design",
+// stamped done from in_review, its own comment reading "no code changes — its
+// actual technical work is fully delegated to three child stories", flagged
+// anyway. Asking a human to verify the code landed for a container is asking
+// them to verify nothing, and a flag that fires on correct behavior is how the
+// banner stops being read.
 const STARTED_STATUSES = new Set<Status>(["in_review", "in_progress"]);
 
 export function doneWithoutMergedPr(
   fromStatus: Status,
   openPr: OpenPr | null,
   merged: MergedPr | null,
+  hasChildren = false,
 ): DeviationFlag | null {
+  if (hasChildren) return null;
   if (!STARTED_STATUSES.has(fromStatus) || openPr !== null || merged !== null) return null;
   return {
     reason: "done_without_merged_pr",

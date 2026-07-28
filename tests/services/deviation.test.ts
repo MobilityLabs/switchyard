@@ -351,6 +351,20 @@ describe("doneWithoutMergedPr", () => {
     });
   });
 
+  // SYD-275: an epic carries no code of its own -- its children do. SYD-248 is
+  // the case: "Umbrella for the Touch ID affirmation design", stamped done from
+  // in_review with a comment reading "no code changes", flagged anyway. Asking
+  // a human to "verify the code actually landed" for a container is asking them
+  // to verify nothing.
+  it("does NOT flag an issue that has children — an epic carries no code itself", () => {
+    expect(doneWithoutMergedPr("in_review", null, null, true)).toBeNull();
+    expect(doneWithoutMergedPr("in_progress", null, null, true)).toBeNull();
+  });
+
+  it("still flags a childless issue — the default when nothing says otherwise", () => {
+    expect(doneWithoutMergedPr("in_review", null, null, false)).not.toBeNull();
+  });
+
   it("does NOT flag a closure from a status where nobody had started work", () => {
     expect(doneWithoutMergedPr("todo", null, null)).toBeNull();
     expect(doneWithoutMergedPr("backlog", null, null)).toBeNull();
@@ -418,6 +432,19 @@ describe("updateIssue done transition — done_without_merged_pr (SYD-204)", () 
 
   // The other half of the scoping: closing something nobody ever started is a
   // legitimate no-code done (a duplicate, a research spike) and must stay quiet.
+  // Driven through updateIssue, so it proves the child count actually reaches
+  // the checker rather than that the checker handles a flag someone passed it.
+  it("does NOT record the deviation when the done issue is an epic with children", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "umbrella" }); // SYD-1
+    createIssue(db, human, { projectKey: "SYD", title: "the real work", parentRef: "SYD-1" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(deviationEventsFor(db, "SYD-1")).toHaveLength(0);
+  });
+
   it("does NOT record the deviation when closing an unclaimed issue from todo", () => {
     const { db, human } = setup();
     createIssue(db, human, { projectKey: "SYD", title: "duplicate of something" });

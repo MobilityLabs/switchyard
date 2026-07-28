@@ -455,7 +455,19 @@ export function updateIssue(
           // SYD-204: no open PR to authorize delivery for — check whether this
           // transition is the done-without-merged-PR deviation (a point-in-time
           // fact recorded once, not a continuously re-evaluated live signal).
-          const deviation = doneWithoutMergedPr(current.status, open, getMergedPr(tx, current.id));
+          // SYD-275: an epic's code lives in its children, so a childless
+          // check would flag every umbrella issue for having no PR of its own.
+          const childCount = tx
+            .select({ n: sql<number>`count(*)` })
+            .from(issues)
+            .where(eq(issues.parentId, current.id))
+            .get();
+          const deviation = doneWithoutMergedPr(
+            current.status,
+            open,
+            getMergedPr(tx, current.id),
+            (childCount?.n ?? 0) > 0,
+          );
           if (deviation) {
             toRecord.push({
               type: "process_deviation",
