@@ -326,6 +326,29 @@ export function confirmPrLink(
         `${ref} has no live link to ${repo}#${input.prNumber} to confirm — declare it first.`,
       );
     }
+    // Confirming a suggestion used to succeed and do nothing. Every reader of
+    // proof joins on role='delivers', so a confirmed `references` row
+    // satisfies none of them: the caller got a success, an event on the
+    // timeline, and an unchanged flag. Found the live way — confirming the
+    // ingested #194 link on SYD-243 to clear its done_without_merged_pr, which
+    // reported success and left the flag lit.
+    //
+    // Refused rather than auto-promoted, deliberately. `references` links come
+    // from PR prose — since SYD-274, one for EVERY ref a PR names — so letting
+    // a single confirm turn a passing mention into delivery-grade evidence
+    // would reopen the SYD-280 hole from the other side. The two verbs mean
+    // different things: `declare` asserts what a PR carries, `confirm` vouches
+    // for an assertion someone already made. There is no assertion here to
+    // vouch for, and declaring is a one-step path that both supersedes the
+    // suggestion and confirms.
+    if (link.role === "references") {
+      throw new SwitchyardError(
+        `${ref}'s link to ${repo}#${input.prNumber} is a \`references\` suggestion, not a claim that ` +
+          `the PR carries this work — confirming it would prove nothing, because every reader of ` +
+          `proof requires role 'delivers'. Declare it instead: that supersedes the suggestion and ` +
+          `confirms in one step.`,
+      );
+    }
     if (link.confirmedBy !== null) return link;
 
     const now = nowSeconds();
