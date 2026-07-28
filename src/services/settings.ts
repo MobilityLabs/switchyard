@@ -36,6 +36,11 @@ export const REGISTRY = {
   "sessions.stale_seconds": { type: "number", default: 12 * 3600 },
   "claims.stale_seconds": { type: "number", default: 4 * 3600 },
   "claims.deviation_seconds": { type: "number", default: 3600 },
+  // SYD-261: how long a done issue may sit with an open, undelivered agent PR
+  // before it is flagged. Much shorter than the stale-claim window because
+  // delivery normally completes within seconds of the stamp — an hour of
+  // silence here is already an incident, not idleness.
+  "delivery.undelivered_seconds": { type: "number", default: 900 },
   "claims.lease_ttl_seconds": { type: "number", default: 8 * 3600 },
   // SYD-210 Layer B: a heartbeat renews a lease to now + this window (= the
   // host worker's N missed beats x interval, 10 x 60s). Shorter than the mint

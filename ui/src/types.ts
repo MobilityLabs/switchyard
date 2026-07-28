@@ -51,6 +51,7 @@ export type Issue = {
     | { reason: "open_pr_not_in_review"; message: string }
     | { reason: "stale_claim"; message: string }
     | { reason: "done_without_merged_pr"; message: string }
+    | { reason: "done_pr_not_delivered"; message: string }
     | null;
   openPr: { prNumber: number; url: string; repo: string; headSha: string | null } | null;
 };

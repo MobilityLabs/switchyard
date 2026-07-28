@@ -324,6 +324,86 @@ describe("process_deviation does not reset the idle clock (SYD-188 seam)", () =>
   });
 });
 
+// SYD-261: HEX-1 was stamped done ~70 minutes before its PR registered, so the
+// done-stamp carried no pin and was never a delivery authorization. That part
+// is deliberate -- the pin records the head a human approved -- but the
+// resulting state (done, open agent PR, nothing delivering it) had no signal
+// at all: done_without_merged_pr won't fire because a PR IS open, and the
+// SYD-230 re-stamp affordance is an info banner nobody was watching. PR #304
+// sat green for 30+ minutes and was merged by hand.
+//
+// Live-recomputed, like the other three here: the moment delivery merges the
+// PR, openPr goes null and the flag clears itself.
+describe("getDeviation — done_pr_not_delivered (SYD-261)", () => {
+  function doneWithOpenPr() {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    // The PR registers AFTER the stamp — the ordering this issue is about.
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 304,
+      status: "open",
+      branch: "agent/SYD-1",
+      url: `https://github.com/${REPO}/pull/304`,
+      headSha: "abc",
+      ghUpdatedAt: "2026-07-24T18:00:00Z",
+    });
+    return { db, human, agent };
+  }
+
+  it("does NOT flag immediately — the normal flow is stamp, then deliver seconds later", () => {
+    const { db } = doneWithOpenPr();
+    expect(getDeviation(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+
+  it("flags once the PR has sat undelivered past the threshold", () => {
+    const { db } = doneWithOpenPr();
+    ageAllEvents(db, getIssue(db, "SYD-1").id, 3600);
+    const flag = getDeviation(db, getIssue(db, "SYD-1").id);
+    expect(flag?.reason).toBe("done_pr_not_delivered");
+    expect(flag?.message).toContain("304");
+  });
+
+  it("clears itself the moment the PR merges — nothing to re-stamp", () => {
+    const { db, human } = doneWithOpenPr();
+    ageAllEvents(db, getIssue(db, "SYD-1").id, 3600);
+    expect(getDeviation(db, getIssue(db, "SYD-1").id)?.reason).toBe("done_pr_not_delivered");
+    upsertPrState(db, human, {
+      repo: REPO,
+      prNumber: 304,
+      status: "merged",
+      branch: "agent/SYD-1",
+      url: `https://github.com/${REPO}/pull/304`,
+      headSha: "abc",
+      ghUpdatedAt: "2026-07-24T19:00:00Z",
+      mergeSha: "def",
+    });
+    expect(getDeviation(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+
+  it("appears in the bulk listing too, not only the single-issue read", () => {
+    const { db } = doneWithOpenPr();
+    const id = getIssue(db, "SYD-1").id;
+    ageAllEvents(db, id, 3600);
+    expect(listDeviationByIssueId(db).get(id)?.reason).toBe("done_pr_not_delivered");
+  });
+
+  it("does NOT flag a done issue with no PR at all — that is done_without_merged_pr's job", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "no pr" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    ageAllEvents(db, getIssue(db, "SYD-1").id, 3600);
+    expect(getDeviation(db, getIssue(db, "SYD-1").id)).toBeNull();
+  });
+});
+
 // SYD-204: a point-in-time check (not a live-recomputed one) run inside
 // updateIssue's done transition — see doneWithoutMergedPr's own doc comment
 // for why fromStatus/openPr/merged are checked instead of re-deriving state.

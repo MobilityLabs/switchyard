@@ -252,10 +252,12 @@ export function ActivityFeed({
 export function AttentionBanner({
   attention,
   onRetry,
+  onRestamp,
   onResolveClick,
 }: {
   attention: Issue["attention"];
   onRetry?: () => void;
+  onRestamp?: () => void;
   onResolveClick?: () => void;
 }) {
   if (!attention) return null;
@@ -267,12 +269,22 @@ export function AttentionBanner({
   // delivery_failed: it re-authorizes an attributed agent PR, and a deviation
   // has none, so offering it here would be a button that cannot work.
   const canResolve = isError || attention.reason === "done_without_merged_pr";
+  // SYD-261: done with an open, undelivered agent PR. Re-stamp is the action
+  // that fixes it (it re-authorizes the PR's CURRENT head, which is the whole
+  // reason the late-registering PR wasn't auto-delivered), so offer it here
+  // rather than leaving the flag to point at a separate banner below.
+  const canRestamp = attention.reason === "done_pr_not_delivered";
   return (
     <p className={`banner ${isError ? "danger" : "warn"} issue-attention`}>
       {isError ? "⛔" : "⚠"} {attention.message}
       {isError && onRetry && (
         <button className="retry-delivery" onClick={onRetry}>
           Retry delivery
+        </button>
+      )}
+      {canRestamp && onRestamp && (
+        <button className="retry-delivery" onClick={onRestamp}>
+          Re-stamp delivery
         </button>
       )}
       {canResolve && onResolveClick && (
@@ -288,7 +300,12 @@ export function AttentionBanner({
  * pin-less-done case (pr_state was blind to the PR when it was stamped done, so
  * the done-stamp carried no delivery pin). Offers a one-click re-authorize
  * without the done→in_review→done round-trip. The delivery_failed case has its
- * own "Retry delivery" in AttentionBanner, so defer to it and render nothing. */
+ * own "Retry delivery" in AttentionBanner, so defer to it and render nothing.
+ *
+ * SYD-261 gave this same state an attention flag (done_pr_not_delivered) once
+ * it has gone stale, and that banner carries its own Re-stamp button — so
+ * defer to it as well rather than showing two banners about one PR. This one
+ * still covers the fresh window before the flag arms. */
 export function RestampBanner({
   status,
   openPr,
@@ -300,7 +317,14 @@ export function RestampBanner({
   attention: Issue["attention"];
   onRestamp: () => void;
 }) {
-  if (status !== "done" || !openPr || attention?.reason === "delivery_failed") return null;
+  if (
+    status !== "done" ||
+    !openPr ||
+    attention?.reason === "delivery_failed" ||
+    attention?.reason === "done_pr_not_delivered"
+  ) {
+    return null;
+  }
   return (
     <p className="banner info restamp-delivery">
       📦 PR #{openPr.prNumber} is open but hasn’t been delivered yet.{" "}
@@ -481,6 +505,7 @@ export default function IssueDetail({ refId }: { refId: string }) {
       <AttentionBanner
         attention={data.attention}
         onRetry={() => act(() => redeliverIssue(refId, data.deliveryPin?.headSha ?? undefined))}
+        onRestamp={() => act(() => redeliverIssue(refId, data.openPr?.headSha ?? undefined))}
         onResolveClick={() => setResolveOpen(true)}
       />
       <RestampBanner
