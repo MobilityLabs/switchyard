@@ -20,6 +20,7 @@ import {
   STATUSES,
   WORKER_PREFERENCES,
   type Activity,
+  type Actor,
   type Attachment,
   type DependencyRef,
   type DeployResult,
@@ -34,6 +35,7 @@ import { formatElapsed } from "./Agents";
 import { projectKeyFromRef } from "../refs";
 import { Composer } from "../Composer";
 import { safeHref } from "../safeHref";
+import PrLinks from "../PrLinks";
 
 const SUMMARY_FALLBACK_LENGTH = 200;
 
@@ -403,7 +405,7 @@ export function AgentSessionStrip({ refId }: { refId: string }) {
   );
 }
 
-export default function IssueDetail({ refId }: { refId: string }) {
+export default function IssueDetail({ refId, me }: { refId: string; me: Actor }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [resolveOpen, setResolveOpen] = useState(false);
@@ -560,6 +562,17 @@ export default function IssueDetail({ refId }: { refId: string }) {
       )}
       <PollErrorBar error={error} />
       {delivery && <DeliveryStrip status={delivery} />}
+      {/* Directly under the delivery strip and the attention banner, because
+          this panel is what explains both — "done without a merged PR" is a
+          statement about these links (SYD-290). */}
+      <PrLinks
+        refId={refId}
+        projectId={data.projectId}
+        links={data.prLinks}
+        activity={data.activity}
+        me={me}
+        onChanged={reload}
+      />
       <AgentSessionStrip refId={refId} />
       {data.sourceType && (
         <div className="provenance panel">

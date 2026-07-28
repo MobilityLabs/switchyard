@@ -1,6 +1,7 @@
 import type {
   Actor,
   ActorWithStatus,
+  AttentionReason,
   AgentSession,
   Attachment,
   Issue,
@@ -9,6 +10,8 @@ import type {
   PendingActionStatus,
   Priority,
   Project,
+  PrLinkRole,
+  PrLinkView,
   Status,
   WebhookView,
   GithubRepoView,
@@ -75,7 +78,10 @@ export const listIssues = (
     text?: string;
     needsInput?: boolean;
     excludeSnoozed?: boolean;
-    attention?: "delivery_failed";
+    // Any flag, not just delivery_failed: searchIssues has always accepted the
+    // full AttentionFlag["reason"] union, and clearing the done_without_merged_pr
+    // backlog (SYD-290) needs to ask for exactly that one.
+    attention?: AttentionReason;
     openPr?: boolean;
   } = {},
 ) => {
@@ -151,6 +157,35 @@ export const resolveDeviation = (ref: string, reason: string, note?: string) =>
     method: "POST",
     body: JSON.stringify({ reason, note }),
   });
+// Declared issue<->PR attribution (SYD-280), reachable from the board (SYD-290).
+//
+// A human declaring is auto-confirmed server-side, so `declarePrLink` is the
+// one-step path that both records the attribution and vouches for it — and the
+// only way to PROMOTE a free-text `references` suggestion, which `confirm`
+// deliberately refuses (confirming a suggestion would prove nothing, because
+// every reader of proof requires role 'delivers').
+export const declarePrLink = (
+  ref: string,
+  input: { repo: string; prNumber: number; role?: PrLinkRole },
+) =>
+  api<PrLinkView>(`/api/issues/${ref}/pr-links`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const confirmPrLink = (ref: string, input: { repo: string; prNumber: number }) =>
+  api<PrLinkView>(`/api/issues/${ref}/pr-links/confirm`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+export const revokePrLink = (
+  ref: string,
+  input: { repo: string; prNumber: number; reason: string },
+) =>
+  api<{ ok: true }>(`/api/issues/${ref}/pr-links/revoke`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
 export const addDependency = (blockerRef: string, blockedRef: string) =>
   api<{ ok: true }>("/api/dependencies", {
     method: "POST",

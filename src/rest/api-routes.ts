@@ -37,7 +37,12 @@ import {
 } from "../services/dependencies.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { recordDeliveryEvent } from "../services/delivery-events.js";
-import { declarePrLink, confirmPrLink, revokePrLink, listLiveLinks } from "../services/pr-links.js";
+import {
+  declarePrLink,
+  confirmPrLink,
+  revokePrLink,
+  listLiveLinkViews,
+} from "../services/pr-links.js";
 import {
   startAgentSession,
   endAgentSession,
@@ -282,7 +287,12 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
       // SYD-280: additive. openPr/deliveryPin keep their exact shape, so the UI
       // is unaffected; this exposes the attribution behind them so a human can
       // see what is linked and confirm or revoke it.
-      prLinks: listLiveLinks(db, issue.id),
+      //
+      // SYD-290 widened it from the bare rows to the view: the panel that acts
+      // on these links needs actor NAMES and, crucially, whether anything has
+      // observed the PR — a confirmed link to an unobserved PR is a valid
+      // statement that still proves nothing, and the panel has to say so.
+      prLinks: listLiveLinkViews(db, issue.id),
       activity: getActivity(db, ref),
       dependencies: listDependencies(db, ref),
       attachments: listAttachments(db, ref),

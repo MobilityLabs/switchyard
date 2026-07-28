@@ -21,7 +21,13 @@ const LABELS: Record<string, string> = {
 // SYD-175: the actionable view is the DEFAULT (during a queue recovery the
 // actionable set was 9 of 150+ cards); the full history sits behind an
 // explicit "all" pill, and an explicit choice persists per browser.
-type DoneFilter = "errors" | "not_merged";
+// SYD-290: "unlinked" is the third, and the one with a backlog behind it —
+// ~46 done issues carry an unresolved done_without_merged_pr and none of them
+// had a live PR link, because declaring and confirming were CLI-only. Clearing
+// them is per-issue by design (Sean's call: click through them, no bulk
+// script), so the filter that finds them is what makes that a queue rather than
+// an archaeology exercise.
+type DoneFilter = "errors" | "not_merged" | "unlinked";
 
 const DONE_FILTERS_STORAGE_KEY = "switchyard:done-filters";
 const DEFAULT_DONE_FILTERS: DoneFilter[] = ["errors", "not_merged"];
@@ -98,7 +104,8 @@ export default function Board({ project }: { project: string }) {
             cards = cards.filter(
               (i) =>
                 (doneFilters.has("errors") && i.attention?.reason === "delivery_failed") ||
-                (doneFilters.has("not_merged") && i.openPr != null),
+                (doneFilters.has("not_merged") && i.openPr != null) ||
+                (doneFilters.has("unlinked") && i.attention?.reason === "done_without_merged_pr"),
             );
           }
           const badgeText =
@@ -140,6 +147,15 @@ export default function Board({ project }: { project: string }) {
                       onClick={() => toggleDoneFilter("not_merged")}
                     >
                       🔀 not merged
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill filter-pill filter-warn${doneFilters.has("unlinked") ? " active" : ""}`}
+                      aria-pressed={doneFilters.has("unlinked")}
+                      title="Show only done cards with no merged PR on record — declare or confirm their PR link"
+                      onClick={() => toggleDoneFilter("unlinked")}
+                    >
+                      🔗 unlinked
                     </button>
                     <button
                       type="button"

@@ -20,6 +20,7 @@ import { listIssues, listProjects } from "../api";
 
 const ISSUE: Issue = {
   id: 1,
+  projectId: 1,
   ref: "SYD-42",
   title: "Fix the widget",
   description: "",

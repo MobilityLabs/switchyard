@@ -23,9 +23,12 @@ import {
   confirmPrLink,
   revokePrLink,
   listLiveLinks,
+  listLiveLinkViews,
   recordIngestedPrLink,
   backfillPrLinksFromPrState,
 } from "../../src/services/pr-links.js";
+import { getAttention } from "../../src/services/attention.js";
+import type { Actor } from "../../src/services/actors.js";
 
 const REPO = "acme/widgets";
 const OTHER_REPO = "acme/unrelated";
@@ -445,5 +448,138 @@ describe("the DoS the previous design died on", () => {
     const kinds = listIssueEvents(db, 1).map((e) => e.type);
     expect(kinds).not.toContain("pr_link_declared");
     expect(kinds).toContain("gh_pr_opened");
+  });
+});
+
+// SYD-290. The links panel and the attention banner render on the same screen,
+// so the view backing the panel has to reach the same verdict the banner's SQL
+// does. Every test here pins one of the two against the other rather than
+// asserting the view's output in isolation.
+describe("listLiveLinkViews — what the panel shows a human", () => {
+  /** Drives the real webhook so the observation comes from ingestion, not an insert. */
+  function observeMerge(db: ReturnType<typeof openDb>, prNumber: number, updatedAt: string) {
+    handleGithubWebhook(db, "pull_request", {
+      action: "closed",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: prNumber,
+        merged: true,
+        merge_commit_sha: "d".repeat(40),
+        html_url: `https://github.com/${REPO}/pull/${prNumber}`,
+        head: { ref: "feat/some-topic", sha: "c".repeat(40) },
+        title: "some interactive work",
+        updated_at: updatedAt,
+      },
+    });
+  }
+
+  /** Walks SYD-1 to `done` with no PR of any kind, arming done_without_merged_pr. */
+  function stampDone(db: ReturnType<typeof openDb>, human: Actor, agent: Actor) {
+    claimIssue(db, agent, "SYD-1");
+    updateIssue(db, human, "SYD-1", { status: "in_review" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+  }
+
+  it("names the declarer and confirmer instead of leaving the panel with actor ids", () => {
+    const { db, human, agent } = setup();
+    const lease = claim(db, agent);
+    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
+
+    const [before] = listLiveLinkViews(db, 1);
+    expect(before.declaredByName).toBe("claude/worker");
+    expect(before.confirmedByName).toBeNull();
+    expect(before.confirmedByHuman).toBe(false);
+
+    confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    const [after] = listLiveLinkViews(db, 1);
+    expect(after.confirmedByName).toBe("sean");
+    expect(after.confirmedByHuman).toBe(true);
+  });
+
+  // The trap this field exists to close. A PR merged before SYD-287 widened
+  // ingestion has no pr_state row, so declaring AND confirming a link to it is
+  // a valid statement that still proves nothing — the join has no observation
+  // half. Without `observed`, the panel would show "confirmed ✓" beside a lit
+  // warning and look like a bug in the banner.
+  it("reports observed: null for a PR nothing ever observed, and agrees the flag stays lit", () => {
+    const { db, human, agent } = setup();
+    stampDone(db, human, agent);
+    expect(getAttention(db, 1)?.reason).toBe("done_without_merged_pr");
+
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 128 });
+
+    const [view] = listLiveLinkViews(db, 1);
+    expect(view.role).toBe("delivers");
+    expect(view.confirmedByName).toBe("sean"); // a human declaration auto-confirms
+    expect(view.observed).toBeNull();
+    expect(view.provesLanded).toBe(false);
+    // The banner reaches the same conclusion — the panel is explaining it, not
+    // contradicting it.
+    expect(getAttention(db, 1)?.reason).toBe("done_without_merged_pr");
+  });
+
+  it("reports the merge and proves landing once both halves exist, clearing the flag", () => {
+    const { db, human, agent } = setup();
+    stampDone(db, human, agent);
+    observeMerge(db, 42, "2026-07-12T11:00:00Z");
+    expect(getAttention(db, 1)?.reason).toBe("done_without_merged_pr");
+
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 42 });
+
+    const [view] = listLiveLinkViews(db, 1);
+    expect(view.observed?.status).toBe("merged");
+    expect(view.provesLanded).toBe(true);
+    expect(getAttention(db, 1)).toBeNull();
+  });
+
+  // §5a. A non-human confirmer buys no exemption from recency, so a merge that
+  // predates the declaration can't be retro-claimed by infra.
+  it("withholds proof from a service-confirmed link whose merge predates the declaration", () => {
+    const { db, human, agent, infra } = setup();
+    stampDone(db, human, agent);
+    observeMerge(db, 43, "2026-07-12T11:00:00Z");
+
+    declarePrLink(db, infra, "SYD-1", { repo: REPO, prNumber: 43 });
+
+    const [view] = listLiveLinkViews(db, 1);
+    expect(view.confirmedByName).toBe("deliver");
+    expect(view.confirmedByHuman).toBe(false);
+    expect(view.observed?.status).toBe("merged");
+    expect(view.provesLanded).toBe(false);
+    expect(getAttention(db, 1)?.reason).toBe("done_without_merged_pr");
+  });
+
+  // A suggestion from PR prose is not a claim about what carries the work, so
+  // it can never prove landing however merged the PR is.
+  it("never proves landing from a references suggestion", () => {
+    const { db, human, agent } = setup();
+    stampDone(db, human, agent);
+    handleGithubWebhook(db, "pull_request", {
+      action: "closed",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: 44,
+        merged: true,
+        merge_commit_sha: "e".repeat(40),
+        html_url: `https://github.com/${REPO}/pull/44`,
+        head: { ref: "attacker/whatever" },
+        title: "unrelated work that mentions SYD-1",
+        updated_at: "2026-07-12T11:00:00Z",
+      },
+    });
+
+    const [view] = listLiveLinkViews(db, 1);
+    expect(view.role).toBe("references");
+    expect(view.observed?.status).toBe("merged");
+    expect(view.provesLanded).toBe(false);
+    expect(getAttention(db, 1)?.reason).toBe("done_without_merged_pr");
+  });
+
+  it("drops a revoked link from the panel entirely", () => {
+    const { db, human } = setup();
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    expect(listLiveLinkViews(db, 1)).toHaveLength(1);
+    revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7, reason: "wrong PR" });
+    expect(listLiveLinkViews(db, 1)).toHaveLength(0);
   });
 });

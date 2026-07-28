@@ -24,8 +24,21 @@ export const SUMMARY_MAX_LENGTH = 280;
 export const INTERACTIVE_PREFERENCE = "interactive";
 /** Options for the "preferred worker" dropdown: an engine name, or the interactive sentinel. */
 export const WORKER_PREFERENCES = ["claude", "codex", "gemini", INTERACTIVE_PREFERENCE] as const;
+/** Every reason `GET /api/issues?attention=` accepts — mirrors AttentionFlag["reason"] server-side. */
+export const ATTENTION_REASONS = [
+  "delivery_failed",
+  "merged_pr_not_done",
+  "open_pr_not_in_review",
+  "stale_claim",
+  "done_without_merged_pr",
+  "done_pr_not_delivered",
+] as const;
+export type AttentionReason = (typeof ATTENTION_REASONS)[number];
+
 export type Issue = {
   id: number;
+  /** Needed to scope a declared PR link to the repos bound to this issue's project. */
+  projectId: number;
   ref: string;
   title: string;
   description: string;
@@ -45,16 +58,45 @@ export type Issue = {
   snoozedUntil: number | null;
   createdAt: number;
   updatedAt: number;
-  attention:
-    | { reason: "delivery_failed"; message: string }
-    | { reason: "merged_pr_not_done"; message: string }
-    | { reason: "open_pr_not_in_review"; message: string }
-    | { reason: "stale_claim"; message: string }
-    | { reason: "done_without_merged_pr"; message: string }
-    | { reason: "done_pr_not_delivered"; message: string }
-    | null;
+  attention: { reason: AttentionReason; message: string } | null;
   openPr: { prNumber: number; url: string; repo: string; headSha: string | null } | null;
 };
+export const PR_LINK_ROLES = ["delivers", "references"] as const;
+export type PrLinkRole = (typeof PR_LINK_ROLES)[number];
+
+/**
+ * A declared issue↔PR link as the issue page shows it (SYD-280/SYD-290) — the
+ * shape `listLiveLinkViews` returns, which is the DECLARATION (who said this PR
+ * carries the work, and who vouched for it) joined to the OBSERVATION (what
+ * GitHub was last seen doing to that PR).
+ *
+ * `observed: null` is not "not merged" — it means nothing has ever observed
+ * this PR, which is the state every PR merged before SYD-287 is in. The panel
+ * has to distinguish the two, because only the first is fixable by clicking.
+ */
+export type PrLinkView = {
+  id: number;
+  issueId: number;
+  repo: string;
+  prNumber: number;
+  role: PrLinkRole;
+  declaredBy: number;
+  declaredByName: string;
+  declaredAt: number;
+  confirmedBy: number | null;
+  confirmedByName: string | null;
+  confirmedByHuman: boolean;
+  confirmedAt: number | null;
+  revokedAt: number | null;
+  observed: {
+    status: "open" | "merged" | "closed";
+    url: string | null;
+    ghUpdatedAt: number | null;
+  } | null;
+  /** Whether this link alone lets a reader conclude the work landed — the server's verdict, not the UI's. */
+  provesLanded: boolean;
+};
+
 export type Activity = {
   type: string;
   actorName: string;
@@ -87,6 +129,8 @@ export type IssueDetail = Issue & {
     headSha: string | null;
     status: "open" | "merged" | "closed";
   } | null;
+  /** Live declared PR links — read these directly, never inferred from openPr/deliveryPin. */
+  prLinks: PrLinkView[];
 };
 export type AgentSession = {
   id: number;

@@ -19,10 +19,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { Issue, IssueDetail } from "../types";
+import type { Actor, Issue, IssueDetail } from "../types";
 
 vi.mock("../api", () => ({
   addComment: vi.fn(() => Promise.resolve()),
+  listGithubRepos: vi.fn(() => Promise.resolve([])),
+  declarePrLink: vi.fn(() => Promise.resolve({})),
+  confirmPrLink: vi.fn(() => Promise.resolve({})),
+  revokePrLink: vi.fn(() => Promise.resolve({})),
   getIssue: vi.fn(() => Promise.resolve(null)),
   listActors: vi.fn(() => Promise.resolve([])),
   listIssues: vi.fn(() => Promise.resolve([])),
@@ -36,9 +40,12 @@ import { navigate, scopeProject, useRoute } from "../router";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const ME: Actor = { id: 1, name: "sean", type: "human" };
+
 function issue(ref: string, title = `Title for ${ref}`): Issue {
   return {
     id: Number(ref.split("-")[1]),
+    projectId: 1,
     ref,
     title,
     description: "",
@@ -71,6 +78,7 @@ function detailOf(i: Issue): IssueDetail {
     deliveryPin: null,
     children: [],
     parentRef: null,
+    prLinks: [],
   };
 }
 
@@ -80,7 +88,7 @@ function detailOf(i: Issue): IssueDetail {
 function ReviewRoute() {
   const route = useRoute();
   if (route.view !== "review") return null;
-  return <Review project={scopeProject(route.scope)} currentRef={route.ref} />;
+  return <Review project={scopeProject(route.scope)} currentRef={route.ref} me={ME} />;
 }
 
 async function flush(): Promise<void> {

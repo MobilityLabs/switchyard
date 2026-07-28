@@ -1525,3 +1525,97 @@ kbd {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* Declared issue<->PR links (SYD-290). Each row carries two independent
+   states — the declaration's provenance and the PR's observed status — so the
+   layout keeps them on one line and lets the explanatory note wrap below. */
+.pr-links {
+  margin: 12px 0;
+}
+.pr-links h3 {
+  margin: 0 0 8px;
+}
+.pr-links.compact {
+  margin: 8px 0;
+}
+.pr-link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pr-link-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 14px;
+}
+.pr-link-number {
+  font-weight: 600;
+}
+.pr-link-provenance {
+  color: var(--muted);
+  font-size: 13px;
+}
+.pr-link-unconfirmed {
+  color: var(--warn);
+  font-style: normal;
+}
+.pr-link-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.pr-link-merged {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.pr-link-open {
+  color: var(--accent-2);
+  border-color: var(--accent-2);
+}
+.pr-link-closed,
+.pr-link-unobserved {
+  color: var(--muted);
+}
+/* The note explaining why a confirmed link still proves nothing takes the full
+   row width — it is the panel's whole reason for showing the observation half. */
+.pr-link-note {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--warn);
+}
+.pr-link-references {
+  opacity: 0.8;
+  margin-top: 4px;
+}
+.pr-link-suggestions-head {
+  margin: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.pr-link-hint {
+  font-weight: 400;
+  color: var(--muted);
+}
+.pr-link-declare {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pr-link-input {
+  width: 90px;
+}
+.pr-link-suggests {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
