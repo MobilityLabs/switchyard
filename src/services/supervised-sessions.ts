@@ -69,8 +69,8 @@ export function resolveSupervisedPrincipal(db: Db, sessionToken: string): Princi
   if (!human || !agent || human.type !== "human" || agent.type !== "agent") return null;
 
   return {
-    actor: { id: human.id, name: human.name, type: human.type },
-    viaAgent: { id: agent.id, name: agent.name, type: agent.type },
+    actor: { id: human.id, name: human.name, type: human.type, attended: human.attended },
+    viaAgent: { id: agent.id, name: agent.name, type: agent.type, attended: agent.attended },
     sessionId: row.id,
   };
 }

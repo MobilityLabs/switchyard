@@ -349,7 +349,7 @@ export async function executeImportPlan(
 
   // The importer is a host-CLI, human-operated tool — same standing as
   // src/cli.ts's cliActor for human-only service calls (SYD-157 guard).
-  const importOperator: Actor = { id: 0, name: "cli", type: "human" };
+  const importOperator: Actor = { id: 0, name: "cli", type: "human", attended: true };
   for (const p of plan.projects) {
     if (!p.exists) {
       createProject(db, importOperator, { key: p.key, name: p.name });

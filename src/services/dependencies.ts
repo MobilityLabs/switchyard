@@ -12,7 +12,11 @@ import { listOpenPrByIssueId } from "./pr-status.js";
 import { EXECUTABLE_GATE_ACTIONS, findOrCreatePendingAction, isHardGated } from "./hard-gate.js";
 import { getSetting } from "./settings.js";
 import { affinityRank, QUEUE_RANK_ORDER } from "./queue.js";
-import { callerClassification, INTERACTIVE_PREFERENCE } from "./worker-preference.js";
+import {
+  callerClassification,
+  isAttendedCaller,
+  INTERACTIVE_PREFERENCE,
+} from "./worker-preference.js";
 
 const CLOSED = ["done", "canceled"] as const;
 const PRIORITY_RANK = sql`CASE ${issues.priority}
@@ -272,7 +276,9 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
   // skips it at dispatch — but nextTask ignored it entirely, so an agent asking
   // for work directly could still be handed one. Everything else about
   // worker_preference stays soft, sorted by affinityRank below.
-  if (actor.type !== "human") {
+  // Keyed on "is a person watching", not "is this a person" — an attended
+  // agent session is the caller this work is FOR (see isAttendedCaller).
+  if (!isAttendedCaller(actor)) {
     conditions.push(sql`(${issues.workerPreference} IS NULL
       OR ${issues.workerPreference} <> ${INTERACTIVE_PREFERENCE})`);
   }

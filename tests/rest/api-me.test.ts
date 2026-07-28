@@ -10,7 +10,13 @@ describe("GET /me", () => {
     const app = buildApiRoutes(db);
     const res = await app.request("/me", { headers: { authorization: `Bearer ${token}` } });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ id: 1, name: "claude/dev", type: "agent" });
+    // attended is part of the identity a session should be able to read.
+    expect(await res.json()).toEqual({
+      id: 1,
+      name: "claude/dev",
+      type: "agent",
+      attended: false,
+    });
     expect((await app.request("/me")).status).toBe(401);
   });
 });

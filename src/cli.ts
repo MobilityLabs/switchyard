@@ -19,7 +19,7 @@ import { SwitchyardError } from "./services/errors.js";
 
 // The CLI operates directly on the db file with no HTTP auth, so it stands
 // in for a human operator when calling human-only service functions.
-const cliActor: Actor = { id: 0, name: "cli", type: "human" };
+const cliActor: Actor = { id: 0, name: "cli", type: "human", attended: true };
 
 // Resolves a human actor by name, matching mint-supervised-session's inline
 // lookup below — factored out because the affirm-key commands need it three
@@ -32,7 +32,7 @@ function requireHumanActor(db: ReturnType<typeof openDb>, name: string): Actor {
       `"${name}" is an actor of type "${row.type}", not a human — affirmation keys belong to humans.`,
     );
   }
-  return { id: row.id, name: row.name, type: row.type };
+  return { id: row.id, name: row.name, type: row.type, attended: row.attended };
 }
 
 const [dbPath, cmd, ...args] = process.argv.slice(2);
@@ -100,7 +100,7 @@ try {
         `"${humanName}" is an actor of type "${row.type}", not a human — supervised sessions root on a human actor.`,
       );
     }
-    const human: Actor = { id: row.id, name: row.name, type: row.type };
+    const human: Actor = { id: row.id, name: row.name, type: row.type, attended: row.attended };
     const { sessionToken } = openSupervisedSession(db, human, agentName);
     console.log(`supervised session token (shown once): ${sessionToken}`);
     console.log(

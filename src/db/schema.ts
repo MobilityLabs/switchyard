@@ -29,6 +29,13 @@ export const actors = sqliteTable("actors", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull().unique(),
   type: text("type", { enum: ["human", "agent", "service"] }).notNull(),
+  // Is a person watching this caller's session? Distinct from `type`, which
+  // answers "is this a person". An interactive Claude session is type=agent
+  // but human-attended, and `worker_preference: "interactive"` work is meant
+  // for exactly that caller — nextTask used to route it away because it could
+  // only ask the first question. Routing only; it grants no authority and
+  // requireHuman never consults it.
+  attended: integer("attended", { mode: "boolean" }).notNull().default(false),
   tokenHash: text("token_hash"),
   createdAt: integer("created_at").notNull().default(now()),
 });

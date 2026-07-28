@@ -1,0 +1,1 @@
+ALTER TABLE `actors` ADD `attended` integer DEFAULT false NOT NULL;
