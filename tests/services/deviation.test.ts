@@ -337,10 +337,28 @@ describe("doneWithoutMergedPr", () => {
     });
   });
 
-  it("does NOT flag when the transition is not from in_review", () => {
+  // SYD-265: in_progress flags too. A claimed issue is one someone started
+  // writing code for -- stamping it straight to done with no PR is the same
+  // lost-work shape as from in_review, and skipping review makes it MORE
+  // likely to go unnoticed, not less. The original scoping comment justified
+  // excluding triage/backlog ("no code involved"); in_progress was swept in
+  // with them and never had a rationale of its own.
+  it("flags a done transition from in_progress — a claim means code work was started", () => {
+    expect(doneWithoutMergedPr("in_progress", null, null)).toEqual({
+      reason: "done_without_merged_pr",
+      message:
+        "moved to done from in_progress with no PR ever recorded as open or merged — verify the code actually landed",
+    });
+  });
+
+  it("does NOT flag a closure from a status where nobody had started work", () => {
     expect(doneWithoutMergedPr("todo", null, null)).toBeNull();
-    expect(doneWithoutMergedPr("in_progress", null, null)).toBeNull();
     expect(doneWithoutMergedPr("backlog", null, null)).toBeNull();
+    expect(doneWithoutMergedPr("triage", null, null)).toBeNull();
+  });
+
+  it("does NOT flag from in_progress either when a PR is already on record", () => {
+    expect(doneWithoutMergedPr("in_progress", null, { prNumber: 7, eventId: 1 })).toBeNull();
   });
 
   it("does NOT flag when there is a merged PR on record", () => {
@@ -377,6 +395,35 @@ describe("updateIssue done transition — done_without_merged_pr (SYD-204)", () 
     const evs = deviationEventsFor(db, "SYD-1");
     expect(evs).toHaveLength(1);
     expect(evs[0].payload).toMatchObject({ reason: "done_without_merged_pr" });
+  });
+
+  // SYD-265: the gap this issue's audit pointed at. Its five unflagged rows
+  // turned out to predate the check itself (stamped 2026-07-14 02:00Z; the
+  // check landed on main at 15:16Z the same day), but reading the code for
+  // them surfaced a real one: skipping review entirely.
+  it("records the deviation when a human stamps done straight from in_progress", () => {
+    const { db, human, agent } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    claimIssue(db, agent, "SYD-1"); // -> in_progress, so code work was started
+    const updated = updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(updated.status).toBe("done"); // attention-only, never blocks the stamp
+    const evs = deviationEventsFor(db, "SYD-1");
+    expect(evs).toHaveLength(1);
+    expect(evs[0].payload).toMatchObject({
+      reason: "done_without_merged_pr",
+      message: expect.stringContaining("from in_progress"),
+    });
+  });
+
+  // The other half of the scoping: closing something nobody ever started is a
+  // legitimate no-code done (a duplicate, a research spike) and must stay quiet.
+  it("does NOT record the deviation when closing an unclaimed issue from todo", () => {
+    const { db, human } = setup();
+    createIssue(db, human, { projectKey: "SYD", title: "duplicate of something" });
+    updateIssue(db, human, "SYD-1", { status: "todo" });
+    updateIssue(db, human, "SYD-1", { status: "done" });
+    expect(deviationEventsFor(db, "SYD-1")).toHaveLength(0);
   });
 
   it("does NOT record the deviation when the PR already merged before the stamp", () => {

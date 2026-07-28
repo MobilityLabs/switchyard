@@ -103,24 +103,34 @@ export function computeDeviation(
 // SYD-204: a point-in-time check run inside updateIssue's done transition —
 // unlike the three reasons above (recomputed live from current state on every
 // read), this one captures a fact about the transition itself, at the moment
-// it happens: an issue that went through review (implying real code work,
-// per the claim -> in_progress -> PR -> in_review -> done process) reached
-// done with no PR ever recorded open or merged. Scoped to fromStatus ===
-// "in_review" so a direct triage/backlog closure (no code involved, e.g. a
-// research spike or a duplicate) never flags — those are the legitimate
-// no-merge dones this stays attention-only for. An in-flight open PR isn't a
-// deviation either: stamping done over one is the normal SYD-208 flow that
-// authorizes delivery to merge it shortly after.
+// it happens: an issue someone was writing code for reached done with no PR
+// ever recorded open or merged. An in-flight open PR isn't a deviation:
+// stamping done over one is the normal SYD-208 flow that authorizes delivery
+// to merge it shortly after.
+//
+// Which statuses count as "someone was writing code" is the whole question.
+// A closure from triage/backlog/todo involves no code by definition — nobody
+// claimed it — so a research spike or a duplicate must never flag, and those
+// are the legitimate no-merge dones this stays attention-only for.
+//
+// SYD-265 added in_progress to in_review. The original scoping justified
+// excluding triage/backlog on the "no code involved" ground; in_progress got
+// swept in with them and never had a rationale of its own, but it does not
+// share theirs — an issue in in_progress has been CLAIMED, and the claim is
+// exactly the signal that code work started. Stamping such an issue straight
+// to done with no PR is the same lost-work shape as from in_review, and
+// skipping review makes it likelier to go unnoticed, not less.
+const STARTED_STATUSES = new Set<Status>(["in_review", "in_progress"]);
+
 export function doneWithoutMergedPr(
   fromStatus: Status,
   openPr: OpenPr | null,
   merged: MergedPr | null,
 ): DeviationFlag | null {
-  if (fromStatus !== "in_review" || openPr !== null || merged !== null) return null;
+  if (!STARTED_STATUSES.has(fromStatus) || openPr !== null || merged !== null) return null;
   return {
     reason: "done_without_merged_pr",
-    message:
-      "moved to done from in_review with no PR ever recorded as open or merged — verify the code actually landed",
+    message: `moved to done from ${fromStatus} with no PR ever recorded as open or merged — verify the code actually landed`,
   };
 }
 
