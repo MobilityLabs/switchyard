@@ -582,18 +582,55 @@ export function evaluateBranchProtection(protection: BranchProtection | null): {
 }
 
 /**
- * Whether the SYD-222 startup gate should refuse to run the delivery worker:
- * only when the operator opted in via `delivery.requireBranchProtection` AND
- * at least one linked repo actually failed (or couldn't verify) its branch-
- * protection check. Pure so the gating decision is testable without shelling
- * out to `gh` — see `warnOnRelaxedBranchProtection` in deliver.ts, which
- * still warns unconditionally regardless of this gate.
+ * The projects this worker may deliver for, given which repos failed (or could
+ * not verify) their branch-protection check.
+ *
+ * **Per-repo, not global (SYD-284).** SYD-222 shipped this as a startup gate
+ * that called `process.exit(1)` the moment ANY linked repo was unprotected —
+ * so one misconfigured project would silently stop delivery for every other
+ * project on the host, turning a config problem in one repo into an outage in
+ * all of them. The risk being managed is per-repo (CI is the sole check
+ * authority for THAT repo's merges — SYD-209), so the refusal is too.
+ *
+ * Opt-in still: with `delivery.requireBranchProtection` unset or false, every
+ * configured project stays deliverable and `warnOnRelaxedBranchProtection`'s
+ * alarm is the only signal, exactly as before.
+ *
+ * Pure, so the decision is testable without shelling out to `gh`.
  */
-export function shouldRefuseUnprotectedMain(
+export function deliverableProjectKeys(
+  allProjectKeys: Iterable<string>,
   requireBranchProtection: boolean | undefined,
-  failingProjectKeys: string[],
-): boolean {
-  return requireBranchProtection === true && failingProjectKeys.length > 0;
+  failingProjectKeys: Iterable<string>,
+): string[] {
+  const all = [...allProjectKeys];
+  if (requireBranchProtection !== true) return all;
+  const failing = new Set(failingProjectKeys);
+  return all.filter((key) => !failing.has(key));
+}
+
+/**
+ * Refs in `work` belonging to projects that were withheld — what the operator
+ * needs named, because silently delivering nothing for a repo looks identical
+ * to having no work for it. Sean's framing: the worker keeps running for other
+ * repos and shows an error against the one it is refusing.
+ *
+ * Note this reports an OPERATOR condition, not a delivery verdict — nothing
+ * here posts `delivery_failed`, because the work has not been attempted and
+ * failed; it has been held back. Telling those two apart on the board is
+ * SYD-272/SYD-276's job.
+ */
+export function refsHeldBackByProtection(
+  work: DeliveryWork,
+  withheldProjectKeys: Iterable<string>,
+): string[] {
+  const withheld = new Set(withheldProjectKeys);
+  const refs = [
+    ...work.pending.map((p) => p.ref),
+    ...work.unfinished.map((a) => a.issueRef),
+    ...work.deployRetries.map((r) => r.ref),
+  ];
+  return [...new Set(refs.filter((ref) => withheld.has(projectKeyOf(ref))))].sort();
 }
 
 /** Extracts "owner/repo" from a git remote URL — https, ssh, or scp-like, with or without a .git suffix. */
