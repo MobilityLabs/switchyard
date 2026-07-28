@@ -319,7 +319,8 @@ this:
    `--internal` Docker network (`syd-workers`) with no route out; their only
    exit is a tinyproxy sidecar (`syd-egress`, built by
    `npm run build:worker-image` from `Dockerfile.egress-proxy`) that forwards
-   only to `api.anthropic.com`, `registry.npmjs.org`, and the tracker host
+   only to `api.anthropic.com`, `registry.npmjs.org`, `registry.yarnpkg.com`
+   (yarn's default registry — SYD-269), and the tracker host
    from `url`. Add hosts with `egressAllow: ["host.name"]`; opt out entirely
    with `egress: "open"` in `switchyard-worker.json`. The worker stands the
    network and sidecar up automatically at startup (and refuses to start if

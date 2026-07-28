@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ensureEgressGuard,
+  egressAllowlist,
   injectKeyEnvArgs,
   EGRESS_CA_VOLUME,
   EGRESS_CA_DIR,
@@ -20,7 +21,10 @@ const config: WorkerConfig = {
   projects: { SYD: { repo: "/repo/syd" } },
 };
 
-const domainsCsv = "api.anthropic.com,localhost,registry.npmjs.org";
+// Derived rather than spelled out: these cases are about credential injection
+// and the CA volume, not the allowlist's contents (asserted in
+// worker-select.test.ts), so a new baseline host shouldn't break them.
+const domainsCsv = egressAllowlist(config).join(",");
 
 type Call = { cmd: string; args: string[] };
 function mockExec(respond: (call: Call) => string | Error) {

@@ -13,6 +13,7 @@ import {
   buildDockerArgs,
   egressMode,
   egressAllowlist,
+  satisfies,
   ensureEgressGuard,
   buildContainerizedPrompt,
   stackChecksEnv,
@@ -665,11 +666,12 @@ describe("egress config (SYD-110)", () => {
     expect(egressMode({ ...config, egress: "proxy" })).toBe("proxy");
   });
 
-  it("egressAllowlist covers the Anthropic API, npm registry, and the tracker host", () => {
+  it("egressAllowlist covers the Anthropic API, both package registries, and the tracker host", () => {
     expect(egressAllowlist(config)).toEqual([
       "api.anthropic.com",
       "localhost",
       "registry.npmjs.org",
+      "registry.yarnpkg.com",
     ]);
   });
 
@@ -680,7 +682,40 @@ describe("egress config (SYD-110)", () => {
         url: "http://nas.local:3300",
         egressAllow: ["github.com", "api.anthropic.com"],
       }),
-    ).toEqual(["api.anthropic.com", "github.com", "nas.local", "registry.npmjs.org"]);
+    ).toEqual([
+      "api.anthropic.com",
+      "github.com",
+      "nas.local",
+      "registry.npmjs.org",
+      "registry.yarnpkg.com",
+    ]);
+  });
+
+  // SYD-269: yarn defaults to registry.yarnpkg.com, so a session for a yarn
+  // project got a 403 CONNECT from the sidecar on every install. Assert the
+  // host is unconditional — a project declaring `yarn` in stack.cli must not be
+  // what turns it on, or the base config and the codex/gemini ones (which ask
+  // for github.com and serve no yarn project) become disjoint instead of
+  // nested, and rebuild the shared sidecar in turn. See the next test.
+  it("egressAllowlist allows the yarn registry regardless of any project's stack", () => {
+    expect(egressAllowlist(config)).toContain("registry.yarnpkg.com");
+    expect(
+      egressAllowlist({
+        ...config,
+        projects: {
+          SYD: { repo: "/repo/syd", stack: { cli: [{ name: "yarn", check: "yarn -v" }] } },
+        },
+      }),
+    ).toEqual(egressAllowlist(config));
+  });
+
+  // The invariant satisfies() depends on (SYD-270): every worker config on the
+  // host must be nested, so the widest one creates the sidecar and the rest
+  // accept it. Disjoint sets ping-pong the sidecar on every boot.
+  it("a config's extras keep it a superset of the bare config — sidecar sets stay nested", () => {
+    const base = egressAllowlist(config);
+    const withExtras = egressAllowlist({ ...config, egressAllow: ["github.com"] });
+    expect(satisfies(withExtras, base)).toBe(true);
   });
 });
 
@@ -700,7 +735,10 @@ describe("ensureEgressGuard (SYD-110)", () => {
     return { calls, exec };
   }
 
-  const domainsCsv = "api.anthropic.com,localhost,registry.npmjs.org";
+  // Derived, not spelled out: these cases exercise the guard's docker
+  // orchestration, not the allowlist's contents (asserted directly above), so
+  // adding a baseline host shouldn't have to be re-typed here.
+  const domainsCsv = egressAllowlist(config).join(",");
   // SYD-186: the sidecar now also injects provider creds; env supplies them and
   // seeds the INJECT_KEYS freshness sentinel (CLAUDE_CODE_OAUTH_TOKEN here).
   const egressEnv = { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat-REAL" } as NodeJS.ProcessEnv;

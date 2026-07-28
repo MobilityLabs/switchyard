@@ -29,9 +29,10 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
 #
 # A concrete pinned binary rather than `corepack enable` on purpose: corepack
 # shims fetch whatever version a repo pins in "packageManager" lazily, at
-# session start, from repo.yarnpkg.com as well as registry.npmjs.org -- only
-# the latter is in the sidecar's allowlist (EGRESS_BASELINE in
-# scripts/worker-select.ts), so a shim would reintroduce the same silent
+# session start, from repo.yarnpkg.com -- which is NOT in the sidecar's
+# allowlist (EGRESS_BASELINE in scripts/worker-select.ts allows the npm and
+# yarn *registries*, registry.npmjs.org and registry.yarnpkg.com, but not
+# corepack's distribution host), so a shim would reintroduce the same silent
 # no-dependencies failure behind a network block. Pinned for reproducible
 # rebuilds, same as CLAUDE_CODE_VERSION above.
 ARG PNPM_VERSION=11.17.0
