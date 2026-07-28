@@ -11,8 +11,10 @@ import {
   handleGithubWebhook,
   refFromBranch,
   refFromText,
+  refsFromText,
   repositoryFullName,
 } from "../../src/services/github-webhook.js";
+import { listLiveLinks } from "../../src/services/pr-links.js";
 
 function setup(boundRepos: string[] = []) {
   const db = openDb(":memory:");
@@ -39,6 +41,19 @@ describe("refFromBranch / refFromText", () => {
     expect(refFromText("fixes issue related to SYD-64 delivery")).toBe("SYD-64");
     expect(refFromText("no ref here")).toBeNull();
     expect(refFromText(null)).toBeNull();
+  });
+
+  // SYD-274: refFromText stops at the first match because one ref owns the
+  // activity-feed line. refsFromText is for the rest of them.
+  it("refsFromText returns every ref across the given strings, deduped in order", () => {
+    expect(refsFromText(["feat: a thing (SYD-242)", "closes SYD-243, SYD-244"])).toEqual([
+      "SYD-242",
+      "SYD-243",
+      "SYD-244",
+    ]);
+    expect(refsFromText(["SYD-1 and SYD-1 again", null, 42, "SYD-2"])).toEqual(["SYD-1", "SYD-2"]);
+    expect(refsFromText(["no ref here"])).toEqual([]);
+    expect(refsFromText([])).toEqual([]);
   });
 });
 
@@ -794,5 +809,78 @@ describe("handleGithubWebhook / actor reuse", () => {
     });
     const names = getActivity(db, "SYD-1").map((a) => a.actorName);
     expect(names).toEqual(["sean", "github", "github"]);
+  });
+});
+
+// SYD-274: one PR routinely carries several issues' work — 0ae22a9 closed
+// SYD-243 and SYD-244 under SYD-242's PR. Before this, only the first ref the
+// text named got anything; the siblings held no event, no link, no trace the
+// PR existed, so their done_without_merged_pr warnings had no evidence to
+// reach and stayed lit with no path out but archaeology.
+describe("handleGithubWebhook / sibling refs named in PR text (SYD-274)", () => {
+  function multiIssueSetup() {
+    const db = openDb(":memory:");
+    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    createProject(db, human, { key: "SYD", name: "Switchyard" });
+    createProject(db, human, { key: "NOC", name: "Piano" });
+    createIssue(db, human, { projectKey: "SYD", title: "parent" }); // SYD-1
+    createIssue(db, human, { projectKey: "SYD", title: "sibling a" }); // SYD-2
+    createIssue(db, human, { projectKey: "SYD", title: "sibling b" }); // SYD-3
+    createIssue(db, human, { projectKey: "NOC", title: "other project" }); // NOC-1
+    addGithubRepo(db, human, { fullName: "acme/widgets", projectKey: "SYD" });
+    return { db, human };
+  }
+
+  const closingPr = (body: string) => ({
+    action: "closed",
+    repository: { full_name: "acme/widgets" },
+    pull_request: {
+      number: 206,
+      html_url: "https://github.com/acme/widgets/pull/206",
+      head: { ref: "feat/multi", sha: "a".repeat(40) },
+      updated_at: "2026-07-27T10:00:00Z",
+      merged: true,
+      merge_commit_sha: "0ae22a9".padEnd(40, "0"),
+      title: "feat: a thing (SYD-1)",
+      body,
+    },
+  });
+
+  it("mints a references link on every sibling the text names, not just the first", () => {
+    const { db } = multiIssueSetup();
+    handleGithubWebhook(db, "pull_request", closingPr("closes SYD-2, SYD-3"));
+    for (const ref of ["SYD-1", "SYD-2", "SYD-3"]) {
+      const links = listLiveLinks(db, getIssue(db, ref).id);
+      expect(
+        links.map((l) => l.prNumber),
+        `${ref} should link PR 206`,
+      ).toEqual([206]);
+    }
+  });
+
+  // The load-bearing half. SYD-280 removed free-text clearing precisely so a
+  // passing mention could not silence a safety net; widening WHICH refs get a
+  // suggestion must not widen what a suggestion is worth.
+  it("mints them as inert references suggestions — never delivers, never confirmed", () => {
+    const { db } = multiIssueSetup();
+    handleGithubWebhook(db, "pull_request", closingPr("closes SYD-2, SYD-3"));
+    for (const ref of ["SYD-2", "SYD-3"]) {
+      const [link] = listLiveLinks(db, getIssue(db, ref).id);
+      expect(link.role, `${ref} role`).toBe("references");
+      expect(link.confirmedBy, `${ref} confirmedBy`).toBeNull();
+    }
+  });
+
+  it("ignores refs from another project — a cross-project link would be a guess", () => {
+    const { db } = multiIssueSetup();
+    handleGithubWebhook(db, "pull_request", closingPr("also mentions NOC-1"));
+    expect(listLiveLinks(db, getIssue(db, "NOC-1").id)).toEqual([]);
+  });
+
+  it("ignores refs naming no issue", () => {
+    const { db } = multiIssueSetup();
+    const outcome = handleGithubWebhook(db, "pull_request", closingPr("closes SYD-2, SYD-999"));
+    expect(outcome.handled).toBe(true);
+    expect(listLiveLinks(db, getIssue(db, "SYD-2").id)).toHaveLength(1);
   });
 });
