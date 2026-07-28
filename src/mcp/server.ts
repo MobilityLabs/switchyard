@@ -15,6 +15,7 @@ import {
   SUMMARY_MAX_LENGTH,
 } from "../services/issues.js";
 import { nextTask, addDependency, removeDependency } from "../services/dependencies.js";
+import { listQueue, setQueuePosition } from "../services/queue.js";
 import { addComment, getActivity } from "../services/comments.js";
 import { searchIssues } from "../services/search.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
@@ -150,11 +151,45 @@ export function buildMcpServer(
     "next_task",
     {
       description:
-        "Get the highest-priority issue in `todo` that is assigned to you or unassigned and not blocked. " +
-        "Call this when you want work. Returns null when nothing is workable.",
+        "Get the next issue you should work on: `todo`, assigned to you or unassigned, not blocked, " +
+        "and not an epic whose children are still open. Call this when you want work. Returns null " +
+        "when nothing is workable. Order: the human-curated queue first (see set_queue_position), " +
+        "then issues preferring your engine, then priority, then age. Issues marked " +
+        'worker_preference "interactive" are never returned to a non-human caller.',
       inputSchema: { project_key: z.string().optional() },
     },
     guard(({ project_key }: { project_key?: string }) => nextTask(db, actor, project_key)),
+  );
+
+  server.registerTool(
+    "set_queue_position",
+    {
+      description:
+        "Place an issue in the manual working queue that next_task walks before falling back to " +
+        "priority, or move it. `position` is 1-based (1 = worked next); past the end appends; " +
+        "null removes the issue from the queue. Returns the queue as it stands afterwards. " +
+        "Use this to record an agreed working order — an order that lives only in a document or a " +
+        "conversation is one next_task will ignore. Ordering is not a claim: you do not need to " +
+        "hold the issue, and no lease is required.",
+      inputSchema: {
+        ref: z.string(),
+        position: z.number().int().positive().nullable(),
+      },
+    },
+    guard(({ ref, position }: { ref: string; position: number | null }) =>
+      setQueuePosition(db, actor, ref, { position }, attribution),
+    ),
+  );
+
+  server.registerTool(
+    "show_queue",
+    {
+      description:
+        "The manual working queue, front first — what next_task will hand out before falling back " +
+        "to priority ordering. Empty when nobody has ordered anything.",
+      inputSchema: {},
+    },
+    guard(() => listQueue(db)),
   );
 
   server.registerTool(

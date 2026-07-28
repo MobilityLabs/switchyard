@@ -8,6 +8,7 @@ import {
   GEMINI_DEFAULT_AUTH_TYPE_VAR,
   GEMINI_API_KEY_AUTH_TYPE,
 } from "./engines/gemini.js";
+import { INTERACTIVE_PREFERENCE } from "../src/services/worker-preference.js";
 
 /** The subset of an /api/issues row the selector needs. */
 export type WorkerIssue = {
@@ -382,14 +383,11 @@ export function checkRoleLockConflict(
  * oldest-first within a priority (SYD-160), so capacity is filled by priority
  * rather than by the feed's arrival order.
  */
-/**
- * Reserved `workerPreference` value: an issue that must be handled by a
- * human-attended interactive session, never auto-dispatched to a headless
- * worker (e.g. it needs live credentials, a real provider CLI, or a mid-task
- * human decision — the exact case that stranded SYD-220/225's headless workers).
- * Disjoint from the engine names the soft-affinity sort understands.
- */
-export const INTERACTIVE_PREFERENCE = "interactive";
+// Defined in src/services/worker-preference.ts (a leaf module, no imports) and
+// re-exported here so this file's existing importers are unaffected. The server
+// became a second reader at SYD-294 — nextTask's affinity sort — and the two
+// must agree on the vocabulary.
+export { INTERACTIVE_PREFERENCE };
 
 export function selectDispatchable<T extends WorkerIssue>(
   issues: T[],

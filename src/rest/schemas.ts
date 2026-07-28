@@ -151,6 +151,13 @@ export const prLinkTargetBody = z.object({
   repo: z.string(),
   prNumber: z.number().int().positive(),
 });
+
+// SYD-294: 1-based position in the manual working queue; null removes the issue
+// from it. Nullable rather than optional so "take this out of the queue" is an
+// explicit statement and cannot be a forgotten field.
+export const queuePositionBody = z.object({
+  position: z.number().int().positive().nullable(),
+});
 export const prLinkRevokeBody = prLinkTargetBody.extend({ reason: z.string() });
 export const snoozeBody = z.object({ until: z.number().int().positive() });
 export const duplicateBody = z.object({ of: z.string() });
