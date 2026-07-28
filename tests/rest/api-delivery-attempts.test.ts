@@ -80,6 +80,7 @@ describe("GET /api/delivery-work", () => {
         kind: string;
         pin: unknown;
         priorHeads: string[];
+        deliveredByPrNumber: number | null;
       }[];
       unfinished: unknown[];
       deployRetries: unknown[];
@@ -92,6 +93,8 @@ describe("GET /api/delivery-work", () => {
         kind: "done_stamp",
         pin: { repo: "acme/widgets", prNumber: 9, headSha },
         priorHeads: [],
+        // SYD-273: the tracker's proof-bearing merged PR, null when it has none.
+        deliveredByPrNumber: null,
       },
     ]);
     expect(work.unfinished).toEqual([]);

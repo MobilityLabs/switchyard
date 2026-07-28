@@ -290,9 +290,14 @@ describe("delivery worker trigger (SYD-208/209)", () => {
     const event = bodyOf(deliveryEventCalls("SYD-9")[0]);
     expect(event).toMatchObject({ type: "delivery_failed" });
     expect(String(event.message)).toContain("no later merged PR");
+    // SYD-273: the failure now says the declared-link path was checked too, so
+    // "no PR on the branch" can't be misread as "we only looked at the branch".
+    expect(String(event.message)).toContain("no PR declared as delivering this issue");
     const comments = fetchMock().mock.calls.filter(([u]) => String(u).endsWith("/comments"));
     const commentBody = bodyOf(comments[0]).body as string;
-    expect(commentBody).toContain("Re-open PR #42");
+    expect(commentBody).toContain("re-open PR #42");
+    // The declare-the-real-PR exit, which is the one that fixed SYD-108.
+    expect(commentBody).toContain("declare that PR");
     expect(commentBody).toContain("re-run the agent");
   });
 

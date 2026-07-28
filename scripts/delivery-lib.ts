@@ -113,6 +113,12 @@ export type WorkAuthorization = {
   // at one of the worker's own earlier rebases is re-rebased, not disarmed.
   // Optional so an older server (deploy skew) that omits it still parses.
   priorHeads?: string[];
+  // SYD-273: the PR the tracker already holds proof-bearing evidence for --
+  // a declared `delivers` link joined to a merged pr_state row, on whatever
+  // branch. Consulted before the branch-scoped GitHub query when a pinned PR
+  // is closed unmerged, so work that landed via an interactive feat/ branch
+  // reconciles instead of dead-ending. Optional for deploy skew.
+  deliveredByPrNumber?: number | null;
 };
 
 export type WorkAttempt = {
@@ -819,7 +825,7 @@ export function closedPrAlreadyDeliveredComment(
   mergeSha: string,
 ): string {
   return (
-    `Redeliver reconciled for ${ref}: PR #${closedPrNumber} was closed unmerged, but ${agentBranch(ref)} was ` +
+    `Redeliver reconciled for ${ref}: PR #${closedPrNumber} was closed unmerged, but the work was ` +
     `already delivered via PR #${mergedPrNumber} (merged at \`${mergeSha}\`) — treating this as delivered, no ` +
     `merge needed.`
   );
@@ -833,10 +839,11 @@ export function closedPrAlreadyDeliveredComment(
  */
 export function closedPrDeadEndComment(ref: string, prNumber: number): string {
   return (
-    `Delivery FAILED for ${ref}: PR #${prNumber} is closed unmerged, and no later PR on ${agentBranch(ref)} has ` +
-    `merged the work either — this pin is a dead end.\n` +
-    `Re-open PR #${prNumber}, or re-run the agent to produce a fresh PR from ${agentBranch(ref)}, then click Retry ` +
-    `delivery on the attention banner.`
+    `Delivery FAILED for ${ref}: PR #${prNumber} is closed unmerged, no PR this issue DECLARED has merged, and ` +
+    `no later PR on ${agentBranch(ref)} has merged the work either — this pin is a dead end.\n` +
+    `If the work actually landed under some other PR, declare that PR as this issue's \`delivers\` link — the ` +
+    `tracker then reconciles on its own (SYD-273). Otherwise re-open PR #${prNumber}, or re-run the agent to ` +
+    `produce a fresh PR from ${agentBranch(ref)}, then click Retry delivery on the attention banner.`
   );
 }
 

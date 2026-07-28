@@ -36,6 +36,7 @@ import { deliveryAttempts, deliveryRollout, events, type DeliveryOutcome } from 
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
+import { getMergedPr } from "./pr-status.js";
 
 export type DeliveryPinPayload = { repo: string; prNumber: number; headSha: string | null };
 
@@ -53,6 +54,26 @@ export type PendingAuthorization = {
    * outputs land here, so a genuine third-party push is still rejected.
    */
   priorHeads: string[];
+  /**
+   * SYD-273: the PR the TRACKER already knows delivered this issue's work, if
+   * any — a proof-bearing declared link joined to a merged pr_state row
+   * (getMergedPr), on whatever branch it happens to live.
+   *
+   * The worker's closed-pin reconcile used to ask GitHub for merged PRs on
+   * `agent/<ref>` and nothing else, so work that landed through an
+   * interactive `feat/` branch was invisible to it: SYD-108's #61 was closed
+   * unmerged and its replacement #124 merged from
+   * `feat/syd-108-gate-delivery-events`, and every one of 8 retries over 15
+   * days reported "no later merged PR" about work that had been on main the
+   * whole time.
+   *
+   * Deliberately NOT sourced from gh_pr_merged events. This value causes the
+   * worker to record `delivered` and mark the attempt merged_deployed, so it
+   * has to meet the SYD-280 evidence bar — a declared link, not a ref someone
+   * typed into a PR title. Optional so an older worker (deploy skew) ignores
+   * it and keeps its branch-scoped behaviour.
+   */
+  deliveredByPrNumber: number | null;
 };
 
 export type DeliveryAttemptRow = typeof deliveryAttempts.$inferSelect;
@@ -166,7 +187,14 @@ export function listPendingDeliveryAuthorizations(db: DbOrTx): PendingAuthorizat
             `,
             )
             .map((x) => x.h);
-    return { authorizationId: r.authorizationId, ref: r.ref, kind: r.kind, pin, priorHeads };
+    return {
+      authorizationId: r.authorizationId,
+      ref: r.ref,
+      kind: r.kind,
+      pin,
+      priorHeads,
+      deliveredByPrNumber: getMergedPr(db as Db, getIssue(db, r.ref).id)?.prNumber ?? null,
+    };
   });
 }
 

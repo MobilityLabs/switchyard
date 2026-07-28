@@ -6,7 +6,41 @@ import { SwitchyardError } from "./errors.js";
 import { getIssue, toView, type IssueView } from "./issues.js";
 import { recordEvent } from "./events.js";
 import { getAttention } from "./attention.js";
-import { deliveryPinFor } from "./pr-status.js";
+import { deliveryPinFor, getMergedPr, type DeliveryPin } from "./pr-status.js";
+
+/**
+ * Whether this exact pin has already been retried and failed (SYD-273).
+ *
+ * "Exact" is the point: same repo, same PR, same head. A retry re-authorizes
+ * delivery of one specific commit, so if that commit already produced a
+ * delivery_failed, re-running the identical poll can only produce it again.
+ * SYD-108 collected 8 such authorizations over 15 days, two of them 25 minutes
+ * apart, each answered by a byte-identical failure.
+ *
+ * Repo comparison is case-folded — the same SYD-212 hazard the pr_state
+ * readers already guard against, and live here: SYD-108's recorded merge
+ * carries `MobilityLabs/switchyard` while its redeliver pins carry
+ * `mobilitylabs/switchyard`.
+ */
+function pinAlreadyDeadEnded(db: Db, issueId: number, pin: DeliveryPin): boolean {
+  const row = db.all<{ n: number }>(sql`
+    SELECT 1 AS n
+    FROM events rd
+    WHERE rd.issue_id = ${issueId}
+      AND rd.type = 'redeliver_requested'
+      AND json_extract(rd.payload, '$.pin.prNumber') = ${pin.prNumber}
+      AND json_extract(rd.payload, '$.pin.headSha') = ${pin.headSha}
+      AND lower(json_extract(rd.payload, '$.pin.repo')) = lower(${pin.repo})
+      AND EXISTS (
+        SELECT 1 FROM events df
+        WHERE df.issue_id = rd.issue_id
+          AND df.type = 'delivery_failed'
+          AND df.id > rd.id
+      )
+    LIMIT 1
+  `)[0];
+  return row !== undefined;
+}
 
 function requireHuman(actor: Actor, action: string): void {
   if (actor.type !== "human") {
@@ -139,6 +173,23 @@ export function redeliverIssue(
   if (expectedHeadSha !== pin.headSha) {
     throw new SwitchyardError(
       `${ref}'s PR #${pin.prNumber} head moved since you looked: you saw ${expectedHeadSha}, but the head is now ${pin.headSha} — review the new commits before re-authorizing.`,
+    );
+  }
+  // SYD-273: a closed pin that already dead-ended will dead-end again — the
+  // poll is a pure function of the pin, and nothing about the pin changed.
+  // Gated on the CLOSED status deliberately so this can't become a wall:
+  // reopening the PR is precisely the case where retrying the same pin is
+  // right, and pr_state knows it happened.
+  if (pin.status === "closed" && pinAlreadyDeadEnded(db, current.id, pin)) {
+    const merged = getMergedPr(db, current.id);
+    throw new SwitchyardError(
+      `${ref}'s PR #${pin.prNumber} at ${pin.headSha} was already retried and failed — retrying it ` +
+        `re-runs the identical poll for the identical answer. ` +
+        (merged
+          ? `The work looks delivered by PR #${merged.prNumber}; clear the flag with resolve-delivery naming it.`
+          : `If the work landed under a different PR, declare that PR as this issue's delivers link ` +
+            `and the flag clears itself. If it landed with no PR at all, use resolve-delivery with a note. ` +
+            `If the PR is reopened on GitHub, retry once the tracker has observed that.`),
     );
   }
   recordEvent(db, {
