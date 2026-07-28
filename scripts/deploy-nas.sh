@@ -7,6 +7,11 @@
 # Rollback: pass a git ref to ship that commit's tree instead of the working
 # tree, e.g. `scripts/deploy-nas.sh <previous-good-sha>` — one command to
 # recover from a bad deploy without touching the NAS by hand.
+#
+# This ships code, never data. A migration that has to be RUN goes through
+# scripts/switchyard-admin (SYD-291), its sibling in the same sudoers rule —
+# see that script's header for which migrations belong there and which should
+# run at startup instead.
 set -e
 cd "$(dirname "$0")/.."
 
