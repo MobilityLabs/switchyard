@@ -183,8 +183,8 @@ export type WorkerConfig = {
    * "open" is the escape hatch: plain default-bridge networking, full egress.
    */
   egress?: "proxy" | "open";
-  /** Extra hostnames the egress proxy should allow, beyond the tracker host,
-   * api.anthropic.com, and registry.npmjs.org. */
+  /** Extra hostnames the egress proxy should allow, beyond the tracker host
+   * and EGRESS_BASELINE (api.anthropic.com plus the npm and yarn registries). */
   egressAllow?: string[];
 };
 
@@ -947,9 +947,25 @@ export function injectKeyNames(env: NodeJS.ProcessEnv): string[] {
   return PROVIDER_KEY_VARS.filter((v) => env[v]).sort();
 }
 
-/** Baseline hosts every session needs: the Anthropic API and npm's registry
- * (sessions run `npm ci`). The tracker host comes from config.url. */
-const EGRESS_BASELINE = ["api.anthropic.com", "registry.npmjs.org"];
+/**
+ * Baseline hosts every session needs: the Anthropic API and the package
+ * registries sessions install from. The tracker host comes from config.url.
+ *
+ * Both registries are unconditional rather than derived from a project's
+ * `stack.cli` (SYD-269). Deriving looks tidier — only the workers serving a
+ * yarn project would allow yarn's registry — but there is ONE shared
+ * `syd-egress` sidecar for the whole host and each worker stands it up from
+ * its own config. Derivation would make those configs disjoint rather than
+ * nested (the base config serves a yarn project, the codex/gemini ones ask for
+ * `github.com`), and disjoint configs rebuild the sidecar in turn — exactly
+ * the boot-order-dependent allowlist SYD-270 fixed. Keeping the registries in
+ * the baseline preserves the nesting invariant `satisfies()` relies on, and
+ * covers the next yarn project without anyone remembering to.
+ *
+ * The added exposure is nil: registry.yarnpkg.com is a CDN alias serving the
+ * same public npm packages as registry.npmjs.org, which is already allowed.
+ */
+const EGRESS_BASELINE = ["api.anthropic.com", "registry.npmjs.org", "registry.yarnpkg.com"];
 
 export function egressMode(config: WorkerConfig): "proxy" | "open" {
   return config.egress ?? "proxy";
