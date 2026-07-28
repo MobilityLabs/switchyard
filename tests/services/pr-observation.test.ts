@@ -27,6 +27,7 @@ import { handleGithubWebhook } from "../../src/services/github-webhook.js";
 import { findPrState } from "../../src/services/pr-state.js";
 import { getOpenPr, getMergedPr, deliveryPinFor } from "../../src/services/pr-status.js";
 import { getAttention } from "../../src/services/attention.js";
+import { listPendingDeliveryAuthorizations } from "../../src/services/delivery-attempts.js";
 import {
   declarePrLink,
   revokePrLink,
@@ -324,6 +325,44 @@ describe("the SYD-280 regression fence still holds (SYD-287)", () => {
     // observing every PR cannot retroactively mint links for undeclared work.
     expect(backfillPrLinksFromPrState(db, human).created).toBe(0);
     expect(listLiveLinks(db, 1).map((l) => l.role)).toEqual(["references"]);
+  });
+
+  // The regression this fence exists for, found by stamping SYD-287 itself
+  // done against the deployed fix: making interactive work observable gave it
+  // a deliveryPinFor for the first time, so the done stamp wrote a pin,
+  // listPendingDeliveryAuthorizations queued it, and deliver.ts — whose whole
+  // contract is "fetch, rebase and force-push agent/<ref>" — found no such
+  // branch and took SYD-165's dead-PR path, which auto-CLOSED the open PR.
+  // That is SYD-283 ("delivery must never close a PR it did not open") going
+  // from latent to reachable.
+  it("does not queue an interactive PR for delivery — the worker can only rebase agent/<ref>", () => {
+    const { db, human } = setup();
+    declare(db, human);
+    handleGithubWebhook(db, "pull_request", featPr("opened"));
+    // The stamp DOES authorize a pin now — getOpenPr sees the declared PR, and
+    // demands the head SHA the human reviewed (SYD-208's compare-and-set).
+    updateIssue(db, human, "SYD-1", { status: "done", expectedHeadSha: "a".repeat(40) });
+    expect(deliveryPinFor(db, 1)?.prNumber).toBe(PR);
+    // ...and the queue still refuses it, because nothing can deliver it yet.
+    expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
+  });
+
+  it("still queues an agent/<ref> PR — the guard bounds the queue, it does not empty it", () => {
+    const { db, human } = setup();
+    handleGithubWebhook(db, "pull_request", {
+      action: "opened",
+      repository: { full_name: REPO },
+      pull_request: {
+        number: 12,
+        html_url: `https://github.com/${REPO}/pull/12`,
+        head: { ref: "agent/SYD-1", sha: "b".repeat(40) },
+        updated_at: "2026-07-27T10:00:00Z",
+      },
+    });
+    updateIssue(db, human, "SYD-1", { status: "done", expectedHeadSha: "b".repeat(40) });
+    const pending = listPendingDeliveryAuthorizations(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].pin).toMatchObject({ prNumber: 12, repo: REPO });
   });
 
   it("never writes issueRef from a link — that column stays branch-derived until it is dropped", () => {

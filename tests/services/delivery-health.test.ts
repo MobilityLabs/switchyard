@@ -11,6 +11,7 @@ import {
   finishDeliveryAttempt,
 } from "../../src/services/delivery-attempts.js";
 import { deliveryAttempts } from "../../src/db/schema.js";
+import { upsertPrState } from "../../src/services/pr-state.js";
 import { getDeliveryHealth } from "../../src/services/delivery-health.js";
 
 const REPO = "acme/widgets";
@@ -31,6 +32,17 @@ function stampDone(
   const issue = getIssue(db, ref);
   updateIssue(db, human, ref, { status: "done" });
   stampDonePinSeq += 1;
+  // The observation the pin refers to — see the same helper in
+  // delivery-attempts.test.ts. A pin with no pr_state row behind it is a
+  // state production cannot produce, and since SYD-287 the trigger predicate
+  // requires the pinned PR to be on agent/<ref>.
+  upsertPrState(db, human, {
+    repo: REPO,
+    prNumber: stampDonePinSeq,
+    status: "open",
+    branch: `agent/${ref}`,
+    headSha: `sha-${stampDonePinSeq}`,
+  });
   recordEvent(db, {
     issueId: issue.id,
     actorId: human.id,

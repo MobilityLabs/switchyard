@@ -8,6 +8,7 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue, updateIssue } from "../../src/services/issues.js";
 import { recordEvent } from "../../src/services/events.js";
+import { upsertPrState } from "../../src/services/pr-state.js";
 import {
   listPendingDeliveryAuthorizations,
   startDeliveryAttempt,
@@ -31,6 +32,16 @@ beforeEach(() => {
 
   const issue = createIssue(db, human.actor, { projectKey: "SYD", title: "Ship it" });
   updateIssue(db, human.actor, issue.ref, { status: "done" });
+  // The observation behind the pin: a done-stamp pin is derived from
+  // getOpenPr, so it always names a PR with a pr_state row, and since SYD-287
+  // the trigger predicate requires that PR to be on agent/<ref>.
+  upsertPrState(db, human.actor, {
+    repo: REPO,
+    prNumber: 1,
+    status: "open",
+    branch: `agent/${issue.ref}`,
+    headSha: "sha-1",
+  });
   recordEvent(db, {
     issueId: issue.id,
     actorId: human.actor.id,
