@@ -963,6 +963,43 @@ export function egressAllowlist(config: WorkerConfig): string[] {
   return [...hosts].sort();
 }
 
+/**
+ * Whether a running sidecar's set already covers what a worker needs.
+ *
+ * Superset, not equality (SYD-270). The single shared `syd-egress` sidecar is
+ * stood up by every worker on the host, each from its OWN config file — and
+ * those configs legitimately differ: `switchyard-worker.json` declares no
+ * `egressAllow`, while the codex and gemini configs both declare
+ * `["github.com"]`. Under an equality check no two of them ever agree, so the
+ * early return can never hold and each boot tears the sidecar down and rebuilds
+ * it, last writer winning. That made the allowlist a function of boot order
+ * rather than of configuration: a host added to one config was silently
+ * stripped by the next worker's start, and every boot re-entered the create
+ * race this issue is about.
+ *
+ * With superset-accept the fleet converges after at most one rebuild — the
+ * worker needing the most hosts creates the sidecar, and the rest accept it —
+ * so steady-state boots are no-ops and the create race stops being re-entered.
+ *
+ * This relies on the configs being NESTED, which today they are. Disjoint
+ * extras would still rebuild in turn; ensureEgressGuard warns by name when a
+ * rebuild is about to drop somebody else's hosts, because that is a
+ * misconfiguration to fix rather than something to absorb with a union (an
+ * allowlist that only grows would outlive every config that asked for it).
+ */
+export function satisfies(existing: string[], required: string[]): boolean {
+  const have = new Set(existing);
+  return required.every((r) => have.has(r));
+}
+
+/** Reads one `NAME=a,b,c` value out of `docker inspect`'s space-joined env
+ * dump. Parsed rather than substring-matched so callers can compare sets
+ * instead of exact strings (SYD-270). */
+export function readEnvList(inspectOutput: string, name: string): string[] {
+  const match = new RegExp(`(?:^|\\s)${name}=(\\S*)`).exec(inspectOutput);
+  return match?.[1] ? match[1].split(",").filter(Boolean) : [];
+}
+
 /** Minimal exec shape ensureEgressGuard needs — injected so tests never touch docker. */
 export type ExecFn = (cmd: string, args: string[]) => Promise<{ stdout: string }>;
 
@@ -987,8 +1024,8 @@ export async function ensureEgressGuard(
   // genuinely isn't there when we look again.
   const inspectProxy = async (): Promise<{
     running: boolean;
-    sameDomains: boolean;
-    sameKeys: boolean;
+    domains: string[];
+    keys: string[];
   } | null> => {
     try {
       const { stdout } = await exec("docker", [
@@ -999,8 +1036,8 @@ export async function ensureEgressGuard(
       ]);
       return {
         running: stdout.trim().startsWith("true"),
-        sameDomains: stdout.includes(`ALLOWED_DOMAINS=${domainsCsv}`),
-        sameKeys: stdout.includes(`INJECT_KEYS=${keysCsv}`),
+        domains: readEnvList(stdout, "ALLOWED_DOMAINS"),
+        keys: readEnvList(stdout, "INJECT_KEYS"),
       };
     } catch {
       return null;
@@ -1015,8 +1052,15 @@ export async function ensureEgressGuard(
     }
   };
 
-  const domainsCsv = egressAllowlist(config).join(",");
-  const keysCsv = injectKeyNames(env).join(",");
+  const requiredDomains = egressAllowlist(config);
+  const requiredKeys = injectKeyNames(env);
+  /** The running sidecar is good enough when it already allows/injects at
+   * least what this worker needs — see the SYD-270 note on satisfies(). */
+  const satisfied = (p: { running: boolean; domains: string[]; keys: string[] } | null): boolean =>
+    p !== null &&
+    p.running &&
+    satisfies(p.domains, requiredDomains) &&
+    satisfies(p.keys, requiredKeys);
 
   if (!(await networkExists())) {
     try {
@@ -1027,12 +1071,44 @@ export async function ensureEgressGuard(
   }
 
   let proxy = await inspectProxy();
-  if (proxy && proxy.running && proxy.sameDomains && proxy.sameKeys) return;
+  if (satisfied(proxy)) return;
+
+  // Recreate with THIS config's set, not a union with what is already there:
+  // an egress allowlist that only ever grows would keep a host alive long
+  // after every config stopped asking for it, which is the opposite of what an
+  // allowlist is for. Convergence instead comes from superset-accept above —
+  // the worker needing the most creates it, the rest accept it.
+  //
+  // That holds because the configs are NESTED (base declares no egressAllow;
+  // codex and gemini both declare ["github.com"]). Genuinely disjoint extras
+  // would ping-pong, so say so out loud rather than papering over it with a
+  // union — a config that needs a host no other worker allows is a
+  // misconfiguration, not something to silently accommodate.
+  const dropped = (proxy?.domains ?? []).filter((d) => !requiredDomains.includes(d));
+  if (dropped.length > 0) {
+    console.error(
+      `WARNING: rebuilding ${EGRESS_PROXY_NAME} drops ${dropped.join(", ")} from the shared ` +
+        `allowlist — another worker's config asks for hosts this one does not. If that worker ` +
+        `still needs them, add them here too or the two will rebuild the sidecar in turn.`,
+    );
+  }
+  const domainsCsv = requiredDomains.join(",");
+  const keysCsv = requiredKeys.join(",");
 
   if (proxy) {
     // Remove the container only — the CA volume is left in place so the
     // regenerated sidecar reuses the same CA every agent already trusts.
-    await exec("docker", ["rm", "-f", EGRESS_PROXY_NAME]);
+    try {
+      await exec("docker", ["rm", "-f", EGRESS_PROXY_NAME]);
+    } catch (err) {
+      // "removal of container syd-egress is already in progress" — a twin got
+      // there first (SYD-270). This was the one mutating step with no
+      // race handling, so it turned a won race into a FATAL. Only a real
+      // failure if a wrong sidecar is still standing when we look again.
+      proxy = await inspectProxy();
+      if (satisfied(proxy)) return;
+      if (proxy) throw err;
+    }
   }
   try {
     await exec("docker", [
@@ -1055,7 +1131,7 @@ export async function ensureEgressGuard(
     // Name-conflict race: accept the winner's proxy if it's healthy — and
     // leave the network connect to the winner too.
     proxy = await inspectProxy();
-    if (proxy && proxy.running && proxy.sameDomains && proxy.sameKeys) return;
+    if (satisfied(proxy)) return;
     throw err;
   }
   // Dual-home the sidecar: created on the default bridge (egress), connected
