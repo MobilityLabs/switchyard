@@ -172,6 +172,37 @@ describe("nextTask skips what the caller cannot take (SYD-294)", () => {
     expect(next(human)).toBe(hands_on);
   });
 
+  // The hard skip above keyed on actor.type, which conflated two different
+  // questions: "is this a person" and "is a person watching this session".
+  // An interactive Claude session is an agent by type but is human-attended,
+  // and it is exactly the caller `interactive` work is meant for -- yet it was
+  // routed away from it, so the top of the curated queue was invisible to the
+  // only non-human caller that could do it.
+  it("hands an `interactive` issue to an ATTENDED agent, not just a human", () => {
+    const session = createActor(db, {
+      name: "claude/interactive",
+      type: "agent",
+      attended: true,
+    }).actor;
+    const hands_on = todo("needs a person", { workerPreference: "interactive" });
+    setQueuePosition(db, human, hands_on, { position: 1 });
+    expect(next(claude)).toBeNull(); // unattended dispatch worker: still skipped
+    expect(next(session)).toBe(hands_on);
+    expect(next(human)).toBe(hands_on);
+  });
+
+  it("defaults an agent to unattended — the safe direction, since it only withholds work", () => {
+    const plain = createActor(db, { name: "claude/other", type: "agent" }).actor;
+    expect(plain.attended).toBe(false);
+    const hands_on = todo("needs a person", { workerPreference: "interactive" });
+    setQueuePosition(db, human, hands_on, { position: 1 });
+    expect(next(plain)).toBeNull();
+  });
+
+  it("treats a human as attended without anyone setting a flag", () => {
+    expect(human.attended).toBe(true);
+  });
+
   it("skips a queued interactive issue rather than stalling on it", () => {
     const hands_on = todo("needs a person", { workerPreference: "interactive" });
     const headless = todo("headless-ok");

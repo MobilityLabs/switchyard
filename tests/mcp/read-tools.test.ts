@@ -122,13 +122,23 @@ describe("MCP read tools", () => {
 
   it("whoami returns the actor the calling token authenticates as", async () => {
     const r = await client.callTool({ name: "whoami", arguments: {} });
-    expect(JSON.parse(text(r))).toEqual({ id: agent.id, name: "claude/worker", type: "agent" });
+    expect(JSON.parse(text(r))).toEqual({
+      id: agent.id,
+      name: "claude/worker",
+      type: "agent",
+      attended: false,
+    });
   });
 
   it("whoami reflects a human actor's own token", async () => {
     const humanClient = await connect(human);
     const r = await humanClient.callTool({ name: "whoami", arguments: {} });
-    expect(JSON.parse(text(r))).toEqual({ id: human.id, name: "sean", type: "human" });
+    expect(JSON.parse(text(r))).toEqual({
+      id: human.id,
+      name: "sean",
+      type: "human",
+      attended: true,
+    });
   });
 
   it("errors are agent-legible, not stack traces", async () => {

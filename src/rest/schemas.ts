@@ -46,6 +46,8 @@ export const issueUpdateBody = z.object({
 
 export const redeliverBody = z.object({ expectedHeadSha: z.string().min(1).optional() });
 
+export const actorAttendedBody = z.object({ attended: z.boolean() });
+
 export const resolveDeliveryBody = z.object({ note: z.string().min(1) });
 
 // SYD-262: `reason` is validated against RESOLVABLE_DEVIATIONS in the service,

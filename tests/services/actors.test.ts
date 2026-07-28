@@ -6,6 +6,7 @@ import {
   listActorsWithStatus,
   rotateActorToken,
   revokeActorToken,
+  setActorAttended,
 } from "../../src/services/actors.js";
 
 describe("actors", () => {
@@ -92,5 +93,55 @@ describe("actors", () => {
     const db = openDb(":memory:");
     const human = createActor(db, { name: "sean", type: "human" }).actor;
     expect(() => revokeActorToken(db, human, 999)).toThrowError(/no actor with id 999/i);
+  });
+
+  // `attended` answers "is a person watching this caller", which is the
+  // question nextTask's interactive skip actually wants — distinct from
+  // `type`, which answers "is this a person".
+  describe("attended", () => {
+    const setup = () => {
+      const db = openDb(":memory:");
+      const human = createActor(db, { name: "sean", type: "human" }).actor;
+      const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
+      return { db, human, agent };
+    };
+
+    it("defaults humans to attended and everyone else to not", () => {
+      const { human, agent, db } = setup();
+      expect(human.attended).toBe(true);
+      expect(agent.attended).toBe(false);
+      expect(createActor(db, { name: "svc", type: "service" }).actor.attended).toBe(false);
+    });
+
+    it("honours an explicit attended at creation", () => {
+      const { db } = setup();
+      const s = createActor(db, { name: "claude/interactive", type: "agent", attended: true });
+      expect(s.actor.attended).toBe(true);
+      expect(authenticate(db, s.token)?.attended).toBe(true);
+    });
+
+    it("lets a human set and clear it on an agent, and it survives a round-trip", () => {
+      const { db, human, agent } = setup();
+      expect(setActorAttended(db, human, agent.id, true).attended).toBe(true);
+      expect(listActorsWithStatus(db).find((a) => a.id === agent.id)?.attended).toBe(true);
+      expect(setActorAttended(db, human, agent.id, false).attended).toBe(false);
+      expect(listActorsWithStatus(db).find((a) => a.id === agent.id)?.attended).toBe(false);
+    });
+
+    // A caller must not be able to widen its own queue.
+    it("refuses a non-human caller", () => {
+      const { db, agent } = setup();
+      expect(() => setActorAttended(db, agent, agent.id, true)).toThrowError(/only humans/i);
+    });
+
+    it("refuses to set it on a human — attended by definition, so a flag would imply it can be off", () => {
+      const { db, human } = setup();
+      expect(() => setActorAttended(db, human, human.id, false)).toThrowError(/by definition/i);
+    });
+
+    it("errors on an unknown actor id", () => {
+      const { db, human } = setup();
+      expect(() => setActorAttended(db, human, 999, true)).toThrowError(/no actor with id 999/i);
+    });
   });
 });

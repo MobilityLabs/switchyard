@@ -49,7 +49,7 @@ export function redeemLoginLink(db: Db, token: string): { sessionToken: string; 
   if (!a) {
     throw new SwitchyardError(`Login link references a missing actor (id ${row.actorId}).`);
   }
-  return { sessionToken, actor: { id: a.id, name: a.name, type: a.type } };
+  return { sessionToken, actor: { id: a.id, name: a.name, type: a.type, attended: a.attended } };
 }
 
 // kind='plain' is a security boundary, not a convenience filter: the
@@ -65,7 +65,7 @@ export function getSessionActor(db: Db, sessionToken: string): Actor | null {
     .where(and(eq(sessions.tokenHash, hashToken(sessionToken)), eq(sessions.kind, "plain")))
     .get();
   if (!row || row.s.expiresAt < nowSec()) return null;
-  return { id: row.a.id, name: row.a.name, type: row.a.type };
+  return { id: row.a.id, name: row.a.name, type: row.a.type, attended: row.a.attended };
 }
 
 // kind='plain' scoping mirrors getSessionActor above: a supervised session

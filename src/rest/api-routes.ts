@@ -9,6 +9,7 @@ import {
   createActor,
   getActorById,
   listActorsWithStatus,
+  setActorAttended,
   rotateActorToken,
   revokeActorToken,
   type Actor,
@@ -121,6 +122,7 @@ import {
   duplicateBody,
   settingPutBody,
   redeliverBody,
+  actorAttendedBody,
   resolveDeliveryBody,
   resolveDeviationBody,
   deliveryAttemptStartBody,
@@ -203,6 +205,17 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     if (!Number.isInteger(id)) throw new SwitchyardError(`There is no actor with id ${idParam}.`);
     return id;
   };
+
+  app.post("/actors/:id/attended", body(actorAttendedBody), (c) =>
+    c.json(
+      setActorAttended(
+        db,
+        c.var.actor,
+        parseActorId(c.req.param("id")),
+        c.req.valid("json").attended,
+      ),
+    ),
+  );
 
   app.post("/actors/:id/rotate-token", (c) =>
     c.json(rotateActorToken(db, c.var.actor, parseActorId(c.req.param("id")))),
