@@ -7,32 +7,31 @@
 // transition itself rather than recomputed live, see doneWithoutMergedPr).
 //
 // What resolves a delivery failure: a later `delivered` event (the
-// delivery-attempt vocabulary stays event-written by the delivery worker), the
-// issue's PR reaching `merged` in pr_state with a co-written transition event
-// newer than the failure (SYD-207 — a manual merge of the agent/<ref> branch
-// observed by the webhook/poller, replacing the deleted SYD-94 reconcile
-// pass), or a later `delivery_resolved` event (SYD-178 — a human explicitly
-// clearing a stuck flag when the fix landed through a path pr_state never
-// attributes, e.g. an interactive feat/ branch). For THIS flag, raw
-// gh_pr_merged events are audit history and are not consulted — pr_state's
-// strict agent/<ref> attribution is deliberate (SYD-206), so a non-agent merge
-// never auto-clears it; only an explicit human resolve does. Clearing a
-// delivery failure re-authorizes an actual merge+deploy, so the evidence has
-// to be the authoritative kind.
+// delivery-attempt vocabulary stays event-written by the delivery worker), a
+// PR the issue DECLARED reaching `merged` in pr_state with a co-written
+// transition event newer than the failure (SYD-207, replacing the deleted
+// SYD-94 reconcile pass), or a later `delivery_resolved` event (SYD-178 — a
+// human explicitly clearing a stuck flag when the fix landed through a path
+// nothing observed at all, e.g. a direct push with no PR). Raw gh_pr_merged
+// events are audit history here and are never consulted: clearing a delivery
+// failure re-authorizes an actual merge+deploy, so the evidence has to be a
+// declared link joined to an observed merge, not a string in a PR title.
 //
-// A done_without_merged_pr deviation resolves on any of three: a later pr_state
-// row reaching `merged` (a human pushes the stale branch and merges it by
-// hand); ANY gh_pr_merged event on the issue (SYD-267); or a later
-// deviation_resolved recorded by a human (SYD-262).
+// Both arms below read pr_links ⋈ pr_state, so both cover interactive `feat/`
+// work — the declaration supplies the attribution (SYD-280) and ingestion
+// supplies the observation (SYD-287). Neither reads a branch name.
 //
-// The gh_pr_merged arm is a deliberate exception to the paragraph above, and
-// the difference is what the flag authorizes. delivery_failed gates a real
-// merge+deploy. done_without_merged_pr gates nothing — it only asks a human to
-// go verify the work landed, and a merged PR carrying the ref is precisely what
-// it would have them look at. Before SYD-267 this flag fired on every
-// interactive issue (feat/<topic> is the documented branch convention), telling
-// people "no PR ever recorded" about a PR the issue page was rendering directly
-// underneath the banner. A signal that is reliably wrong is worse than none.
+// A done_without_merged_pr deviation resolves on either: a merged pr_state row
+// reached through a PROOF-BEARING link (declared AND confirmed by someone
+// accountable — see the SQL comment below for why SYD-267's second arm had to
+// go), or a later deviation_resolved recorded by a human (SYD-262).
+//
+// The two flags demand different strengths of evidence, and the difference is
+// what each authorizes. delivery_failed gates a real merge+deploy, so it wants
+// the transition ordered after the failure. done_without_merged_pr gates
+// nothing — it only asks a human to go verify the work landed — so it stays
+// deliberately unordered, but it does demand a confirmed link, because before
+// SYD-280 any PR that merely MENTIONED an issue silenced it permanently.
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { getDeviation, listDeviationByIssueId, type DeviationFlag } from "./deviation.js";

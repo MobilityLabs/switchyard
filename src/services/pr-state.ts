@@ -21,16 +21,22 @@
 //   refresh fields, never transition status).
 // - Absence is not evidence: this function only ever moves state forward from
 //   an observation; a PR missing from a poll window simply produces no call.
-// - Authoritative attribution is branch-only AND repo-bound: issueRef is set
-//   only when the branch is a strict agent/<ref> match AND this repo is bound
-//   to that ref's project (github_repos.projectId). An agent/SYD-1 PR in some
-//   other project's repo records display-only state, never SYD-1's claim-
-//   gating state. Free-text ref scans never reach this function.
-// - On a real transition it co-writes ONE canonical audit event
-//   (gh_pr_opened/gh_pr_merged/gh_pr_closed/gh_pr_reopened), deduped against
-//   history via findEventIdByPayload so a redelivery — or a pre-cutover event
-//   recorded by the old direct-write path — never yields a second copy; the
-//   event id (new or the deduped original's) becomes lastTransitionEventId.
+// - This table holds no attribution. It is a pure observation of a PR, keyed
+//   (repo, prNumber); which issue a PR belongs to lives in pr_links (SYD-280).
+//   `issueRef` survives only as the SYD-280 §10 step-3 dual-write, written
+//   from the branch and read by nothing — never from a link, which would
+//   re-couple the two facts this split exists to separate. Step 4 drops it.
+// - A strict agent/<ref> match on a repo bound to that ref's project is the
+//   AUTO-DECLARATION trigger, not a gate: it records the `delivers` link the
+//   worker would otherwise have to declare by hand. An agent/SYD-1 PR in some
+//   other project's repo declares nothing.
+// - On a real transition it co-writes ONE canonical audit event per issue
+//   holding a live `delivers` link (gh_pr_opened/gh_pr_merged/gh_pr_closed/
+//   gh_pr_reopened), deduped against history via findEventIdByPayload so a
+//   redelivery — or a pre-cutover event recorded by the old direct-write path
+//   — never yields a second copy; the earliest declarer's event id (new or the
+//   deduped original's) becomes lastTransitionEventId. Reading the link rather
+//   than the branch (SYD-287) is what gives interactive work a timeline entry.
 
 import { and, eq, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
@@ -42,7 +48,7 @@ import { getProjectByKey } from "./projects.js";
 import { normalizeRepoFullName } from "./github-repos.js";
 import { recordEvent, findEventIdByPayload } from "./events.js";
 import { parseGhTimestamp, refFromBranch } from "./github-webhook.js";
-import { recordIngestedPrLink } from "./pr-links.js";
+import { recordIngestedPrLink, deliversLinkIssueIds } from "./pr-links.js";
 
 export type PrStateRow = typeof prState.$inferSelect;
 export type PrStatus = "open" | "merged" | "closed";
@@ -212,34 +218,38 @@ export function upsertPrState(db: Db, actor: Actor, input: PrObservation): Upser
     }
 
     let lastTransitionEventId = existing?.lastTransitionEventId ?? null;
-    if (decision.transition !== null && issueRef !== null) {
-      const issueId = getIssue(tx, issueRef).id;
+    if (decision.transition !== null) {
+      // SYD-287: the issues this transition is canonical for are the ones
+      // holding a live `delivers` link — read from pr_links, not from the
+      // branch-derived issueRef above. For agent/<ref> work that is the same
+      // single issue it always was (the auto-declaration a few lines up wrote
+      // its link), so the SYD-280 regression fence holds; for an interactive
+      // feat/ PR it is the only reason the merge reaches a timeline at all.
+      // A PR declared by more than one issue (design §3, SYD-274) gets the
+      // event on each; the row's single lastTransitionEventId takes the
+      // earliest declarer's, which deliversLinkIssueIds orders first.
       const kind = EVENT_KIND[decision.transition];
       const ghUpdatedAtIso = parseGhTimestamp(o.ghUpdatedAt);
       const dedupe =
         decision.transition === "reopened"
           ? { jsonPath: "$.ghUpdatedAt", value: ghUpdatedAtIso }
           : { jsonPath: "$.prNumber", value: o.prNumber };
-      const duplicate = findEventIdByPayload(tx, issueId, kind, dedupe.jsonPath, dedupe.value);
-      if (duplicate !== null) {
-        lastTransitionEventId = duplicate;
-      } else {
-        const payload: Record<string, unknown> = {
-          prNumber: o.prNumber,
-          url: o.url ?? existing?.url ?? null,
-          repo: o.repo,
-          headSha: o.headSha ?? existing?.headSha ?? null,
-          ghUpdatedAt: ghUpdatedAtIso,
-        };
-        if (decision.transition === "merged") payload.mergeSha = o.mergeSha ?? null;
-        else payload.branch = o.branch ?? existing?.branch ?? null;
-        lastTransitionEventId = recordEvent(tx, {
-          issueId,
-          actorId: actor.id,
-          type: kind,
-          payload,
-        });
-      }
+      const payload: Record<string, unknown> = {
+        prNumber: o.prNumber,
+        url: o.url ?? existing?.url ?? null,
+        repo: o.repo,
+        headSha: o.headSha ?? existing?.headSha ?? null,
+        ghUpdatedAt: ghUpdatedAtIso,
+      };
+      if (decision.transition === "merged") payload.mergeSha = o.mergeSha ?? null;
+      else payload.branch = o.branch ?? existing?.branch ?? null;
+
+      deliversLinkIssueIds(tx, o.repo, o.prNumber).forEach((issueId, i) => {
+        const duplicate = findEventIdByPayload(tx, issueId, kind, dedupe.jsonPath, dedupe.value);
+        const eventId =
+          duplicate ?? recordEvent(tx, { issueId, actorId: actor.id, type: kind, payload });
+        if (i === 0) lastTransitionEventId = eventId;
+      });
     }
 
     const next = {

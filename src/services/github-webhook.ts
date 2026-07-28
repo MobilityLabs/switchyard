@@ -1,11 +1,22 @@
 // Inbound GitHub webhook handling (SYD-64): turns pull_request/check_suite/push
 // deliveries into timeline events on the issue they belong to, so the SYD-54
 // delivery strip and activity feed reflect GitHub's own state instead of
-// relying on agents to hand-write "merged PR #N" comments. Issues are matched
-// by parsing the `agent/<ref>` branch convention (scripts/delivery-lib.ts's
-// agentBranch) off the PR/check-suite/push branch first, falling back to
-// scanning free text (PR title/body, or commit messages for push) for a bare
-// ref — same two signals SYD-64 asked for.
+// relying on agents to hand-write "merged PR #N" comments.
+//
+// Two separate questions, deliberately not one (SYD-280/SYD-287):
+//
+// - WHICH ISSUE'S FEED does a delivery belong on? Parsed, as SYD-64 asked:
+//   the `agent/<ref>` branch convention (scripts/delivery-lib.ts's agentBranch)
+//   first, then a bare ref in free text (PR title/body, or commit messages for
+//   push). This is display, and a string may decide it.
+// - IS THE PR ATTRIBUTED to an issue's work? DECLARED, never parsed: a live
+//   `delivers` row in pr_links. handlePullRequest writes pr_state on that
+//   signal, so the observation half exists for any branch — an interactive
+//   `feat/` PR included. An agent/<ref> branch still auto-declares its own
+//   link (pr-state.ts), which is why that path's behaviour is unchanged.
+//
+// Nothing here may read a ref out of a branch or a PR title to decide what a
+// PR *belongs to*. That is the rule SYD-280 exists to enforce (CLAUDE.md).
 //
 // push (SYD-73) records a gh_pushed event (commit count, head sha, compare
 // url) rather than folding into the SYD-54 delivery strip — a push isn't a
@@ -17,11 +28,11 @@ import { z } from "zod";
 import type { Db } from "../db/index.js";
 import type { EventKind } from "../db/schema.js";
 import { getOrCreateActor } from "./actors.js";
-import { getIssue } from "./issues.js";
+import { getIssue, issueRefById } from "./issues.js";
 import { recordEvent } from "./events.js";
 import { boundRepoFullNames, normalizeRepoFullName } from "./github-repos.js";
 import { upsertPrState, attributedRef, type PrObservation } from "./pr-state.js";
-import { recordIngestedPrLink } from "./pr-links.js";
+import { recordIngestedPrLink, deliversLinkIssueIds } from "./pr-links.js";
 
 const GITHUB_ACTOR_NAME = "github";
 
@@ -209,45 +220,78 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
   const payload = parsed.data;
   const pr = payload.pull_request;
   if (!pr) return { handled: false, reason: "pull_request payload missing pull_request object" };
-  const ref = resolveRef([pr.head?.ref], [pr.title, pr.body]);
-  if (!ref) return { handled: false, reason: "no issue ref found in branch, title, or body" };
+  const prNumber = Number(pr.number);
+  const branch = pr.head?.ref ?? null;
+  // The ref the PR's *strings* name — the branch convention first, then the
+  // first bare ref in the title or body. Since SYD-280 this decides only what
+  // the activity feed shows and which issue gets a `references` suggestion;
+  // it decides nothing about attribution.
+  const textRef = resolveRef([branch], [pr.title, pr.body]);
+
+  // SYD-287: attribution is DECLARED, so a PR can carry an issue's work while
+  // naming it nowhere — not in the branch, not in the title, not in the body.
+  // A live `delivers` link is keyed on (repo, prNumber) alone, so looking one
+  // up is what makes "no ref in the text" survivable instead of a dead end.
+  // It needs a repo the delivery named: resolveRepo's sole-bound-repo
+  // inference (SYD-205) needs a project, which only a ref can supply.
+  const namedRepoLinks = repo !== null ? deliversLinkIssueIds(db, repo, prNumber) : [];
+  if (textRef === null && namedRepoLinks.length === 0) {
+    return { handled: false, reason: "no issue ref found in branch, title, or body" };
+  }
   const action = payload.action ?? "";
   if (!PR_ACTIONS.has(action)) {
     return { handled: false, reason: `ignored pull_request action "${action}"` };
   }
 
-  const prNumber = Number(pr.number);
   const url = String(pr.html_url ?? "");
-  const branch = pr.head?.ref ?? null;
   const headSha = pr.head?.sha ?? null;
   const ghUpdatedAt = parseGhTimestamp(pr.updated_at);
 
-  let issue: { id: number; projectId: number };
-  try {
-    issue = getIssue(db, ref);
-  } catch {
-    return { handled: false, reason: `no Switchyard issue matches ref ${ref}` };
+  // The issue the PR's text names, when it names a real one. Only this path
+  // can infer an unnamed repo, and only it records the display events — a
+  // declared-but-unmentioned PR has none of either.
+  let issue: { ref: string; id: number; projectId: number } | undefined;
+  if (textRef !== null) {
+    try {
+      issue = { ...getIssue(db, textRef), ref: textRef };
+    } catch {
+      // A ref naming no issue is a dead end only when nothing declared this
+      // PR either: a declaration outranks a string that matched nothing.
+      if (namedRepoLinks.length === 0) {
+        return { handled: false, reason: `no Switchyard issue matches ref ${textRef}` };
+      }
+    }
   }
-  const resolvedRepo = resolveRepo(db, issue.projectId, repo);
+  const resolvedRepo = issue ? resolveRepo(db, issue.projectId, repo) : repo;
   if (resolvedRepo === "ambiguous") return { handled: false, reason: AMBIGUOUS_REPO_REASON };
 
-  // Authoritative path (SYD-206): a strict agent/<ref> branch in the repo
-  // bound to that ref's project routes through upsertPrState, which owns the
-  // state row AND co-writes the canonical transition event — no direct event
-  // write here, so one physical transition never appears twice. Everything
-  // else (free-text matches, cross-repo agent branches) records display/audit
-  // events only and never touches pr_state.
-  const attributed = resolvedRepo !== null && attributedRef(db, resolvedRepo, branch) === ref;
-  if (attributed) {
+  // Re-read against the RESOLVED repo: a legacy producer that omitted `repo`
+  // (the SYD-205 deploy-skew path) only learns which repo it meant after the
+  // sole-bound-repo inference above.
+  const linkedIssueIds =
+    resolvedRepo === null ? [] : deliversLinkIssueIds(db, resolvedRepo, prNumber);
+  const branchAttributed =
+    resolvedRepo !== null && attributedRef(db, resolvedRepo, branch) !== null;
+
+  // OBSERVATION (SYD-206, widened by SYD-287). pr_state is keyed
+  // (repo, prNumber) and carries no issue identity, so it is worth writing
+  // whenever something accountable attributes this PR: a strict agent/<ref>
+  // branch in a bound repo (which auto-declares its own link inside
+  // upsertPrState), or a live `delivers` link someone declared. upsertPrState
+  // owns the state row AND co-writes the canonical transition event, so
+  // nothing is written directly here and one physical transition never
+  // appears twice.
+  //
+  // Before SYD-287 this was the branch test alone, which is why a declared
+  // feat/ PR got a declaration and never an observation — while every reader
+  // in pr-status.ts INNER JOINs the two.
+  const observed = branchAttributed || linkedIssueIds.length > 0;
+  const ref = textRef ?? issueRefById(db, linkedIssueIds[0] ?? null) ?? "";
+
+  let observedOutcome: GithubWebhookOutcome | null = null;
+  if (observed) {
     const actor = getOrCreateActor(db, GITHUB_ACTOR_NAME, "agent");
-    const base = {
-      repo: resolvedRepo!,
-      prNumber,
-      url,
-      branch,
-      headSha,
-      ghUpdatedAt,
-    };
+    const base = { repo: resolvedRepo!, prNumber, url, branch, headSha, ghUpdatedAt };
     if (action === "synchronize") {
       upsertPrState(db, actor, { ...base, status: "open" });
       return { handled: true, ref, type: "synchronize", recorded: false };
@@ -268,58 +312,74 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
           : pr.merged
             ? "gh_pr_merged"
             : "gh_pr_closed";
-    const outcome = upsertPrState(db, actor, observation);
-    return outcome.transition !== null
-      ? { handled: true, ref, type }
-      : { handled: true, ref, type, duplicate: true };
+    const applied = upsertPrState(db, actor, observation);
+    observedOutcome =
+      applied.transition !== null
+        ? { handled: true, ref, type }
+        : { handled: true, ref, type, duplicate: true };
   }
 
-  const byPrNumber = { jsonPath: "$.prNumber", value: prNumber };
-  if (action === "opened") {
-    return record(
-      db,
-      ref,
-      "gh_pr_opened",
-      { prNumber, url, branch, headSha, ghUpdatedAt },
-      resolvedRepo,
-      byPrNumber,
-    );
+  // DISPLAY. Unchanged, but no longer the observation's else-branch: a PR
+  // whose text names some OTHER issue keeps the activity-feed line and the
+  // `references` suggestion it has always had, even when a declaration made
+  // the PR observable for the issue that actually owns it. Skipped when the
+  // text ref's issue already took upsertPrState's canonical co-write, which is
+  // what keeps one transition from appearing twice.
+  let displayOutcome: GithubWebhookOutcome | null = null;
+  if (issue !== undefined && !branchAttributed && !linkedIssueIds.includes(issue.id)) {
+    const textOnlyRef = issue.ref;
+    const byPrNumber = { jsonPath: "$.prNumber", value: prNumber };
+    if (action === "opened") {
+      displayOutcome = record(
+        db,
+        textOnlyRef,
+        "gh_pr_opened",
+        { prNumber, url, branch, headSha, ghUpdatedAt },
+        resolvedRepo,
+        byPrNumber,
+      );
+    } else if (action === "closed") {
+      displayOutcome = pr.merged
+        ? record(
+            db,
+            textOnlyRef,
+            "gh_pr_merged",
+            { prNumber, url, mergeSha: pr.merge_commit_sha ?? null, headSha, ghUpdatedAt },
+            resolvedRepo,
+            byPrNumber,
+          )
+        : record(
+            db,
+            textOnlyRef,
+            "gh_pr_closed",
+            { prNumber, url, headSha, ghUpdatedAt },
+            resolvedRepo,
+            byPrNumber,
+          );
+    } else if (action === "reopened") {
+      // A PR can legitimately reopen more than once, so dedupe by GitHub's own
+      // timestamp (a redelivery repeats it; a genuine re-reopen carries a newer
+      // one) rather than by prNumber.
+      displayOutcome = record(
+        db,
+        textOnlyRef,
+        "gh_pr_reopened",
+        { prNumber, url, branch, headSha, ghUpdatedAt },
+        resolvedRepo,
+        { jsonPath: "$.ghUpdatedAt", value: ghUpdatedAt },
+      );
+    }
   }
-  if (action === "closed") {
-    return pr.merged
-      ? record(
-          db,
-          ref,
-          "gh_pr_merged",
-          { prNumber, url, mergeSha: pr.merge_commit_sha ?? null, headSha, ghUpdatedAt },
-          resolvedRepo,
-          byPrNumber,
-        )
-      : record(
-          db,
-          ref,
-          "gh_pr_closed",
-          { prNumber, url, headSha, ghUpdatedAt },
-          resolvedRepo,
-          byPrNumber,
-        );
-  }
-  if (action === "reopened") {
-    // A PR can legitimately reopen more than once, so dedupe by GitHub's own
-    // timestamp (a redelivery repeats it; a genuine re-reopen carries a newer
-    // one) rather than by prNumber.
-    return record(
-      db,
-      ref,
-      "gh_pr_reopened",
-      { prNumber, url, branch, headSha, ghUpdatedAt },
-      resolvedRepo,
-      { jsonPath: "$.ghUpdatedAt", value: ghUpdatedAt },
-    );
-  }
-  // synchronize, display-only: acknowledged, nothing recorded — a head
-  // refresh on an unattributed PR has no state row to keep fresh.
-  return { handled: true, ref, type: "synchronize", recorded: false };
+
+  // The observation is the more meaningful answer when both halves ran (a
+  // declared PR that also mentions some other issue), so it wins the single
+  // return slot; the display write already happened either way. Falling
+  // through to neither means synchronize on an unattributed PR: acknowledged,
+  // nothing recorded — there is no state row to keep fresh.
+  return (
+    observedOutcome ??
+    displayOutcome ?? { handled: true, ref, type: "synchronize", recorded: false }
+  );
 }
 
 function branchFromGitRef(gitRef: unknown): string | null {
