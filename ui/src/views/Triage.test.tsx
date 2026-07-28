@@ -27,6 +27,7 @@ import { listIssues, markDuplicate, updateIssue } from "../api";
 
 const ISSUE: Issue = {
   id: 1,
+  projectId: 1,
   ref: "SYD-1",
   title: "Do the thing",
   description: "",

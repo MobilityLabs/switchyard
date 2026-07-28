@@ -22,8 +22,9 @@
 // authority infra already holds, not a widening of it.
 
 import { and, eq, isNull, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import type { Db, DbOrTx } from "../db/index.js";
-import { prLinks, type PrLinkRole } from "../db/schema.js";
+import { actors, prLinks, prState, type PrLinkRole } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
@@ -46,6 +47,106 @@ export function listLiveLinks(db: DbOrTx, issueId: number): PrLink[] {
     .where(and(eq(prLinks.issueId, issueId), isNull(prLinks.revokedAt)))
     .orderBy(sql`${prLinks.declaredAt} DESC, ${prLinks.id} DESC`)
     .all();
+}
+
+/** What GitHub was last seen doing to a linked PR — the pr_state half of the join. */
+export type PrObservationView = {
+  status: "open" | "merged" | "closed";
+  url: string | null;
+  ghUpdatedAt: number | null;
+};
+
+export type PrLinkView = PrLink & {
+  declaredByName: string;
+  confirmedByName: string | null;
+  /** Whether a HUMAN confirmed — the §5a exception turns on this, not on merely being confirmed. */
+  confirmedByHuman: boolean;
+  /** null when nothing has ever observed this PR, which is not the same as "not merged". */
+  observed: PrObservationView | null;
+  /** True when this link on its own would let a reader conclude the work landed. */
+  provesLanded: boolean;
+};
+
+/**
+ * Does this link, joined to its observation, satisfy the proof-bearing
+ * predicate the readers use? The TS mirror of the SQL in attention.ts's
+ * unresolvedDoneWithoutMerge — kept as one exported function because the UI
+ * panel and the attention banner sit on the same screen, and a panel that says
+ * "confirmed ✓" beside a lit "done without a merged PR" warning is a second
+ * contradictory signal rather than an explanation (SYD-290).
+ *
+ * The three conjuncts, per design §5/§5a and the pr_links schema comment:
+ * role is `delivers` (a suggestion proves nothing), someone accountable
+ * confirmed it, and — unless that confirmer was a human — the observation must
+ * postdate the declaration, so a stale merge can't be retro-claimed.
+ */
+export function provesLanded(
+  link: Pick<PrLink, "role" | "confirmedBy" | "declaredAt">,
+  confirmedByHuman: boolean,
+  observed: PrObservationView | null,
+): boolean {
+  if (link.role !== "delivers" || link.confirmedBy === null) return false;
+  if (observed?.status !== "merged") return false;
+  if (confirmedByHuman) return true;
+  return observed.ghUpdatedAt !== null && observed.ghUpdatedAt >= link.declaredAt;
+}
+
+/**
+ * Every live link on an issue with the two things a human needs in order to
+ * act on it: WHO said what (declarer/confirmer names, so the panel can show
+ * "declared by claude/dev, unconfirmed" rather than an actor id), and WHETHER
+ * ANYTHING OBSERVED THE PR.
+ *
+ * The observation half matters more than it looks. `pr_state` only started
+ * covering every PR in a bound repo at SYD-287; PRs merged before that — this
+ * repo has a run of them, #121-#155 — have no row at all. Declaring and
+ * confirming a link to one of those is a perfectly valid statement that still
+ * leaves `done_without_merged_pr` lit, because the join has no observation
+ * half. Surfacing `observed: null` is what stops the panel from implying a
+ * click will clear a flag that it cannot.
+ */
+export function listLiveLinkViews(db: DbOrTx, issueId: number): PrLinkView[] {
+  const declarer = alias(actors, "declarer");
+  const confirmer = alias(actors, "confirmer");
+  const rows = db
+    .select({
+      link: prLinks,
+      declaredByName: declarer.name,
+      confirmedByName: confirmer.name,
+      confirmerType: confirmer.type,
+      status: prState.status,
+      url: prState.url,
+      ghUpdatedAt: prState.ghUpdatedAt,
+    })
+    .from(prLinks)
+    .innerJoin(declarer, eq(declarer.id, prLinks.declaredBy))
+    .leftJoin(confirmer, eq(confirmer.id, prLinks.confirmedBy))
+    // pr_state is keyed (repo, prNumber) with repo stored as written, so match
+    // case-insensitively the way every other reader of this join does.
+    .leftJoin(
+      prState,
+      and(
+        sql`lower(${prState.repo}) = lower(${prLinks.repo})`,
+        eq(prState.prNumber, prLinks.prNumber),
+      ),
+    )
+    .where(and(eq(prLinks.issueId, issueId), isNull(prLinks.revokedAt)))
+    .orderBy(sql`${prLinks.declaredAt} DESC, ${prLinks.id} DESC`)
+    .all();
+
+  return rows.map((r) => {
+    const observed: PrObservationView | null =
+      r.status === null ? null : { status: r.status, url: r.url, ghUpdatedAt: r.ghUpdatedAt };
+    const confirmedByHuman = r.confirmerType === "human";
+    return {
+      ...r.link,
+      declaredByName: r.declaredByName,
+      confirmedByName: r.confirmedByName,
+      confirmedByHuman,
+      observed,
+      provesLanded: provesLanded(r.link, confirmedByHuman, observed),
+    };
+  });
 }
 
 /**

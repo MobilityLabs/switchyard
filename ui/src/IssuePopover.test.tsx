@@ -22,6 +22,7 @@ import type { IssueDetail } from "./types";
 
 const ISSUE: IssueDetail = {
   id: 1,
+  projectId: 1,
   ref: "SYD-83",
   title: "Rich internal refs",
   description: "",
@@ -50,6 +51,7 @@ const ISSUE: IssueDetail = {
   parentRef: null,
   attachments: [],
   deliveryPin: null,
+  prLinks: [],
 };
 
 async function renderMarkdown(text: string): Promise<HTMLElement> {

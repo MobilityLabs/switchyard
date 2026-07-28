@@ -103,9 +103,9 @@ function ShellRouter({ me }: { me: Actor }) {
     <Shell me={me} projects={projects.data ?? []}>
       {route.view === "triage" && <Triage project={scopeProject(route.scope)} />}
       {route.view === "board" && <Board project={route.scope} />}
-      {route.view === "issue" && <IssueDetail refId={route.ref} />}
+      {route.view === "issue" && <IssueDetail refId={route.ref} me={me} />}
       {route.view === "review" && (
-        <Review project={scopeProject(route.scope)} currentRef={route.ref} />
+        <Review project={scopeProject(route.scope)} currentRef={route.ref} me={me} />
       )}
       {route.view === "new-issue" && <NewIssue defaultProject={scopeProject(route.scope)} />}
       {route.view === "search" && (

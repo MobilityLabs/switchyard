@@ -33,6 +33,7 @@ const PROJECTS: Project[] = [
 function issue(o: Partial<Issue> = {}): Issue {
   return {
     id: 1,
+    projectId: 1,
     ref: "SYD-9",
     title: "t",
     description: "",

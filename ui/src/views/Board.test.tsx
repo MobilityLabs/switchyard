@@ -24,6 +24,7 @@ vi.mock("../api", () => ({
 function issue(o: Partial<Issue> = {}): Issue {
   return {
     id: 1,
+    projectId: 1,
     ref: "SYD-1",
     title: "Ship it",
     description: "",

@@ -9,6 +9,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../api", () => ({
   addComment: vi.fn(),
+  listGithubRepos: vi.fn(() => Promise.resolve([])),
+  declarePrLink: vi.fn(() => Promise.resolve({})),
+  confirmPrLink: vi.fn(() => Promise.resolve({})),
+  revokePrLink: vi.fn(() => Promise.resolve({})),
   addDependency: vi.fn(),
   getIssue: vi.fn(),
   removeDependency: vi.fn(),
@@ -897,6 +901,7 @@ describe("IssueDetail status select and Retry send the rendered PR head sha (SYD
   function detail(o: Partial<IssueDetailType> = {}): IssueDetailType {
     return {
       id: 1,
+      projectId: 1,
       ref: "SYD-1",
       title: "Ship it",
       description: "",
@@ -923,6 +928,7 @@ describe("IssueDetail status select and Retry send the rendered PR head sha (SYD
       activity: [],
       dependencies: { blockedBy: [], blocks: [] },
       attachments: [],
+      prLinks: [],
       ...o,
     };
   }
@@ -933,7 +939,7 @@ describe("IssueDetail status select and Retry send the rendered PR head sha (SYD
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<IssueDetail refId={d.ref} />);
+      root.render(<IssueDetail refId={d.ref} me={{ id: 1, name: "sean", type: "human" }} />);
     });
     await act(async () => {}); // flush the usePoll effects (getIssue, listActors)
     return container;

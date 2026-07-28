@@ -4,7 +4,8 @@ import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
 import { PollErrorBar } from "../PollErrorBar";
 import { Composer } from "../Composer";
-import type { Issue, IssueDetail as IssueDetailType } from "../types";
+import type { Actor, Issue, IssueDetail as IssueDetailType } from "../types";
+import PrLinks from "../PrLinks";
 import { ActivityFeed } from "./IssueDetail";
 import { projectKeyFromRef } from "../refs";
 import { safeHref } from "../safeHref";
@@ -18,9 +19,11 @@ import { attentionChip } from "../attention";
 export default function Review({
   project,
   currentRef,
+  me,
 }: {
   project: string | null;
   currentRef: string | null;
+  me: Actor;
 }) {
   const { data, error, reload } = usePoll(
     () => listIssues({ project: project ?? undefined, status: "in_review" }),
@@ -279,6 +282,24 @@ export default function Review({
               <p className="empty">Loading activity…</p>
             )}
           </div>
+
+          {/* SYD-290: the reviewer is already looking at the PR when they
+              authorize, so confirming its link belongs here — but as its own
+              button, NOT folded into Approve. Confirmation is the one act the
+              model reserves for a person; making it a side effect of a
+              different verdict would mean a human vouches for a link without
+              ever choosing to. */}
+          {detail.data && (
+            <PrLinks
+              refId={current.ref}
+              projectId={current.projectId}
+              links={detail.data.prLinks}
+              activity={detail.data.activity}
+              me={me}
+              onChanged={detail.reload}
+              compact
+            />
+          )}
 
           <Composer
             value={draft}
