@@ -749,6 +749,89 @@ describe("ensureEgressGuard (SYD-110)", () => {
     expect(runCall!.args.join(" ")).toContain(`ALLOWED_DOMAINS=${domainsCsv}`);
   });
 
+  // SYD-270: the thrash underneath the race. Every worker on the host stands
+  // up the ONE shared sidecar from its own config, and those configs
+  // legitimately differ — switchyard-worker.json declares no egressAllow while
+  // the codex and gemini configs declare ["github.com"]. Under the old exact
+  // match no two of them ever agreed, so each boot tore the sidecar down and
+  // rebuilt it, last writer winning: the live allowlist was a function of boot
+  // order, not configuration.
+  it("accepts a sidecar whose allowlist is a SUPERSET of what this worker needs", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      // What a codex/gemini worker leaves behind: everything this config wants,
+      // plus github.com that only those configs ask for.
+      if (args[0] === "inspect")
+        return `true ALLOWED_DOMAINS=${domainsCsv},github.com INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN`;
+      return "";
+    });
+    await ensureEgressGuard(config, exec, egressEnv);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(false);
+    expect(calls.some((c) => c.args.join(" ").includes("rm -f"))).toBe(false);
+  });
+
+  it("still rebuilds when the sidecar is MISSING a host this worker needs", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      // Superset of nothing: has an extra, but lacks registry.npmjs.org.
+      if (args[0] === "inspect")
+        return "true ALLOWED_DOMAINS=api.anthropic.com,localhost,github.com INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN";
+      return "";
+    });
+    await ensureEgressGuard(config, exec, egressEnv);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(true);
+  });
+
+  it("accepts a superset of INJECT_KEYS too, so a worker with fewer creds does not rebuild", async () => {
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect")
+        return `true ALLOWED_DOMAINS=${domainsCsv} INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN,GEMINI_API_KEY`;
+      return "";
+    });
+    await ensureEgressGuard(config, exec, egressEnv);
+    expect(calls.some((c) => c.args[0] === "run")).toBe(false);
+  });
+
+  // The second FATAL this issue reports. `docker run`'s name-conflict was
+  // already handled; `docker rm -f` was the one mutating step with no race
+  // handling, so a won race surfaced as a crash.
+  it("survives losing the remove race — 'removal already in progress'", async () => {
+    let inspects = 0;
+    const { calls, exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect") {
+        inspects++;
+        // First look: stale sidecar, so we try to remove it. Second look (after
+        // the failed remove): the twin has already rebuilt it correctly.
+        return inspects === 1
+          ? "true ALLOWED_DOMAINS=api.anthropic.com,stale.host INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN"
+          : `true ALLOWED_DOMAINS=${domainsCsv} INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN`;
+      }
+      if (args.join(" ").includes("rm -f")) {
+        return new Error(
+          "Error response from daemon: removal of container syd-egress is already in progress",
+        );
+      }
+      return "";
+    });
+    await expect(ensureEgressGuard(config, exec, egressEnv)).resolves.toBeUndefined();
+    // Accepted the twin's work rather than crashing or double-creating.
+    expect(calls.some((c) => c.args[0] === "run")).toBe(false);
+  });
+
+  it("still fails when the remove fails AND a wrong sidecar is still standing", async () => {
+    const { exec } = mockExec(({ args }) => {
+      if (args[0] === "network") return "[]";
+      if (args[0] === "inspect")
+        return "true ALLOWED_DOMAINS=api.anthropic.com,stale.host INJECT_KEYS=CLAUDE_CODE_OAUTH_TOKEN";
+      if (args.join(" ").includes("rm -f")) return new Error("removal already in progress");
+      return "";
+    });
+    // Nothing healed it, so this is a real failure and must not be swallowed.
+    await expect(ensureEgressGuard(config, exec, egressEnv)).rejects.toThrow(/removal/i);
+  });
+
   it("survives losing the network-create race to a concurrently starting worker", async () => {
     // Observed live (2026-07-11): deliver and worker-answer kickstarted
     // together; both saw the network missing, the loser's `network create`
