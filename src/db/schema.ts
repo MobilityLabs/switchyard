@@ -70,6 +70,13 @@ export const issues = sqliteTable(
     // matching issues ahead of neutral ones for that worker; null = no
     // preference. Never restricts — an idle worker still falls back to it.
     workerPreference: text("worker_preference"),
+    // Manual working order (SYD-294): position in the human-curated queue that
+    // nextTask walks before falling back to priority. NULL = unranked, which is
+    // almost every issue — this is a short "next up" list, not a total order
+    // over the backlog. Sparse (100, 200, 300...) purely as a readability
+    // convenience; setQueuePosition renumbers the whole ranked set on every
+    // move, so the gaps carry no meaning and can never be exhausted.
+    queueRank: integer("queue_rank"),
     createdAt: integer("created_at").notNull().default(now()),
     updatedAt: integer("updated_at").notNull().default(now()),
   },
@@ -77,6 +84,7 @@ export const issues = sqliteTable(
     index("issues_project_id_idx").on(t.projectId),
     index("issues_status_idx").on(t.status),
     index("issues_assignee_id_idx").on(t.assigneeId),
+    index("issues_queue_rank_idx").on(t.queueRank),
   ],
 );
 
@@ -114,6 +122,10 @@ export const EVENT_KINDS = [
   "summary_changed",
   "labels_changed",
   "worker_preference_changed",
+  // SYD-294: placed in / moved within / removed from the manual working queue.
+  // Payload carries {from, to} as 1-based positions, never raw queue_rank —
+  // renumbering churns the ranks on every move.
+  "queue_position_changed",
   "parent_changed",
   "snoozed",
   "marked_duplicate",

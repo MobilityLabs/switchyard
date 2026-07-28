@@ -45,6 +45,7 @@ import {
 } from "../services/agent-sessions.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
 import { getOpenPr, listOpenPrByIssueId, deliveryPinFor } from "../services/pr-status.js";
+import { listQueue, setQueuePosition } from "../services/queue.js";
 import {
   getDeliveryWork,
   startDeliveryAttempt,
@@ -125,6 +126,7 @@ import {
   deliveryAttemptStartBody,
   deliveryAttemptFinishBody,
   deliveryAttemptDerivedHeadBody,
+  queuePositionBody,
 } from "./schemas.js";
 
 type Env = { Variables: { actor: Actor; leaseToken?: string } };
@@ -428,6 +430,15 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     revokePrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), c.var.leaseToken);
     return c.json({ ok: true });
   });
+
+  // The manual working order (SYD-294). Not human-gated: it refines `priority`,
+  // which has never been, and an agent that has just derived an order from a
+  // board review should be able to record it. Every move records an event.
+  app.get("/queue", (c) => c.json(listQueue(db)));
+
+  app.post("/issues/:ref/queue-position", body(queuePositionBody), (c) =>
+    c.json(setQueuePosition(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
+  );
 
   app.post("/issues/:ref/request-input", body(requestInputBody), (c) =>
     c.json(

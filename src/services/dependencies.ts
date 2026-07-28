@@ -11,6 +11,8 @@ import { recordEvent } from "./events.js";
 import { listOpenPrByIssueId } from "./pr-status.js";
 import { EXECUTABLE_GATE_ACTIONS, findOrCreatePendingAction, isHardGated } from "./hard-gate.js";
 import { getSetting } from "./settings.js";
+import { affinityRank, QUEUE_RANK_ORDER } from "./queue.js";
+import { callerClassification, INTERACTIVE_PREFERENCE } from "./worker-preference.js";
 
 const CLOSED = ["done", "canceled"] as const;
 const PRIORITY_RANK = sql`CASE ${issues.priority}
@@ -229,6 +231,23 @@ export function getOpenBlockers(db: DbOrTx, issueId: number): IssueView[] {
   return rows.map((r) => toView(db, r.issue));
 }
 
+/**
+ * The next issue this actor should pick up, or null.
+ *
+ * Ordering, in precedence order (SYD-294):
+ *
+ * 1. **The manual queue** (`queue_rank`), front first. A human ordering the
+ *    board outranks every heuristic below it — that is what it is for.
+ * 2. **Affinity** with the caller's own classification, which can only break
+ *    ties among UNRANKED issues since ranks are a total order. Soft, per
+ *    SYD-201: a preference sorts, it never restricts.
+ * 3. Priority, then age — the behaviour before SYD-294, preserved exactly for
+ *    a board with nothing ranked.
+ *
+ * A ranked issue the caller cannot take is SKIPPED, not a stopping point: the
+ * filters below apply uniformly, so the walk simply continues down the queue
+ * and falls through to (2)/(3) once the ranked set is exhausted.
+ */
 export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView | null {
   const project = projectKey !== undefined ? getProjectByKey(db, projectKey) : undefined;
   const conditions = [
@@ -239,7 +258,24 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
       JOIN issues b ON b.id = d.blocker_id
       WHERE d.blocked_id = ${issues.id} AND b.status NOT IN ('done', 'canceled')
     )`,
+    // SYD-294: a container is not work. An issue with OPEN children is an epic
+    // whose stories are the actual tasks — handing it out gets the epic claimed
+    // and nothing done. Once every child closes it becomes eligible again,
+    // which is correct: what remains is stamping the parent.
+    sql`NOT EXISTS (
+      SELECT 1 FROM issues c
+      WHERE c.parent_id = ${issues.id} AND c.status NOT IN ('done', 'canceled')
+    )`,
   ];
+  // SYD-294: the one HARD use of worker_preference. `interactive` means "a
+  // headless worker cannot finish this" (SYD-239), and worker-select.ts already
+  // skips it at dispatch — but nextTask ignored it entirely, so an agent asking
+  // for work directly could still be handed one. Everything else about
+  // worker_preference stays soft, sorted by affinityRank below.
+  if (actor.type !== "human") {
+    conditions.push(sql`(${issues.workerPreference} IS NULL
+      OR ${issues.workerPreference} <> ${INTERACTIVE_PREFERENCE})`);
+  }
   // SYD-99: don't recommend an issue whose prior claim already has an open
   // PR in flight (e.g. released back to todo by a stale-claim sweep while
   // its PR is still unmerged) — claimIssue would refuse it anyway. Reuses
@@ -252,7 +288,12 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
     .select()
     .from(issues)
     .where(and(...conditions))
-    .orderBy(PRIORITY_RANK, issues.createdAt)
+    .orderBy(
+      QUEUE_RANK_ORDER,
+      affinityRank(callerClassification(actor)),
+      PRIORITY_RANK,
+      issues.createdAt,
+    )
     .limit(1)
     .all();
   return candidates[0] ? toView(db, candidates[0]) : null;
