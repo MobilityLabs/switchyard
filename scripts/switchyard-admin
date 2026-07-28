@@ -30,6 +30,26 @@
 # mint-login / mint-supervised-session hand out sessions. Any of those behind a
 # NOPASSWD rule would turn "can ssh to the NAS" into "can obtain full API
 # credentials", which is a bigger grant than this wrapper is meant to make.
+# INSTALL (verified on el-duro 2026-07-28 — both obvious commands fail there):
+#
+#   # scp does NOT work: the SFTP subsystem is disabled, so it dies with
+#   # "subsystem request failed on channel 0". Pipe over ssh instead, the same
+#   # way deploy-nas.sh already does.
+#   ssh "$NAS" 'cat > /tmp/switchyard-admin' < scripts/switchyard-admin
+#
+#   # -t so sudo can prompt: install and the sudoers write are precisely the
+#   # operations no NOPASSWD rule covers. `visudo` is NOT on Synology's PATH,
+#   # so do not chain a `visudo -c` validation onto the end — it exits 127.
+#   ssh -t "$NAS" 'sudo install -o root -g root -m 755 /tmp/switchyard-admin /usr/local/bin/switchyard-admin && \
+#     echo "hardcock ALL=(root) NOPASSWD: /usr/local/bin/switchyard-admin" | sudo tee /etc/sudoers.d/switchyard-admin >/dev/null && \
+#     sudo chmod 0440 /etc/sudoers.d/switchyard-admin'
+#
+#   # Verify WITHOUT -t: this only passes if the NOPASSWD rule really took.
+#   ssh "$NAS" 'sudo -n /usr/local/bin/switchyard-admin list-github-repos'
+#
+# /etc/sudoers.d is unreadable to the ssh user, so a drop-in file is used
+# rather than editing an existing line — and `#includedir /etc/sudoers.d` is
+# confirmed active, since the rule took effect immediately.
 set -e
 
 CONTAINER="${SWITCHYARD_CONTAINER:-switchyard}"
