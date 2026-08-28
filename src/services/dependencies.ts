@@ -140,7 +140,7 @@ export function removeDependency(
   // The setting upgrades refusal to a proposable divert — UX, not security.
   if (asHuman(actor, attr) === null) {
     throw new SwitchyardError(
-      "Only humans remove dependencies — if you believe a blocker is wrong, say so in a comment.",
+      "Only a human acting in person removes dependencies — if you believe a blocker is wrong, say so in a comment. A supervised session can propose one once dependency.remove is in supervised.hard_gate_actions.",
     );
   }
   db.transaction((tx) => {

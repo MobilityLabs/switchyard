@@ -430,12 +430,12 @@ export function updateIssue(
       }
       if (current.status === "triage" && !vouching) {
         throw new SwitchyardError(
-          `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`,
+          `${ref} is in triage — only a human acting in person moves issues out of triage, and a supervised session is not that. Use triage_queue to help a human review it.`,
         );
       }
       if (patch.status === "done" && !vouching) {
         throw new SwitchyardError(
-          "Only humans move issues to done — comment your verification evidence and move it to in_review instead.",
+          "Only a human acting in person moves issues to done — comment your verification evidence and move it to in_review instead. In a supervised session, propose it and your human affirms.",
         );
       }
       if (agentPath) {
@@ -606,7 +606,7 @@ export function updateIssue(
     ) {
       if (!vouching && patch.labels.includes("auto") && !current.labels.includes("auto")) {
         throw new SwitchyardError(
-          `Only humans apply the "auto" label — it opts an issue into unattended dispatch.`,
+          `Only a human acting in person applies the "auto" label — it opts an issue into unattended dispatch, so an agent applying it to its own issue would be self-escalating.`,
         );
       }
       changes.labels = patch.labels;

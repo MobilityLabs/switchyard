@@ -155,7 +155,7 @@ describe("escalation, snooze, and duplicate routes", () => {
       body: JSON.stringify({ until: future }),
     });
     expect(denied.status).toBe(400);
-    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only (a )?humans?/i);
 
     const snoozed = await body<{ snoozedUntil: number }>(
       await app.request(`/issues/${filed.ref}/snooze`, {
@@ -201,7 +201,7 @@ describe("escalation, snooze, and duplicate routes", () => {
       body: JSON.stringify({ of: original.ref }),
     });
     expect(denied.status).toBe(400);
-    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only (a )?humans?/i);
 
     const marked = await body<{
       status: string;
@@ -253,7 +253,7 @@ describe("escalation, snooze, and duplicate routes", () => {
       body: "{}",
     });
     expect(denied.status).toBe(400);
-    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only (a )?humans?/i);
 
     // This issue has no pr_state row at all (no repo bound, no PR ever
     // opened), so deliveryPinFor finds nothing to redeliver — refused before
@@ -370,7 +370,7 @@ describe("escalation, snooze, and duplicate routes", () => {
       body: JSON.stringify({ note: NOTE }),
     });
     expect(denied.status).toBe(400);
-    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only (a )?humans?/i);
 
     // No repo bound, no PR ever opened — resolve-delivery still succeeds
     // where redeliver would refuse with "no agent PR on record".
@@ -441,7 +441,7 @@ describe("escalation, snooze, and duplicate routes", () => {
       body: JSON.stringify({ reason: "done_without_merged_pr", note: NOTE }),
     });
     expect(denied.status).toBe(400);
-    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only (a )?humans?/i);
 
     const ok = await app.request(`/issues/${filed.ref}/resolve-deviation`, {
       method: "POST",

@@ -43,7 +43,7 @@ describe("actor routes", () => {
       body: JSON.stringify({ name: "claude/other", type: "agent" }),
     });
     expect(denied.status).toBe(400);
-    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await denied.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
 
     const res = await app.request("/actors", {
       method: "POST",
@@ -70,7 +70,7 @@ describe("actor routes", () => {
       headers: { authorization: `Bearer ${bearer}` },
     });
     expect(denied.status).toBe(400);
-    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await denied.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
 
     const res = await app.request(`/actors/${worker.actor.id}/rotate-token`, {
       method: "POST",
@@ -102,7 +102,7 @@ describe("actor routes", () => {
       headers: { authorization: `Bearer ${bearer}` },
     });
     expect(denied.status).toBe(400);
-    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await denied.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
 
     const res = await app.request(`/actors/${worker.actor.id}/token`, {
       method: "DELETE",
@@ -158,7 +158,7 @@ describe("actor routes", () => {
       headers: { authorization: `Bearer ${bearer}` },
     });
     expect(denied.status).toBe(400);
-    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await denied.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
 
     const res = await app.request(`/actors/${sean.id}/login-link`, {
       method: "POST",

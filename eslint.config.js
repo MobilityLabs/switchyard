@@ -41,6 +41,47 @@ export default tseslint.config(
       "react-hooks/exhaustive-deps": "warn",
     },
   },
+  // SYD-281. `HumanActor` is a compile-time brand — erased at runtime — so the
+  // real enforcement is the adapters calling `asHuman`/`requireHuman` and
+  // throwing. These two rules keep the type honest by making the ways around it
+  // greppable rather than invisible.
+  //
+  // Neither is a security boundary. A cast ban does not stop `f(x as any)`, and
+  // a caller that wrongly reaches for NO_SESSION in a supervised path fails open
+  // exactly as `{}` would. What they buy is that the wrong choice is a named
+  // token a reviewer can search for.
+  {
+    files: ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
+    ignores: [
+      // asHuman/requireHuman mint the brand; there is nowhere else it can come from.
+      "src/services/principal.ts",
+      // The hard-gate executor re-drives as the human with deliberately empty
+      // attribution, which is what makes the affirmed action NOT re-divert.
+      "src/services/hard-gate.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "TSAsExpression > TSTypeReference > Identifier[name='HumanActor']",
+          message:
+            "Never cast to HumanActor — mint it with asHuman()/requireHuman() so the runtime check actually runs. A cast here is how a human-only gate becomes a no-op with no trace.",
+        },
+        // NOT enforced: a companion rule banning a bare `{}` where an
+        // Attribution is expected. It cannot be written syntactically — ESLint
+        // sees an empty ObjectExpression and cannot tell an Attribution from a
+        // LeaseChannel (updateIssue's 5th argument) or an options bag
+        // (claimIssue's 4th). The broad selector produced 71 hits, almost all
+        // legitimate, which is the shape of a rule that gets switched off.
+        //
+        // NO_SESSION still exists and is used at the call sites that have no
+        // session; it is just conventional rather than enforced. Honest scope:
+        // the sentinel is a legibility control either way — a caller that
+        // wrongly reaches for it in a supervised path fails open exactly as
+        // `{}` would.
+      ],
+    },
+  },
   {
     rules: {
       // Not yet enforced as errors: preexisting `any` usages and non-null

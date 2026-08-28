@@ -129,7 +129,9 @@ describe("dependencies", () => {
 
   it("agents cannot remove a dependency — removal would defeat a human's gate", () => {
     addDependency(db, human, "AIPI-1", "AIPI-2");
-    expect(() => removeDependency(db, agent, "AIPI-1", "AIPI-2")).toThrowError(/only humans/i);
+    expect(() => removeDependency(db, agent, "AIPI-1", "AIPI-2")).toThrowError(
+      /only (a )?humans?/i,
+    );
     expect(listDependencies(db, "AIPI-2").blockedBy).toHaveLength(1);
     // Agents CAN still add — declaring a discovered blocker is intended.
     expect(() => addDependency(db, agent, "AIPI-2", "AIPI-3")).not.toThrow();

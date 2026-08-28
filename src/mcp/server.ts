@@ -4,7 +4,7 @@ import type { Db } from "../db/index.js";
 import { STATUSES, PRIORITIES } from "../db/schema.js";
 import type { Actor } from "../services/actors.js";
 import type { Attribution } from "../services/attribution.js";
-import { effectiveActor } from "../services/principal.js";
+import { actingAgent, effectiveActor } from "../services/principal.js";
 import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import { listProjects } from "../services/projects.js";
 import {
@@ -88,9 +88,20 @@ export function buildMcpServer(
     {
       description:
         "Get the actor name/type/id your MCP token is bound to — the MCP equivalent of REST's " +
-        "GET /me. Useful for assignee-scoped search_issues, or to confirm which actor a token authenticates as.",
+        "GET /me. Useful for assignee-scoped search_issues, or to confirm which actor a token authenticates as. " +
+        "In a supervised session this reports BOTH identities: the accountable human, and the agent " +
+        "that actually holds your claims and PR declarations.",
     },
-    guard(() => actor),
+    guard(() => {
+      // SYD-281: `actor` alone is misleading in a supervised session — the
+      // session's assignments, leases and declaredBy are the AGENT's, so
+      // search_issues(assignee: whoami().name) would return nothing for the
+      // session's own work.
+      const acting = actingAgent(db, actor, attribution);
+      // Only when it DIFFERS: for a plain agent session the acting agent IS the
+      // actor, and echoing it back would be noise.
+      return acting && acting.id !== actor.id ? { ...actor, actingAs: acting } : actor;
+    }),
   );
 
   server.registerTool(

@@ -50,7 +50,7 @@ describe("issue routes", () => {
       body: JSON.stringify({ status: "todo" }),
     });
     expect(denied.status).toBe(400);
-    expect((await body<{ error: string }>(denied)).error).toMatch(/only humans/i);
+    expect((await body<{ error: string }>(denied)).error).toMatch(/only (a )?humans?/i);
 
     const accepted = await app.request(`/issues/${filed.ref}`, {
       method: "PATCH",

@@ -37,7 +37,7 @@ describe("service token — REST-layer guards", () => {
       body: JSON.stringify({ name: "claude/other", type: "agent" }),
     });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await res.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
   });
 
   it("CANNOT mint a login link (requireHumanCaller)", async () => {
@@ -47,7 +47,7 @@ describe("service token — REST-layer guards", () => {
       body: "{}",
     });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await res.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
   });
 
   it("CAN post GitHub events (trusted poller)", async () => {
@@ -182,7 +182,7 @@ describe("non-human bearers are refused at every human-only route", () => {
           ...(r.body === undefined ? {} : { body: JSON.stringify(r.body) }),
         });
         expect(res.status).toBe(400);
-        expect(((await res.json()) as { error: string }).error).toMatch(/only humans/i);
+        expect(((await res.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
       });
     }
   }

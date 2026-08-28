@@ -171,7 +171,7 @@ describe("MCP write tools in a supervised session", () => {
       arguments: { blocker_ref: blocker.ref, blocked_ref: issue.ref },
     });
     expect(rPlain.isError).toBe(true);
-    expect(text(rPlain)).toMatch(/Only humans remove dependencies/i);
+    expect(text(rPlain)).toMatch(/only a human acting in person removes dependencies/i);
 
     // 3. Supervised session with hard-gate action configured parks a pending action
     setSetting(db, human, "supervised.hard_gate_actions", ["dependency.remove"]);
@@ -299,5 +299,17 @@ describe("declare_pr_link in a supervised session (SYD-281)", () => {
     });
     const [link] = listLiveLinkViews(db, issue.id);
     expect(link.role).toBe("delivers");
+  });
+
+  // SYD-281: after the identity rule the session's assignments, declaredBy and
+  // creatorId are the AGENT's, so a whoami that reported only the accountable
+  // human would send search_issues(assignee: whoami().name) looking for work
+  // under a name that holds none of it.
+  it("whoami reports the accountable human AND the agent actually holding the work", async () => {
+    const client = await connectSupervised();
+    const me = JSON.parse(text(await client.callTool({ name: "whoami", arguments: {} })));
+    expect(me.name).toBe(human.name);
+    expect(me.type).toBe("human");
+    expect(me.actingAs).toMatchObject({ id: agent.id, name: agent.name, type: "agent" });
   });
 });
