@@ -147,8 +147,10 @@ abandoned on contact.
 export const NO_SESSION: Attribution = {};
 ```
 
-The rule bans the bare literal and permits the sentinel. `hard-gate.ts:197` uses it with
-its existing comment (note `:196` is the **lease channel** `{}`, not `ctx`). Be honest in
+The rule bans the bare literal and permits the sentinel. `hard-gate.ts:197` uses it with its existing comment (note `:196` is the **lease channel**
+`{}`, not `ctx`), and so does the `dependency.remove` executor's
+`removeDependency(tx, human, blockerRef, blockedRef, {})` about ten lines above — a second
+`ctx` literal revision 4 never named, which the lint rule will flag. Be honest in
 the PR: **the sentinel is a legibility control, not a security one.** A caller that wrongly
 reaches for `NO_SESSION` in a supervised path fails open exactly as `{}` does. What it buys
 is that the wrong choice is a named, greppable token instead of two invisible braces.
@@ -282,23 +284,36 @@ delivery-attempts.ts requireDeliveryInfra:208 — four callers: :228, :290, :334
 rest/api-routes.ts :672 /github-events → `actingAgent(...) !== null`
 ```
 
-**The delivery predicate is `actingAgent(...) !== null`, NOT `asHuman(...) === null`.**
-Service actors **must** pass these gates — `SWITCHYARD_DELIVER_POLLER_TOKEN` and
-`SWITCHYARD_GITHUB_POLLER_TOKEN` are service actors, and
-`tests/services/service-actor.test.ts:46,57,61` already assert it. Reading revision 3's
-"refused" as `asHuman` would have **stopped production delivery**. `actingAgent(...) !== null`
-is behaviourally identical to today and additionally refuses a supervised agent. Keeping
-those three tests green is an acceptance condition.
+**Decision on the two delivery sites: leave them exactly as they are.** Revision 4 said this
+in prose and then listed them in the table anyway. They are REST-only — `sup_` resolves at
+`/mcp` only, no delivery tool exists among the MCP tools — so `ctx` is always empty there and
+a supervised principal cannot reach them. `recordDeliveryEvent` (`delivery-events.ts:41-46`)
+has **no `Attribution` parameter** and neither do its callers; `requireDeliveryInfra` has four
+(`:228, :290, :334, :371`). Converting either is the same unbudgeted expansion flagged for
+`startAgentSession`/`endAgentSession`, for no reachable gain. **Delete their two rows from this
+population.** `api-routes.ts:672` `/github-events` is the same shape and gets the same answer.
 
-`recordDeliveryEvent` (`delivery-events.ts:41-46`) has **no `Attribution` parameter** and
-neither do its callers; `requireDeliveryInfra` has four. Both are the same unbudgeted
-expansion flagged for `startAgentSession`/`endAgentSession`. Since neither is MCP-reachable,
-**the cheapest correct answer is to leave both as they are with a note** — they are
-REST-only and `ctx` is always empty there. Decide in the PR; do not leave it to the
-implementer.
+Had they been converted with `asHuman(...) === null`, production delivery would have stopped:
+`SWITCHYARD_DELIVER_POLLER_TOKEN` and `SWITCHYARD_GITHUB_POLLER_TOKEN` are service actors, and
+`tests/services/service-actor.test.ts:46,57,61` assert they pass. Keeping those three green is
+an acceptance condition regardless.
+
+**`assertClaimable` and `assertAssignee` take `ctx` and compare `effectiveActor` internally** —
+not a call-site actor substitution, which revision 4 left ambiguous by writing the two adjacent
+rows two different ways. Their call sites are `issues.ts:425` (`assertAssignee`, from the
+transition allow-list) and `:547`, `:632`, `:778` (`assertClaimable`); each passes the
+enclosing `attr`. Miss `:547` or `:632` and a supervised claim is checked against the human in
+one branch and the agent in another.
+
+**Resolve `effectiveActor` once at function entry**, not at each of the eight branch points the
+`issues.ts` table names. Otherwise fail-closed is branch-dependent: a patch touching only
+`priority` (`:550`) or `title` (`:562`) reaches none of them, so the same broken session throws
+on one patch and silently writes as the human on another. Hoisting also removes ~8 redundant
+`SELECT`s per transaction and puts the row-identity-vs-event-identity split — the single most
+misreadable thing in this change — in one place instead of eight.
 
 **`requireAgent`'s other two callers.** `:126`/`:142` (`startAgentSession`/`endAgentSession`)
-have no `Attribution` parameter, and the owner tie at `:150` (`existing.actorId !== actor.id`)
+have no `Attribution` parameter, and the owner tie at `:145` (`existing.actorId !== actor.id`)
 keys on `actor.id` — the same "owner tie matches rather than saves you" shape flagged as
 load-bearing for `affirmPendingAction`. Budget it, and re-key the tie to `effectiveActor`.
 
@@ -323,17 +338,42 @@ auth.ts:15                   login links belong to humans — data rule (caller 
 actors.ts:38                 default `attended` at creation
 actors.ts:110                target must not be human — data rule
 comments.ts:31               AGENT_QUESTION_RE signalling — not authorization
-nextTask (dependencies.ts:257)  MUST stay human-keyed — see below
+issues.ts:179, :378          service refusals — a supervised actor is never a service
+needs-input.ts:33            same
+supervised-sessions.ts:28, :69  internal data rules; :69 already refuses a non-agent viaAgent
+cli.ts:66                    argument parsing
 ```
 
-**`nextTask` is the one place where *not* applying the rule is the security-relevant
-choice.** `dependencies.ts:257` filters `eq(issues.assigneeId, actor.id)`, so after the rule
-a supervised `next_task` stops surfacing the agent's own claimed work — a real cost. But the
-actor passed to `nextTask` must stay the **human**, because `isAttendedCaller`
-(`worker-preference.ts:50-52`) reads it to decide whether to apply the hard
-`worker_preference <> 'interactive'` filter (`dependencies.ts:281-284`). Key it to the agent
-and supervised sessions lose the interactive queue they exist to serve. Accept the narrower
-result and write the reason down.
+Those five service/internal sites are safe no-ops under the rule, but revision 4 claimed a
+closed sweep without naming them. Named now so the sweep is actually closed.
+
+**`attachments.actorId` is a decision, not an absence.** Revision 4 classified
+`attachments.ts:102` as a carrier that "calls no accessor" — true of the `attr` parameter, but
+`:146` writes `actorId: actor.id` into the `attachments` table (`schema.ts:240-242`), a
+persistent row-identity FK, and `attach_file` **is** an MCP tool. Under the rule a supervised
+agent's screenshot stays recorded as uploaded by the human, with the agent only on the paired
+event's `viaAgentId`. That is the right answer — it matches `events.actorId` — but state it as
+an explicit exclusion from the row-identity list rather than letting it read as an oversight.
+Every other actor FK in `schema.ts` (lines 64, 67, 188, 198, 210, 218, 229, 344, 349, 422, 437,
+466, 512, 550) is accounted for.
+
+**`nextTask` uses `actor` for two independent things, and they get different answers.**
+Revision 4 treated them as one decision and stated the consequence wrongly.
+
+- **The assignee leg** (`dependencies.ts:259`, `or(isNull(assigneeId), eq(assigneeId, actor.id))`)
+  keys to `effectiveActor`. Leaving it on the human does **not** merely narrow the result — it
+  **wedges**: `next_task` keeps surfacing issues assigned to the human, which the supervised
+  agent then cannot claim (`assertClaimable:260-269` compares against the agent and throws
+  "already claimed by Sean"), and with `.limit(1)` (`:303`) one such issue sorting first pins
+  the recommendation on something unclaimable indefinitely.
+- **`isAttendedCaller` / `callerClassification`** (`worker-preference.ts:50-52`, `:29-32`) stay
+  on the **human**, so the hard `worker_preference <> 'interactive'` filter (`:279-282`) is not
+  applied and supervised sessions keep the interactive queue they exist to serve.
+
+Also set `attended: true` when minting the supervised agent actor. `getOrCreateActor`
+(`actors.ts:61-75`) inserts with no `attended` and the column defaults false
+(`schema.ts:38`), but a supervised session is attended by definition — that is what the flag
+means, and `setActorAttended` is human-only anyway (`actors.ts:107`).
 
 ## New attack surface the identity rule creates
 
@@ -350,9 +390,16 @@ session's claim on a path that previously refused outright. Lease tokens still s
 two sessions' writes, so this is defence-in-depth loss rather than an authorization bypass —
 but `assertClaimable` is the guard SYD-93 exists because of.
 
-**Fix: namespace supervised agents.** `openSupervisedSession` derives
-`supervised/<human>/<engine>` rather than accepting a bare name. Cheaper than a registry, and
-it keeps `callerClassification`'s prefix split (`worker-preference.ts:31`) meaningful.
+**Fix: namespace supervised agents** as `<engine>/supervised/<human>` — engine first.
+`callerClassification` is `actor.name.split("/")[0]` (`worker-preference.ts:31`), so
+`supervised/<human>/<engine>` would classify as `"supervised"`, matching no `workerPreference`
+value (`ui/src/types.ts:26`). Engine-first is distinct from `claude/dev` *and* keeps the prefix
+split working. `cli.ts:91-93` must reject `/` in the engine argument and update its usage
+string, or the existing habit `mint-supervised-session sean claude/dev` yields
+`claude/dev/supervised/sean`.
+
+This closes the collapse for **new** sessions only — see the migration's fourth item for the
+12-hour window on sessions already open at deploy.
 
 ## Migration
 
@@ -364,20 +411,49 @@ Expiry leaves `assigneeId` = human, so the new `isHolderMutation` is permanently
 reopened — while `assertClaimable:261-269` throws "already claimed by \<human\>" forever,
 since clearing an assignee is human-only (`:610`).
 
-**Use the `ensureClaimLeaseCutover` precedent** (`lease-cutover.ts:17-38`, already wired at
-`server.ts:162-163` beside `ensureRolloutBackfill`): marker-guarded, once-only, sets
-status→`todo`, `assigneeId`→`null`, records `claim_released`. Releasing the assignment resets
-the control instead of removing it, and needs no event archaeology.
+Release the **assignment**, following `ensureClaimLeaseCutover` (`lease-cutover.ts:17-38`).
+Four things that precedent does not give you, each of which is required:
 
-Ordering matters: the existing cutover already released all `in_progress` claims once, so a
-new migration must be independently marker-guarded and idempotent, and must state whether it
-finds anything at all on an instance that has already run the cutover. **`claim_leases` is
-part of the migration surface** — revision 3 never mentioned the table.
+**1. The selection predicate — and it does need event archaeology.** `claim_leases`
+(`schema.ts:457-476`) has no session column, and an `issues.assigneeId` pointing at a human is
+byte-identical whether the claim came from a supervised session or from a person claiming at
+their desk. The only link is `events.sessionId` (`schema.ts:199`), written by `recordEvent` at
+`issues.ts:691-697`. So the migration selects `in_progress` issues whose latest `assigned`
+event has `sessionId IS NOT NULL`. Revision 4 claimed this "needs no event archaeology" — that
+was only true of the broad alternative (release every human-assigned claim), which would also
+release claims a person made in person. **Target precisely; do not use the broad hammer.**
 
-History is not rewritten: existing `creatorId`, `declaredBy`, and `confirmedBy` rows written
-under the old rule stay as they are. That asymmetry with claims is deliberate — claims are
-live state, the others are history — and should be said rather than left for a reviewer to
-ask about.
+**2. Invalidate the lease in the same transaction.** `lease-cutover.ts:22-34` does a raw
+`tx.update(issues)` and **never touches `claim_leases`** — verified. Copy it as-is and the
+human-keyed lease row stays active, so when the agent re-claims, the mint block
+(`issues.ts:673`) inserts a *second* active row. `getActiveLease` (`leases.ts:29-34`) uses a
+bare `.get()` with no `ORDER BY` against its own "at most one by construction" invariant
+(`:17-18`), returns the stale human row, and the agent's next holder mutation throws at `:391`
+forever — holding a token it can never use. Call `invalidateLease(tx, issue.id)`
+(`leases.ts:123`) per released issue, inside the release transaction.
+
+**3. Carry the precedent's precondition.** `lease-cutover.ts:9-16` rests its blast-radius
+argument on the worker LaunchAgents being down at cutover. A routine `npm run deploy` restarts
+only the NAS tracker while the workers keep polling, and a released issue lands at
+`status: todo, assigneeId: null` — exactly what `selectDispatchable` wants
+(`scripts/worker-select.ts:456`). The window is narrowed by the `interactive` skip (`:459`) and
+the `auto`-label requirement (`:448-450`), not closed. **Either stop the worker LaunchAgents
+for this deploy, or run it through the `switchyard-admin` operator path (SYD-291)** rather than
+at startup.
+
+**4. Soft-close open supervised sessions.** `sessions.viaAgentId` is fixed at mint
+(`supervised-sessions.ts:38`) and `SUPERVISED_TTL` is 12h (`:10`), so a session minted against
+`claude/dev` before the deploy keeps that binding for up to 12 hours — which is precisely the
+`assertClaimable` collapse the namespacing exists to prevent, live after shipping. Bulk-set
+`closedAt` on every open supervised session, forcing a re-mint under the new naming.
+`closeSupervisedSession` (`:80-86`) shows the shape and documents why a hard DELETE is wrong
+(`sessions.id` is an FK target for `events.sessionId`).
+
+Ordering: independently marker-guarded and idempotent, and state what it finds on an instance
+that has already run `ensureClaimLeaseCutover`.
+
+History is not rewritten: existing `creatorId`, `declaredBy`, and `confirmedBy` rows stay as
+they are. Claims are live state; the others are history.
 
 ## The brand is not the enforcement
 
@@ -385,6 +461,31 @@ ask about.
 and throw; the brand is compile-time defence in depth. The ESLint rule bans `as HumanActor`
 outside `principal.ts` and the CLI mint, and bans a bare `{}` as `ctx` in favour of
 `NO_SESSION`.
+
+**The brand is a legibility control at the same tier as `NO_SESSION`, not a security
+boundary.** Banning `as HumanActor` does not stop `f(x as any)` or an `any`-typed intermediate
+flowing into a `HumanActor` parameter. Say this in the PR alongside the `NO_SESSION` caveat.
+
+**The two roots of trust keep their inline checks.** Deleting the six private `requireHuman`
+helpers does **not** extend to `affirmPendingAction` (`hard-gate.ts:91-95`) or
+`openSupervisedSession` (`supervised-sessions.ts:24-27`). Their absence from the deletion list
+is the only thing implying it; say "kept" out loud, because these are the two places a silent
+deletion costs the most.
+
+**Deleting the helpers deletes live tests — the replacement is spec, not an exercise for the
+implementer.** `tests/services/settings.test.ts:95-99` and `tests/services/projects.test.ts:32-52`
+construct an agent `Actor` and call `setSetting` / `createProject` asserting `/human-only/`.
+Once those services take `HumanActor` those files stop typechecking, and the implementer either
+deletes the assertion or casts in the test — and a test cast is precisely the "tests construct
+state the producer never produces" failure this repo has already been bitten by. So:
+
+- The service-level tests are **replaced** by adapter-level tests. `tests/rest/api-settings.test.ts:20-38`
+  and `tests/rest/api-projects.test.ts:56,80` already assert the agent refusal at the REST
+  boundary and are the model.
+- Audit `webhooks`, `github-repos`, `triage-actions`, and `actors` for the same shape — all four
+  have service-level tests today — and give every population-A service an adapter-level
+  agent-refusal test.
+- The lint ban gets **no** test exemption.
 
 ## Adapters
 
@@ -453,7 +554,14 @@ TDD, driven through real entry points.
 
 1. `asHuman` null iff `sessionId != null` or `viaAgentId != null` or not human.
    `actingAgent` null on a missing row and on a row no longer typed `agent`.
-   **`effectiveActor` throws** when ctx says supervised and no agent resolves.
+   **`effectiveActor` throws** when ctx says supervised and no agent resolves. This one is a
+   direct-DB unit test, not a real entry point — the throw is unreachable in production
+   (`resolveSupervisedPrincipal:69` re-checks the agent type and 401s first, and `src/` has no
+   actor-delete or actor-retype path). Say so rather than promising an entry-point drive the
+   test cannot deliver.
+1b. **A supervised session whose agent row is retyped mid-flight**, driven through
+   `update_issue {priority}` — asserts the fail-closed throw is not branch-dependent. This is
+   the test that makes the hoist (below) load-bearing.
 2. Every population-A gate refuses a supervised principal.
 3. Every reachable inverse gate refuses, through the MCP tool: triage exit, `auto` label,
    reassign, transition allow-list, `file_issue` landing in `triage` with provenance.
@@ -467,13 +575,24 @@ TDD, driven through real entry points.
 7. A `service` actor **confirming** at `POST /issues/:ref/pr-links/confirm` is refused.
 8. **`tests/services/service-actor.test.ts:46,57,61` stay green** — the delivery regression
    guard.
-9. `claim_issue` supervised: assigns the agent, **mints a lease**, and a subsequent
-   `heartbeat` renews it. Then the **SYD-111 bare-PATCH path** — `update_issue
-   {status:"in_progress"}` on an unassigned issue — assigns the same agent.
+9. `claim_issue` supervised: assigns the agent and mints a lease **keyed to the agent** —
+   assert `claim_leases.actorId` — and a subsequent claim-scoped MCP write with that token
+   validates. Then the **SYD-111 bare-PATCH path** — `update_issue {status:"in_progress"}` on
+   an unassigned issue — assigns the same agent.
+   **No heartbeat leg.** `mcp/server.ts:372` registers `heartbeat` only `if (connectionLeaseToken)`,
+   and `:280-283` refuses `claim_issue` for exactly those connections — the two are mutually
+   exclusive, so a supervised session cannot heartbeat what it claimed. An implementer given
+   that assertion would call `heartbeatClaim` directly, which is the state-constructing test
+   class this plan rejects everywhere else.
 10. `assertAssignee` under supervision: an `assigneeOnly` transition (`:425`) on an
     agent-assigned issue succeeds.
-11. The migration: a pre-existing human-assigned supervised claim, through startup, then
-    re-claimed by the agent. Idempotent across restarts.
+11. The migration: a pre-existing supervised claim (selected by its `assigned` event's
+    `sessionId`), through startup, then re-claimed by the agent — **and then a holder mutation
+    with the re-minted token that does not throw.** Asserting only that the re-claim succeeds
+    would go green with the two-active-leases hole open: the re-claim works, the *next* write
+    is what fails. Same shape as the `upsertPrState` incident — assert the state the step
+    leaves behind, not the step. Plus: idempotent across restarts, and an in-person human claim
+    in the same fixture is left untouched.
 12. The cookie affirm route still works — a regression guard on the gate deliberately left
     alone.
 13. Boundary: `dependencies.ts:89` needs `edgeExists`, so a non-existent edge never diverts
