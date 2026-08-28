@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { NO_SESSION } from "../../src/services/attribution.js";
 import { createHuman } from "../helpers/human.js";
 import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
@@ -184,7 +185,7 @@ describe("listPendingDeliveryAuthorizations", () => {
       headSha: "def",
       ghUpdatedAt: "2026-07-14T10:00:00Z",
     });
-    declarePrLink(db, human, issue.ref, { repo: REPO, prNumber: 124 });
+    declarePrLink(db, human, issue.ref, { repo: REPO, prNumber: 124 }, undefined, NO_SESSION);
     // Pinned stamp must be the NEWEST done transition — latest-stamp-per-issue
     // is what picks the live authorization.
     updateIssue(db, human, issue.ref, { status: "done" });

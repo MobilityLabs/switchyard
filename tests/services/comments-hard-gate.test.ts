@@ -10,6 +10,10 @@
 // validator to gate `todo` directly in the settings table, the way a future
 // config change could, and confirming addComment's write is now diverted
 // exactly like a direct updateIssue call would be.
+// SYD-281: `{ sessionId }` alone is a shape production never produces —
+// resolveSupervisedPrincipal always sets viaAgent AND sessionId together
+// (supervised-sessions.ts). effectiveActor now fails closed on a supervised
+// attribution with no resolvable agent, so these tests build the real thing.
 import { describe, it, expect, beforeEach } from "vitest";
 import { createHuman } from "../helpers/human.js";
 import type { HumanActor } from "../../src/services/principal.js";
@@ -17,13 +21,17 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue, claimIssue, updateIssue } from "../../src/services/issues.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
+import { attributionOf, type Attribution } from "../../src/services/attribution.js";
 import { requestHumanInput } from "../../src/services/needs-input.js";
 import { addComment } from "../../src/services/comments.js";
 import { settings } from "../../src/db/schema.js";
 import { isHardGated } from "../../src/services/hard-gate.js";
 
-let db: Db, human: HumanActor, agent: Actor, sessionId: number;
+let db: Db, human: HumanActor, agent: Actor, sessionId: number, supAttr: Attribution;
 beforeEach(() => {
   db = openDb(":memory:");
   human = createHuman(db, "sean");
@@ -33,7 +41,9 @@ beforeEach(() => {
   // An agent can only claim from "todo" (AGENT_STATUS_TRANSITIONS); a human
   // files into "backlog", so queue it first or claimIssue throws.
   updateIssue(db, human, "SYD-1", { status: "todo" });
-  sessionId = openSupervisedSession(db, human, "claude-code").sessionId;
+  const _sess = openSupervisedSession(db, human, "claude-code");
+  sessionId = _sess.sessionId;
+  supAttr = attributionOf(resolveSupervisedPrincipal(db, _sess.sessionToken)!);
 });
 
 function gateTodo() {
@@ -48,32 +58,38 @@ function gateTodo() {
 }
 
 describe("addComment's answer-path status write vs the hard-gate", () => {
-  it("diverts a supervised self-answer instead of silently writing a gated status", () => {
+  // SYD-281 moved this further back than SYD-241 did. The answer path is now
+  // gated on a human ACTING, so a supervised session never reaches it at all —
+  // there is no gated status write left to divert, because there is no status
+  // write. An agent cannot answer its own escalation, which is the human-clear-
+  // only rule SYD-220/225 established and a supervised principal was skipping.
+  it("does not let a supervised session answer its own escalation, gated or not", () => {
     const { leaseToken } = claimIssue(db, agent, "SYD-1");
     requestHumanInput(db, agent, "SYD-1", "Which approach?", leaseToken);
     gateTodo();
     expect(isHardGated(db, "todo")).toBe(true);
 
-    expect(() => addComment(db, human, "SYD-1", "Go with option B.", { sessionId })).toThrow();
+    // The comment itself is fine — commenting is not a human-only act.
+    expect(() => addComment(db, human, "SYD-1", "Go with option B.", supAttr)).not.toThrow();
 
-    // Nothing committed: not the status, not the claim release, not even the
-    // needsInput flag or the comment itself — the whole write rolled back.
+    // But the answer path did not run: the question still stands, the claim is
+    // still held, and no status was written.
     const after = getIssue(db, "SYD-1");
     expect(after.status).toBe("in_progress");
     expect(after.assigneeId).not.toBeNull();
     expect(after.needsInput).toBe(true);
   });
 
-  it("still answers normally when the target status is not gated (baseline)", () => {
+  it("does not answer even when the target status is NOT gated (the divert is not what stops it)", () => {
     const { leaseToken } = claimIssue(db, agent, "SYD-1");
     requestHumanInput(db, agent, "SYD-1", "Which approach?", leaseToken);
 
-    expect(() => addComment(db, human, "SYD-1", "Go with option B.", { sessionId })).not.toThrow();
+    expect(() => addComment(db, human, "SYD-1", "Go with option B.", supAttr)).not.toThrow();
 
     const after = getIssue(db, "SYD-1");
-    expect(after.status).toBe("todo");
-    expect(after.assigneeId).toBeNull();
-    expect(after.needsInput).toBe(false);
+    expect(after.status).toBe("in_progress");
+    expect(after.assigneeId).not.toBeNull();
+    expect(after.needsInput).toBe(true);
   });
 
   it("does not divert a non-supervised (plain) human self-answer", () => {

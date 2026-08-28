@@ -1,4 +1,5 @@
 import type { Db } from "../db/index.js";
+import { asHuman } from "./principal.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
 import { SwitchyardError } from "./errors.js";
@@ -41,7 +42,11 @@ export function addComment(
         sessionId: attr.sessionId,
       });
     }
-    if (actor.type === "human" && issue.needsInput) {
+    // SYD-281: `actor.type === "human"` was true for a supervised principal, so
+    // an agent could answer its OWN escalation — clearing needsInput and
+    // releasing the claim without a person ever reading the question. That is
+    // the human-clear-only rule from SYD-220/225.
+    if (asHuman(actor, attr) !== null && issue.needsInput) {
       // The agent that escalated stopped its session, so an in_progress claim is
       // dead weight — release it with the answer so the worker can re-dispatch
       // immediately instead of waiting out the stale-claim sweep.

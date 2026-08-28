@@ -17,6 +17,7 @@
 // the tests that matter, because that is the order production produces (open
 // the PR, the poller sees it within a tick, then the session declares).
 import { describe, it, expect } from "vitest";
+import { NO_SESSION } from "../../src/services/attribution.js";
 import { createHuman } from "../helpers/human.js";
 import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
@@ -81,7 +82,7 @@ const merged = (pr: Record<string, unknown> = {}) =>
 
 /** Declares SYD-1 -> the PR as a human (auto-confirmed, so proof-bearing). */
 function declare(db: Db, human: Parameters<typeof declarePrLink>[1], prNumber = PR) {
-  return declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber });
+  return declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber }, undefined, NO_SESSION);
 }
 
 describe("a declared feat/ PR gains its observation half (SYD-287)", () => {
@@ -211,7 +212,14 @@ describe("declaring after ingestion — the production ordering (SYD-287)", () =
     const { db, human } = setup();
     handleGithubWebhook(db, "pull_request", featPr("opened"));
     declare(db, human);
-    revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: PR, reason: "wrong issue" });
+    revokePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: PR, reason: "wrong issue" },
+      undefined,
+      NO_SESSION,
+    );
     expect(listLiveLinks(db, 1)).toHaveLength(0);
     // The superseded references row is soft-revoked, never deleted.
     const kinds = getActivity(db, "SYD-1").map((a) => a.type);
@@ -224,7 +232,7 @@ describe("what a declaration still cannot do (SYD-287)", () => {
   it("an agent-declared link gates claims but never proves landing", () => {
     const { db, agent, other } = setup();
     const lease = claimIssue(db, agent, "SYD-1").leaseToken as string;
-    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: PR }, lease);
+    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: PR }, lease, NO_SESSION);
     handleGithubWebhook(db, "pull_request", featPr("opened"));
     handleGithubWebhook(db, "pull_request", merged());
 
@@ -256,7 +264,14 @@ describe("what a declaration still cannot do (SYD-287)", () => {
     const { db, human } = setup();
     declare(db, human);
     handleGithubWebhook(db, "pull_request", featPr("opened"));
-    revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: PR, reason: "mis-linked" });
+    revokePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: PR, reason: "mis-linked" },
+      undefined,
+      NO_SESSION,
+    );
 
     // The observation survives a revoke — a revoke removes an interpretation,
     // never an observation, and deleting the evidence would be the wrong move.
@@ -272,7 +287,14 @@ describe("what a declaration still cannot do (SYD-287)", () => {
   it("a PR in an unbound repo is still unobservable — declaring there is refused outright", () => {
     const { db, human } = setup();
     expect(() =>
-      declarePrLink(db, human, "SYD-1", { repo: "acme/unrelated", prNumber: PR }),
+      declarePrLink(
+        db,
+        human,
+        "SYD-1",
+        { repo: "acme/unrelated", prNumber: PR },
+        undefined,
+        NO_SESSION,
+      ),
     ).toThrow(/bound/i);
     handleGithubWebhook(db, "pull_request", {
       ...featPr("opened"),

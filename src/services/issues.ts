@@ -1,4 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
+import { asHuman, actingAgent, effectiveActor } from "./principal.js";
+import { NO_SESSION } from "./attribution.js";
 import type { SQLiteUpdateSetSource } from "drizzle-orm/sqlite-core";
 import type { Db, DbOrTx } from "../db/index.js";
 import {
@@ -171,6 +173,12 @@ export function createIssue(
   input: CreateIssueInput,
   attr: Attribution = {},
 ): IssueView {
+  // SYD-281: "agent-created issues land in triage with required provenance" is
+  // a CLAUDE.md invariant, and it asked `actor.type === "agent"` — which a
+  // supervised principal (typed human) walked straight past, filing into
+  // `backlog` with no provenance and no description.
+  const agentPath = actingAgent(db, actor, attr) !== null;
+  const eff = effectiveActor(db, actor, attr);
   // SYD-213: a `service` token is trusted worker-host infra whose mandate is
   // posting PR/delivery events, reading, and commenting — never authoring board
   // work. Denied wholesale (fail-closed) rather than falling through to the
@@ -181,13 +189,13 @@ export function createIssue(
       "Service actors post events, read, and comment — they cannot create issues.",
     );
   }
-  if (actor.type === "agent" && !input.provenance) {
+  if (agentPath && !input.provenance) {
     throw new SwitchyardError(
       "Agent-created issues require provenance — pass sourceType " +
         '("session" | "todo" | "ci" | "manual") plus a detail (e.g. "src/api.ts:88" or a session id) or url.',
     );
   }
-  if (actor.type === "agent" && !input.description?.trim()) {
+  if (agentPath && !input.description?.trim()) {
     throw new SwitchyardError(
       "Agent-filed issues need a description a human can triage from — say what's wrong, why it matters, and what you suggest doing.",
     );
@@ -208,10 +216,10 @@ export function createIssue(
         title: input.title,
         description: input.description ?? "",
         summary: input.summary ?? null,
-        status: actor.type === "agent" ? "triage" : "backlog",
+        status: agentPath ? "triage" : "backlog",
         priority: input.priority ?? "none",
         labels: input.labels ?? [],
-        creatorId: actor.id,
+        creatorId: eff.id,
         parentId,
         sourceType: input.provenance?.sourceType ?? null,
         sourceDetail: input.provenance?.detail ?? null,
@@ -256,8 +264,11 @@ export type UpdateIssueInput = {
  * is the gap that let SYD-93 get fixed twice in parallel (worker PR #41 vs a
  * coordinating session's PR #42, opened without ever calling claim_issue).
  */
-function assertClaimable(db: DbOrTx, actor: Actor, current: IssueView): void {
-  if (current.assigneeId === actor.id) return;
+function assertClaimable(db: DbOrTx, actor: Actor, current: IssueView, ctx: Attribution): void {
+  // SYD-281: compares the identity that actually holds work — the agent in a
+  // supervised session. Callers: updateIssue's claim-gate leg and self-assign
+  // leg, and claimIssue.
+  if (current.assigneeId === effectiveActor(db, actor, ctx).id) return;
   if (current.assigneeId !== null) {
     const assignee = db
       .select()
@@ -277,8 +288,16 @@ function assertClaimable(db: DbOrTx, actor: Actor, current: IssueView): void {
 }
 
 /** Used by assigneeOnly entries in AGENT_STATUS_TRANSITIONS. */
-function assertAssignee(db: DbOrTx, actor: Actor, current: IssueView, toStatus: Status): void {
-  if (current.assigneeId === actor.id) return;
+function assertAssignee(
+  db: DbOrTx,
+  actor: Actor,
+  current: IssueView,
+  toStatus: Status,
+  ctx: Attribution,
+): void {
+  // SYD-281: an assigneeOnly transition on an agent-assigned issue must be
+  // reachable by the agent that holds it, not only by the accountable human.
+  if (current.assigneeId === effectiveActor(db, actor, ctx).id) return;
   if (current.assigneeId === null) {
     throw new SwitchyardError(
       `${current.ref} isn't assigned to anyone — only the assignee can move it to "${toStatus}". Claim it first.`,
@@ -311,6 +330,16 @@ export function updateIssue(
   attr: Attribution = {},
 ): IssueView {
   checkSummaryLength(patch.summary);
+  // SYD-281. Three questions, resolved ONCE here rather than at each of the
+  // branch points below — otherwise fail-closed is branch-dependent, and a
+  // patch touching only `priority` would write as the human where a status
+  // patch throws.
+  //   eff       — whose name goes on the row (assignee, lease, creator)
+  //   agentPath — is an agent credential acting (claim + lease rules apply)
+  //   vouching  — is a human ACTING, not merely accountable
+  const eff = effectiveActor(db, actor, attr);
+  const agentPath = actingAgent(db, actor, attr) !== null;
+  const vouching = asHuman(actor, attr) !== null;
   if (attr.sessionId != null && patch.status !== undefined) {
     const target = getIssue(db, ref); // real resolver; has .id/.status
     if (patch.status !== target.status && isHardGated(db, patch.status)) {
@@ -386,9 +415,9 @@ export function updateIssue(
     // token but not this lease). Humans are individuated by actor and are never
     // lease-gated. A fresh claim (assigneeId === null -> assigned, below) mints
     // instead of validating, so the two are disjoint.
-    const isHolderMutation = actor.type === "agent" && current.assigneeId === actor.id;
+    const isHolderMutation = agentPath && current.assigneeId === eff.id;
     if (isHolderMutation) {
-      validateLease(tx, current.id, actor.id, lease.presented);
+      validateLease(tx, current.id, eff.id, lease.presented);
     }
     const changes: SQLiteUpdateSetSource<typeof issues> = {};
     const toRecord: { type: EventKind; payload: Record<string, unknown> }[] = [];
@@ -399,17 +428,17 @@ export function updateIssue(
           `"${patch.status}" is not a status — valid statuses are: ${STATUSES.join(", ")}.`,
         );
       }
-      if (current.status === "triage" && actor.type === "agent") {
+      if (current.status === "triage" && !vouching) {
         throw new SwitchyardError(
           `${ref} is in triage — only humans move issues out of triage. Use triage_queue to help a human review it.`,
         );
       }
-      if (patch.status === "done" && actor.type === "agent") {
+      if (patch.status === "done" && !vouching) {
         throw new SwitchyardError(
           "Only humans move issues to done — comment your verification evidence and move it to in_review instead.",
         );
       }
-      if (actor.type === "agent") {
+      if (agentPath) {
         if (current.status === "done") {
           throw new SwitchyardError(`${ref} is done — only humans reopen a done issue.`);
         }
@@ -422,7 +451,7 @@ export function updateIssue(
           );
         }
         if (allowed.assigneeOnly) {
-          assertAssignee(tx, actor, current, patch.status);
+          assertAssignee(tx, actor, current, patch.status, attr);
         }
       }
       // SYD-208: stamping done on an issue with an open agent PR authorizes
@@ -503,8 +532,8 @@ export function updateIssue(
             `${ref} is not the issue claimed for your session — a supervised session can only work its own claimed issue, not claim another. Call get_issue on your assigned issue.`,
           );
         }
-        changes.assigneeId = actor.id;
-        toRecord.push({ type: "assigned", payload: { to: actor.name } });
+        changes.assigneeId = eff.id;
+        toRecord.push({ type: "assigned", payload: { to: eff.name } });
       }
       // Symmetric to the auto-claim above: `todo` means "available for
       // dispatch", so moving (back) to todo releases any claim. Without this a
@@ -527,7 +556,7 @@ export function updateIssue(
       }
     }
 
-    if (patch.status === "in_progress" && actor.type === "agent") {
+    if (patch.status === "in_progress" && agentPath) {
       // Same gates claimIssue enforces — without this, a PATCH straight to
       // in_progress would let an agent start work a human deliberately
       // blocked behind another issue, or duplicate a claim/PR already in
@@ -544,7 +573,7 @@ export function updateIssue(
           `${ref} is blocked by ${blockers.map((b) => b.ref).join(", ")} — resolve the blocker first, or call next_task for another issue.`,
         );
       }
-      assertClaimable(tx, actor, current);
+      assertClaimable(tx, actor, current, attr);
     }
 
     if (patch.priority !== undefined && patch.priority !== current.priority) {
@@ -575,11 +604,7 @@ export function updateIssue(
       patch.labels !== undefined &&
       JSON.stringify([...patch.labels].sort()) !== JSON.stringify([...current.labels].sort())
     ) {
-      if (
-        actor.type === "agent" &&
-        patch.labels.includes("auto") &&
-        !current.labels.includes("auto")
-      ) {
+      if (!vouching && patch.labels.includes("auto") && !current.labels.includes("auto")) {
         throw new SwitchyardError(
           `Only humans apply the "auto" label — it opts an issue into unattended dispatch.`,
         );
@@ -607,8 +632,8 @@ export function updateIssue(
         // subject to the same claim gates — reassigning to another actor or
         // clearing an existing assignee would disrupt dispatch coordination
         // and bypass claim-before-work, so those are human-only.
-        if (actor.type === "agent") {
-          if (assigneeId !== actor.id) {
+        if (agentPath) {
+          if (assigneeId !== eff.id) {
             throw new SwitchyardError(
               patch.assigneeName === null
                 ? `Agents can't unassign ${ref} — clearing an assignee is human-only. If it's your own claim, move the issue back to "todo" to release it.`
@@ -629,7 +654,7 @@ export function updateIssue(
               `${ref} is not the issue claimed for your session — a supervised session can only work its own claimed issue, not claim another.`,
             );
           }
-          assertClaimable(tx, actor, current);
+          assertClaimable(tx, actor, current, attr);
         }
         changes.assigneeId = assigneeId;
         toRecord.push({ type: "assigned", payload: { to: patch.assigneeName } });
@@ -661,7 +686,7 @@ export function updateIssue(
       }
     }
 
-    if (patch.status !== undefined && actor.type === "human" && current.needsInput) {
+    if (patch.status !== undefined && vouching && current.needsInput) {
       changes.needsInput = false;
       toRecord.push({ type: "needs_input_cleared", payload: {} });
     }
@@ -672,14 +697,14 @@ export function updateIssue(
     // here). Disjoint from the holder-validation above (assigneeId was null).
     if (
       lease.minted &&
-      changes.assigneeId === actor.id &&
+      changes.assigneeId === eff.id &&
       current.assigneeId === null &&
       (changes.status === "in_progress" || current.status === "in_progress")
     ) {
       lease.minted.token = mintLease(
         tx,
         current.id,
-        actor.id,
+        eff.id,
         getSetting(db, "claims.lease_ttl_seconds"),
       );
     }
@@ -716,9 +741,15 @@ export function heartbeatClaim(
   actor: Actor,
   ref: string,
   leaseToken?: string,
+  attr: Attribution = NO_SESSION,
 ): { expiresAt: number } {
   const issue = getIssue(db, ref);
-  const lease = heartbeatLease(db, issue.id, actor.id, leaseToken);
+  // SYD-281: correct by symmetry with the mint, which keys to the effective
+  // actor. Unreachable from a supervised session today — mcp/server.ts registers
+  // `heartbeat` only for a connection-lease session, and those are refused
+  // claim_issue — so this is the right answer for the day that changes, not a
+  // live fix.
+  const lease = heartbeatLease(db, issue.id, effectiveActor(db, actor, attr).id, leaseToken);
   return { expiresAt: lease.expiresAt };
 }
 
@@ -729,6 +760,9 @@ export function claimIssue(
   opts: { takeover?: boolean } = {},
   attr: Attribution = {},
 ): ClaimResult {
+  // SYD-281: in a supervised session the AGENT holds the work — assignee, lease
+  // holder, declarer. Resolved once here so every branch below agrees.
+  const eff = effectiveActor(db, actor, attr);
   const current = getIssue(db, ref);
   const blockers = getOpenBlockers(db, current.id);
   if (blockers.length > 0) {
@@ -743,7 +777,7 @@ export function claimIssue(
   // sessions share the worker actor — a default takeover would silently kill a
   // healthy running container). Takeover only reaches here for the same actor;
   // a different actor's claim is refused by assertClaimable below.
-  if (current.assigneeId === actor.id) {
+  if (current.assigneeId === eff.id) {
     const active = getActiveLease(db, current.id);
     if (active && !opts.takeover) {
       throw new SwitchyardError(
@@ -766,7 +800,7 @@ export function claimIssue(
           sessionId: attr.sessionId,
         });
       }
-      return mintLease(tx, current.id, actor.id, getSetting(db, "claims.lease_ttl_seconds"));
+      return mintLease(tx, current.id, eff.id, getSetting(db, "claims.lease_ttl_seconds"));
     });
     return { issue: getIssue(db, ref), leaseToken };
   }
@@ -774,13 +808,13 @@ export function claimIssue(
   // Fresh claim of an unassigned (or blocked/PR-guarded) issue: assertClaimable
   // is re-checked inside updateIssue's in_progress gate; the mint happens there
   // via the out-channel.
-  assertClaimable(db, actor, current);
+  assertClaimable(db, actor, current, attr);
   const minted: { token: string | null } = { token: null };
   const issue = updateIssue(
     db,
     actor,
     ref,
-    { status: "in_progress", assigneeName: actor.name },
+    { status: "in_progress", assigneeName: eff.name },
     { minted },
     attr,
   );

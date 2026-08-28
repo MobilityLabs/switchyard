@@ -2,6 +2,10 @@
 // status change as a pending_actions row instead of committing it, for a
 // supervised session. See src/services/hard-gate.ts for the gate policy and
 // pending-action CRUD this divert calls into.
+// SYD-281: `{ sessionId }` alone is a shape production never produces —
+// resolveSupervisedPrincipal always sets viaAgent AND sessionId together
+// (supervised-sessions.ts). effectiveActor now fails closed on a supervised
+// attribution with no resolvable agent, so these tests build the real thing.
 import { describe, it, expect, beforeEach } from "vitest";
 import { createHuman } from "../helpers/human.js";
 import type { HumanActor } from "../../src/services/principal.js";
@@ -9,21 +13,27 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue, updateIssue } from "../../src/services/issues.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
+import { attributionOf, type Attribution } from "../../src/services/attribution.js";
 import { pendingActions } from "../../src/db/schema.js";
 
-let db: Db, human: HumanActor, issueId: number, sessionId: number;
+let db: Db, human: HumanActor, issueId: number, sessionId: number, supAttr: Attribution;
 beforeEach(() => {
   db = openDb(":memory:");
   human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   issueId = createIssue(db, human, { projectKey: "SYD", title: "t", description: "d" }).id;
-  sessionId = openSupervisedSession(db, human, "claude-code").sessionId;
+  const _sess = openSupervisedSession(db, human, "claude-code");
+  sessionId = _sess.sessionId;
+  supAttr = attributionOf(resolveSupervisedPrincipal(db, _sess.sessionToken)!);
 });
 
 describe("updateIssue hard-gate divert", () => {
   it("parks a supervised done-stamp as a pending action instead of committing", () => {
-    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, supAttr)).toThrow(
       /awaiting human affirmation/i,
     );
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
@@ -32,7 +42,7 @@ describe("updateIssue hard-gate divert", () => {
 
   it("dedups a retried proposal instead of piling up rows", () => {
     for (let i = 0; i < 2; i++) {
-      expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+      expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, supAttr)).toThrow(
         /awaiting human affirmation/i,
       );
     }
@@ -50,14 +60,14 @@ describe("updateIssue hard-gate divert", () => {
     updateIssue(db, human, "SYD-1", { status: "done" }, {}, {});
     // Now a supervised call proposes the same status: patch.status ===
     // target.status, so the divert must not fire (today's code no-ops here).
-    const view = updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId });
+    const view = updateIssue(db, human, "SYD-1", { status: "done" }, {}, supAttr);
     expect(view.status).toBe("done");
     expect(db.select().from(pendingActions).all()).toHaveLength(0);
   });
 
   it("rejects a mixed patch instead of silently dropping the other fields", () => {
     expect(() =>
-      updateIssue(db, human, "SYD-1", { status: "done", priority: "high" }, {}, { sessionId }),
+      updateIssue(db, human, "SYD-1", { status: "done", priority: "high" }, {}, supAttr),
     ).toThrow(/must be its own call/i);
     expect(db.select().from(pendingActions).all()).toHaveLength(0);
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
@@ -75,7 +85,7 @@ describe("updateIssue hard-gate divert", () => {
         "SYD-1",
         { status: "done", priority: undefined, title: undefined },
         {},
-        { sessionId },
+        supAttr,
       ),
     ).toThrow(/awaiting human affirmation/i);
     expect(db.select().from(pendingActions).all()).toHaveLength(1);

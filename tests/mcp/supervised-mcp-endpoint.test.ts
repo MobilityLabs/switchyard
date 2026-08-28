@@ -71,9 +71,18 @@ afterEach(async () => {
 describe("/mcp resolves a supervised principal", () => {
   it("stamps dual attribution on writes made with a sup_ token", async () => {
     const client = await connect(supToken);
+    // SYD-281: a supervised session is on the agent path now, so it follows
+    // AGENT_STATUS_TRANSITIONS — claim, then move. Before, being typed human let
+    // it jump straight to in_review from todo.
+    const claimed = await client.callTool({ name: "claim_issue", arguments: { ref: issue.ref } });
+    expect(claimed.isError).toBeFalsy();
     const r = await client.callTool({
       name: "update_issue",
-      arguments: { ref: issue.ref, status: "in_review" },
+      arguments: {
+        ref: issue.ref,
+        status: "in_review",
+        lease_token: JSON.parse(text(claimed)).lease_token,
+      },
     });
     expect(r.isError).toBeFalsy();
 

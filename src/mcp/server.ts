@@ -156,7 +156,9 @@ export function buildMcpServer(
         'worker_preference "interactive" are never returned to a non-human caller.',
       inputSchema: { project_key: z.string().optional() },
     },
-    guard(({ project_key }: { project_key?: string }) => nextTask(db, actor, project_key)),
+    guard(({ project_key }: { project_key?: string }) =>
+      nextTask(db, actor, project_key, attribution),
+    ),
   );
 
   server.registerTool(

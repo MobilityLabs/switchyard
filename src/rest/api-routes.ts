@@ -476,7 +476,14 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // what makes a link proof-bearing.
   app.post("/issues/:ref/pr-links", body(prLinkDeclareBody), (c) =>
     c.json(
-      declarePrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), c.var.leaseToken),
+      declarePrLink(
+        db,
+        c.var.actor,
+        c.req.param("ref"),
+        c.req.valid("json"),
+        c.var.leaseToken,
+        NO_SESSION,
+      ),
     ),
   );
 
@@ -487,12 +494,20 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
         requireHumanCaller(c.var.actor, "confirm a PR link"),
         c.req.param("ref"),
         c.req.valid("json"),
+        NO_SESSION,
       ),
     ),
   );
 
   app.post("/issues/:ref/pr-links/revoke", body(prLinkRevokeBody), (c) => {
-    revokePrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), c.var.leaseToken);
+    revokePrLink(
+      db,
+      c.var.actor,
+      c.req.param("ref"),
+      c.req.valid("json"),
+      c.var.leaseToken,
+      NO_SESSION,
+    );
     return c.json({ ok: true });
   });
 

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { NO_SESSION } from "../../src/services/attribution.js";
 import { createHuman } from "../helpers/human.js";
 import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
@@ -349,7 +350,7 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
     expect(getAttention(db, id)?.reason).toBe("done_without_merged_pr");
 
     // A feat/ branch: no agent/<ref> to infer from, so a human states the link.
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 197 });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 197 }, undefined, NO_SESSION);
     upsertPrState(db, human, {
       repo: REPO,
       prNumber: 197,
@@ -401,7 +402,7 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
     // is also the hand-merge-then-update-the-board flow, which is why §5a's
     // recency binding must not apply to a human-confirmed link — under a
     // blanket rule this issue could never prove it landed.
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 197 });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 197 }, undefined, NO_SESSION);
     upsertPrState(db, human, {
       repo: REPO,
       prNumber: 197,
