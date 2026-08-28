@@ -16,15 +16,46 @@ const nowSec = () => Math.floor(Date.now() / 1000);
  * credential — it must never reach the web/REST cookie path (see the
  * `kind='plain'` filters in auth.ts's getSessionActor/deleteSession).
  */
+/**
+ * SYD-281: the agent a supervised session binds to is NAMESPACED, not taken
+ * verbatim from the caller.
+ *
+ * `getOrCreateActor` returns an EXISTING actor when the name matches, so
+ * `mint-supervised-session sean claude/dev` used to bind a session to the live
+ * dispatch worker's own actor. That was harmless while a supervised claim
+ * assigned the human — a container's assertClaimable refused with "already
+ * claimed by sean". Once the agent holds the claim it is the same actor, so
+ * assertClaimable early-returns and claimIssue downgrades the refusal to "pass
+ * takeover: true". A dispatched container could then seize a live interactive
+ * session's claim on a path that previously refused it outright.
+ *
+ * Engine first, so callerClassification's `name.split("/")[0]`
+ * (worker-preference.ts) still yields the engine rather than the literal
+ * "supervised".
+ */
+export function supervisedAgentName(engine: string, humanName: string): string {
+  if (engine.includes("/")) {
+    throw new SwitchyardError(
+      `"${engine}" is an engine name (e.g. "claude"), not an actor name — a supervised session's agent is namespaced as <engine>/supervised/<human>.`,
+    );
+  }
+  return `${engine}/supervised/${humanName}`;
+}
+
 export function openSupervisedSession(
   db: Db,
   human: Actor,
-  agentName: string,
+  engine: string,
 ): { sessionToken: string; sessionId: number } {
   if (human.type !== "human") {
     throw new SwitchyardError("Only a human can open a supervised session.");
   }
-  const agent = getOrCreateActor(db, agentName, "agent");
+  const agentName = supervisedAgentName(engine, human.name);
+  // Attended by definition: a supervised session is a person driving an agent,
+  // which is exactly what the flag means (worker-preference.ts reads it to
+  // decide whether the interactive queue applies). getOrCreateActor's insert
+  // path defaults it false, which would have quietly withheld interactive work.
+  const agent = getOrCreateActor(db, agentName, "agent", { attended: true });
   if (agent.type !== "agent") {
     throw new SwitchyardError(
       `"${agentName}" must be an agent to act as a supervised session's editor — it already exists as a ${agent.type}.`,

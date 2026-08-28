@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,7 +26,7 @@ beforeEach(() => {
   db = openDb(":memory:");
   const { token } = createActor(db, { name: "claude/dev", type: "agent" });
   agentH = { authorization: `Bearer ${token}` };
-  createProject(db, createActor(db, { name: "sean", type: "human" }).actor, {
+  createProject(db, createHuman(db, "sean"), {
     key: "SYD",
     name: "Switchyard",
   });

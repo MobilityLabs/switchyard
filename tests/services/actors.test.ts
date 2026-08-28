@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman, createHumanWithToken } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import {
   createActor,
@@ -21,15 +23,15 @@ describe("actors", () => {
 
   it("rejects duplicate names with an agent-legible error", () => {
     const db = openDb(":memory:");
-    createActor(db, { name: "sean", type: "human" });
-    expect(() => createActor(db, { name: "sean", type: "human" })).toThrowError(
+    createHumanWithToken(db, "sean");
+    expect(() => createHumanWithToken(db, "sean")).toThrowError(
       /actor named "sean" already exists/,
     );
   });
 
   it("lists actors with token status and no token material", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createActor(db, { name: "claude/worker", type: "agent" });
     const list = listActorsWithStatus(db);
     expect(list).toHaveLength(2);
@@ -44,7 +46,7 @@ describe("actors", () => {
 
   it("rotates a token: old token stops authenticating, new one works", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const { token: oldToken } = createActor(db, { name: "claude/worker", type: "agent" });
     const worker = authenticate(db, oldToken)!;
     const { token: newToken } = rotateActorToken(db, human, worker.id);
@@ -54,44 +56,33 @@ describe("actors", () => {
     expect(authenticate(db, newToken)?.id).toBe(worker.id);
   });
 
-  it("rejects agents rotating tokens", () => {
-    const db = openDb(":memory:");
-    const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
-    const other = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    expect(() => rotateActorToken(db, agent, other.id)).toThrowError(/only humans/i);
-  });
+  // SYD-281: the agent/service refusal for token rotation moved to the adapter —
+  // see tests/rest/api-service-actor.test.ts (rotate and revoke, both tiers).
 
   it("errors rotating a token for an unknown actor id", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     expect(() => rotateActorToken(db, human, 999)).toThrowError(/no actor with id 999/i);
   });
 
   it("revokes a token: the actor can no longer authenticate", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const { token } = createActor(db, { name: "claude/worker", type: "agent" });
     const worker = authenticate(db, token)!;
     revokeActorToken(db, human, worker.id);
     expect(authenticate(db, token)).toBeNull();
   });
 
-  it("rejects agents revoking tokens", () => {
-    const db = openDb(":memory:");
-    const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
-    const other = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    expect(() => revokeActorToken(db, agent, other.id)).toThrowError(/only humans/i);
-  });
-
   it("refuses to let a human revoke their own token", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     expect(() => revokeActorToken(db, human, human.id)).toThrowError(/cannot revoke your own/i);
   });
 
   it("errors revoking a token for an unknown actor id", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     expect(() => revokeActorToken(db, human, 999)).toThrowError(/no actor with id 999/i);
   });
 
@@ -101,7 +92,7 @@ describe("actors", () => {
   describe("attended", () => {
     const setup = () => {
       const db = openDb(":memory:");
-      const human = createActor(db, { name: "sean", type: "human" }).actor;
+      const human = createHuman(db, "sean");
       const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
       return { db, human, agent };
     };
@@ -128,11 +119,9 @@ describe("actors", () => {
       expect(listActorsWithStatus(db).find((a) => a.id === agent.id)?.attended).toBe(false);
     });
 
-    // A caller must not be able to widen its own queue.
-    it("refuses a non-human caller", () => {
-      const { db, agent } = setup();
-      expect(() => setActorAttended(db, agent, agent.id, true)).toThrowError(/only humans/i);
-    });
+    // A caller must not be able to widen its own queue. SYD-281: asserted at the
+    // adapter now (tests/rest/api-service-actor.test.ts) — setActorAttended takes
+    // a HumanActor, so an agent cannot reach it.
 
     it("refuses to set it on a human — attended by definition, so a flag would imply it can be off", () => {
       const { db, human } = setup();

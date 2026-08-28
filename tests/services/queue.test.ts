@@ -10,6 +10,8 @@
 // because the rank is an implementation detail and the observable contract is
 // "what do I get handed next".
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -18,11 +20,11 @@ import { addDependency, nextTask } from "../../src/services/dependencies.js";
 import { listQueue, setQueuePosition } from "../../src/services/queue.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
-let db: Db, human: Actor, claude: Actor, codex: Actor;
+let db: Db, human: HumanActor, claude: Actor, codex: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   // The engine is the actor-name prefix — these are the real production actor
   // names (claude/dev, codex/dev, gemini/dev), which is what makes affinity
   // derivable from the caller's token alone.

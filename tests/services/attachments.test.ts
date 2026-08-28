@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,12 +13,12 @@ import { getActivity } from "../../src/services/comments.js";
 import { saveAttachment, listAttachments } from "../../src/services/attachments.js";
 
 let db: Db;
-let human: Actor;
+let human: HumanActor;
 let tmpRoot: string;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Needs a screenshot" });
   tmpRoot = mkdtempSync(path.join(tmpdir(), "syd-att-svc-"));

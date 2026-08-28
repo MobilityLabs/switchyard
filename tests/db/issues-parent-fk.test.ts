@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -8,7 +10,7 @@ import { issues } from "../../src/db/schema.js";
 describe("issues.parent_id foreign key", () => {
   it("rejects a parentId pointing at a nonexistent issue", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
@@ -29,7 +31,7 @@ describe("issues.parent_id foreign key", () => {
 
   it("still allows a parentId pointing at a real issue", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     const parent = createIssue(db, human, { projectKey: "AIPI", title: "Parent" });
     const child = createIssue(db, human, {

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -12,7 +14,7 @@ import {
 describe("github repos", () => {
   it("links, lists, scopes to a project, and unlinks", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const p = createProject(db, human, { key: "SYD", name: "Switchyard" });
     const unscoped = addGithubRepo(db, human, { fullName: "acme/widgets" });
     const scoped = addGithubRepo(db, human, {
@@ -32,7 +34,7 @@ describe("github repos", () => {
 
   it("rejects malformed full names, unknown projects, and duplicate links", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     expect(() => addGithubRepo(db, human, { fullName: "not-a-repo" })).toThrowError(
       /must be "owner\/repo"/i,
@@ -48,7 +50,7 @@ describe("github repos", () => {
 
   it("errors removing an unknown id", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     expect(() => removeGithubRepo(db, human, 999)).toThrowError(
       /no linked github repo with id 999/i,
     );
@@ -56,7 +58,7 @@ describe("github repos", () => {
 
   it("finds a linked repo by full name, or undefined when unlinked", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     addGithubRepo(db, human, { fullName: "acme/widgets", secret: "s3cret" });
     expect(findGithubRepo(db, "acme/widgets")?.secret).toBe("s3cret");
     expect(findGithubRepo(db, "acme/other")).toBeUndefined();
@@ -64,7 +66,7 @@ describe("github repos", () => {
 
   it("normalizes fullName to lowercase on write and matches regardless of casing (SYD-212)", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const repo = addGithubRepo(db, human, { fullName: "MobilityLabs/Switchyard" });
     expect(repo.fullName).toBe("mobilitylabs/switchyard");
 
@@ -78,24 +80,13 @@ describe("github repos", () => {
 
   it("rejects linking the same repo twice under different casing", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     addGithubRepo(db, human, { fullName: "acme/widgets" });
     expect(() => addGithubRepo(db, human, { fullName: "Acme/Widgets" })).toThrowError(
       /already linked/i,
     );
   });
 
-  it("rejects agent actors managing linked repos", () => {
-    const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
-    const repo = addGithubRepo(db, human, { fullName: "acme/widgets" });
-
-    expect(() => addGithubRepo(db, agent, { fullName: "acme/other" })).toThrowError(
-      /only humans manage linked github repos/i,
-    );
-    expect(() => removeGithubRepo(db, agent, repo.id)).toThrowError(
-      /only humans manage linked github repos/i,
-    );
-  });
+  // SYD-281: the agent/service refusal moved to the adapter — see
+  // tests/rest/api-service-actor.test.ts (link and unlink, both non-human tiers).
 });

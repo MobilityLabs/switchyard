@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -11,7 +13,7 @@ describe("GET /events", () => {
   it("returns the joined, newest-first feed and honors ?limit", async () => {
     const db = openDb(":memory:");
     const { token } = createActor(db, { name: "sean", type: "human" });
-    const human = createActor(db, { name: "someone-else", type: "human" }).actor;
+    const human = createHuman(db, "someone-else");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
     updateIssue(db, human, "SYD-1", { status: "todo" });
@@ -53,7 +55,7 @@ describe("GET /events", () => {
   it("pages via before_id and signals truncation with X-Truncated/X-Next-Cursor headers (SYD-89)", async () => {
     const db = openDb(":memory:");
     const { token } = createActor(db, { name: "sean", type: "human" });
-    const human = createActor(db, { name: "someone-else", type: "human" }).actor;
+    const human = createHuman(db, "someone-else");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Busy issue" }); // 1 event
     for (let i = 0; i < 4; i++) {
@@ -89,7 +91,7 @@ describe("GET /unanswered-questions", () => {
     const db = openDb(":memory:");
     const { token } = createActor(db, { name: "sean", type: "human" });
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
-    const human = createActor(db, { name: "someone-else", type: "human" }).actor;
+    const human = createHuman(db, "someone-else");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
     createIssue(db, human, { projectKey: "SYD", title: "Answered already" });

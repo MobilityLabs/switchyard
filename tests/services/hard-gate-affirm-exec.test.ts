@@ -4,7 +4,13 @@
 // human affirms it. Task 5's hard-gate.test.ts covers affirmPendingAction in
 // isolation (rows created directly via findOrCreatePendingAction); this file
 // checks the same guarantees hold when the row comes from the real divert.
+// SYD-281: `{ sessionId }` alone is a shape production never produces —
+// resolveSupervisedPrincipal always sets viaAgent AND sessionId together
+// (supervised-sessions.ts). effectiveActor now fails closed on a supervised
+// attribution with no resolvable agent, so these tests build the real thing.
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { sql } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
@@ -12,19 +18,25 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, getIssue, updateIssue } from "../../src/services/issues.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
+import { attributionOf, type Attribution } from "../../src/services/attribution.js";
 import { pendingActions } from "../../src/db/schema.js";
 import { affirmPendingAction, getPendingAction } from "../../src/services/hard-gate.js";
 
 const REPO = "acme/widgets";
 
-let db: Db, human: Actor, issueId: number, sessionId: number;
+let db: Db, human: HumanActor, issueId: number, sessionId: number, supAttr: Attribution;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   issueId = createIssue(db, human, { projectKey: "SYD", title: "t", description: "d" }).id;
-  sessionId = openSupervisedSession(db, human, "claude-code").sessionId;
+  const _sess = openSupervisedSession(db, human, "claude-code");
+  sessionId = _sess.sessionId;
+  supAttr = attributionOf(resolveSupervisedPrincipal(db, _sess.sessionToken)!);
 });
 
 function onlyPendingId(): number {
@@ -35,7 +47,7 @@ function onlyPendingId(): number {
 
 describe("divert -> affirm end to end", () => {
   it("affirming the human's own pending action executes the done transition", () => {
-    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, supAttr)).toThrow(
       /awaiting human affirmation/i,
     );
     const id = onlyPendingId();
@@ -63,7 +75,7 @@ describe("divert -> affirm end to end", () => {
         "SYD-1",
         { status: "done", expectedHeadSha: "stale-sha" },
         {},
-        { sessionId },
+        supAttr,
       ),
     ).toThrow(/awaiting human affirmation/i);
     const id = onlyPendingId();
@@ -74,7 +86,7 @@ describe("divert -> affirm end to end", () => {
   });
 
   it("double-affirm: second affirm throws and exactly one done event is recorded", () => {
-    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, { sessionId })).toThrow(
+    expect(() => updateIssue(db, human, "SYD-1", { status: "done" }, {}, supAttr)).toThrow(
       /awaiting human affirmation/i,
     );
     const id = onlyPendingId();

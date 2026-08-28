@@ -27,6 +27,7 @@ import type { Db, DbOrTx } from "../db/index.js";
 import { actors, prLinks, prState, type PrLinkRole } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import type { Attribution } from "./attribution.js";
+import { asHuman, actingAgent, effectiveActor, type HumanActor } from "./principal.js";
 import { SwitchyardError } from "./errors.js";
 import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
@@ -227,8 +228,11 @@ export function declarePrLink(
   actor: Actor,
   ref: string,
   input: PrLinkTarget & { role?: PrLinkRole },
-  leaseToken?: string,
-  attr: Attribution = {},
+  leaseToken: string | undefined,
+  // SYD-281: required, no default. "This caller has no session" and "this caller
+  // forgot to thread the session" were the same value, and that is the mechanism
+  // that let a supervised agent's declaration be stamped as a human's vouch.
+  attr: Attribution,
 ): PrLink {
   const repo = normalizeRepoFullName(input.repo);
   if (!Number.isInteger(input.prNumber) || input.prNumber <= 0) {
@@ -238,20 +242,34 @@ export function declarePrLink(
     const issue = getIssue(tx, ref);
     assertRepoBound(tx, issue.projectId, repo);
 
-    const isAgent = actor.type === "agent";
-    if (isAgent) {
-      if (issue.assigneeId !== actor.id) {
+    // SYD-281: `isAgent` used to answer three different questions at once, and
+    // a supervised principal (typed human, not typed agent) got the wrong answer
+    // to all of them. They are now asked separately:
+    //
+    //   agentPath — is an agent credential acting? Governs the claim and lease,
+    //     and keys them to the AGENT, since the accountable human holds neither.
+    //   vouching  — is a human ACTING (not merely accountable)? Governs whether
+    //     this declaration also carries that human's confirmation.
+    //
+    // A `service` actor is neither, which is the SYD-298 half: it was passing
+    // `!== "agent"` and having its declarations auto-confirmed.
+    const eff = effectiveActor(tx, actor, attr);
+    const agentPath = actingAgent(tx, actor, attr) !== null;
+    const vouching = asHuman(actor, attr) !== null;
+
+    if (agentPath) {
+      if (issue.assigneeId !== eff.id) {
         throw new SwitchyardError(
           `${ref} is not yours to declare a PR for — claim it first, or ask a human to record the link.`,
         );
       }
-      validateLease(tx, issue.id, actor.id, leaseToken);
+      validateLease(tx, issue.id, eff.id, leaseToken);
     }
 
     // Agents declare delivers or nothing: a references link is a suggestion,
     // and suggestions come from humans or from free-text ingestion, never from
     // an actor asserting its own work.
-    const role: PrLinkRole = isAgent ? "delivers" : (input.role ?? "delivers");
+    const role: PrLinkRole = agentPath ? "delivers" : (input.role ?? "delivers");
 
     const now = nowSeconds();
 
@@ -286,10 +304,14 @@ export function declarePrLink(
         repo,
         prNumber: input.prNumber,
         role,
-        declaredBy: actor.id,
+        // The declarer is whoever is actually doing the work — the agent in a
+        // supervised session. revokePrLink's "your own link" test compares
+        // against this, so the two must move together or an agent can withdraw
+        // declarations its supervisor made in person.
+        declaredBy: eff.id,
         declaredAt: now,
-        confirmedBy: isAgent ? null : actor.id,
-        confirmedAt: isAgent ? null : now,
+        confirmedBy: vouching ? actor.id : null,
+        confirmedAt: vouching ? now : null,
       })
       .returning()
       .get();
@@ -302,7 +324,10 @@ export function declarePrLink(
         repo,
         prNumber: input.prNumber,
         role,
-        confirmed: !isAgent,
+        // Must track the row: writing confirmedBy:null here while the event
+        // said `confirmed: true` would manufacture the attestation in the audit
+        // stream while fixing only the mutable row.
+        confirmed: vouching,
         // Names what this superseded, so "where did the references link go"
         // is answerable from the timeline and not only from the revoked row.
         ...(existing ? { promotedFrom: existing.role } : {}),
@@ -408,17 +433,18 @@ export function recordIngestedPrLink(
  */
 export function confirmPrLink(
   db: Db,
-  actor: Actor,
+  actor: HumanActor,
   ref: string,
   input: PrLinkTarget,
-  attr: Attribution = {},
+  attr: Attribution,
 ): PrLink {
+  // SYD-281/SYD-298: this gate used to read `actor.type === "agent"`, which
+  // refused agents and waved through BOTH `service` actors (the poller tokens
+  // already speak REST) and supervised agents (typed human). It is the one
+  // function whose entire job is minting the attestation SYD-280 protects, and
+  // it was the widest way to forge one. The type now carries the proof — only
+  // `asHuman` can produce a HumanActor — so there is nothing left to check here.
   const repo = normalizeRepoFullName(input.repo);
-  if (actor.type === "agent") {
-    throw new SwitchyardError(
-      "Only a human can confirm a PR link — an agent may declare which PR carries its work, but never vouch for it.",
-    );
-  }
   return db.transaction((tx) => {
     const issue = getIssue(tx, ref);
     const link = findLiveLink(tx, issue.id, repo, input.prNumber);
@@ -568,8 +594,8 @@ export function revokePrLink(
   actor: Actor,
   ref: string,
   input: PrLinkTarget & { reason: string },
-  leaseToken?: string,
-  attr: Attribution = {},
+  leaseToken: string | undefined,
+  attr: Attribution,
 ): void {
   const repo = normalizeRepoFullName(input.repo);
   if (!input.reason.trim()) {
@@ -582,20 +608,31 @@ export function revokePrLink(
       throw new SwitchyardError(`${ref} has no live link to ${repo}#${input.prNumber}.`);
     }
 
-    if (actor.type !== "human") {
-      // A non-human may withdraw only its OWN, still-unconfirmed statement.
-      // Once a human has vouched for a link, only a human can take it back.
+    // SYD-281: all three tests here were keyed on `actor`, which in a supervised
+    // session is the accountable human — so a supervised agent skipped the lease
+    // (its `type` is "human", not "agent") AND satisfied the `declaredBy` test
+    // for every unconfirmed link its supervisor had declared IN PERSON, from any
+    // other session. It could withdraw its human's own statements.
+    const eff = effectiveActor(tx, actor, attr);
+    if (asHuman(actor, attr) === null) {
+      // A non-vouching caller may withdraw only its OWN, still-unconfirmed
+      // statement. Once a human has vouched for a link, only a human takes it
+      // back.
       if (link.confirmedBy !== null) {
         throw new SwitchyardError(
           `${ref}'s link to ${repo}#${input.prNumber} has been confirmed — only a human can revoke it.`,
         );
       }
-      if (link.declaredBy !== actor.id) {
+      if (link.declaredBy !== eff.id) {
         throw new SwitchyardError(
           `${ref}'s link to ${repo}#${input.prNumber} was declared by someone else — only its declarer or a human can revoke it.`,
         );
       }
-      if (actor.type === "agent") validateLease(tx, issue.id, actor.id, leaseToken);
+      // Keyed to the acting agent, not the actor: the human holds no lease. A
+      // `service` actor is not on the agent path and keeps passing untouched —
+      // services can hold no claim at all (issues.ts), so lease-gating them
+      // would break ingestion.
+      if (actingAgent(tx, actor, attr) !== null) validateLease(tx, issue.id, eff.id, leaseToken);
     }
 
     tx.update(prLinks).set({ revokedAt: nowSeconds() }).where(eq(prLinks.id, link.id)).run();

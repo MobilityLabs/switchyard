@@ -9,6 +9,9 @@
 //   2. Declaring is not confirming. An agent can over-block (safe, revocable)
 //      but can never make its own link prove that its work landed.
 import { describe, it, expect } from "vitest";
+import { NO_SESSION } from "../../src/services/attribution.js";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { prState } from "../../src/db/schema.js";
 import { createActor } from "../../src/services/actors.js";
@@ -35,7 +38,7 @@ const OTHER_REPO = "acme/unrelated";
 
 function setup() {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
   const infra = createActor(db, { name: "deliver", type: "service" }).actor;
@@ -59,7 +62,7 @@ describe("declarePrLink — who may declare", () => {
   it("lets an agent holding the claim declare, presenting its lease", () => {
     const { db, agent } = setup();
     const lease = claim(db, agent);
-    const link = declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
+    const link = declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION);
     expect(link.role).toBe("delivers");
     expect(link.prNumber).toBe(7);
   });
@@ -67,7 +70,9 @@ describe("declarePrLink — who may declare", () => {
   it("refuses an agent that presents no lease", () => {
     const { db, agent } = setup();
     claim(db, agent);
-    expect(() => declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(/lease/i);
+    expect(() =>
+      declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, undefined, NO_SESSION),
+    ).toThrow(/lease/i);
   });
 
   it("refuses an agent that does not hold the claim", () => {
@@ -75,54 +80,96 @@ describe("declarePrLink — who may declare", () => {
     const lease = claim(db, agent);
     // The other agent presents someone else's lease token — the shared-token
     // case SYD-210 exists for.
-    expect(() => declarePrLink(db, other, "SYD-1", { repo: REPO, prNumber: 7 }, lease)).toThrow();
+    expect(() =>
+      declarePrLink(db, other, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION),
+    ).toThrow();
   });
 
   it("lets a human declare without any lease", () => {
     const { db, human } = setup();
-    const link = declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    const link = declarePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: 7 },
+      undefined,
+      NO_SESSION,
+    );
     expect(link.prNumber).toBe(7);
   });
 
   it("lets trusted infra (service) declare — the auto path", () => {
     const { db, infra } = setup();
-    const link = declarePrLink(db, infra, "SYD-1", { repo: REPO, prNumber: 7 });
+    const link = declarePrLink(
+      db,
+      infra,
+      "SYD-1",
+      { repo: REPO, prNumber: 7 },
+      undefined,
+      NO_SESSION,
+    );
     expect(link.prNumber).toBe(7);
   });
 
   it("refuses a repo not bound to the issue's project", () => {
     const { db, human } = setup();
-    expect(() => declarePrLink(db, human, "SYD-1", { repo: OTHER_REPO, prNumber: 7 })).toThrow(
-      /bound/i,
-    );
+    expect(() =>
+      declarePrLink(db, human, "SYD-1", { repo: OTHER_REPO, prNumber: 7 }, undefined, NO_SESSION),
+    ).toThrow(/bound/i);
   });
 
   it("normalizes repo casing so uniqueness cannot be defeated by case", () => {
     const { db, human } = setup();
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
-    expect(() => declarePrLink(db, human, "SYD-1", { repo: "ACME/Widgets", prNumber: 7 })).toThrow(
-      /already/i,
-    );
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, undefined, NO_SESSION);
+    expect(() =>
+      declarePrLink(
+        db,
+        human,
+        "SYD-1",
+        { repo: "ACME/Widgets", prNumber: 7 },
+        undefined,
+        NO_SESSION,
+      ),
+    ).toThrow(/already/i);
   });
 });
 
 describe("declarePrLink — confirmation at declaration", () => {
   it("auto-confirms a human declaration", () => {
     const { db, human } = setup();
-    const link = declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    const link = declarePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: 7 },
+      undefined,
+      NO_SESSION,
+    );
     expect(link.confirmedBy).toBe(human.id);
   });
 
-  it("auto-confirms a service declaration", () => {
+  // SYD-298, closed by SYD-281. This asserted the bug: `confirmedBy` was
+  // `isAgent ? null : actor.id`, so a `service` actor — the GitHub and deliver
+  // poller tokens, which already speak REST — had its declarations stamped as
+  // vouched-for. The predicate is now "is a human ACTING", which a service is
+  // not.
+  it("leaves a service declaration UNCONFIRMED — infra observes, it does not vouch", () => {
     const { db, infra } = setup();
-    const link = declarePrLink(db, infra, "SYD-1", { repo: REPO, prNumber: 7 });
-    expect(link.confirmedBy).toBe(infra.id);
+    const link = declarePrLink(
+      db,
+      infra,
+      "SYD-1",
+      { repo: REPO, prNumber: 7 },
+      undefined,
+      NO_SESSION,
+    );
+    expect(link.confirmedBy).toBeNull();
   });
 
   it("leaves an agent declaration UNCONFIRMED — it can never prove its own work landed", () => {
     const { db, agent } = setup();
     const lease = claim(db, agent);
-    const link = declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
+    const link = declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION);
     expect(link.confirmedBy).toBeNull();
   });
 
@@ -135,6 +182,7 @@ describe("declarePrLink — confirmation at declaration", () => {
       "SYD-1",
       { repo: REPO, prNumber: 7, role: "references" },
       lease,
+      NO_SESSION,
     );
     expect(link.role).toBe("delivers");
   });
@@ -144,19 +192,15 @@ describe("confirmPrLink", () => {
   it("lets a human confirm an agent's link", () => {
     const { db, human, agent } = setup();
     const lease = claim(db, agent);
-    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
-    const link = confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION);
+    const link = confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION);
     expect(link.confirmedBy).toBe(human.id);
   });
 
-  it("refuses an agent confirming anything, including its own link", () => {
-    const { db, agent } = setup();
-    const lease = claim(db, agent);
-    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
-    expect(() => confirmPrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
-      /confirm/i,
-    );
-  });
+  // SYD-281: confirmPrLink takes a HumanActor, so an agent or service cannot be
+  // handed to it at all — the refusal is asserted at the adapter, where the
+  // question is actually asked (tests/rest/api-service-actor.test.ts covers
+  // "confirm a PR link" for both non-human tiers).
 
   // Found live: Sean confirmed the ingested #194 link on SYD-243 to clear its
   // done_without_merged_pr flag. The call succeeded, recorded a
@@ -179,12 +223,12 @@ describe("confirmPrLink", () => {
       role: "references",
       actorId: agent.id,
     });
-    expect(() => confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
-      /references/i,
-    );
-    expect(() => confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
-      /declare/i,
-    );
+    expect(() =>
+      confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION),
+    ).toThrow(/references/i);
+    expect(() =>
+      confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION),
+    ).toThrow(/declare/i);
   });
 
   it("leaves the suggestion untouched when it refuses — no half-applied confirm", () => {
@@ -196,7 +240,9 @@ describe("confirmPrLink", () => {
       role: "references",
       actorId: agent.id,
     });
-    expect(() => confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow();
+    expect(() =>
+      confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION),
+    ).toThrow();
     const [link] = listLiveLinks(db, getIssue(db, "SYD-1").id);
     expect(link.role).toBe("references");
     expect(link.confirmedBy).toBeNull();
@@ -213,16 +259,23 @@ describe("confirmPrLink", () => {
       role: "references",
       actorId: agent.id,
     });
-    const promoted = declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    const promoted = declarePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: 7 },
+      undefined,
+      NO_SESSION,
+    );
     expect(promoted.role).toBe("delivers");
     expect(promoted.confirmedBy).toBe(human.id);
   });
 
   it("refuses to confirm a link that does not exist", () => {
     const { db, human } = setup();
-    expect(() => confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
-      /no live/i,
-    );
+    expect(() =>
+      confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION),
+    ).toThrow(/no live/i);
   });
 });
 
@@ -230,43 +283,85 @@ describe("revokePrLink", () => {
   it("lets the declarer revoke their own unconfirmed link", () => {
     const { db, agent } = setup();
     const lease = claim(db, agent);
-    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
-    revokePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7, reason: "wrong PR" }, lease);
+    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION);
+    revokePrLink(
+      db,
+      agent,
+      "SYD-1",
+      { repo: REPO, prNumber: 7, reason: "wrong PR" },
+      lease,
+      NO_SESSION,
+    );
     expect(listLiveLinks(db, 1)).toHaveLength(0);
   });
 
   it("refuses an agent revoking a CONFIRMED link", () => {
     const { db, human, agent } = setup();
     const lease = claim(db, agent);
-    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
-    confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION);
+    confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION);
     expect(() =>
-      revokePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7, reason: "nope" }, lease),
+      revokePrLink(
+        db,
+        agent,
+        "SYD-1",
+        { repo: REPO, prNumber: 7, reason: "nope" },
+        lease,
+        NO_SESSION,
+      ),
     ).toThrow(/human/i);
   });
 
   it("lets a human revoke any link, confirmed or not", () => {
     const { db, human, agent } = setup();
     const lease = claim(db, agent);
-    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
-    confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
-    revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7, reason: "mis-linked" });
+    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION);
+    confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION);
+    revokePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: 7, reason: "mis-linked" },
+      undefined,
+      NO_SESSION,
+    );
     expect(listLiveLinks(db, 1)).toHaveLength(0);
   });
 
   it("requires a reason", () => {
     const { db, human } = setup();
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, undefined, NO_SESSION);
     expect(() =>
-      revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7, reason: "  " }),
+      revokePrLink(
+        db,
+        human,
+        "SYD-1",
+        { repo: REPO, prNumber: 7, reason: "  " },
+        undefined,
+        NO_SESSION,
+      ),
     ).toThrow(/reason/i);
   });
 
   it("is soft — the same PR can be re-declared after a revoke, and history survives", () => {
     const { db, human } = setup();
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
-    revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7, reason: "mis-linked" });
-    const again = declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, undefined, NO_SESSION);
+    revokePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: 7, reason: "mis-linked" },
+      undefined,
+      NO_SESSION,
+    );
+    const again = declarePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: 7 },
+      undefined,
+      NO_SESSION,
+    );
     expect(again.revokedAt).toBeNull();
     expect(listLiveLinks(db, 1)).toHaveLength(1);
     // Both declarations are on the record.
@@ -382,9 +477,9 @@ describe("the DoS the previous design died on", () => {
   // hold the issue.
   it("an agent with a valid token but no claim on the issue cannot block it", () => {
     const { db, other } = setup();
-    expect(() => declarePrLink(db, other, "SYD-1", { repo: REPO, prNumber: 7 })).toThrow(
-      /not yours/i,
-    );
+    expect(() =>
+      declarePrLink(db, other, "SYD-1", { repo: REPO, prNumber: 7 }, undefined, NO_SESSION),
+    ).toThrow(/not yours/i);
     expect(listLiveLinks(db, 1)).toHaveLength(0);
   });
 
@@ -474,7 +569,7 @@ describe("listLiveLinkViews — what the panel shows a human", () => {
   }
 
   /** Walks SYD-1 to `done` with no PR of any kind, arming done_without_merged_pr. */
-  function stampDone(db: ReturnType<typeof openDb>, human: Actor, agent: Actor) {
+  function stampDone(db: ReturnType<typeof openDb>, human: HumanActor, agent: Actor) {
     claimIssue(db, agent, "SYD-1");
     updateIssue(db, human, "SYD-1", { status: "in_review" });
     updateIssue(db, human, "SYD-1", { status: "done" });
@@ -483,14 +578,14 @@ describe("listLiveLinkViews — what the panel shows a human", () => {
   it("names the declarer and confirmer instead of leaving the panel with actor ids", () => {
     const { db, human, agent } = setup();
     const lease = claim(db, agent);
-    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease);
+    declarePrLink(db, agent, "SYD-1", { repo: REPO, prNumber: 7 }, lease, NO_SESSION);
 
     const [before] = listLiveLinkViews(db, 1);
     expect(before.declaredByName).toBe("claude/worker");
     expect(before.confirmedByName).toBeNull();
     expect(before.confirmedByHuman).toBe(false);
 
-    confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    confirmPrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, NO_SESSION);
     const [after] = listLiveLinkViews(db, 1);
     expect(after.confirmedByName).toBe("sean");
     expect(after.confirmedByHuman).toBe(true);
@@ -506,7 +601,7 @@ describe("listLiveLinkViews — what the panel shows a human", () => {
     stampDone(db, human, agent);
     expect(getAttention(db, 1)?.reason).toBe("done_without_merged_pr");
 
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 128 });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 128 }, undefined, NO_SESSION);
 
     const [view] = listLiveLinkViews(db, 1);
     expect(view.role).toBe("delivers");
@@ -524,7 +619,7 @@ describe("listLiveLinkViews — what the panel shows a human", () => {
     observeMerge(db, 42, "2026-07-12T11:00:00Z");
     expect(getAttention(db, 1)?.reason).toBe("done_without_merged_pr");
 
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 42 });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 42 }, undefined, NO_SESSION);
 
     const [view] = listLiveLinkViews(db, 1);
     expect(view.observed?.status).toBe("merged");
@@ -534,15 +629,19 @@ describe("listLiveLinkViews — what the panel shows a human", () => {
 
   // §5a. A non-human confirmer buys no exemption from recency, so a merge that
   // predates the declaration can't be retro-claimed by infra.
-  it("withholds proof from a service-confirmed link whose merge predates the declaration", () => {
+  // SYD-281 narrowed this: a service declaration is no longer confirmed at all,
+  // so the link fails `provesLanded`'s `confirmedBy IS NOT NULL` before the
+  // recency disjunction is reached. The flag still lights, for a stricter
+  // reason than before.
+  it("withholds proof from an unconfirmed service declaration, merged or not", () => {
     const { db, human, agent, infra } = setup();
     stampDone(db, human, agent);
     observeMerge(db, 43, "2026-07-12T11:00:00Z");
 
-    declarePrLink(db, infra, "SYD-1", { repo: REPO, prNumber: 43 });
+    declarePrLink(db, infra, "SYD-1", { repo: REPO, prNumber: 43 }, undefined, NO_SESSION);
 
     const [view] = listLiveLinkViews(db, 1);
-    expect(view.confirmedByName).toBe("deliver");
+    expect(view.confirmedByName).toBeNull();
     expect(view.confirmedByHuman).toBe(false);
     expect(view.observed?.status).toBe("merged");
     expect(view.provesLanded).toBe(false);
@@ -577,9 +676,16 @@ describe("listLiveLinkViews — what the panel shows a human", () => {
 
   it("drops a revoked link from the panel entirely", () => {
     const { db, human } = setup();
-    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 }, undefined, NO_SESSION);
     expect(listLiveLinkViews(db, 1)).toHaveLength(1);
-    revokePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7, reason: "wrong PR" });
+    revokePrLink(
+      db,
+      human,
+      "SYD-1",
+      { repo: REPO, prNumber: 7, reason: "wrong PR" },
+      undefined,
+      NO_SESSION,
+    );
     expect(listLiveLinkViews(db, 1)).toHaveLength(0);
   });
 });

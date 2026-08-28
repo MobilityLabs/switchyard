@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { NO_SESSION } from "../../src/services/attribution.js";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
@@ -29,7 +32,7 @@ const REPO = "acme/widgets";
 
 function setup() {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   const agent = createActor(db, { name: "claude", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   return { db, human, agent };
@@ -82,7 +85,7 @@ function stampDone(
 describe("delivery_attempts schema", () => {
   it("stores and reads an attempt row with the full outcome enum available", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
@@ -182,7 +185,7 @@ describe("listPendingDeliveryAuthorizations", () => {
       headSha: "def",
       ghUpdatedAt: "2026-07-14T10:00:00Z",
     });
-    declarePrLink(db, human, issue.ref, { repo: REPO, prNumber: 124 });
+    declarePrLink(db, human, issue.ref, { repo: REPO, prNumber: 124 }, undefined, NO_SESSION);
     // Pinned stamp must be the NEWEST done transition — latest-stamp-per-issue
     // is what picks the live authorization.
     updateIssue(db, human, issue.ref, { status: "done" });

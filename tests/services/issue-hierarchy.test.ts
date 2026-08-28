@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -11,10 +13,10 @@ import {
 } from "../../src/services/issues.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
-let db: Db, human: Actor;
+let db: Db, human: HumanActor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Epic" }); // SYD-1
 });

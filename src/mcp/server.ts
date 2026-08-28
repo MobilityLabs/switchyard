@@ -4,6 +4,7 @@ import type { Db } from "../db/index.js";
 import { STATUSES, PRIORITIES } from "../db/schema.js";
 import type { Actor } from "../services/actors.js";
 import type { Attribution } from "../services/attribution.js";
+import { actingAgent, effectiveActor } from "../services/principal.js";
 import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import { listProjects } from "../services/projects.js";
 import {
@@ -73,9 +74,6 @@ export function buildMcpServer(
   // would then check that victim instead of the attacker. Empty for a plain
   // (non-supervised) principal, which must never populate events.sessionId.
   attribution: Attribution = {},
-  // The agent acting on the human's behalf in a supervised session. `actor` is
-  // the accountable human root, so agent-scoped tools act as this instead.
-  viaAgent?: Actor,
 ): McpServer {
   const server = new McpServer({ name: "switchyard", version: "0.1.0" });
 
@@ -90,9 +88,20 @@ export function buildMcpServer(
     {
       description:
         "Get the actor name/type/id your MCP token is bound to — the MCP equivalent of REST's " +
-        "GET /me. Useful for assignee-scoped search_issues, or to confirm which actor a token authenticates as.",
+        "GET /me. Useful for assignee-scoped search_issues, or to confirm which actor a token authenticates as. " +
+        "In a supervised session this reports BOTH identities: the accountable human, and the agent " +
+        "that actually holds your claims and PR declarations.",
     },
-    guard(() => actor),
+    guard(() => {
+      // SYD-281: `actor` alone is misleading in a supervised session — the
+      // session's assignments, leases and declaredBy are the AGENT's, so
+      // search_issues(assignee: whoami().name) would return nothing for the
+      // session's own work.
+      const acting = actingAgent(db, actor, attribution);
+      // Only when it DIFFERS: for a plain agent session the acting agent IS the
+      // actor, and echoing it back would be noise.
+      return acting && acting.id !== actor.id ? { ...actor, actingAs: acting } : actor;
+    }),
   );
 
   server.registerTool(
@@ -158,7 +167,9 @@ export function buildMcpServer(
         'worker_preference "interactive" are never returned to a non-human caller.',
       inputSchema: { project_key: z.string().optional() },
     },
-    guard(({ project_key }: { project_key?: string }) => nextTask(db, actor, project_key)),
+    guard(({ project_key }: { project_key?: string }) =>
+      nextTask(db, actor, project_key, attribution),
+    ),
   );
 
   server.registerTool(
@@ -379,7 +390,13 @@ export function buildMcpServer(
         inputSchema: { ref: z.string(), lease_token: z.string().optional() },
       },
       guard(({ ref, lease_token }: { ref: string; lease_token?: string }) => {
-        const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token ?? connectionLeaseToken);
+        const { expiresAt } = heartbeatClaim(
+          db,
+          actor,
+          ref,
+          lease_token ?? connectionLeaseToken,
+          attribution,
+        );
         return { ok: true, expires_at: expiresAt };
       }),
     );
@@ -413,8 +430,15 @@ export function buildMcpServer(
       // The one agent-scoped write: recordProgressNote's requireAgent rejects a
       // human, and in a supervised session `actor` IS the human root — so act as
       // the bound agent instead of relaxing the guard. For a plain agent session
-      // viaAgent is undefined and `actor` is already the agent (unchanged).
-      recordProgressNote(db, viaAgent ?? actor, ref, note, attribution);
+      // `actor` is already the agent (unchanged).
+      //
+      // SYD-281: this was `viaAgent ?? actor` — the identity rule hand-rolled at
+      // the one site someone hit the problem. effectiveActor IS that expression,
+      // so this is behaviourally identical and the special case disappears.
+      // Progress notes deliberately keep the AGENT on events.actorId (lastNoteFor
+      // joins on it) — the one event where the agent is the actor, not the
+      // viaAgent.
+      recordProgressNote(db, effectiveActor(db, actor, attribution), ref, note, attribution);
       return { ok: true };
     }),
   );

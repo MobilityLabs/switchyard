@@ -4,6 +4,7 @@
 // (claim gate, attention, search) migrate at SYD-207.
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHumanWithToken } from "../helpers/human.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -17,7 +18,7 @@ let headers: Record<string, string>;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  const worker = createActor(db, { name: "delivery-worker", type: "human" });
+  const worker = createHumanWithToken(db, "delivery-worker");
   headers = { authorization: `Bearer ${worker.token}` };
   createProject(db, worker.actor, { key: "SYD", name: "Switchyard" });
   createIssue(db, worker.actor, { projectKey: "SYD", title: "One" });

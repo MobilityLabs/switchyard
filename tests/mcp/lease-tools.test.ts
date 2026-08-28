@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { openDb, type Db } from "../../src/db/index.js";
@@ -7,7 +9,7 @@ import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, getIssue } from "../../src/services/issues.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
-let db: Db, human: Actor, agent: Actor;
+let db: Db, human: HumanActor, agent: Actor;
 async function connect(actor: Actor, connectionLeaseToken?: string) {
   const [ct, st] = InMemoryTransport.createLinkedPair();
   await buildMcpServer(db, actor, undefined, connectionLeaseToken).connect(st);
@@ -20,7 +22,7 @@ const text = (r: Awaited<ReturnType<Client["callTool"]>>) =>
 
 beforeEach(async () => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
   createIssue(db, human, { projectKey: "AIPI", title: "t" });

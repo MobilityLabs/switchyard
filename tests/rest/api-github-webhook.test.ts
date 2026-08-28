@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { describe, it, expect, beforeEach } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
@@ -15,11 +17,11 @@ function sign(body: string, secret: string = SECRET): string {
 
 let db: Db;
 let app: ReturnType<typeof buildGithubWebhookRoutes>;
-let human: Actor;
+let human: HumanActor;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
   app = buildGithubWebhookRoutes(db, SECRET);

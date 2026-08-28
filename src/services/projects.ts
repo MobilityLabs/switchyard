@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import type { HumanActor } from "./principal.js";
 import type { Db, DbOrTx } from "../db/index.js";
 import { projects } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -8,14 +9,12 @@ export type Project = typeof projects.$inferSelect;
 
 // Project mutations are board governance (SYD-157): server-enforced
 // human-only, like triage transitions and dependency removal.
-function requireHuman(actor: Actor, action: string): void {
-  if (actor.type !== "human") {
-    throw new SwitchyardError(`Only humans can ${action} — agents should ask a human to do this.`);
-  }
-}
 
-export function createProject(db: Db, actor: Actor, input: { key: string; name: string }): Project {
-  requireHuman(actor, "create a project");
+export function createProject(
+  db: Db,
+  actor: HumanActor,
+  input: { key: string; name: string },
+): Project {
   if (!/^[A-Z]{2,10}$/.test(input.key)) {
     throw new SwitchyardError(
       `Project key "${input.key}" is invalid — use 2–10 uppercase letters, e.g. "AIPI".`,
@@ -31,8 +30,12 @@ export function createProject(db: Db, actor: Actor, input: { key: string; name: 
 }
 
 /** Rename a project. The key (issue refs embed it) and counter are immutable. Human-only. */
-export function updateProject(db: Db, actor: Actor, key: string, input: { name: string }): Project {
-  requireHuman(actor, "rename a project");
+export function updateProject(
+  db: Db,
+  actor: HumanActor,
+  key: string,
+  input: { name: string },
+): Project {
   const project = getProjectByKey(db, key);
   return db
     .update(projects)

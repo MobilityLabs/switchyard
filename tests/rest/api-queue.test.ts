@@ -5,6 +5,7 @@
 // the wrong service, or a body schema that rejects the `null` that means
 // "remove from the queue", would both pass typecheck and fail in production.
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHumanWithToken } from "../helpers/human.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -16,7 +17,7 @@ let humanHeaders: Record<string, string>, agentHeaders: Record<string, string>;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" });
+  const human = createHumanWithToken(db, "sean");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
   humanHeaders = { authorization: `Bearer ${human.token}` };
   agentHeaders = { authorization: `Bearer ${agent.token}` };

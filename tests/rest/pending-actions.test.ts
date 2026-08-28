@@ -1,17 +1,22 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, getIssue, type IssueView } from "../../src/services/issues.js";
 import { createLoginLink, redeemLoginLink } from "../../src/services/auth.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
 import { attributionOf } from "../../src/services/attribution.js";
 import { listPendingActions } from "../../src/services/hard-gate.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
 let db: Db;
 let app: ReturnType<typeof buildApiRoutes>;
-let owner: Actor, bystander: Actor, agent: Actor;
+let owner: HumanActor, bystander: HumanActor, agent: Actor;
 let agentToken: string, supToken: string;
 let ownerCookie: string, bystanderCookie: string;
 let issue: IssueView;
@@ -28,8 +33,8 @@ function loginCookie(name: string): string {
 beforeEach(() => {
   db = openDb(":memory:");
   app = buildApiRoutes(db);
-  owner = createActor(db, { name: "sean", type: "human" }).actor;
-  bystander = createActor(db, { name: "morgan", type: "human" }).actor;
+  owner = createHuman(db, "sean");
+  bystander = createHuman(db, "morgan");
   const created = createActor(db, { name: "claude-code", type: "agent" });
   agent = created.actor;
   agentToken = created.token;
@@ -49,7 +54,7 @@ beforeEach(() => {
       issue.ref,
       { status: "done" },
       {},
-      attributionOf({ actor: owner, viaAgent: agent, sessionId: session.sessionId }),
+      attributionOf(resolveSupervisedPrincipal(db, session.sessionToken)!),
     ),
   ).toThrow(/awaiting human affirmation/i);
 

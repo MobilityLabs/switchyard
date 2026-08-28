@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -15,10 +17,10 @@ import { listIssueEvents } from "../../src/services/events.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 
-let db: Db, human: Actor, agent: Actor;
+let db: Db, human: HumanActor, agent: Actor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
   // Bound repo so recordDeliveryEvent's publish writes pr_state — post-SYD-207
@@ -127,7 +129,9 @@ describe("dependencies", () => {
 
   it("agents cannot remove a dependency — removal would defeat a human's gate", () => {
     addDependency(db, human, "AIPI-1", "AIPI-2");
-    expect(() => removeDependency(db, agent, "AIPI-1", "AIPI-2")).toThrowError(/only humans/i);
+    expect(() => removeDependency(db, agent, "AIPI-1", "AIPI-2")).toThrowError(
+      /only (a )?humans?/i,
+    );
     expect(listDependencies(db, "AIPI-2").blockedBy).toHaveLength(1);
     // Agents CAN still add — declaring a discovered blocker is intended.
     expect(() => addDependency(db, agent, "AIPI-2", "AIPI-3")).not.toThrow();

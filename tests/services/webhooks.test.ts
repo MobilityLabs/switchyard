@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -12,7 +14,7 @@ import {
 describe("webhooks", () => {
   it("registers, lists, scopes to a project, and removes", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const p = createProject(db, human, { key: "SYD", name: "Switchyard" });
     const all = addWebhook(db, human, { url: "http://example.com/hook" });
     const scoped = addWebhook(db, human, {
@@ -32,18 +34,7 @@ describe("webhooks", () => {
     );
   });
 
-  it("rejects agent actors managing webhooks", () => {
-    const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
-    const hook = addWebhook(db, human, { url: "http://example.com/hook" });
-
-    expect(() => addWebhook(db, agent, { url: "http://example.com/other" })).toThrowError(
-      /only humans manage webhooks/i,
-    );
-    expect(() => removeWebhook(db, agent, hook.id)).toThrowError(/only humans manage webhooks/i);
-    expect(() => setWebhookActive(db, agent, hook.id, false)).toThrowError(
-      /only humans manage webhooks/i,
-    );
-  });
+  // SYD-281: the agent/service refusal moved to the adapter — see
+  // tests/rest/api-service-actor.test.ts, which covers all three webhook routes
+  // against both non-human tiers.
 });

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { serve } from "@hono/node-server";
@@ -8,10 +10,13 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, type IssueView } from "../../src/services/issues.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
 import { createApp } from "../../src/server.js";
 
-let db: Db, human: Actor, agent: Actor, issue: IssueView;
+let db: Db, human: HumanActor, agent: Actor, plainAgent: Actor, issue: IssueView;
 let supToken: string, sessionId: number, agentToken: string;
 let server: ReturnType<typeof serve>, baseUrl: string;
 
@@ -46,14 +51,18 @@ function latestEvent(issueId: number, type: string) {
 
 beforeEach(async () => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
+  // The plain agent bearer this file also exercises. SYD-281: the SUPERVISED
+  // session's agent is a different, namespaced actor, taken from the principal
+  // below — binding to this one is exactly what the namespacing prevents.
   const created = createActor(db, { name: "claude-code", type: "agent" });
-  agent = created.actor;
+  plainAgent = created.actor;
   agentToken = created.token;
   createProject(db, human, { key: "SUP", name: "supervised" });
-  const session = openSupervisedSession(db, human, agent.name);
+  const session = openSupervisedSession(db, human, "claude-code");
   supToken = session.sessionToken;
   sessionId = session.sessionId;
+  agent = resolveSupervisedPrincipal(db, supToken)!.viaAgent!;
   issue = createIssue(db, human, { projectKey: "SUP", title: "Wire /mcp" });
   updateIssue(db, human, issue.ref, { status: "todo" });
 
@@ -69,9 +78,18 @@ afterEach(async () => {
 describe("/mcp resolves a supervised principal", () => {
   it("stamps dual attribution on writes made with a sup_ token", async () => {
     const client = await connect(supToken);
+    // SYD-281: a supervised session is on the agent path now, so it follows
+    // AGENT_STATUS_TRANSITIONS — claim, then move. Before, being typed human let
+    // it jump straight to in_review from todo.
+    const claimed = await client.callTool({ name: "claim_issue", arguments: { ref: issue.ref } });
+    expect(claimed.isError).toBeFalsy();
     const r = await client.callTool({
       name: "update_issue",
-      arguments: { ref: issue.ref, status: "in_review" },
+      arguments: {
+        ref: issue.ref,
+        status: "in_review",
+        lease_token: JSON.parse(text(claimed)).lease_token,
+      },
     });
     expect(r.isError).toBeFalsy();
 
@@ -121,7 +139,7 @@ describe("/mcp resolves a supervised principal", () => {
     // CROSS-TASK INVARIANT: a plain session's id in events.sessionId would make
     // POST /auth/logout FK-500, since deleteSession hard-deletes plain sessions.
     const ev = latestEvent(issue.id, "comment");
-    expect(ev.actor_id).toBe(agent.id);
+    expect(ev.actor_id).toBe(plainAgent.id);
     expect(ev.via_agent_id).toBeNull();
     expect(ev.session_id).toBeNull();
     await client.close();

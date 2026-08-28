@@ -74,7 +74,7 @@ describe("api auth + projects", () => {
       body: JSON.stringify({ name: "agent rename" }),
     });
     expect(denied.status).toBe(400);
-    expect(((await denied.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await denied.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
   });
 
   it("rejects agent-token project creation (SYD-157)", async () => {
@@ -84,7 +84,7 @@ describe("api auth + projects", () => {
       body: JSON.stringify({ key: "AGT", name: "agent project" }),
     });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toMatch(/only humans/i);
+    expect(((await res.json()) as { error: string }).error).toMatch(/only (a )?humans?/i);
   });
 
   it("lists actors without leaking token hashes", async () => {

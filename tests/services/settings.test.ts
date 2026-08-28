@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import {
@@ -32,7 +34,7 @@ describe("settings", () => {
 
   it("a human can override a setting, read it back, and it shows isDefault: false", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     setSetting(db, human, "sessions.stale_seconds", 60);
     expect(getSetting(db, "sessions.stale_seconds")).toBe(60);
     const row = getAllSettings(db).find((r) => r.key === "sessions.stale_seconds")!;
@@ -42,7 +44,7 @@ describe("settings", () => {
 
   it("setting twice overwrites rather than duplicating", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     setSetting(db, human, "dispatch.poll_seconds", 100);
     setSetting(db, human, "dispatch.poll_seconds", 200);
     expect(getSetting(db, "dispatch.poll_seconds")).toBe(200);
@@ -50,7 +52,7 @@ describe("settings", () => {
 
   it("resetSetting deletes the row, reverting to default", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     setSetting(db, human, "instance.name", "Acme Tracker");
     expect(getSetting(db, "instance.name")).toBe("Acme Tracker");
     resetSetting(db, human, "instance.name");
@@ -60,7 +62,7 @@ describe("settings", () => {
 
   it("validates type and range", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     expect(() => setSetting(db, human, "dispatch.max_concurrent", "not a number")).toThrowError(
       /positive integer/i,
     );
@@ -86,18 +88,16 @@ describe("settings", () => {
 
   it("rejects unknown keys on get/set/reset", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     expect(() => getSetting(db, "nope.nope" as never)).toThrowError(/unknown setting/i);
     expect(() => setSetting(db, human, "nope.nope", 1)).toThrowError(/unknown setting/i);
     expect(() => resetSetting(db, human, "nope.nope")).toThrowError(/unknown setting/i);
   });
 
-  it("rejects agent actors writing settings", () => {
-    const db = openDb(":memory:");
-    const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
-    expect(() => setSetting(db, agent, "instance.name", "Nope")).toThrowError(/human-only/i);
-    expect(() => resetSetting(db, agent, "instance.name")).toThrowError(/human-only/i);
-  });
+  // SYD-281: the agent/service refusal moved to the adapter, where the gate now
+  // lives — tests/rest/api-service-actor.test.ts. setSetting takes a HumanActor,
+  // so an agent cannot reach it at all, and asserting that here would mean
+  // minting a fake one.
 
   it("getDispatchPolicy returns just the dispatch.* group, defaults on a fresh DB", () => {
     const db = openDb(":memory:");
@@ -119,7 +119,7 @@ describe("settings", () => {
 
     it("an instance.base_url override wins over SWITCHYARD_URL", () => {
       const db = openDb(":memory:");
-      const human = createActor(db, { name: "sean", type: "human" }).actor;
+      const human = createHuman(db, "sean");
       setSetting(db, human, "instance.base_url", "https://tracker.example.com");
       vi.stubEnv("SWITCHYARD_URL", "http://env.example:9999");
       expect(resolveBaseUrl(db)).toBe("https://tracker.example.com");
@@ -139,7 +139,7 @@ describe("settings", () => {
 
     it("resetSetting restores env/default resolution", () => {
       const db = openDb(":memory:");
-      const human = createActor(db, { name: "sean", type: "human" }).actor;
+      const human = createHuman(db, "sean");
       setSetting(db, human, "instance.base_url", "https://tracker.example.com");
       resetSetting(db, human, "instance.base_url");
       vi.stubEnv("SWITCHYARD_URL", "http://env.example:9999");
@@ -149,7 +149,7 @@ describe("settings", () => {
 
   it("getDispatchPolicy reflects human overrides", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     setSetting(db, human, "dispatch.max_concurrent", 5);
     setSetting(db, human, "dispatch.poll_seconds", 30);
     expect(getDispatchPolicy(db)).toMatchObject({ maxConcurrent: 5, intervalSeconds: 30 });
@@ -163,7 +163,7 @@ describe("settings", () => {
 
   it("accepts a boolean for affirm_requires_signature and rejects non-booleans", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     setSetting(db, human, "supervised.affirm_requires_signature", true);
     expect(getSetting(db, "supervised.affirm_requires_signature")).toBe(true);
     expect(() => setSetting(db, human, "supervised.affirm_requires_signature", "yes")).toThrow(

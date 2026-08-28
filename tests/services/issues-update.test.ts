@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -16,10 +18,10 @@ import { addGithubRepo } from "../../src/services/github-repos.js";
 
 const REPO = "acme/widgets";
 
-let db: Db, human: Actor, agent: Actor;
+let db: Db, human: HumanActor, agent: Actor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
   // Bound repo so recordDeliveryEvent's publish writes pr_state — post-SYD-207
@@ -133,10 +135,10 @@ describe("updateIssue", () => {
     // non-status edits by agents are still allowed in triage
     expect(updateIssue(db, agent, filed.ref, { priority: "high" }).priority).toBe("high");
     expect(() => updateIssue(db, agent, filed.ref, { status: "todo" })).toThrowError(
-      /only humans move issues out of triage/i,
+      /only a human acting in person moves issues out of triage/i,
     );
     expect(() => claimIssue(db, agent, filed.ref)).toThrowError(
-      /only humans move issues out of triage/i,
+      /only a human acting in person moves issues out of triage/i,
     );
     expect(updateIssue(db, human, filed.ref, { status: "todo" }).status).toBe("todo");
   });
@@ -147,7 +149,7 @@ describe("updateIssue", () => {
     updateIssue(db, agent, "AIPI-1", { status: "in_review" }, { presented: leaseToken });
     expect(() =>
       updateIssue(db, agent, "AIPI-1", { status: "done" }, { presented: leaseToken }),
-    ).toThrowError(/only humans move issues to done/i);
+    ).toThrowError(/only a human acting in person moves issues to done/i);
     expect(getIssue(db, "AIPI-1").status).toBe("in_review");
     expect(updateIssue(db, human, "AIPI-1", { status: "done" }).status).toBe("done");
   });
@@ -156,7 +158,7 @@ describe("updateIssue", () => {
     // starting without "auto": agent adding it is rejected
     updateIssue(db, human, "AIPI-1", { labels: ["urgent"] });
     expect(() => updateIssue(db, agent, "AIPI-1", { labels: ["auto", "urgent"] })).toThrowError(
-      /only humans apply the "auto" label/i,
+      /only a human acting in person applies the "auto" label/i,
     );
     expect(getIssue(db, "AIPI-1").labels).toEqual(["urgent"]);
 

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -8,8 +10,12 @@ import { sql } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, updateIssue, type IssueView } from "../../src/services/issues.js";
+import { createIssue, updateIssue, getIssue, type IssueView } from "../../src/services/issues.js";
 import { addDependency, listDependencies } from "../../src/services/dependencies.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
+import { requestHumanInput } from "../../src/services/needs-input.js";
+import { declarePrLink } from "../../src/services/pr-links.js";
+import { listLiveLinkViews } from "../../src/services/pr-links.js";
 import { setSetting } from "../../src/services/settings.js";
 import {
   openSupervisedSession,
@@ -19,7 +25,7 @@ import { attributionOf } from "../../src/services/attribution.js";
 import type { Principal } from "../../src/services/principal.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
-let db: Db, human: Actor, agent: Actor, dir: string, prin: Principal, issue: IssueView;
+let db: Db, human: HumanActor, agent: Actor, dir: string, prin: Principal, issue: IssueView;
 
 const text = (r: Awaited<ReturnType<Client["callTool"]>>) =>
   (r.content as { type: string; text: string }[])[0].text;
@@ -39,9 +45,9 @@ function latestEvent(issueId: number, type: string) {
  * how /mcp bakes a resolved supervised session into the tool closure. */
 async function connectSupervised(): Promise<Client> {
   const [ct, st] = InMemoryTransport.createLinkedPair();
-  await buildMcpServer(db, prin.actor, dir, undefined, attributionOf(prin), prin.viaAgent).connect(
-    st,
-  );
+  // SYD-281: no viaAgent argument — the acting agent is derived from the
+  // attribution's viaAgentId by effectiveActor, so there is one source of truth.
+  await buildMcpServer(db, prin.actor, dir, undefined, attributionOf(prin)).connect(st);
   const c = new Client({ name: "test", version: "0.0.0" });
   await c.connect(ct);
   return c;
@@ -50,11 +56,13 @@ async function connectSupervised(): Promise<Client> {
 beforeEach(() => {
   db = openDb(":memory:");
   dir = mkdtempSync(path.join(tmpdir(), "syd-supervised-"));
-  human = createActor(db, { name: "sean", type: "human" }).actor;
-  agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
+  human = createHuman(db, "sean");
+  // SYD-281: the session's agent is minted namespaced by openSupervisedSession,
+  // so take it from the resolved principal rather than pre-creating one.
   createProject(db, human, { key: "SUP", name: "supervised" });
-  const { sessionToken } = openSupervisedSession(db, human, agent.name);
+  const { sessionToken } = openSupervisedSession(db, human, "claude-code");
   prin = resolveSupervisedPrincipal(db, sessionToken)!;
+  agent = prin.viaAgent!;
   issue = createIssue(db, human, { projectKey: "SUP", title: "Wire the surface" });
   updateIssue(db, human, issue.ref, { status: "todo" });
 });
@@ -64,9 +72,23 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 describe("MCP write tools in a supervised session", () => {
   it("(a) update_issue -> in_review writes a dual-attributed status_changed event", async () => {
     const client = await connectSupervised();
+    // SYD-281: a supervised session is now on the agent path, so it obeys
+    // AGENT_STATUS_TRANSITIONS like any other agent — todo -> in_review is not a
+    // legal jump, and in_review is assigneeOnly. Before this change a supervised
+    // principal was typed human and skipped the allow-list entirely, which is
+    // one of the bypasses this story closes. Claim, then move.
+    const claimed = await client.callTool({
+      name: "claim_issue",
+      arguments: { ref: issue.ref },
+    });
+    expect(claimed.isError).toBeFalsy();
     const r = await client.callTool({
       name: "update_issue",
-      arguments: { ref: issue.ref, status: "in_review" },
+      arguments: {
+        ref: issue.ref,
+        status: "in_review",
+        lease_token: JSON.parse(text(claimed)).lease_token,
+      },
     });
     expect(r.isError).toBeFalsy();
     expect(JSON.parse(text(r)).status).toBe("in_review");
@@ -135,7 +157,7 @@ describe("MCP write tools in a supervised session", () => {
     }
   });
 
-  it("remove_dependency via plain agent is refused, but supervised session parks or executes it", async () => {
+  it("remove_dependency via plain agent is refused; supervised parks when gated, and is REFUSED when not", async () => {
     // 1. Setup blocker issue and dependency
     const blocker = createIssue(db, human, { projectKey: "SUP", title: "The blocker" });
     addDependency(db, human, blocker.ref, issue.ref);
@@ -151,7 +173,7 @@ describe("MCP write tools in a supervised session", () => {
       arguments: { blocker_ref: blocker.ref, blocked_ref: issue.ref },
     });
     expect(rPlain.isError).toBe(true);
-    expect(text(rPlain)).toMatch(/Only humans remove dependencies/i);
+    expect(text(rPlain)).toMatch(/only a human acting in person removes dependencies/i);
 
     // 3. Supervised session with hard-gate action configured parks a pending action
     setSetting(db, human, "supervised.hard_gate_actions", ["dependency.remove"]);
@@ -173,15 +195,203 @@ describe("MCP write tools in a supervised session", () => {
     // Edge still exists (nothing was changed)
     expect(listDependencies(db, issue.ref).blockedBy.map((d) => d.ref)).toEqual([blocker.ref]);
 
-    // 4. Supervised session with full absorption (no hard-gate) executes immediately
+    // 4. SYD-281: with full absorption the removal is now REFUSED, not executed.
+    // "Dependency removal is human-only" (CLAUDE.md) used to be satisfied by a
+    // supervised principal because it is typed human. This is the fails-closed
+    // property: without the operator settings write the capability is lost, not
+    // the guard.
     setSetting(db, human, "supervised.hard_gate_actions", []);
     const rAbsorb = await client.callTool({
       name: "remove_dependency",
       arguments: { blocker_ref: blocker.ref, blocked_ref: issue.ref },
     });
-    expect(rAbsorb.isError).toBeUndefined();
+    expect(rAbsorb.isError).toBe(true);
+    expect(text(rAbsorb)).toMatch(/human/i);
 
-    // Edge is gone!
-    expect(listDependencies(db, issue.ref).blockedBy).toEqual([]);
+    // Edge survives.
+    expect(listDependencies(db, issue.ref).blockedBy.map((d) => d.ref)).toEqual([blocker.ref]);
+  });
+});
+
+// SYD-281's headline finding. `declarePrLink` wrote
+// `confirmedBy: isAgent ? null : actor.id`, and a supervised principal resolves
+// to the bound HUMAN — so an agent's declaration was auto-confirmed and stamped
+// with the human's actor id. It did not evade the attestation; it manufactured
+// one, and `provesLanded` accepted it.
+//
+// Driven through the MCP tool with a real sup_ token rather than by calling
+// declarePrLink directly: SYD-280 shipped inert because its tests called
+// upsertPrState directly while production never did.
+describe("declare_pr_link in a supervised session (SYD-281)", () => {
+  const REPO = "acme/widgets";
+
+  beforeEach(() => {
+    addGithubRepo(db, human, { fullName: REPO, projectKey: "SUP" });
+  });
+
+  /** Claims the issue for the supervised session and returns its lease token. */
+  async function claimIt(client: Client): Promise<string> {
+    const r = await client.callTool({ name: "claim_issue", arguments: { ref: issue.ref } });
+    if (r.isError) throw new Error("claim_issue failed: " + text(r));
+    return JSON.parse(text(r)).lease_token as string;
+  }
+
+  it("declares UNCONFIRMED — a supervised agent proposes, it does not vouch", async () => {
+    const client = await connectSupervised();
+    const lease = await claimIt(client);
+    const r = await client.callTool({
+      name: "declare_pr_link",
+      arguments: { ref: issue.ref, repo: REPO, pr_number: 7, lease_token: lease },
+    });
+    expect(r.isError).toBeFalsy();
+
+    const [link] = listLiveLinkViews(db, issue.id);
+    expect(link.confirmedByName).toBeNull();
+    expect(link.confirmedByHuman).toBe(false);
+    expect(link.provesLanded).toBe(false);
+  });
+
+  it("records the AGENT as declarer, so revoke's ownership test is the agent's", async () => {
+    const client = await connectSupervised();
+    const lease = await claimIt(client);
+    await client.callTool({
+      name: "declare_pr_link",
+      arguments: { ref: issue.ref, repo: REPO, pr_number: 7, lease_token: lease },
+    });
+    const [link] = listLiveLinkViews(db, issue.id);
+    expect(link.declaredByName).toBe(agent.name);
+  });
+
+  it("emits pr_link_declared with confirmed:false — the event agrees with the row", async () => {
+    const client = await connectSupervised();
+    const lease = await claimIt(client);
+    await client.callTool({
+      name: "declare_pr_link",
+      arguments: { ref: issue.ref, repo: REPO, pr_number: 7, lease_token: lease },
+    });
+    const [row] = db.all<{ payload: string }>(
+      sql`SELECT payload FROM events WHERE issue_id = ${issue.id} AND type = 'pr_link_declared' ORDER BY id DESC LIMIT 1`,
+    );
+    expect(JSON.parse(row.payload).confirmed).toBe(false);
+  });
+
+  it("refuses a declaration on an issue the session has not claimed", async () => {
+    const other = createIssue(db, human, { projectKey: "SUP", title: "Not ours" });
+    const client = await connectSupervised();
+    const r = await client.callTool({
+      name: "declare_pr_link",
+      arguments: { ref: other.ref, repo: REPO, pr_number: 9 },
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/not yours to declare/i);
+  });
+
+  it("forces role to delivers — a supervised agent cannot mint a references suggestion", async () => {
+    const client = await connectSupervised();
+    const lease = await claimIt(client);
+    await client.callTool({
+      name: "declare_pr_link",
+      arguments: {
+        ref: issue.ref,
+        repo: REPO,
+        pr_number: 7,
+        role: "references",
+        lease_token: lease,
+      },
+    });
+    const [link] = listLiveLinkViews(db, issue.id);
+    expect(link.role).toBe("delivers");
+  });
+
+  // SYD-281: after the identity rule the session's assignments, declaredBy and
+  // creatorId are the AGENT's, so a whoami that reported only the accountable
+  // human would send search_issues(assignee: whoami().name) looking for work
+  // under a name that holds none of it.
+  it("whoami reports the accountable human AND the agent actually holding the work", async () => {
+    const client = await connectSupervised();
+    const me = JSON.parse(text(await client.callTool({ name: "whoami", arguments: {} })));
+    expect(me.name).toBe(human.name);
+    expect(me.type).toBe("human");
+    expect(me.actingAs).toMatchObject({ id: agent.id, name: agent.name, type: "agent" });
+  });
+
+  // SYD-281 review (opus + fable): the two cases the spec named as the ones a
+  // naive implementer gets wrong, plus the two gates the changeset review found
+  // unconverted. Each of these passes on `main` — i.e. each is a live hole.
+
+  it("a NO-OP status patch does not clear needsInput", async () => {
+    // issues.ts's clear fires on `patch.status !== undefined`, NOT on a change,
+    // and the hard-gate divert only engages when the status actually differs. So
+    // a supervised agent could answer its own escalation with a status patch
+    // equal to the current status — touching `comment` never enters into it.
+    const claimed = await (
+      await connectSupervised()
+    ).callTool({
+      name: "claim_issue",
+      arguments: { ref: issue.ref },
+    });
+    const lease = JSON.parse(text(claimed)).lease_token as string;
+    requestHumanInput(db, agent, issue.ref, "Which approach?", lease);
+    expect(getIssue(db, issue.ref).needsInput).toBe(true);
+
+    const client = await connectSupervised();
+    const cur = getIssue(db, issue.ref).status;
+    const r = await client.callTool({
+      name: "update_issue",
+      arguments: { ref: issue.ref, status: cur, lease_token: lease },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(getIssue(db, issue.ref).needsInput).toBe(true);
+  });
+
+  it("cannot revoke a link the human declared in person", async () => {
+    // The repo is already linked by this describe's beforeEach.
+    // The human declares, at their desk, with no session.
+    declarePrLink(db, human, issue.ref, { repo: "acme/widgets", prNumber: 11 }, undefined, {});
+
+    const client = await connectSupervised();
+    const r = await client.callTool({
+      name: "revoke_pr_link",
+      arguments: { ref: issue.ref, repo: "acme/widgets", pr_number: 11, reason: "not mine" },
+    });
+    expect(r.isError).toBe(true);
+    // declaredBy is the human and the link is confirmed, so both the ownership
+    // test and the confirmed test refuse it. Keyed to `actor` (the accountable
+    // human) instead of the acting agent, this would have succeeded.
+    expect(text(r)).toMatch(/confirmed|declared by someone else/i);
+  });
+
+  it("request_human_input on its own claimed issue still needs the agent's lease", async () => {
+    const claimed = await (
+      await connectSupervised()
+    ).callTool({
+      name: "claim_issue",
+      arguments: { ref: issue.ref },
+    });
+    expect(claimed.isError).toBeFalsy();
+    const client = await connectSupervised();
+    const r = await client.callTool({
+      name: "request_human_input",
+      arguments: { ref: issue.ref, question: "Which approach?" },
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/lease/i);
+    expect(getIssue(db, issue.ref).needsInput).toBe(false);
+  });
+
+  it("an @agent comment does not dispatch an answerer — that is a human act", async () => {
+    // worker-select.ts consumes every agent_question event as a signal to
+    // dispatch a headless answerer, so a supervised agent posting "@agent ..."
+    // could summon a worker as though a person had asked.
+    const client = await connectSupervised();
+    const r = await client.callTool({
+      name: "comment",
+      arguments: { ref: issue.ref, body: "@agent what should I do here?" },
+    });
+    expect(r.isError).toBeFalsy();
+    const [row] = db.all<{ n: number }>(
+      sql`SELECT COUNT(*) AS n FROM events WHERE issue_id = ${issue.id} AND type = 'agent_question'`,
+    );
+    expect(row.n).toBe(0);
   });
 });

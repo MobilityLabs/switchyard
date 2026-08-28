@@ -1,4 +1,6 @@
 import { and, eq, isNull, notInArray, or, sql } from "drizzle-orm";
+import { asHuman, effectiveActor } from "./principal.js";
+import { NO_SESSION } from "./attribution.js";
 import type { Db, DbOrTx } from "../db/index.js";
 import { dependencies, issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -131,9 +133,14 @@ export function removeDependency(
       });
     }
   }
-  if (actor.type !== "human") {
+  // SYD-281: "dependency removal is human-only" (CLAUDE.md). A supervised
+  // principal is typed human, so it passed. Note this fails CLOSED without the
+  // operator settings write: a supervised removal skips the divert (which needs
+  // `dependency.remove` in supervised.hard_gate_actions) and lands here, refused.
+  // The setting upgrades refusal to a proposable divert — UX, not security.
+  if (asHuman(actor, attr) === null) {
     throw new SwitchyardError(
-      "Only humans remove dependencies — if you believe a blocker is wrong, say so in a comment.",
+      "Only a human acting in person removes dependencies — if you believe a blocker is wrong, say so in a comment. A supervised session can propose one once dependency.remove is in supervised.hard_gate_actions.",
     );
   }
   db.transaction((tx) => {
@@ -252,11 +259,27 @@ export function getOpenBlockers(db: DbOrTx, issueId: number): IssueView[] {
  * filters below apply uniformly, so the walk simply continues down the queue
  * and falls through to (2)/(3) once the ranked set is exhausted.
  */
-export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView | null {
+export function nextTask(
+  db: Db,
+  actor: Actor,
+  projectKey?: string,
+  ctx: Attribution = NO_SESSION,
+): IssueView | null {
   const project = projectKey !== undefined ? getProjectByKey(db, projectKey) : undefined;
   const conditions = [
     eq(issues.status, "todo"),
-    or(isNull(issues.assigneeId), eq(issues.assigneeId, actor.id)),
+    // SYD-281: the assignee leg keys to the identity that actually holds work,
+    // so a supervised session still sees its own agent's claims. Leaving it on
+    // the human WEDGES: next_task keeps surfacing issues assigned to the human,
+    // which assertClaimable then refuses to the agent, and with .limit(1) one
+    // such issue pins the recommendation forever.
+    //
+    // isAttendedCaller and callerClassification below deliberately keep reading
+    // `actor` (the human). That is the one place NOT applying the identity rule
+    // is the security-relevant choice: they decide whether the hard
+    // `worker_preference <> interactive` filter applies, and a supervised
+    // session must keep the interactive queue it exists to serve.
+    or(isNull(issues.assigneeId), eq(issues.assigneeId, effectiveActor(db, actor, ctx).id)),
     sql`NOT EXISTS (
       SELECT 1 FROM dependencies d
       JOIN issues b ON b.id = d.blocker_id

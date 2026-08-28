@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
 import { openDb, type Db } from "../../src/db/index.js";
@@ -16,7 +18,7 @@ const hookBodies: string[] = [];
 beforeAll(async () => {
   db = openDb(":memory:");
   agentToken = createActor(db, { name: "claude/dev", type: "agent" }).token;
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
 
   server = await new Promise((resolve) => {

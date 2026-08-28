@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import type { HumanActor } from "./principal.js";
 import type { Db } from "../db/index.js";
 import { actors } from "../db/schema.js";
 import { SwitchyardError } from "./errors.js";
@@ -8,12 +9,6 @@ export type ActorType = "human" | "agent" | "service";
 /** `attended` = a person is watching this caller (see actors.attended). */
 export type Actor = { id: number; name: string; type: ActorType; attended: boolean };
 export type ActorWithStatus = Actor & { createdAt: number; hasToken: boolean };
-
-function requireHuman(actor: Actor, action: string): void {
-  if (actor.type !== "human") {
-    throw new SwitchyardError(`Only humans can ${action} — agents should ask a human to do this.`);
-  }
-}
 
 export function createActor(
   db: Db,
@@ -57,7 +52,12 @@ export function authenticate(db: Db, token: string): Actor | null {
  * that doesn't authenticate through Switchyard (e.g. the GitHub webhook
  * receiver) — unlike createActor, this never throws on an existing name.
  */
-export function getOrCreateActor(db: Db, name: string, type: ActorType): Actor {
+export function getOrCreateActor(
+  db: Db,
+  name: string,
+  type: ActorType,
+  opts: { attended?: boolean } = {},
+): Actor {
   const existing = db.select().from(actors).where(eq(actors.name, name)).get();
   if (existing)
     return {
@@ -66,7 +66,11 @@ export function getOrCreateActor(db: Db, name: string, type: ActorType): Actor {
       type: existing.type,
       attended: existing.attended,
     };
-  const row = db.insert(actors).values({ name, type }).returning().get();
+  const row = db
+    .insert(actors)
+    .values({ name, type, ...(opts.attended === undefined ? {} : { attended: opts.attended }) })
+    .returning()
+    .get();
   return { id: row.id, name: row.name, type: row.type, attended: row.attended };
 }
 
@@ -104,8 +108,12 @@ export function listActorsWithStatus(db: Db): ActorWithStatus[] {
  * Refused for humans, who are attended by definition — silently accepting a
  * flag that changes nothing would imply it could be turned off.
  */
-export function setActorAttended(db: Db, actor: Actor, actorId: number, attended: boolean): Actor {
-  requireHuman(actor, "change whether an actor is attended");
+export function setActorAttended(
+  db: Db,
+  actor: HumanActor,
+  actorId: number,
+  attended: boolean,
+): Actor {
   const target = getActorById(db, actorId);
   if (target.type === "human") {
     throw new SwitchyardError(
@@ -117,8 +125,7 @@ export function setActorAttended(db: Db, actor: Actor, actorId: number, attended
 }
 
 /** Mints a fresh token for an existing actor, invalidating the old one. Human-only. */
-export function rotateActorToken(db: Db, actor: Actor, actorId: number): { token: string } {
-  requireHuman(actor, "rotate an actor's token");
+export function rotateActorToken(db: Db, actor: HumanActor, actorId: number): { token: string } {
   getActorById(db, actorId);
   const token = mintToken("syd");
   db.update(actors)
@@ -129,8 +136,7 @@ export function rotateActorToken(db: Db, actor: Actor, actorId: number): { token
 }
 
 /** Nulls out an actor's token hash, so it can no longer authenticate. Human-only. */
-export function revokeActorToken(db: Db, actor: Actor, actorId: number): void {
-  requireHuman(actor, "revoke an actor's token");
+export function revokeActorToken(db: Db, actor: HumanActor, actorId: number): void {
   if (actorId === actor.id) {
     throw new SwitchyardError(
       "You cannot revoke your own actor's token — sign in as a different human actor to do this.",

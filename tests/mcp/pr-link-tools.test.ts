@@ -4,6 +4,8 @@
 // Without it a feat/ branch has no way to say which PR carries its work, and
 // the swap in pr-status.ts/attention.ts would silently regress SYD-267.
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { openDb, type Db } from "../../src/db/index.js";
@@ -15,7 +17,7 @@ import { listLiveLinks } from "../../src/services/pr-links.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
 const REPO = "acme/widgets";
-let db: Db, human: Actor, agent: Actor;
+let db: Db, human: HumanActor, agent: Actor;
 
 async function connect(actor: Actor, connectionLease?: string) {
   const [ct, st] = InMemoryTransport.createLinkedPair();
@@ -30,7 +32,7 @@ const text = (r: Awaited<ReturnType<Client["callTool"]>>) =>
 
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship it" });

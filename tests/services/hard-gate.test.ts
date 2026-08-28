@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { and, eq, sql } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
@@ -41,10 +43,10 @@ const park = (
   expiresAt: number = nowSec() + 300,
 ) => findOrCreatePendingAction(db, session, issue, actionType, payload, expiresAt);
 
-let db: Db, human: Actor, issueId: number, sessionId: number;
+let db: Db, human: HumanActor, issueId: number, sessionId: number;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
   issueId = createIssue(db, human, { projectKey: "SYD", title: "t", description: "d" }).id;
@@ -172,7 +174,7 @@ describe("affirmPendingAction", () => {
   });
 
   it("refuses a human who is not the session's accountable human", () => {
-    const other = createActor(db, { name: "other", type: "human" }).actor;
+    const other = createHuman(db, "other");
     const id = park(sessionId, issueId, "done");
     expect(() => affirmPendingAction(db, other, id)).toThrow(/only the accountable human/i);
     expect(getIssue(db, "SYD-1").status).not.toBe("done");
@@ -248,7 +250,7 @@ describe("affirmPendingAction", () => {
   });
 
   it("a non-owner affirming an expired row gets the owner-tie error, not the expired one, and causes no write", () => {
-    const other = createActor(db, { name: "other", type: "human" }).actor;
+    const other = createHuman(db, "other");
     const id = park(sessionId, issueId, "done", {}, nowSec() - 1);
     expect(() => affirmPendingAction(db, other, id)).toThrow(/only the accountable human/i);
     // Not the expiry message, and — the actual proof — the row was never

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
@@ -18,7 +20,7 @@ const REPO = "acme/widgets";
 
 function setup() {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   return { db, human };
 }

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { claimLeases, events } from "../../src/db/schema.js";
@@ -22,7 +24,7 @@ const REPO = "acme/widgets";
 
 function setup() {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   // Bound repo so recordDeliveryEvent/upsertPrState write attributed pr_state

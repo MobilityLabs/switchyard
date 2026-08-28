@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import { actingAgent, effectiveActor } from "./principal.js";
 import type { Db } from "../db/index.js";
 import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -40,8 +41,13 @@ export function requestHumanInput(
     // already-claimed issue by its holder"). A non-holder agent escalating an
     // issue it hasn't claimed is a benign additive signal (like comment) and is
     // not lease-gated; humans are never lease-gated.
-    if (actor.type === "agent" && issue.assigneeId === actor.id) {
-      validateLease(tx, issue.id, actor.id, leaseToken);
+    // SYD-281: both halves move. The predicate asked `type === "agent"`, which a
+    // supervised principal (typed human) fails, so the whole branch was skipped
+    // and the lease never validated — on an issue its own agent now holds. The
+    // key must be the effective actor too: the human holds no lease.
+    const eff = effectiveActor(tx, actor, attr);
+    if (actingAgent(tx, actor, attr) !== null && issue.assigneeId === eff.id) {
+      validateLease(tx, issue.id, eff.id, leaseToken);
     }
     const row = tx
       .update(issues)

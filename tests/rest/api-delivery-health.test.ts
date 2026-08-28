@@ -3,6 +3,7 @@
 // tell whether a night was bad.
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHumanWithToken } from "../helpers/human.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -24,7 +25,7 @@ const REPO = "acme/widgets";
 
 beforeEach(() => {
   db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" });
+  const human = createHumanWithToken(db, "sean");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
   humanHeaders = { authorization: `Bearer ${human.token}` };
   agentHeaders = { authorization: `Bearer ${agent.token}` };

@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import type { HumanActor } from "./principal.js";
 import type { Db } from "../db/index.js";
 import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -42,22 +43,15 @@ function pinAlreadyDeadEnded(db: Db, issueId: number, pin: DeliveryPin): boolean
   return row !== undefined;
 }
 
-function requireHuman(actor: Actor, action: string): void {
-  if (actor.type !== "human") {
-    throw new SwitchyardError(`Only humans can ${action} — agents should ask a human to do this.`);
-  }
-}
-
 /**
  * Snoozes an issue until a future unix timestamp. Human-only.
  */
 export function snoozeIssue(
   db: Db,
-  actor: Actor,
+  actor: HumanActor,
   ref: string,
   untilUnixSeconds: number,
 ): IssueView {
-  requireHuman(actor, "snooze an issue");
   const now = Math.floor(Date.now() / 1000);
   if (untilUnixSeconds <= now) {
     throw new SwitchyardError(
@@ -85,8 +79,7 @@ export function snoozeIssue(
 /**
  * Marks an issue as a duplicate of another and cancels it. Human-only.
  */
-export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string): IssueView {
-  requireHuman(actor, "mark an issue as a duplicate");
+export function markDuplicate(db: Db, actor: HumanActor, ref: string, ofRef: string): IssueView {
   return db.transaction((tx) => {
     const current = getIssue(tx, ref);
     const of = getIssue(tx, ofRef);
@@ -136,11 +129,10 @@ export function markDuplicate(db: Db, actor: Actor, ref: string, ofRef: string):
  */
 export function redeliverIssue(
   db: Db,
-  actor: Actor,
+  actor: HumanActor,
   ref: string,
   expectedHeadSha?: string,
 ): IssueView {
-  requireHuman(actor, "retry a delivery");
   const current = getIssue(db, ref);
   const attention = getAttention(db, current.id);
   const pin = deliveryPinFor(db, current.id);
@@ -249,12 +241,11 @@ export type ResolvableDeviation = (typeof RESOLVABLE_DEVIATIONS)[number];
  */
 export function resolveDeviation(
   db: Db,
-  actor: Actor,
+  actor: HumanActor,
   ref: string,
   reason: string,
   note: string,
 ): IssueView {
-  requireHuman(actor, "resolve a process deviation");
   if (!(RESOLVABLE_DEVIATIONS as readonly string[]).includes(reason)) {
     throw new SwitchyardError(
       `"${reason}" cannot be resolved by hand — it is recomputed from current state and clears itself once the drift stops. Resolvable reasons: ${RESOLVABLE_DEVIATIONS.join(", ")}.`,
@@ -279,8 +270,12 @@ export function resolveDeviation(
   return getIssue(db, ref);
 }
 
-export function resolveDeliveryFailure(db: Db, actor: Actor, ref: string, note: string): IssueView {
-  requireHuman(actor, "resolve a delivery failure");
+export function resolveDeliveryFailure(
+  db: Db,
+  actor: HumanActor,
+  ref: string,
+  note: string,
+): IssueView {
   if (!note.trim()) {
     throw new SwitchyardError(
       "A note is required — say how you confirmed the delivery actually succeeded.",

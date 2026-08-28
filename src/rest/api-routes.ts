@@ -3,6 +3,8 @@ import { getCookie } from "hono/cookie";
 import { HTTPException } from "hono/http-exception";
 import { bodyLimit } from "hono/body-limit";
 import type { Db } from "../db/index.js";
+import { asHuman, type HumanActor } from "../services/principal.js";
+import { NO_SESSION } from "../services/attribution.js";
 import { SwitchyardError, PendingAffirmation } from "../services/errors.js";
 import {
   authenticate,
@@ -138,10 +140,24 @@ import {
 
 type Env = { Variables: { actor: Actor; leaseToken?: string } };
 
-function requireHumanCaller(actor: Actor, action: string): void {
-  if (actor.type !== "human") {
+/**
+ * SYD-281: the adapter mints, the service demands. Human-only services take a
+ * `HumanActor`, which only `asHuman` can produce — so this is where the runtime
+ * question is actually asked, and the returned value is the proof.
+ *
+ * `ctx` is NO_SESSION unconditionally: a `sup_` token resolves only at /mcp
+ * (src/server.ts), never here, so a REST caller never carries a supervised
+ * session. See the spec's "REST residual" — this is not containment, because a
+ * supervised agent on the human's workstation can present the human's own
+ * bearer. Nothing at this layer can tell those apart; credential hygiene and
+ * the cookie/signature routes are the mitigation, not asHuman.
+ */
+function requireHumanCaller(actor: Actor, action: string): HumanActor {
+  const human = asHuman(actor, NO_SESSION);
+  if (!human) {
     throw new SwitchyardError(`Only humans can ${action} — ask a human to do this.`);
   }
+  return human;
 }
 
 export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmentsDir()) {
@@ -193,10 +209,19 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/projects", (c) => c.json(listProjects(db)));
   app.post("/projects", body(projectBody), (c) =>
-    c.json(createProject(db, c.var.actor, c.req.valid("json"))),
+    c.json(
+      createProject(db, requireHumanCaller(c.var.actor, "create a project"), c.req.valid("json")),
+    ),
   );
   app.patch("/projects/:key", body(projectUpdateBody), (c) =>
-    c.json(updateProject(db, c.var.actor, c.req.param("key"), c.req.valid("json"))),
+    c.json(
+      updateProject(
+        db,
+        requireHumanCaller(c.var.actor, "rename a project"),
+        c.req.param("key"),
+        c.req.valid("json"),
+      ),
+    ),
   );
   app.get("/actors", (c) => c.json(listActorsWithStatus(db)));
 
@@ -215,7 +240,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     c.json(
       setActorAttended(
         db,
-        c.var.actor,
+        requireHumanCaller(c.var.actor, "change whether an actor is attended"),
         parseActorId(c.req.param("id")),
         c.req.valid("json").attended,
       ),
@@ -223,11 +248,21 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   );
 
   app.post("/actors/:id/rotate-token", (c) =>
-    c.json(rotateActorToken(db, c.var.actor, parseActorId(c.req.param("id")))),
+    c.json(
+      rotateActorToken(
+        db,
+        requireHumanCaller(c.var.actor, "rotate an actor's token"),
+        parseActorId(c.req.param("id")),
+      ),
+    ),
   );
 
   app.delete("/actors/:id/token", (c) => {
-    revokeActorToken(db, c.var.actor, parseActorId(c.req.param("id")));
+    revokeActorToken(
+      db,
+      requireHumanCaller(c.var.actor, "revoke an actor's token"),
+      parseActorId(c.req.param("id")),
+    );
     return c.json({ ok: true });
   });
 
@@ -273,7 +308,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.post("/issues", body(issueCreateBody), (c) =>
-    c.json(createIssue(db, c.var.actor, c.req.valid("json"))),
+    c.json(createIssue(db, c.var.actor, c.req.valid("json"), NO_SESSION)),
   );
 
   app.get("/issues/:ref", (c) => {
@@ -311,7 +346,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.post("/issues/:ref/claim", (c) => {
-    const { issue, leaseToken } = claimIssue(db, c.var.actor, c.req.param("ref"));
+    const { issue, leaseToken } = claimIssue(db, c.var.actor, c.req.param("ref"), {}, NO_SESSION);
     return c.json({ ...issue, leaseToken });
   });
 
@@ -320,7 +355,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   );
 
   app.post("/issues/:ref/comments", body(commentBody), (c) => {
-    addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);
+    addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body, NO_SESSION);
     return c.json({ ok: true });
   });
 
@@ -441,16 +476,38 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // what makes a link proof-bearing.
   app.post("/issues/:ref/pr-links", body(prLinkDeclareBody), (c) =>
     c.json(
-      declarePrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), c.var.leaseToken),
+      declarePrLink(
+        db,
+        c.var.actor,
+        c.req.param("ref"),
+        c.req.valid("json"),
+        c.var.leaseToken,
+        NO_SESSION,
+      ),
     ),
   );
 
   app.post("/issues/:ref/pr-links/confirm", body(prLinkTargetBody), (c) =>
-    c.json(confirmPrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"))),
+    c.json(
+      confirmPrLink(
+        db,
+        requireHumanCaller(c.var.actor, "confirm a PR link"),
+        c.req.param("ref"),
+        c.req.valid("json"),
+        NO_SESSION,
+      ),
+    ),
   );
 
   app.post("/issues/:ref/pr-links/revoke", body(prLinkRevokeBody), (c) => {
-    revokePrLink(db, c.var.actor, c.req.param("ref"), c.req.valid("json"), c.var.leaseToken);
+    revokePrLink(
+      db,
+      c.var.actor,
+      c.req.param("ref"),
+      c.req.valid("json"),
+      c.var.leaseToken,
+      NO_SESSION,
+    );
     return c.json({ ok: true });
   });
 
@@ -476,16 +533,35 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   );
 
   app.post("/issues/:ref/snooze", body(snoozeBody), (c) =>
-    c.json(snoozeIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").until)),
+    c.json(
+      snoozeIssue(
+        db,
+        requireHumanCaller(c.var.actor, "snooze an issue"),
+        c.req.param("ref"),
+        c.req.valid("json").until,
+      ),
+    ),
   );
 
   app.post("/issues/:ref/duplicate", body(duplicateBody), (c) =>
-    c.json(markDuplicate(db, c.var.actor, c.req.param("ref"), c.req.valid("json").of)),
+    c.json(
+      markDuplicate(
+        db,
+        requireHumanCaller(c.var.actor, "mark an issue as a duplicate"),
+        c.req.param("ref"),
+        c.req.valid("json").of,
+      ),
+    ),
   );
 
   app.post("/issues/:ref/redeliver", body(redeliverBody), (c) =>
     c.json(
-      redeliverIssue(db, c.var.actor, c.req.param("ref"), c.req.valid("json").expectedHeadSha),
+      redeliverIssue(
+        db,
+        requireHumanCaller(c.var.actor, "retry a delivery"),
+        c.req.param("ref"),
+        c.req.valid("json").expectedHeadSha,
+      ),
     ),
   );
 
@@ -494,7 +570,14 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // through a non-agent branch) — Retry is a dead end there since there's no
   // attributed PR to re-authorize.
   app.post("/issues/:ref/resolve-delivery", body(resolveDeliveryBody), (c) =>
-    c.json(resolveDeliveryFailure(db, c.var.actor, c.req.param("ref"), c.req.valid("json").note)),
+    c.json(
+      resolveDeliveryFailure(
+        db,
+        requireHumanCaller(c.var.actor, "resolve a delivery failure"),
+        c.req.param("ref"),
+        c.req.valid("json").note,
+      ),
+    ),
   );
 
   // SYD-262: the same escape hatch for a recorded-once process deviation.
@@ -505,7 +588,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
     c.json(
       resolveDeviation(
         db,
-        c.var.actor,
+        requireHumanCaller(c.var.actor, "resolve a process deviation"),
         c.req.param("ref"),
         c.req.valid("json").reason,
         c.req.valid("json").note,
@@ -606,15 +689,30 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/webhooks", (c) => c.json(listWebhooks(db).map(redact)));
   app.post("/webhooks", body(webhookCreateBody), (c) =>
-    c.json(redact(addWebhook(db, c.var.actor, c.req.valid("json")))),
+    c.json(
+      redact(addWebhook(db, requireHumanCaller(c.var.actor, "add a webhook"), c.req.valid("json"))),
+    ),
   );
   app.delete("/webhooks/:id", (c) => {
-    removeWebhook(db, c.var.actor, Number(c.req.param("id")));
+    removeWebhook(
+      db,
+      requireHumanCaller(c.var.actor, "remove a webhook"),
+      Number(c.req.param("id")),
+    );
     return c.json({ ok: true });
   });
   app.patch("/webhooks/:id", body(webhookPatchBody), (c) => {
     const { active } = c.req.valid("json");
-    return c.json(redact(setWebhookActive(db, c.var.actor, Number(c.req.param("id")), active)));
+    return c.json(
+      redact(
+        setWebhookActive(
+          db,
+          requireHumanCaller(c.var.actor, "change a webhook"),
+          Number(c.req.param("id")),
+          active,
+        ),
+      ),
+    );
   });
 
   // Redact secret from linked-repo objects for safe API responses
@@ -622,10 +720,22 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/github-repos", (c) => c.json(listGithubRepos(db).map(redactRepo)));
   app.post("/github-repos", body(githubRepoCreateBody), (c) =>
-    c.json(redactRepo(addGithubRepo(db, c.var.actor, c.req.valid("json")))),
+    c.json(
+      redactRepo(
+        addGithubRepo(
+          db,
+          requireHumanCaller(c.var.actor, "link a GitHub repo"),
+          c.req.valid("json"),
+        ),
+      ),
+    ),
   );
   app.delete("/github-repos/:id", (c) => {
-    removeGithubRepo(db, c.var.actor, Number(c.req.param("id")));
+    removeGithubRepo(
+      db,
+      requireHumanCaller(c.var.actor, "unlink a GitHub repo"),
+      Number(c.req.param("id")),
+    );
     return c.json({ ok: true });
   });
 
@@ -647,9 +757,20 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   // agent's.
   app.get("/settings", (c) => c.json(getAllSettings(db)));
   app.put("/settings/:key", body(settingPutBody), (c) =>
-    c.json(setSetting(db, c.var.actor, c.req.param("key"), c.req.valid("json").value)),
+    c.json(
+      setSetting(
+        db,
+        requireHumanCaller(c.var.actor, "change settings"),
+        c.req.param("key"),
+        c.req.valid("json").value,
+      ),
+    ),
   );
-  app.delete("/settings/:key", (c) => c.json(resetSetting(db, c.var.actor, c.req.param("key"))));
+  app.delete("/settings/:key", (c) =>
+    c.json(
+      resetSetting(db, requireHumanCaller(c.var.actor, "change settings"), c.req.param("key")),
+    ),
+  );
 
   // Worker-facing: agent tokens are expected callers here (SYD-155) — the
   // dispatch worker polls this to retune concurrency and poll intervals

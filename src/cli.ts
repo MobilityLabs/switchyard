@@ -1,4 +1,6 @@
 import { eq } from "drizzle-orm";
+import { requireHuman, type HumanActor } from "./services/principal.js";
+import { NO_SESSION } from "./services/attribution.js";
 import { readFileSync } from "node:fs";
 import { openDb } from "./db/index.js";
 import { actors } from "./db/schema.js";
@@ -19,12 +21,19 @@ import { SwitchyardError } from "./services/errors.js";
 
 // The CLI operates directly on the db file with no HTTP auth, so it stands
 // in for a human operator when calling human-only service functions.
-const cliActor: Actor = { id: 0, name: "cli", type: "human", attended: true };
+// SYD-281: minted through the same accessor production uses, not cast. This is
+// the single CLI mint the eslint `as HumanActor` ban carves out — and it is a
+// mint, not a cast, precisely so the ban needs no carve-out at all.
+const cliActor: HumanActor = requireHuman(
+  { id: 0, name: "cli", type: "human", attended: true },
+  NO_SESSION,
+  "run admin CLI commands",
+);
 
 // Resolves a human actor by name, matching mint-supervised-session's inline
 // lookup below — factored out because the affirm-key commands need it three
 // times.
-function requireHumanActor(db: ReturnType<typeof openDb>, name: string): Actor {
+function requireHumanActor(db: ReturnType<typeof openDb>, name: string): HumanActor {
   const row = db.select().from(actors).where(eq(actors.name, name)).get();
   if (!row) throw new SwitchyardError(`There is no actor named "${name}".`);
   if (row.type !== "human") {
@@ -32,7 +41,11 @@ function requireHumanActor(db: ReturnType<typeof openDb>, name: string): Actor {
       `"${name}" is an actor of type "${row.type}", not a human — affirmation keys belong to humans.`,
     );
   }
-  return { id: row.id, name: row.name, type: row.type, attended: row.attended };
+  return requireHuman(
+    { id: row.id, name: row.name, type: row.type, attended: row.attended },
+    NO_SESSION,
+    "own affirmation keys",
+  );
 }
 
 const [dbPath, cmd, ...args] = process.argv.slice(2);
@@ -88,9 +101,12 @@ try {
     console.log(`login link (valid 15 minutes, single use):`);
     console.log(resolveBaseUrl(db) + path);
   } else if (cmd === "mint-supervised-session") {
-    const [humanName, agentName] = args;
-    if (!humanName || !agentName) {
-      console.error("mint-supervised-session needs: <humanName> <agentName>");
+    const [humanName, engine] = args;
+    if (!humanName || !engine) {
+      // SYD-281: the second argument is an ENGINE ("claude", "codex"), not an
+      // actor name — the session's agent is namespaced <engine>/supervised/<human>
+      // so it can never collide with a dispatch worker's actor.
+      console.error("mint-supervised-session needs: <humanName> <engine e.g. claude>");
       process.exit(1);
     }
     const row = db.select().from(actors).where(eq(actors.name, humanName)).get();
@@ -101,7 +117,7 @@ try {
       );
     }
     const human: Actor = { id: row.id, name: row.name, type: row.type, attended: row.attended };
-    const { sessionToken } = openSupervisedSession(db, human, agentName);
+    const { sessionToken } = openSupervisedSession(db, human, engine);
     console.log(`supervised session token (shown once): ${sessionToken}`);
     console.log(
       "Set this as your MCP client's bearer. It authorizes supervised writes for 12h. It is NOT a web login. Do NOT run this session with your web cookie or personal syd_ bearer in its environment (see the plan's threat-model).",

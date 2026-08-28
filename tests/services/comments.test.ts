@@ -1,16 +1,21 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
 import { addComment, getActivity } from "../../src/services/comments.js";
 import { attributionOf } from "../../src/services/attribution.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
 
 describe("comments and activity", () => {
   it("appends comments and returns the attributed stream", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
@@ -24,7 +29,7 @@ describe("comments and activity", () => {
 
   it("emits agent_question when a human leads a comment with @agent", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
@@ -37,7 +42,7 @@ describe("comments and activity", () => {
 
   it("matches @agent case-insensitively and tolerates leading whitespace", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
@@ -51,7 +56,7 @@ describe("comments and activity", () => {
 
   it("does not emit agent_question for an ordinary comment or a mid-sentence mention", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
@@ -62,7 +67,7 @@ describe("comments and activity", () => {
 
   it("does not emit agent_question when an agent actor writes the comment", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agentActor = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
@@ -73,13 +78,16 @@ describe("comments and activity", () => {
 
   it("surfaces supervised-session provenance (viaAgentName) only on the delegated event (SYD-240)", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" }); // plain "created" event
 
-    const { sessionId } = openSupervisedSession(db, human, agent.name);
-    const attr = attributionOf({ actor: human, viaAgent: agent, sessionId });
+    // SYD-281: the session mints its own namespaced agent, so read the name off
+    // the principal rather than a hand-made actor — the two are different, and
+    // asserting against the hand-made one tests a pairing production never makes.
+    const { sessionToken } = openSupervisedSession(db, human, "claude");
+    const prin = resolveSupervisedPrincipal(db, sessionToken)!;
+    const attr = attributionOf(prin);
     addComment(db, human, "AIPI-1", "written on Sean's behalf", attr);
 
     const activity = getActivity(db, "AIPI-1");
@@ -87,6 +95,6 @@ describe("comments and activity", () => {
     expect(activity[0].actorName).toBe("sean");
     expect(activity[0].viaAgentName).toBeNull();
     expect(activity[1].actorName).toBe("sean");
-    expect(activity[1].viaAgentName).toBe("claude-code");
+    expect(activity[1].viaAgentName).toBe(prin.viaAgent!.name);
   });
 });
