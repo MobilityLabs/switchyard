@@ -52,7 +52,12 @@ export function authenticate(db: Db, token: string): Actor | null {
  * that doesn't authenticate through Switchyard (e.g. the GitHub webhook
  * receiver) — unlike createActor, this never throws on an existing name.
  */
-export function getOrCreateActor(db: Db, name: string, type: ActorType): Actor {
+export function getOrCreateActor(
+  db: Db,
+  name: string,
+  type: ActorType,
+  opts: { attended?: boolean } = {},
+): Actor {
   const existing = db.select().from(actors).where(eq(actors.name, name)).get();
   if (existing)
     return {
@@ -61,7 +66,11 @@ export function getOrCreateActor(db: Db, name: string, type: ActorType): Actor {
       type: existing.type,
       attended: existing.attended,
     };
-  const row = db.insert(actors).values({ name, type }).returning().get();
+  const row = db
+    .insert(actors)
+    .values({ name, type, ...(opts.attended === undefined ? {} : { attended: opts.attended }) })
+    .returning()
+    .get();
   return { id: row.id, name: row.name, type: row.type, attended: row.attended };
 }
 

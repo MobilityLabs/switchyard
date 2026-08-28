@@ -101,9 +101,12 @@ try {
     console.log(`login link (valid 15 minutes, single use):`);
     console.log(resolveBaseUrl(db) + path);
   } else if (cmd === "mint-supervised-session") {
-    const [humanName, agentName] = args;
-    if (!humanName || !agentName) {
-      console.error("mint-supervised-session needs: <humanName> <agentName>");
+    const [humanName, engine] = args;
+    if (!humanName || !engine) {
+      // SYD-281: the second argument is an ENGINE ("claude", "codex"), not an
+      // actor name — the session's agent is namespaced <engine>/supervised/<human>
+      // so it can never collide with a dispatch worker's actor.
+      console.error("mint-supervised-session needs: <humanName> <engine e.g. claude>");
       process.exit(1);
     }
     const row = db.select().from(actors).where(eq(actors.name, humanName)).get();
@@ -114,7 +117,7 @@ try {
       );
     }
     const human: Actor = { id: row.id, name: row.name, type: row.type, attended: row.attended };
-    const { sessionToken } = openSupervisedSession(db, human, agentName);
+    const { sessionToken } = openSupervisedSession(db, human, engine);
     console.log(`supervised session token (shown once): ${sessionToken}`);
     console.log(
       "Set this as your MCP client's bearer. It authorizes supervised writes for 12h. It is NOT a web login. Do NOT run this session with your web cookie or personal syd_ bearer in its environment (see the plan's threat-model).",

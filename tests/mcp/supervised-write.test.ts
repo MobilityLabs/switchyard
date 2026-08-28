@@ -55,10 +55,12 @@ beforeEach(() => {
   db = openDb(":memory:");
   dir = mkdtempSync(path.join(tmpdir(), "syd-supervised-"));
   human = createHuman(db, "sean");
-  agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
+  // SYD-281: the session's agent is minted namespaced by openSupervisedSession,
+  // so take it from the resolved principal rather than pre-creating one.
   createProject(db, human, { key: "SUP", name: "supervised" });
-  const { sessionToken } = openSupervisedSession(db, human, agent.name);
+  const { sessionToken } = openSupervisedSession(db, human, "claude-code");
   prin = resolveSupervisedPrincipal(db, sessionToken)!;
+  agent = prin.viaAgent!;
   issue = createIssue(db, human, { projectKey: "SUP", title: "Wire the surface" });
   updateIssue(db, human, issue.ref, { status: "todo" });
 });
