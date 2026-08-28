@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { boardColumnCounts } from "../../src/services/board-column-counts.js";
@@ -8,7 +10,7 @@ import { createProject } from "../../src/services/projects.js";
 describe("boardColumnCounts", () => {
   it("counts each project and status and reflects a moved issue", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createProject(db, human, { key: "AIPI", name: "AIPI" });
     const first = createIssue(db, human, { projectKey: "SYD", title: "First" });

@@ -3,6 +3,8 @@
 // supervised session. See src/services/hard-gate.ts for the gate policy and
 // pending-action CRUD this divert calls into.
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -10,10 +12,10 @@ import { createIssue, getIssue, updateIssue } from "../../src/services/issues.js
 import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
 import { pendingActions } from "../../src/db/schema.js";
 
-let db: Db, human: Actor, issueId: number, sessionId: number;
+let db: Db, human: HumanActor, issueId: number, sessionId: number;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   issueId = createIssue(db, human, { projectKey: "SYD", title: "t", description: "d" }).id;
   sessionId = openSupervisedSession(db, human, "claude-code").sessionId;

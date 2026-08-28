@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import type Database from "better-sqlite3";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
@@ -8,10 +10,10 @@ import { searchIssues } from "../../src/services/search.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 
-let db: Db, human: Actor;
+let db: Db, human: HumanActor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "AIPI", name: "aipi" });
   createProject(db, human, { key: "HAND", name: "housing" });
   // Bound repo so recordDeliveryEvent's publish writes pr_state — post-SYD-207

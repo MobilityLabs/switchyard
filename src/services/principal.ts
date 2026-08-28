@@ -54,6 +54,24 @@ export function asHuman(actor: Actor, ctx: Attribution): HumanActor | null {
 }
 
 /**
+ * `asHuman` or throw — the one runtime chokepoint the six private `requireHuman`
+ * helpers collapsed into (settings, actors, projects, webhooks, github-repos,
+ * triage-actions each had their own, all asking `type !== "human"`, which is the
+ * question that returns the wrong answer for a supervised principal).
+ *
+ * Adapters call this and hand the result to the service. That is what makes the
+ * brand honest: the type says "a human was proven to be acting", and this is the
+ * only place outside `asHuman` where that proof is produced.
+ */
+export function requireHuman(actor: Actor, ctx: Attribution, action: string): HumanActor {
+  const human = asHuman(actor, ctx);
+  if (!human) {
+    throw new SwitchyardError(`Only humans can ${action} — agents should ask a human to do this.`);
+  }
+  return human;
+}
+
+/**
  * (2) Whose credential is acting — the identity whose claim and lease govern
  * this write. In a supervised session that is the agent, never the accountable
  * human, who holds no lease.

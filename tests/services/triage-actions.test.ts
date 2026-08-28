@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { issues } from "../../src/db/schema.js";
@@ -21,10 +23,10 @@ import { upsertPrState } from "../../src/services/pr-state.js";
 
 const REPO = "acme/widgets";
 
-let db: Db, human: Actor, agent: Actor;
+let db: Db, human: HumanActor, agent: Actor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
   createIssue(db, human, { projectKey: "AIPI", title: "First" });
@@ -32,11 +34,9 @@ beforeEach(() => {
 });
 
 describe("snoozeIssue", () => {
-  it("rejects agents legibly", () => {
-    const future = Math.floor(Date.now() / 1000) + 3600;
-    expect(() => snoozeIssue(db, agent, "AIPI-1", future)).toThrowError(/human/i);
-  });
-
+  // SYD-281: the agent/service refusal moved to the adapter — see
+  // tests/rest/api-service-actor.test.ts, which covers all five triage verbs
+  // against both non-human tiers.
   it("rejects a non-future until", () => {
     const past = Math.floor(Date.now() / 1000) - 10;
     expect(() => snoozeIssue(db, human, "AIPI-1", past)).toThrowError(/future/i);
@@ -81,10 +81,9 @@ describe("snoozeIssue", () => {
 });
 
 describe("markDuplicate", () => {
-  it("rejects agents legibly", () => {
-    expect(() => markDuplicate(db, agent, "AIPI-1", "AIPI-2")).toThrowError(/human/i);
-  });
-
+  // SYD-281: the agent/service refusal moved to the adapter — see
+  // tests/rest/api-service-actor.test.ts, which covers all five triage verbs
+  // against both non-human tiers.
   it("rejects self-duplicate", () => {
     expect(() => markDuplicate(db, human, "AIPI-1", "AIPI-1")).toThrowError(/itself|differ/i);
   });
@@ -110,7 +109,6 @@ describe("redeliverIssue", () => {
       type: "delivery_failed",
       message: "merge conflict",
     });
-    expect(() => redeliverIssue(db, agent, "AIPI-1")).toThrowError(/human/i);
   });
 
   it("rejects an issue with no unresolved delivery failure", () => {
@@ -357,9 +355,6 @@ describe("resolveDeliveryFailure", () => {
       type: "delivery_failed",
       message: "merge conflict",
     });
-    expect(() => resolveDeliveryFailure(db, agent, "AIPI-1", "merged by hand")).toThrowError(
-      /human/i,
-    );
   });
 
   it("rejects an empty or blank note", () => {
@@ -480,12 +475,9 @@ describe("resolveDeviation", () => {
     updateIssue(db, human, ref, { status: "done" });
   }
 
-  it("rejects agents legibly", () => {
-    stampDoneWithoutPr("AIPI-1");
-    expect(() =>
-      resolveDeviation(db, agent, "AIPI-1", "done_without_merged_pr", "landed on a feat/ branch"),
-    ).toThrowError(/human/i);
-  });
+  // SYD-281: the agent/service refusal moved to the adapter — see
+  // tests/rest/api-service-actor.test.ts, which covers all five triage verbs
+  // against both non-human tiers.
 
   it("rejects an empty or blank note", () => {
     stampDoneWithoutPr("AIPI-1");

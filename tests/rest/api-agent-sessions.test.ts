@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHumanWithToken } from "../helpers/human.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -13,7 +14,7 @@ let workerH: Record<string, string>,
 beforeEach(() => {
   db = openDb(":memory:");
   const worker = createActor(db, { name: "claude/worker", type: "agent" });
-  const human = createActor(db, { name: "sean", type: "human" });
+  const human = createHumanWithToken(db, "sean");
   const otherWorker = createActor(db, { name: "claude/other", type: "agent" });
   workerH = { authorization: `Bearer ${worker.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };

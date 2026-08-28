@@ -3,6 +3,8 @@
 // committing it, for a supervised session. Mirrors
 // hard-gate-divert.test.ts (the "done" transition's divert in updateIssue).
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -16,10 +18,10 @@ import { openSupervisedSession } from "../../src/services/supervised-sessions.js
 import { setSetting } from "../../src/services/settings.js";
 import { pendingActions } from "../../src/db/schema.js";
 
-let db: Db, human: Actor, sessionId: number;
+let db: Db, human: HumanActor, sessionId: number;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "blocker" }); // SYD-1
   createIssue(db, human, { projectKey: "SYD", title: "blocked" }); // SYD-2

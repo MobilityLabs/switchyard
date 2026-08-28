@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { events, agentSessions } from "../../src/db/schema.js";
@@ -21,11 +23,11 @@ function ageSession(db: Db, id: number, secondsAgo: number) {
   db.update(agentSessions).set({ startedAt }).where(eq(agentSessions.id, id)).run();
 }
 
-let db: Db, human: Actor, agent: Actor;
+let db: Db, human: HumanActor, agent: Actor;
 
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, agent, {

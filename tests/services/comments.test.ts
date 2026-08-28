@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -10,7 +12,7 @@ import { openSupervisedSession } from "../../src/services/supervised-sessions.js
 describe("comments and activity", () => {
   it("appends comments and returns the attributed stream", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
@@ -24,7 +26,7 @@ describe("comments and activity", () => {
 
   it("emits agent_question when a human leads a comment with @agent", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
@@ -37,7 +39,7 @@ describe("comments and activity", () => {
 
   it("matches @agent case-insensitively and tolerates leading whitespace", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
@@ -51,7 +53,7 @@ describe("comments and activity", () => {
 
   it("does not emit agent_question for an ordinary comment or a mid-sentence mention", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
 
@@ -62,7 +64,7 @@ describe("comments and activity", () => {
 
   it("does not emit agent_question when an agent actor writes the comment", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agentActor = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" });
@@ -73,7 +75,7 @@ describe("comments and activity", () => {
 
   it("surfaces supervised-session provenance (viaAgentName) only on the delegated event (SYD-240)", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
     createProject(db, human, { key: "AIPI", name: "aipi" });
     createIssue(db, human, { projectKey: "AIPI", title: "Ship v1" }); // plain "created" event

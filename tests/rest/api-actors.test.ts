@@ -1,16 +1,22 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createLoginLink, redeemLoginLink } from "../../src/services/auth.js";
 import { setSetting } from "../../src/services/settings.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
-let db: Db, app: ReturnType<typeof buildApiRoutes>, bearer: string, cookie: string, sean: Actor;
+let db: Db,
+  app: ReturnType<typeof buildApiRoutes>,
+  bearer: string,
+  cookie: string,
+  sean: HumanActor;
 
 beforeEach(() => {
   db = openDb(":memory:");
   bearer = createActor(db, { name: "claude/dev", type: "agent" }).token;
-  sean = createActor(db, { name: "sean", type: "human" }).actor;
+  sean = createHuman(db, "sean");
   const { token } = createLoginLink(db, "sean");
   cookie = `switchyard_session=${redeemLoginLink(db, token).sessionToken}`;
   app = buildApiRoutes(db);

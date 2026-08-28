@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -18,7 +20,7 @@ import { listLiveLinks } from "../../src/services/pr-links.js";
 
 function setup(boundRepos: string[] = []) {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
   for (const fullName of boundRepos) {
@@ -699,7 +701,7 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
 
   it("an agent/SYD-1 PR in a repo bound to another project is never attributed to SYD-1 (cross-repo)", () => {
     const db = setup(["acme/bound"]);
-    const human = createActor(db, { name: "sean2", type: "human" }).actor;
+    const human = createHuman(db, "sean2");
     createProject(db, human, { key: "OTH", name: "Other" });
     addGithubRepo(db, human, { fullName: "acme/other", projectKey: "OTH" });
 
@@ -718,7 +720,7 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
 
   it("a PR in a linked-but-UNBOUND repo is not observed at all", () => {
     const db = setup(["acme/bound"]);
-    const human = createActor(db, { name: "sean3", type: "human" }).actor;
+    const human = createHuman(db, "sean3");
     // Linked with no projectKey — the SYD-207 preflight's warning case.
     addGithubRepo(db, human, { fullName: "acme/unbound" });
 
@@ -820,7 +822,7 @@ describe("handleGithubWebhook / actor reuse", () => {
 describe("handleGithubWebhook / sibling refs named in PR text (SYD-274)", () => {
   function multiIssueSetup() {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createProject(db, human, { key: "NOC", name: "Piano" });
     createIssue(db, human, { projectKey: "SYD", title: "parent" }); // SYD-1

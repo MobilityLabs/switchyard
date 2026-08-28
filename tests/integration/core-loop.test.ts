@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { createHumanWithToken } from "../helpers/human.js";
 import { serve, type ServerType } from "@hono/node-server";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -26,7 +27,7 @@ const text = (r: Awaited<ReturnType<Client["callTool"]>>) =>
 
 beforeAll(async () => {
   db = openDb(":memory:");
-  const sean = createActor(db, { name: "sean", type: "human" });
+  const sean = createHumanWithToken(db, "sean");
   humanToken = sean.token;
   agentToken = createActor(db, { name: "claude/worker", type: "agent" }).token;
   createProject(db, sean.actor, { key: "AIPI", name: "aipi" });

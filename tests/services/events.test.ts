@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
 import { openDb } from "../../src/db/index.js";
 import { events } from "../../src/db/schema.js";
@@ -20,7 +22,7 @@ import {
 describe("listIssueEvents", () => {
   it("projects viaAgentName only on supervised events, in a mixed feed with plain events (SYD-240)", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // plain event
@@ -51,7 +53,7 @@ describe("listIssueEvents", () => {
 describe("listRecentEvents", () => {
   it("returns events newest-first, joined with issue ref, title, project key, and actor name", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event: created
     updateIssue(db, human, "SYD-1", { status: "todo" }); // 1 event: status change
@@ -72,7 +74,7 @@ describe("listRecentEvents", () => {
 
   it("filters by since (strictly after the given unix timestamp)", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Old one" });
     updateIssue(db, human, "SYD-1", { status: "todo" });
@@ -94,7 +96,7 @@ describe("listRecentEvents", () => {
 
   it("defaults the limit to 200 and caps it at 500", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Only issue" });
 
@@ -113,7 +115,7 @@ describe("listRecentEvents", () => {
 describe("listRecentEventsPage", () => {
   function setupManyEvents(count: number) {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     const issue = createIssue(db, human, { projectKey: "SYD", title: "Busy issue" }); // 1 "created" event
     for (let i = 0; i < count - 1; i++) {
@@ -167,7 +169,7 @@ describe("listRecentEventsPage", () => {
 describe("listUnansweredQuestions", () => {
   function setup() {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     return { db, human, agent };

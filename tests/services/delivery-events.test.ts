@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -10,8 +12,8 @@ import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 
 function setup(boundRepos: string[] = []) {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
-  const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
+  const human = createHuman(db, "sean");
+  const worker = createHuman(db, "delivery-worker");
   createProject(db, worker, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
   for (const fullName of boundRepos) addGithubRepo(db, human, { fullName, projectKey: "SYD" });
@@ -21,9 +23,9 @@ function setup(boundRepos: string[] = []) {
 describe("recordDeliveryEvent", () => {
   it("appends pr_opened, delivered, and delivery_failed events to the activity feed", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     // The delivery infra authenticates with a human-typed token (SYD-107/108).
-    const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
+    const worker = createHuman(db, "delivery-worker");
     createProject(db, worker, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
@@ -59,8 +61,8 @@ describe("recordDeliveryEvent", () => {
 
   it("records delivery_failed with just a message", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
-    const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
+    const human = createHuman(db, "sean");
+    const worker = createHuman(db, "delivery-worker");
     createProject(db, worker, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
 
@@ -78,7 +80,7 @@ describe("recordDeliveryEvent", () => {
 
   it("rejects agent actors so delivery status can't be forged (SYD-108)", () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
@@ -96,7 +98,7 @@ describe("recordDeliveryEvent", () => {
 
   it("throws for an unknown issue ref", () => {
     const db = openDb(":memory:");
-    const worker = createActor(db, { name: "delivery-worker", type: "human" }).actor;
+    const worker = createHuman(db, "delivery-worker");
     createProject(db, worker, { key: "SYD", name: "Switchyard" });
     expect(() =>
       recordDeliveryEvent(db, worker, "SYD-9", { type: "delivery_failed", message: "boom" }),

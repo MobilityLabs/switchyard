@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import type { HumanActor } from "./principal.js";
 import type { Db, DbOrTx } from "../db/index.js";
 import { STATUSES, type Status } from "../db/schema.js";
 import { settings } from "../db/schema.js";
@@ -110,14 +111,6 @@ export type SettingView = {
   description: string | null;
 };
 
-function requireHuman(actor: Actor): void {
-  if (actor.type !== "human") {
-    throw new SwitchyardError(
-      "Settings are human-only — ask a human to change instance config or dispatch policy.",
-    );
-  }
-}
-
 function requireKnownKey(key: string): asserts key is SettingKey {
   if (!(key in REGISTRY)) {
     throw new SwitchyardError(
@@ -203,8 +196,7 @@ export function getAllSettings(db: Db): SettingView[] {
   });
 }
 
-export function setSetting(db: Db, actor: Actor, key: string, value: unknown): SettingView {
-  requireHuman(actor);
+export function setSetting(db: Db, actor: HumanActor, key: string, value: unknown): SettingView {
   requireKnownKey(key);
   validateValue(key, value);
   const entry = REGISTRY[key] as RegistryEntry;
@@ -224,8 +216,7 @@ export function setSetting(db: Db, actor: Actor, key: string, value: unknown): S
   };
 }
 
-export function resetSetting(db: Db, actor: Actor, key: string): SettingView {
-  requireHuman(actor);
+export function resetSetting(db: Db, actor: HumanActor, key: string): SettingView {
   requireKnownKey(key);
   const entry = REGISTRY[key] as RegistryEntry;
   db.delete(settings).where(eq(settings.key, key)).run();

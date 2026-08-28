@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { sql } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
@@ -7,10 +9,10 @@ import { createIssue, updateIssue, claimIssue } from "../../src/services/issues.
 import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
 import { attributionOf } from "../../src/services/attribution.js";
 
-let db: Db, human: Actor, agent: Actor;
+let db: Db, human: HumanActor, agent: Actor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
   createProject(db, human, { key: "SUP", name: "supervised" });
 });

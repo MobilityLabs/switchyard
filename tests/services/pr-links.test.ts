@@ -9,6 +9,8 @@
 //   2. Declaring is not confirming. An agent can over-block (safe, revocable)
 //      but can never make its own link prove that its work landed.
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb } from "../../src/db/index.js";
 import { prState } from "../../src/db/schema.js";
 import { createActor } from "../../src/services/actors.js";
@@ -35,7 +37,7 @@ const OTHER_REPO = "acme/unrelated";
 
 function setup() {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
   const infra = createActor(db, { name: "deliver", type: "service" }).actor;
@@ -474,7 +476,7 @@ describe("listLiveLinkViews — what the panel shows a human", () => {
   }
 
   /** Walks SYD-1 to `done` with no PR of any kind, arming done_without_merged_pr. */
-  function stampDone(db: ReturnType<typeof openDb>, human: Actor, agent: Actor) {
+  function stampDone(db: ReturnType<typeof openDb>, human: HumanActor, agent: Actor) {
     claimIssue(db, agent, "SYD-1");
     updateIssue(db, human, "SYD-1", { status: "in_review" });
     updateIssue(db, human, "SYD-1", { status: "done" });

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import type { HumanActor } from "../../src/services/principal.js";
+import { createHumanWithToken } from "../helpers/human.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -13,12 +15,12 @@ import {
 
 let db: Db, app: ReturnType<typeof buildApiRoutes>;
 let agentH: Record<string, string>, humanH: Record<string, string>;
-let humanActor: Actor;
+let humanActor: HumanActor;
 
 beforeEach(() => {
   db = openDb(":memory:");
   const agent = createActor(db, { name: "claude/dev", type: "agent" });
-  const human = createActor(db, { name: "sean", type: "human" });
+  const human = createHumanWithToken(db, "sean");
   humanActor = human.actor;
   agentH = { authorization: `Bearer ${agent.token}`, "content-type": "application/json" };
   humanH = { authorization: `Bearer ${human.token}`, "content-type": "application/json" };

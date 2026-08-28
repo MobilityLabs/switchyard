@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { loginLinks, actors } from "../../src/db/schema.js";
@@ -11,10 +13,10 @@ import {
   deleteSession,
 } from "../../src/services/auth.js";
 
-let db: Db, human: Actor;
+let db: Db, human: HumanActor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createActor(db, { name: "claude/dev", type: "agent" });
 });
 

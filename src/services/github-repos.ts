@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import type { HumanActor } from "./principal.js";
 import type { Db } from "../db/index.js";
 import { githubRepos } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -20,20 +21,11 @@ export function normalizeRepoFullName(fullName: string): string {
   return fullName.toLowerCase();
 }
 
-function requireHuman(actor: Actor): void {
-  if (actor.type !== "human") {
-    throw new SwitchyardError(
-      "Only humans manage linked GitHub repos — ask a human to link or unlink a repo.",
-    );
-  }
-}
-
 export function addGithubRepo(
   db: Db,
-  actor: Actor,
+  actor: HumanActor,
   input: { fullName: string; projectKey?: string; secret?: string },
 ): GithubRepo {
-  requireHuman(actor);
   if (!FULL_NAME_RE.test(input.fullName)) {
     throw new SwitchyardError(`GitHub repo must be "owner/repo" — got "${input.fullName}".`);
   }
@@ -54,8 +46,7 @@ export function listGithubRepos(db: Db): GithubRepo[] {
   return db.select().from(githubRepos).all();
 }
 
-export function removeGithubRepo(db: Db, actor: Actor, id: number): void {
-  requireHuman(actor);
+export function removeGithubRepo(db: Db, actor: HumanActor, id: number): void {
   const gone = db.delete(githubRepos).where(eq(githubRepos.id, id)).returning().get();
   if (!gone) {
     throw new SwitchyardError(

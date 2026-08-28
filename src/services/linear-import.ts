@@ -1,4 +1,6 @@
 import { and, eq, lt } from "drizzle-orm";
+import { requireHuman, type HumanActor } from "./principal.js";
+import { NO_SESSION } from "./attribution.js";
 import type { Db } from "../db/index.js";
 import {
   actors,
@@ -349,7 +351,13 @@ export async function executeImportPlan(
 
   // The importer is a host-CLI, human-operated tool — same standing as
   // src/cli.ts's cliActor for human-only service calls (SYD-157 guard).
-  const importOperator: Actor = { id: 0, name: "cli", type: "human", attended: true };
+  // SYD-281: routed through the same mint as cli.ts's cliActor, not cast — this
+  // is the second synthetic human, and it is the one an audit would miss.
+  const importOperator: HumanActor = requireHuman(
+    { id: 0, name: "cli", type: "human", attended: true },
+    NO_SESSION,
+    "import a Linear export",
+  );
   for (const p of plan.projects) {
     if (!p.exists) {
       createProject(db, importOperator, { key: p.key, name: p.name });

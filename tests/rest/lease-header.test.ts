@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -14,7 +16,7 @@ const auth = (extra: Record<string, string> = {}) => ({
 
 beforeEach(() => {
   db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   agentToken = createActor(db, { name: "claude/worker", type: "agent" }).token;
   createProject(db, human, { key: "AIPI", name: "aipi" });
   createIssue(db, human, { projectKey: "AIPI", title: "t" });

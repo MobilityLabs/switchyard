@@ -88,7 +88,7 @@ describe("webhook routes", () => {
     });
     expect(createRes.status).toBe(400);
     expect(((await createRes.json()) as { error: string }).error).toMatch(
-      /only humans manage webhooks/i,
+      /only humans can (add|remove|change) a webhook/i,
     );
 
     const deleteRes = await app.request("/webhooks/1", {
@@ -97,7 +97,7 @@ describe("webhook routes", () => {
     });
     expect(deleteRes.status).toBe(400);
     expect(((await deleteRes.json()) as { error: string }).error).toMatch(
-      /only humans manage webhooks/i,
+      /only humans can (add|remove|change) a webhook/i,
     );
 
     const listRes = await app.request("/webhooks", { headers: agentH });
@@ -137,7 +137,7 @@ describe("webhook routes", () => {
     });
     expect(denied.status).toBe(400);
     expect(((await denied.json()) as { error: string }).error).toMatch(
-      /only humans manage webhooks/i,
+      /only humans can (add|remove|change) a webhook/i,
     );
   });
 });

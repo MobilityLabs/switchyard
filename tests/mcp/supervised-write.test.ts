@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,7 +21,7 @@ import { attributionOf } from "../../src/services/attribution.js";
 import type { Principal } from "../../src/services/principal.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 
-let db: Db, human: Actor, agent: Actor, dir: string, prin: Principal, issue: IssueView;
+let db: Db, human: HumanActor, agent: Actor, dir: string, prin: Principal, issue: IssueView;
 
 const text = (r: Awaited<ReturnType<Client["callTool"]>>) =>
   (r.content as { type: string; text: string }[])[0].text;
@@ -50,7 +52,7 @@ async function connectSupervised(): Promise<Client> {
 beforeEach(() => {
   db = openDb(":memory:");
   dir = mkdtempSync(path.join(tmpdir(), "syd-supervised-"));
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
   createProject(db, human, { key: "SUP", name: "supervised" });
   const { sessionToken } = openSupervisedSession(db, human, agent.name);

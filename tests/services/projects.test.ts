@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
 import { openDb } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import {
   createProject,
   updateProject,
@@ -9,9 +11,9 @@ import {
   reserveIssueNumber,
 } from "../../src/services/projects.js";
 
-function actors(db: ReturnType<typeof openDb>): { human: Actor; agent: Actor } {
+function actors(db: ReturnType<typeof openDb>): { human: HumanActor; agent: Actor } {
   return {
-    human: createActor(db, { name: "sean", type: "human" }).actor,
+    human: createHuman(db, "sean"),
     agent: createActor(db, { name: "claude/dev", type: "agent" }).actor,
   };
 }
@@ -29,12 +31,11 @@ describe("updateProject (SYD-157, landed via SYD-158)", () => {
     expect(renamed.nextIssueNumber).toBe(2);
   });
 
-  it("rejects agent actors — renames are human-only", () => {
-    const db = openDb(":memory:");
-    const { human, agent } = actors(db);
-    createProject(db, human, { key: "AIPI", name: "aipi" });
-    expect(() => updateProject(db, agent, "AIPI", { name: "sneaky" })).toThrowError(/only humans/i);
-  });
+  // SYD-281: the agent-refusal assertion moved to the adapter, where the gate
+  // now lives — tests/rest/api-service-actor.test.ts covers both the agent and
+  // the service tier against every human-only route. Re-asserting it here would
+  // need a manufactured HumanActor, which is the state-constructing test shape
+  // this story exists to remove.
 
   it("throws legibly for an unknown project key", () => {
     const db = openDb(":memory:");
@@ -42,14 +43,6 @@ describe("updateProject (SYD-157, landed via SYD-158)", () => {
     expect(() => updateProject(db, human, "NOPE", { name: "x" })).toThrowError(
       /no project with key "NOPE"/i,
     );
-  });
-});
-
-describe("createProject human-only guard (SYD-157)", () => {
-  it("rejects agent actors", () => {
-    const db = openDb(":memory:");
-    const { agent } = actors(db);
-    expect(() => createProject(db, agent, { key: "AIPI", name: "x" })).toThrowError(/only humans/i);
   });
 });
 

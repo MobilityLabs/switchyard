@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHumanWithToken } from "../helpers/human.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,7 +59,7 @@ function supervisedRest() {
   const db: Db = openDb(":memory:");
   const app = createApp(db);
 
-  const { actor: human, token: humanToken } = createActor(db, { name: "sean", type: "human" });
+  const { actor: human, token: humanToken } = createHumanWithToken(db, "sean");
   const { actor: otherHuman, token: otherHumanToken } = createActor(db, {
     name: "morgan",
     type: "human",

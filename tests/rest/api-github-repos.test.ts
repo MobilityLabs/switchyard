@@ -69,13 +69,13 @@ describe("github repo routes", () => {
     });
     expect(createRes.status).toBe(400);
     expect(((await createRes.json()) as { error: string }).error).toMatch(
-      /only humans manage linked github repos/i,
+      /only humans can (link|unlink) a github repo/i,
     );
 
     const deleteRes = await app.request("/github-repos/1", { method: "DELETE", headers: agentH });
     expect(deleteRes.status).toBe(400);
     expect(((await deleteRes.json()) as { error: string }).error).toMatch(
-      /only humans manage linked github repos/i,
+      /only humans can (link|unlink) a github repo/i,
     );
 
     const listRes = await app.request("/github-repos", { headers: agentH });

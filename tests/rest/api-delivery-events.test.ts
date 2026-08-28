@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHumanWithToken } from "../helpers/human.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -12,7 +13,7 @@ beforeEach(() => {
   db = openDb(":memory:");
   // The delivery infra (deliver.ts / agent-worker.ts) authenticates with a
   // human-typed token (SYD-107/108) — agent tokens are rejected below.
-  const worker = createActor(db, { name: "delivery-worker", type: "human" });
+  const worker = createHumanWithToken(db, "delivery-worker");
   workerH = { authorization: `Bearer ${worker.token}`, "content-type": "application/json" };
   createProject(db, worker.actor, { key: "SYD", name: "Switchyard" });
   createIssue(db, worker.actor, {

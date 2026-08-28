@@ -4,6 +4,8 @@
 // supervised proposal to remove an edge creates the pending row, then a human
 // affirms it. Mirrors hard-gate-affirm-exec.test.ts (the "done" transition).
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { and, eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
@@ -20,10 +22,10 @@ import { setSetting } from "../../src/services/settings.js";
 import { events, pendingActions } from "../../src/db/schema.js";
 import { affirmPendingAction, getPendingAction } from "../../src/services/hard-gate.js";
 
-let db: Db, human: Actor, agent: Actor, blockedId: number, sessionId: number;
+let db: Db, human: HumanActor, agent: Actor, blockedId: number, sessionId: number;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "blocker" }); // SYD-1

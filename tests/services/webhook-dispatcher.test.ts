@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { createHmac } from "node:crypto";
 import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
@@ -30,7 +32,7 @@ describe("webhook dispatcher", () => {
     });
 
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     addWebhook(db, human, { url: `http://127.0.0.1:${port}/hook`, secret: "s3cret" });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event
@@ -58,7 +60,7 @@ describe("webhook dispatcher", () => {
 
   it("skips webhooks scoped to another project and survives dead endpoints", async () => {
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     createProject(db, human, { key: "AIPI", name: "aipi" });
     addWebhook(db, human, { url: "http://127.0.0.1:1/dead", projectKey: "AIPI" }); // scoped elsewhere + dead
@@ -81,7 +83,7 @@ describe("webhook dispatcher", () => {
     });
 
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     addWebhook(db, human, { url: `http://127.0.0.1:${port}/hook` });
@@ -111,7 +113,7 @@ describe("webhook dispatcher", () => {
     });
 
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     addWebhook(db, human, { url: `http://127.0.0.1:${port}/fail` });
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" }); // 1 event
@@ -139,7 +141,7 @@ describe("webhook dispatcher", () => {
     });
 
     const db = openDb(":memory:");
-    const human = createActor(db, { name: "sean", type: "human" }).actor;
+    const human = createHuman(db, "sean");
     const agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
     createProject(db, human, { key: "SYD", name: "Switchyard" });
     addWebhook(db, human, { url: `http://127.0.0.1:${port}/hook` });

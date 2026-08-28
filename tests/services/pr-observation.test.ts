@@ -17,6 +17,8 @@
 // the tests that matter, because that is the order production produces (open
 // the PR, the poller sees it within a tick, then the session declares).
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -40,7 +42,7 @@ const PR = 226;
 
 function setup() {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   const agent = createActor(db, { name: "claude/dev", type: "agent" }).actor;
   const other = createActor(db, { name: "claude/other", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });

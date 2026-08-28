@@ -10,6 +10,8 @@
 // unreachable by construction (a sup_ token resolves only at /mcp), so there is
 // no honest way to drive it.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { serve } from "@hono/node-server";
@@ -23,7 +25,7 @@ import { openSupervisedSession } from "../../src/services/supervised-sessions.js
 import { setSetting } from "../../src/services/settings.js";
 import { createApp } from "../../src/server.js";
 
-let db: Db, human: Actor, agent: Actor, issue: IssueView;
+let db: Db, human: HumanActor, agent: Actor, issue: IssueView;
 let supToken: string, sessionId: number;
 let server: ReturnType<typeof serve>, baseUrl: string;
 
@@ -41,7 +43,7 @@ const text = (r: Awaited<ReturnType<Client["callTool"]>>) =>
 
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude-code", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   const session = openSupervisedSession(db, human, agent.name);

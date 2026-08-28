@@ -11,6 +11,8 @@
 // config change could, and confirming addComment's write is now diverted
 // exactly like a direct updateIssue call would be.
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -21,10 +23,10 @@ import { addComment } from "../../src/services/comments.js";
 import { settings } from "../../src/db/schema.js";
 import { isHardGated } from "../../src/services/hard-gate.js";
 
-let db: Db, human: Actor, agent: Actor, sessionId: number;
+let db: Db, human: HumanActor, agent: Actor, sessionId: number;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "t", description: "d" });

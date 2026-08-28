@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import {
   createActor,
@@ -28,10 +30,10 @@ import { listIssueEvents } from "../../src/services/events.js";
 // sits ABOVE agent (may post PR/delivery events) and STRICTLY BELOW human
 // (cannot stamp/triage/remove-deps/mint-login/manage config). This matrix is
 // the security contract: adding the type must not leak any human capability.
-let db: Db, human: Actor, agent: Actor, service: Actor;
+let db: Db, human: HumanActor, agent: Actor, service: Actor;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   service = createActor(db, { name: "github-poller", type: "service" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
@@ -145,47 +147,15 @@ describe("service actor — DENIED all issue create/modify (fail-closed)", () =>
   });
 });
 
-describe("service actor — DENIED (config / dependencies / tokens)", () => {
-  it("cannot remove a dependency", () => {
-    addDependency(db, human, "AIPI-1", "AIPI-2");
-    expect(() => removeDependency(db, service, "AIPI-1", "AIPI-2")).toThrowError(/only humans/i);
-  });
-
-  it("cannot link a GitHub repo", () => {
-    expect(() =>
-      addGithubRepo(db, service, { fullName: "acme/other", projectKey: "AIPI" }),
-    ).toThrowError(/only humans/i);
-  });
-
-  it("cannot change a setting", () => {
-    expect(() => setSetting(db, service, "intervalSeconds", 999)).toThrowError(/human/i);
-  });
-
-  it("cannot add a webhook", () => {
-    expect(() =>
-      addWebhook(db, service, { url: "https://example.com/hook", projectKey: "AIPI" }),
-    ).toThrowError(/human/i);
-  });
-
-  it("cannot rotate an actor's token", () => {
-    expect(() => rotateActorToken(db, service, agent.id)).toThrowError(/only humans/i);
-  });
-
-  it("cannot revoke an actor's token", () => {
-    expect(() => revokeActorToken(db, service, agent.id)).toThrowError(/only humans/i);
-  });
-
-  it("cannot create a project", () => {
-    expect(() => createProject(db, service, { key: "NEW", name: "new" })).toThrowError(
-      /only humans/i,
-    );
-  });
-
-  it("cannot snooze an issue", () => {
-    expect(() => snoozeIssue(db, service, "AIPI-1", 9999999999)).toThrowError(/only humans/i);
-  });
-
-  it("cannot mark an issue a duplicate", () => {
-    expect(() => markDuplicate(db, service, "AIPI-1", "AIPI-2")).toThrowError(/only humans/i);
-  });
-});
+// SYD-281: the "service actor — DENIED (config / dependencies / tokens)" block
+// that stood here asserted the service tier is refused by nine human-only
+// services. Those gates no longer live in the service layer — the six private
+// `requireHuman` helpers collapsed into `requireHumanCaller` at the adapter, so
+// the services now take a `HumanActor` and cannot be handed a service actor at
+// all.
+//
+// The assertions were not dropped; they moved to
+// tests/rest/api-service-actor.test.ts, which now walks 17 human-only routes
+// against BOTH the agent and service tiers — wider coverage than this block had.
+// Re-asserting here would require manufacturing a `HumanActor` in a test, which
+// is the state-constructing shape this story exists to remove.

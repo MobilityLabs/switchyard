@@ -5,6 +5,8 @@
 // rebuilding the drift bug class the event-log derivation had.
 
 import { describe, it, expect } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
@@ -26,7 +28,7 @@ const T3 = "2026-07-12T12:00:00Z";
 
 function setup(opts: { bindRepo?: boolean } = {}) {
   const db = openDb(":memory:");
-  const human = createActor(db, { name: "sean", type: "human" }).actor;
+  const human = createHuman(db, "sean");
   const github = createActor(db, { name: "github", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });

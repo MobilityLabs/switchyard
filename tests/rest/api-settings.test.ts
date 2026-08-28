@@ -35,7 +35,9 @@ describe("settings routes", () => {
       body: JSON.stringify({ value: "Nope" }),
     });
     expect(agentRes.status).toBe(400);
-    expect(((await agentRes.json()) as { error: string }).error).toMatch(/human-only/i);
+    expect(((await agentRes.json()) as { error: string }).error).toMatch(
+      /only humans can (change|reset) a? ?settings?/i,
+    );
 
     const humanRes = await app.request("/settings/instance.name", {
       method: "PUT",
@@ -102,7 +104,9 @@ describe("settings routes", () => {
       headers: agentH,
     });
     expect(agentDelete.status).toBe(400);
-    expect(((await agentDelete.json()) as { error: string }).error).toMatch(/human-only/i);
+    expect(((await agentDelete.json()) as { error: string }).error).toMatch(
+      /only humans can (change|reset) a? ?settings?/i,
+    );
 
     const humanDelete = await app.request("/settings/instance.name", {
       method: "DELETE",

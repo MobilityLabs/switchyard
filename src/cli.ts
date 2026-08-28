@@ -1,4 +1,6 @@
 import { eq } from "drizzle-orm";
+import { requireHuman, type HumanActor } from "./services/principal.js";
+import { NO_SESSION } from "./services/attribution.js";
 import { readFileSync } from "node:fs";
 import { openDb } from "./db/index.js";
 import { actors } from "./db/schema.js";
@@ -19,12 +21,19 @@ import { SwitchyardError } from "./services/errors.js";
 
 // The CLI operates directly on the db file with no HTTP auth, so it stands
 // in for a human operator when calling human-only service functions.
-const cliActor: Actor = { id: 0, name: "cli", type: "human", attended: true };
+// SYD-281: minted through the same accessor production uses, not cast. This is
+// the single CLI mint the eslint `as HumanActor` ban carves out — and it is a
+// mint, not a cast, precisely so the ban needs no carve-out at all.
+const cliActor: HumanActor = requireHuman(
+  { id: 0, name: "cli", type: "human", attended: true },
+  NO_SESSION,
+  "run admin CLI commands",
+);
 
 // Resolves a human actor by name, matching mint-supervised-session's inline
 // lookup below — factored out because the affirm-key commands need it three
 // times.
-function requireHumanActor(db: ReturnType<typeof openDb>, name: string): Actor {
+function requireHumanActor(db: ReturnType<typeof openDb>, name: string): HumanActor {
   const row = db.select().from(actors).where(eq(actors.name, name)).get();
   if (!row) throw new SwitchyardError(`There is no actor named "${name}".`);
   if (row.type !== "human") {
@@ -32,7 +41,11 @@ function requireHumanActor(db: ReturnType<typeof openDb>, name: string): Actor {
       `"${name}" is an actor of type "${row.type}", not a human — affirmation keys belong to humans.`,
     );
   }
-  return { id: row.id, name: row.name, type: row.type, attended: row.attended };
+  return requireHuman(
+    { id: row.id, name: row.name, type: row.type, attended: row.attended },
+    NO_SESSION,
+    "own affirmation keys",
+  );
 }
 
 const [dbPath, cmd, ...args] = process.argv.slice(2);

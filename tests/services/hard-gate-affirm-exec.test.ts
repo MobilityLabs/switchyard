@@ -5,6 +5,8 @@
 // isolation (rows created directly via findOrCreatePendingAction); this file
 // checks the same guarantees hold when the row comes from the real divert.
 import { describe, it, expect, beforeEach } from "vitest";
+import { createHuman } from "../helpers/human.js";
+import type { HumanActor } from "../../src/services/principal.js";
 import { sql } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
@@ -18,10 +20,10 @@ import { affirmPendingAction, getPendingAction } from "../../src/services/hard-g
 
 const REPO = "acme/widgets";
 
-let db: Db, human: Actor, issueId: number, sessionId: number;
+let db: Db, human: HumanActor, issueId: number, sessionId: number;
 beforeEach(() => {
   db = openDb(":memory:");
-  human = createActor(db, { name: "sean", type: "human" }).actor;
+  human = createHuman(db, "sean");
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   issueId = createIssue(db, human, { projectKey: "SYD", title: "t", description: "d" }).id;
   sessionId = openSupervisedSession(db, human, "claude-code").sessionId;
