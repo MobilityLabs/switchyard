@@ -1,7 +1,8 @@
 # Human-act integrity: separating attribution from authorization (SYD-281)
 
-Story B of the SYD-279 epic. **Revision 4** — after three rounds of a seven-seat review
-panel (2026-08-27). Findings and disposition: `docs/reviews/2026-08-27-syd281-panel.md`.
+Story B of the SYD-279 epic. **Revision 5** — after four rounds of a seven-seat review panel
+(2026-08-27). Round 4 closed the design question: 3 of 7 seats approved, and every remaining
+finding was scoped to the migration and test descriptions, all folded in here. Findings and disposition: `docs/reviews/2026-08-27-syd281-panel.md`.
 
 ## The problem
 
@@ -47,8 +48,9 @@ line. The finding is that one site got it right and nothing generalized it.
 
 ### Blast radius
 
-**Reachable from `/mcp` with a `sup_` token** (the MCP surface is 22 tools; delivery,
-`confirm_pr_link`, and agent-session start/end are *not* among them):
+**Reachable from `/mcp` with a `sup_` token** (a supervised session sees 21 MCP tools — 22 `registerTool` calls, but `heartbeat` is
+registered only for a connection-lease session, `mcp/server.ts:372`; delivery,
+`confirm_pr_link`, and agent-session start/end are not among them):
 
 | Site | Gate | What a supervised agent gets |
 |---|---|---|
@@ -279,9 +281,7 @@ issues.ts         createIssue:168, updateIssue:305, claimIssue:725,
 comments.ts       :44   (defence in depth; :664 is the primary conversion)
 needs-input.ts    :43, :44
 agent-sessions.ts requireAgent:47 — three callers: :126, :142, :209
-delivery-events.ts :54          → `actingAgent(...) !== null`
-delivery-attempts.ts requireDeliveryInfra:208 — four callers: :228, :290, :334, :371
-rest/api-routes.ts :672 /github-events → `actingAgent(...) !== null`
+(delivery-events.ts and delivery-attempts.ts are NOT in this population — see below)
 ```
 
 **Decision on the two delivery sites: leave them exactly as they are.** Revision 4 said this
