@@ -162,6 +162,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const cutover = ensureClaimLeaseCutover(db);
   if (!cutover.alreadyDone)
     console.log(`claim-lease cutover: released ${cutover.released} in-flight claim(s)`);
+  const { ensureSupervisedClaimCutover } = await import("./services/supervised-claim-cutover.js");
+  const supCutover = ensureSupervisedClaimCutover(db);
+  if (!supCutover.alreadyDone)
+    console.log(
+      `supervised-claim cutover: released ${supCutover.released} claim(s), closed ${supCutover.sessionsClosed} session(s)`,
+    );
   startServer(db, Number(process.env.PORT ?? 3300));
   const { startWebhookDispatcher } = await import("./services/webhook-dispatcher.js");
   startWebhookDispatcher(db);

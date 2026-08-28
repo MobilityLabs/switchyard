@@ -483,6 +483,12 @@ export const claimLeaseCutover = sqliteTable("claim_lease_cutover", {
   completedAt: integer("completed_at").notNull().default(now()),
 });
 
+/** SYD-281 one-time cutover marker — see services/supervised-claim-cutover.ts. */
+export const supervisedClaimCutover = sqliteTable("supervised_claim_cutover", {
+  id: integer("id").primaryKey(),
+  completedAt: integer("completed_at").notNull().default(now()),
+});
+
 export const PENDING_ACTION_STATUSES = ["pending", "affirmed", "expired"] as const;
 export type PendingActionStatus = (typeof PENDING_ACTION_STATUSES)[number];
 
