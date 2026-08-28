@@ -6,7 +6,10 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue } from "../../src/services/issues.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
 import { attributionOf } from "../../src/services/attribution.js";
 
 let db: Db, human: HumanActor, agent: Actor;
@@ -30,8 +33,10 @@ function latestEvent(db: Db, issueId: number, type: string) {
 
 describe("supervised attribution end-to-end", () => {
   it("(a) createIssue + updateIssue->in_review write attributed events", () => {
-    const { sessionId } = openSupervisedSession(db, human, agent.name);
-    const attr = attributionOf({ actor: human, viaAgent: agent, sessionId });
+    const { sessionToken, sessionId } = openSupervisedSession(db, human, "claude");
+    const prin = resolveSupervisedPrincipal(db, sessionToken)!;
+    const attr = attributionOf(prin);
+    const agent = prin.viaAgent!;
 
     // SYD-281: a supervised session is on the agent path, so "agent-created
     // issues land in triage with required provenance" (CLAUDE.md) now applies to
@@ -72,8 +77,10 @@ describe("supervised attribution end-to-end", () => {
   });
 
   it("(b) supervised claimIssue attributes the delegated assigned/status_changed event", () => {
-    const { sessionId } = openSupervisedSession(db, human, agent.name);
-    const attr = attributionOf({ actor: human, viaAgent: agent, sessionId });
+    const { sessionToken, sessionId } = openSupervisedSession(db, human, "claude");
+    const prin = resolveSupervisedPrincipal(db, sessionToken)!;
+    const attr = attributionOf(prin);
+    const agent = prin.viaAgent!;
 
     const issue = createIssue(db, human, { projectKey: "SUP", title: "Claim me" });
     updateIssue(db, human, issue.ref, { status: "todo" });

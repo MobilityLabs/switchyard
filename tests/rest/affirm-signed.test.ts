@@ -9,7 +9,10 @@ import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, type IssueView } from "../../src/services/issues.js";
 import { createLoginLink, redeemLoginLink } from "../../src/services/auth.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
 import { attributionOf } from "../../src/services/attribution.js";
 import { setSetting } from "../../src/services/settings.js";
 import { PendingAffirmation } from "../../src/services/errors.js";
@@ -87,7 +90,7 @@ function supervisedRest() {
       issue.ref,
       { status: "done" },
       {},
-      attributionOf({ actor: human, viaAgent: agent, sessionId: session.sessionId }),
+      attributionOf(resolveSupervisedPrincipal(db, session.sessionToken)!),
     );
   } catch (err) {
     if (err instanceof PendingAffirmation) caught = err;

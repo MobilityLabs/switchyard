@@ -29,7 +29,12 @@ export function addComment(
       viaAgentId: attr.viaAgentId,
       sessionId: attr.sessionId,
     });
-    if (actor.type === "human" && AGENT_QUESTION_RE.test(body.trim())) {
+    // SYD-281: this looked like signalling, but worker-select.ts treats every
+    // agent_question event as a signal to dispatch an answerer, and
+    // events.ts's unanswered-question query accepts it on type alone. A
+    // supervised agent posting "@agent ..." could therefore summon a worker as
+    // though a person had asked. It is a human act.
+    if (asHuman(actor, attr) !== null && AGENT_QUESTION_RE.test(body.trim())) {
       // Read-only signal for the worker's answerer mode: no issue-state change,
       // just a marker event the event poll can watch for (same shape as
       // needs_input_cleared below) — works on any status, including triage.

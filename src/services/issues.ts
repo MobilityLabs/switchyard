@@ -744,11 +744,12 @@ export function heartbeatClaim(
   attr: Attribution = NO_SESSION,
 ): { expiresAt: number } {
   const issue = getIssue(db, ref);
-  // SYD-281: correct by symmetry with the mint, which keys to the effective
-  // actor. Unreachable from a supervised session today — mcp/server.ts registers
-  // `heartbeat` only for a connection-lease session, and those are refused
-  // claim_issue — so this is the right answer for the day that changes, not a
-  // live fix.
+  // SYD-281: keys to the effective actor, matching the mint. This IS reachable
+  // from a supervised session: `heartbeat` is registered whenever the connection
+  // carries an x-switchyard-lease header (mcp/server.ts), and that header is
+  // client-supplied and independent of the bearer (src/server.ts) — a sup_
+  // connection can send one. Keyed to `actor` it would validate the accountable
+  // human against an agent-minted lease and throw on every beat.
   const lease = heartbeatLease(db, issue.id, effectiveActor(db, actor, attr).id, leaseToken);
   return { expiresAt: lease.expiresAt };
 }

@@ -308,7 +308,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.post("/issues", body(issueCreateBody), (c) =>
-    c.json(createIssue(db, c.var.actor, c.req.valid("json"))),
+    c.json(createIssue(db, c.var.actor, c.req.valid("json"), NO_SESSION)),
   );
 
   app.get("/issues/:ref", (c) => {
@@ -346,7 +346,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   });
 
   app.post("/issues/:ref/claim", (c) => {
-    const { issue, leaseToken } = claimIssue(db, c.var.actor, c.req.param("ref"));
+    const { issue, leaseToken } = claimIssue(db, c.var.actor, c.req.param("ref"), {}, NO_SESSION);
     return c.json({ ...issue, leaseToken });
   });
 
@@ -355,7 +355,7 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
   );
 
   app.post("/issues/:ref/comments", body(commentBody), (c) => {
-    addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body);
+    addComment(db, c.var.actor, c.req.param("ref"), c.req.valid("json").body, NO_SESSION);
     return c.json({ ok: true });
   });
 

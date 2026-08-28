@@ -10,9 +10,11 @@ import { sql } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, updateIssue, type IssueView } from "../../src/services/issues.js";
+import { createIssue, updateIssue, getIssue, type IssueView } from "../../src/services/issues.js";
 import { addDependency, listDependencies } from "../../src/services/dependencies.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
+import { requestHumanInput } from "../../src/services/needs-input.js";
+import { declarePrLink } from "../../src/services/pr-links.js";
 import { listLiveLinkViews } from "../../src/services/pr-links.js";
 import { setSetting } from "../../src/services/settings.js";
 import {
@@ -311,5 +313,85 @@ describe("declare_pr_link in a supervised session (SYD-281)", () => {
     expect(me.name).toBe(human.name);
     expect(me.type).toBe("human");
     expect(me.actingAs).toMatchObject({ id: agent.id, name: agent.name, type: "agent" });
+  });
+
+  // SYD-281 review (opus + fable): the two cases the spec named as the ones a
+  // naive implementer gets wrong, plus the two gates the changeset review found
+  // unconverted. Each of these passes on `main` — i.e. each is a live hole.
+
+  it("a NO-OP status patch does not clear needsInput", async () => {
+    // issues.ts's clear fires on `patch.status !== undefined`, NOT on a change,
+    // and the hard-gate divert only engages when the status actually differs. So
+    // a supervised agent could answer its own escalation with a status patch
+    // equal to the current status — touching `comment` never enters into it.
+    const claimed = await (
+      await connectSupervised()
+    ).callTool({
+      name: "claim_issue",
+      arguments: { ref: issue.ref },
+    });
+    const lease = JSON.parse(text(claimed)).lease_token as string;
+    requestHumanInput(db, agent, issue.ref, "Which approach?", lease);
+    expect(getIssue(db, issue.ref).needsInput).toBe(true);
+
+    const client = await connectSupervised();
+    const cur = getIssue(db, issue.ref).status;
+    const r = await client.callTool({
+      name: "update_issue",
+      arguments: { ref: issue.ref, status: cur, lease_token: lease },
+    });
+    expect(r.isError).toBeFalsy();
+    expect(getIssue(db, issue.ref).needsInput).toBe(true);
+  });
+
+  it("cannot revoke a link the human declared in person", async () => {
+    // The repo is already linked by this describe's beforeEach.
+    // The human declares, at their desk, with no session.
+    declarePrLink(db, human, issue.ref, { repo: "acme/widgets", prNumber: 11 }, undefined, {});
+
+    const client = await connectSupervised();
+    const r = await client.callTool({
+      name: "revoke_pr_link",
+      arguments: { ref: issue.ref, repo: "acme/widgets", pr_number: 11, reason: "not mine" },
+    });
+    expect(r.isError).toBe(true);
+    // declaredBy is the human and the link is confirmed, so both the ownership
+    // test and the confirmed test refuse it. Keyed to `actor` (the accountable
+    // human) instead of the acting agent, this would have succeeded.
+    expect(text(r)).toMatch(/confirmed|declared by someone else/i);
+  });
+
+  it("request_human_input on its own claimed issue still needs the agent's lease", async () => {
+    const claimed = await (
+      await connectSupervised()
+    ).callTool({
+      name: "claim_issue",
+      arguments: { ref: issue.ref },
+    });
+    expect(claimed.isError).toBeFalsy();
+    const client = await connectSupervised();
+    const r = await client.callTool({
+      name: "request_human_input",
+      arguments: { ref: issue.ref, question: "Which approach?" },
+    });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/lease/i);
+    expect(getIssue(db, issue.ref).needsInput).toBe(false);
+  });
+
+  it("an @agent comment does not dispatch an answerer — that is a human act", async () => {
+    // worker-select.ts consumes every agent_question event as a signal to
+    // dispatch a headless answerer, so a supervised agent posting "@agent ..."
+    // could summon a worker as though a person had asked.
+    const client = await connectSupervised();
+    const r = await client.callTool({
+      name: "comment",
+      arguments: { ref: issue.ref, body: "@agent what should I do here?" },
+    });
+    expect(r.isError).toBeFalsy();
+    const [row] = db.all<{ n: number }>(
+      sql`SELECT COUNT(*) AS n FROM events WHERE issue_id = ${issue.id} AND type = 'agent_question'`,
+    );
+    expect(row.n).toBe(0);
   });
 });

@@ -6,7 +6,10 @@ import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, getIssue, type IssueView } from "../../src/services/issues.js";
 import { createLoginLink, redeemLoginLink } from "../../src/services/auth.js";
-import { openSupervisedSession } from "../../src/services/supervised-sessions.js";
+import {
+  openSupervisedSession,
+  resolveSupervisedPrincipal,
+} from "../../src/services/supervised-sessions.js";
 import { attributionOf } from "../../src/services/attribution.js";
 import { listPendingActions } from "../../src/services/hard-gate.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
@@ -51,7 +54,7 @@ beforeEach(() => {
       issue.ref,
       { status: "done" },
       {},
-      attributionOf({ actor: owner, viaAgent: agent, sessionId: session.sessionId }),
+      attributionOf(resolveSupervisedPrincipal(db, session.sessionToken)!),
     ),
   ).toThrow(/awaiting human affirmation/i);
 

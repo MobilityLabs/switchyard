@@ -390,7 +390,13 @@ export function buildMcpServer(
         inputSchema: { ref: z.string(), lease_token: z.string().optional() },
       },
       guard(({ ref, lease_token }: { ref: string; lease_token?: string }) => {
-        const { expiresAt } = heartbeatClaim(db, actor, ref, lease_token ?? connectionLeaseToken);
+        const { expiresAt } = heartbeatClaim(
+          db,
+          actor,
+          ref,
+          lease_token ?? connectionLeaseToken,
+          attribution,
+        );
         return { ok: true, expires_at: expiresAt };
       }),
     );
