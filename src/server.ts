@@ -97,7 +97,6 @@ export function createApp(db: Db) {
       undefined,
       leaseToken,
       principal ? attributionOf(principal) : {},
-      principal?.viaAgent,
     );
     res.on("close", () => {
       transport.close();

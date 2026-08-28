@@ -39,9 +39,9 @@ function latestEvent(issueId: number, type: string) {
  * how /mcp bakes a resolved supervised session into the tool closure. */
 async function connectSupervised(): Promise<Client> {
   const [ct, st] = InMemoryTransport.createLinkedPair();
-  await buildMcpServer(db, prin.actor, dir, undefined, attributionOf(prin), prin.viaAgent).connect(
-    st,
-  );
+  // SYD-281: no viaAgent argument — the acting agent is derived from the
+  // attribution's viaAgentId by effectiveActor, so there is one source of truth.
+  await buildMcpServer(db, prin.actor, dir, undefined, attributionOf(prin)).connect(st);
   const c = new Client({ name: "test", version: "0.0.0" });
   await c.connect(ct);
   return c;
