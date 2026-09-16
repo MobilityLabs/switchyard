@@ -38,6 +38,7 @@ jobs:
       - run: npm run format:check
       - run: npm run typecheck
       - run: npm run build:ui
+      - run: npm run build:server
       - run: npm test
 # No deploy/provider secrets are referenced in this PR-triggered workflow, by
 # design (SYD-209): a PR build must never have access to deployment credentials.

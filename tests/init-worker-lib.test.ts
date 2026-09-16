@@ -540,12 +540,15 @@ describe("renderWorkerPlist", () => {
     home: "/Users/sean",
   });
 
-  it("execs tsx directly (no shell) and embeds no secret material", () => {
+  it("execs a single node process via run-compiled.mjs (no shell) and embeds no secret material (SYD-268)", () => {
     expect(plist).toContain("<string>com.switchyard.worker</string>");
-    expect(plist).toContain("<string>/Users/sean/sites/switchyard/node_modules/.bin/tsx</string>");
+    expect(plist).toContain("<string>/Users/sean/.nvm/versions/node/v24.13.0/bin/node</string>");
     expect(plist).toContain(
-      "<string>/Users/sean/sites/switchyard/scripts/agent-worker.ts</string>",
+      "<string>/Users/sean/sites/switchyard/scripts/run-compiled.mjs</string>",
     );
+    expect(plist).toContain("<string>agent-worker</string>");
+    expect(plist).not.toContain("node_modules/.bin/tsx");
+    expect(plist).not.toContain("agent-worker.ts");
     expect(plist).not.toContain("/bin/bash");
     expect(plist).not.toContain(".env");
     // No secret material may ever appear in the plist (world-readable).
@@ -576,7 +579,7 @@ describe("renderWorkerPlist", () => {
       nodeBinDir: "/usr/bin",
       home: "/Users/sean",
     });
-    expect(weird).toContain("<string>/tmp/it's &lt;a&gt;&amp;b/node_modules/.bin/tsx</string>");
+    expect(weird).toContain("<string>/tmp/it's &lt;a&gt;&amp;b/scripts/run-compiled.mjs</string>");
     expect(weird).not.toContain("<a>&b");
   });
 
@@ -592,7 +595,8 @@ describe("renderWorkerPlist", () => {
       expect(code).toContain(`<string>${WORKER_CODE_LAUNCHD_LABEL}</string>`);
       expect(code).toContain("<string>--role</string>");
       expect(code).toContain("<string>code</string>");
-      expect(code).toContain("<string>/r/scripts/agent-worker.ts</string>");
+      expect(code).toContain("<string>/r/scripts/run-compiled.mjs</string>");
+      expect(code).toContain("<string>agent-worker</string>");
 
       const answer = renderWorkerPlist({ ...base, role: "answer" });
       expect(answer).toContain(`<string>${WORKER_ANSWER_LAUNCHD_LABEL}</string>`);
@@ -820,12 +824,16 @@ describe("renderDeliverPlist", () => {
     home: "/Users/sean",
   });
 
-  it("execs tsx against deliver.ts under its own label, distinct from the worker's", () => {
+  it("execs deliver via run-compiled.mjs under its own label, distinct from the worker's (SYD-268)", () => {
     expect(plist).toContain(`<string>${DELIVER_LAUNCHD_LABEL}</string>`);
     expect(DELIVER_LAUNCHD_LABEL).not.toBe("com.switchyard.worker");
-    expect(plist).toContain("<string>/Users/sean/sites/switchyard/node_modules/.bin/tsx</string>");
-    expect(plist).toContain("<string>/Users/sean/sites/switchyard/scripts/deliver.ts</string>");
-    expect(plist).not.toContain("agent-worker.ts");
+    expect(plist).toContain("<string>/Users/sean/.nvm/versions/node/v24.13.0/bin/node</string>");
+    expect(plist).toContain(
+      "<string>/Users/sean/sites/switchyard/scripts/run-compiled.mjs</string>",
+    );
+    expect(plist).toContain("<string>deliver</string>");
+    expect(plist).not.toContain("node_modules/.bin/tsx");
+    expect(plist).not.toContain("agent-worker");
     expect(plist).not.toContain("/bin/bash");
     expect(plist).not.toContain(".env");
     expect(plist).not.toMatch(/syd_|sya_|sk-ant|OAUTH/);
@@ -851,13 +859,15 @@ describe("renderPollPlist", () => {
     home: "/Users/sean",
   });
 
-  it("execs github-poll.ts under the poll service's own label", () => {
+  it("execs github-poll via run-compiled.mjs under the poll service's own label (SYD-268)", () => {
     expect(plist).toContain(`<string>${POLL_LAUNCHD_LABEL}</string>`);
     expect(POLL_LAUNCHD_LABEL).not.toBe(DELIVER_LAUNCHD_LABEL);
-    expect(plist).toContain("/node_modules/.bin/tsx</string>");
-    expect(plist).toContain("/scripts/github-poll.ts</string>");
+    expect(plist).toContain("/bin/node</string>");
+    expect(plist).toContain("/scripts/run-compiled.mjs</string>");
+    expect(plist).toContain("<string>github-poll</string>");
+    expect(plist).not.toContain("node_modules/.bin/tsx");
     expect(plist).not.toContain("deliver.ts");
-    expect(plist).not.toContain("agent-worker.ts");
+    expect(plist).not.toContain("agent-worker");
   });
 
   it("records regeneration provenance and dedicated poll logs", () => {

@@ -372,11 +372,16 @@ export function workerLaunchdLabel(role: WorkerRole): string {
 }
 
 /**
- * Shared plist body for both LaunchAgents (worker + deliver): launchd execs
- * tsx directly (no shell, so no quoting surface at all), restarts on crash
- * only, and never receives secret material — each loop reads the repo .env
- * itself. `nodeBinDir` pins PATH to a concrete node install (launchd doesn't
- * source shell profiles, so nvm-managed node is invisible without it);
+ * Shared plist body for both LaunchAgents (worker + deliver): launchd execs a
+ * single plain `node` process running `scripts/run-compiled.mjs <entry>`
+ * (no shell, so no quoting surface at all — SYD-268, previously `tsx`
+ * directly), restarts on crash only, and never receives secret material —
+ * each loop reads the repo .env itself. run-compiled.mjs builds dist/server
+ * on demand (a content-hash check against dist/server/build-info.json) before
+ * importing the compiled entry, so a stale checkout can never run month-old
+ * compiled code. `nodeBinDir` pins PATH to a concrete node install (launchd
+ * doesn't source shell profiles, so nvm-managed node is invisible without
+ * it) and is also used as the literal node binary in ProgramArguments;
  * `extraPathDirs` carries e.g. the resolved directory of the `claude` binary
  * for bare-host worker dispatch.
  */
@@ -393,6 +398,10 @@ function renderLaunchdPlist(opts: {
   generatedBy: string;
 }): string {
   const repo = escapeXml(opts.repoRoot);
+  const nodeBin = escapeXml(`${opts.nodeBinDir}/node`);
+  // scripts/agent-worker.ts -> "agent-worker", the <entry> arg run-compiled.mjs
+  // maps to dist/server/scripts/<entry>.js.
+  const entry = escapeXml(opts.scriptRelPath.replace(/^scripts\//, "").replace(/\.ts$/, ""));
   const path = escapeXml(
     [
       opts.nodeBinDir,
@@ -416,8 +425,9 @@ function renderLaunchdPlist(opts: {
 
     <key>ProgramArguments</key>
     <array>
-        <string>${repo}/node_modules/.bin/tsx</string>
-        <string>${repo}/${opts.scriptRelPath}</string>
+        <string>${nodeBin}</string>
+        <string>${repo}/scripts/run-compiled.mjs</string>
+        <string>${entry}</string>
 ${argLines ? argLines + "\n" : ""}    </array>
 
     <!-- Restart on crash only; a clean exit (SIGINT handler, launchctl unload)
