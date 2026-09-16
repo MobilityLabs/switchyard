@@ -85,8 +85,26 @@ const DEFAULT_POLL_SECONDS = 30;
  * attempt row. */
 type DeliverOutcome = { outcome: AttemptOutcome; derivedHeadSha?: string };
 
+/**
+ * Repo root, robust to running from either the source tree
+ * (scripts/deliver.ts) or the compiled tree
+ * (dist/server/scripts/deliver.js, SYD-268): walks up from this file until
+ * it finds the directory containing package.json, rather than assuming a
+ * fixed number of ".." segments — those differ between the two layouts.
+ * Assumes nothing under dist/ ever ships its own package.json.
+ */
 function repoRoot(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  while (!existsSync(path.join(dir, "package.json"))) {
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      throw new Error(
+        "could not locate repo root (no package.json found walking up from this file)",
+      );
+    }
+    dir = parent;
+  }
+  return dir;
 }
 
 function loadDotEnv(): void {

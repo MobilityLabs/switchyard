@@ -9,6 +9,7 @@
     "dev": "tsx src/server.ts",
     "affirm": "tsx src/affirm-cli.ts",
     "build:ui": "vite build --config ui/vite.config.ts",
+    "build:server": "node scripts/run-compiled.mjs --build-only",
     "dev:ui": "vite --config ui/vite.config.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc -p ui --noEmit",

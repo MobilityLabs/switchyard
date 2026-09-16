@@ -1,0 +1,20 @@
+{
+  // SYD-268: compiles the host-side launchd entry points (and whatever they
+  // pull in from scripts/ and src/) to plain JS so launchd can run a single
+  // `node dist/server/scripts/<entry>.js` process instead of
+  // `node -> tsx shim -> node+esbuild loader` per service. Deliberately does
+  // NOT touch the root tsconfig.json's `noEmit: true` — `npm run typecheck`
+  // depends on that staying a check-only config.
+  //
+  // worker-sdk/*.ts is intentionally excluded: it's dynamically imported at
+  // runtime (via tsx's programmatic API, see scripts/agent-worker.ts) rather
+  // than compiled, because it has its own isolated node_modules (zod@4) that
+  // an emitted copy under dist/server/worker-sdk/ would not resolve.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist/server",
+    "rootDir": "."
+  },
+  "include": ["scripts/agent-worker.ts", "scripts/deliver.ts", "scripts/github-poll.ts"]
+}

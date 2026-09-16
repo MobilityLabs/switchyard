@@ -61,6 +61,13 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+// SYD-268: loads worker-sdk/sdk-runner.ts (see dispatchSdk / dispatchAnswerSdk
+// below) — tsx's own transform, used instead of a bare `import()` so the
+// runner's internal `.js`-suffixed sibling import still resolves under a
+// plain compiled `node` process. `tsx` stays a devDependency (same as
+// before: the pre-SYD-268 plist already required tsx to be present, just as
+// the ProgramArguments binary rather than a runtime import).
+import { tsImport } from "tsx/esm/api";
 import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import {
   selectDispatchable,
@@ -147,8 +154,26 @@ const tickGate = newTickGate();
 // can run concurrently on the same issue.
 export const answerState: AnswerState = new Map();
 
+/**
+ * Repo root, robust to running from either the source tree
+ * (scripts/agent-worker.ts) or the compiled tree
+ * (dist/server/scripts/agent-worker.js, SYD-268): walks up from this file
+ * until it finds the directory containing package.json, rather than assuming
+ * a fixed number of ".." segments — those differ between the two layouts.
+ * Assumes nothing under dist/ ever ships its own package.json.
+ */
 function repoRoot(): string {
-  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  while (!existsSync(path.join(dir, "package.json"))) {
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      throw new Error(
+        "could not locate repo root (no package.json found walking up from this file)",
+      );
+    }
+    dir = parent;
+  }
+  return dir;
 }
 
 function defaultConfigPath(): string {
@@ -1000,6 +1025,18 @@ export function dispatch(
  * runner module is imported via a runtime-computed path so machines running
  * CLI mode — and the main `tsc` pass / server Docker image — never depend on
  * worker-sdk/ being installed.
+ *
+ * Loaded with tsx's programmatic loader (SYD-268), not a bare `import()`:
+ * this worker now runs as plain compiled JS (dist/server/scripts/*.js,
+ * see scripts/run-compiled.mjs), and worker-sdk/sdk-runner.ts is
+ * deliberately never compiled — it has its own isolated node_modules
+ * (zod@4), which an emitted copy under dist/server/worker-sdk/ would not
+ * resolve (that directory has no ancestor path to worker-sdk/node_modules).
+ * tsx's tsImport() transforms the .ts on the fly and remaps its own
+ * `./sdk-format.js` sibling import back to sdk-format.ts, exactly as the
+ * tsx CLI does, while resolving bare specifiers (`@anthropic-ai/claude-agent-sdk`,
+ * `zod`) from worker-sdk/node_modules since the file never moves — it's
+ * loaded from its real location in the source tree either way.
  */
 function dispatchSdk(
   issue: ApiIssue,
@@ -1055,7 +1092,7 @@ function dispatchSdk(
     : () => {};
 
   const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
-  import(runnerPath)
+  tsImport(runnerPath, import.meta.url)
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
       mod.runSdkSession({
         prompt: buildPrompt(issue.ref, opts),
@@ -1222,7 +1259,7 @@ function dispatchAnswerSdk(
   safeAppend(`[worker] sdk answer session starting for ${ref}\n`);
 
   const runnerPath = path.join(repoRoot(), "worker-sdk", "sdk-runner.ts");
-  import(runnerPath)
+  tsImport(runnerPath, import.meta.url)
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
       mod.runSdkSession({
         prompt: buildAnswerPrompt(ref),
