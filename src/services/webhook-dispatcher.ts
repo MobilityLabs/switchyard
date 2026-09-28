@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { asc, eq, gt } from "drizzle-orm";
+import { and, asc, eq, gt, lt } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, events, issues, projects, webhooks, webhookCursor } from "../db/schema.js";
 import { releaseStaleClaims } from "./stale-claims.js";
@@ -9,7 +9,27 @@ import { expirePendingActions } from "./hard-gate.js";
 import { getSetting } from "./settings.js";
 import { emitProcessDeviations } from "./deviation.js";
 
-export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Promise<number> {
+// Switchyard runs one server process with one database connection. Coalesce
+// overlapping callers, including timer ticks, until the current batch settles.
+// Housekeeping stays outside this guard and keeps running on its own cadence.
+const activeDispatches = new WeakMap<Db, Promise<number>>();
+
+export function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Promise<number> {
+  const active = activeDispatches.get(db);
+  if (active) return active;
+  const pending = dispatchBatch(db, fetchFn).finally(() => activeDispatches.delete(db));
+  activeDispatches.set(db, pending);
+  return pending;
+}
+
+function advanceCursor(db: Db, eventId: number): void {
+  db.update(webhookCursor)
+    .set({ lastEventId: eventId })
+    .where(and(eq(webhookCursor.id, 1), lt(webhookCursor.lastEventId, eventId)))
+    .run();
+}
+
+async function dispatchBatch(db: Db, fetchFn: typeof fetch): Promise<number> {
   let cursor = db.select().from(webhookCursor).where(eq(webhookCursor.id, 1)).get();
   if (!cursor) {
     db.insert(webhookCursor).values({ id: 1, lastEventId: 0 }).run();
@@ -38,7 +58,7 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
   let delivered = 0;
   for (const r of rows) {
     if (suppressed.has(r.e.type)) {
-      db.update(webhookCursor).set({ lastEventId: r.e.id }).where(eq(webhookCursor.id, 1)).run();
+      advanceCursor(db, r.e.id);
       continue;
     }
     const body = JSON.stringify({
@@ -74,7 +94,7 @@ export async function dispatchPending(db: Db, fetchFn: typeof fetch = fetch): Pr
         console.error(`webhook ${h.id} -> ${h.url} failed: ${(err as Error).message}`);
       }
     }
-    db.update(webhookCursor).set({ lastEventId: r.e.id }).where(eq(webhookCursor.id, 1)).run();
+    advanceCursor(db, r.e.id);
   }
   return delivered;
 }

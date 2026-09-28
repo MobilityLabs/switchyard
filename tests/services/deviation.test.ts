@@ -1,3 +1,4 @@
+import { declarePrLink } from "../../src/services/pr-links.js";
 import { describe, it, expect } from "vitest";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
@@ -263,6 +264,7 @@ describe("emitProcessDeviations", () => {
       branch: "agent/SYD-1",
       url: `https://github.com/${REPO}/pull/41`,
     };
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 41 });
     upsertPrState(db, human, {
       ...observation,
       status: "open",
@@ -343,6 +345,7 @@ describe("getDeviation — done_pr_not_delivered (SYD-261)", () => {
     updateIssue(db, human, "SYD-1", { status: "in_review" });
     updateIssue(db, human, "SYD-1", { status: "done" });
     // The PR registers AFTER the stamp — the ordering this issue is about.
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 304 });
     upsertPrState(db, human, {
       repo: REPO,
       prNumber: 304,
@@ -538,6 +541,7 @@ describe("updateIssue done transition — done_without_merged_pr (SYD-204)", () 
     createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
     updateIssue(db, human, "SYD-1", { status: "todo" });
     claimIssue(db, agent, "SYD-1");
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 41 });
     recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 41,

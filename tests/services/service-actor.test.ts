@@ -8,7 +8,11 @@ import {
 } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue } from "../../src/services/issues.js";
-import { addDependency, removeDependency } from "../../src/services/dependencies.js";
+import {
+  addDependency,
+  removeDependency,
+  listDependencies,
+} from "../../src/services/dependencies.js";
 import { addComment } from "../../src/services/comments.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import {
@@ -146,6 +150,13 @@ describe("service actor — DENIED all issue create/modify (fail-closed)", () =>
 });
 
 describe("service actor — DENIED (config / dependencies / tokens)", () => {
+  it("cannot add a dependency or emit a blocking event", () => {
+    const before = listIssueEvents(db, getIssue(db, "AIPI-2").id).length;
+    expect(() => addDependency(db, service, "AIPI-1", "AIPI-2")).toThrow(/cannot add dependencies/);
+    expect(listDependencies(db, "AIPI-2").blockedBy).toEqual([]);
+    expect(listIssueEvents(db, getIssue(db, "AIPI-2").id)).toHaveLength(before);
+  });
+
   it("cannot remove a dependency", () => {
     addDependency(db, human, "AIPI-1", "AIPI-2");
     expect(() => removeDependency(db, service, "AIPI-1", "AIPI-2")).toThrowError(/only humans/i);

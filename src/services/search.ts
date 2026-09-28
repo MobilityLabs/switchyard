@@ -1,11 +1,12 @@
-import { and, desc, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { actors, issues, projects, type Status } from "../db/schema.js";
 import { type IssueView } from "./issues.js";
 import { getProjectByKey } from "./projects.js";
 import { SwitchyardError } from "./errors.js";
+import { issueIdsCondition } from "./issue-scope.js";
 import { listAttentionByIssueId, type AttentionFlag } from "./attention.js";
-import { listOpenPrByIssueId } from "./pr-status.js";
+import { listOpenPrByIssueId, type OpenPr } from "./pr-status.js";
 
 export type SearchFilters = {
   projectKey?: string;
@@ -25,7 +26,16 @@ export type SearchFilters = {
   openPr?: boolean;
 };
 
-export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
+export type SearchSignals = {
+  attention?: Map<number, AttentionFlag>;
+  openPrs?: Map<number, OpenPr>;
+};
+
+export function searchIssues(
+  db: Db,
+  filters: SearchFilters,
+  signals: SearchSignals = {},
+): IssueView[] {
   const conditions: SQL[] = [];
   if (filters.projectKey)
     conditions.push(eq(issues.projectId, getProjectByKey(db, filters.projectKey).id));
@@ -47,27 +57,6 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
     const now = Math.floor(Date.now() / 1000);
     conditions.push(or(isNull(issues.snoozedUntil), sql`${issues.snoozedUntil} <= ${now}`)!);
   }
-  if (filters.attention) {
-    const flagged = [...listAttentionByIssueId(db).entries()]
-      .filter(([, flag]) => flag.reason === filters.attention)
-      .map(([issueId]) => issueId);
-    if (flagged.length === 0) return [];
-    conditions.push(inArray(issues.id, flagged));
-  }
-  if (filters.openPr !== undefined) {
-    const withOpenPr = [...listOpenPrByIssueId(db).keys()];
-    if (filters.openPr) {
-      if (withOpenPr.length === 0) return [];
-      conditions.push(inArray(issues.id, withOpenPr));
-    } else if (withOpenPr.length > 0) {
-      conditions.push(
-        sql`${issues.id} NOT IN (${sql.join(
-          withOpenPr.map((id) => sql`${id}`),
-          sql`, `,
-        )})`,
-      );
-    }
-  }
   if (filters.text) {
     // Escape SQL wildcard characters (%, _, and ~) so they're treated as literals
     const escaped = filters.text.toLowerCase().replace(/[~%_]/g, "~$&");
@@ -78,6 +67,29 @@ export function searchIssues(db: Db, filters: SearchFilters): IssueView[] {
         sql`lower(${issues.description}) LIKE ${pattern} ESCAPE '~'`,
       )!,
     );
+  }
+  // Derive expensive signals only for candidates matching ordinary filters.
+  // The caller can reuse these maps when enriching the resulting list.
+  if (filters.attention || filters.openPr !== undefined) {
+    const candidates = db
+      .select({ id: issues.id })
+      .from(issues)
+      .where(conditions.length ? and(...conditions) : undefined)
+      .all()
+      .map((r) => r.id);
+    if (candidates.length === 0) return [];
+    const openPrs = listOpenPrByIssueId(db, candidates);
+    signals.openPrs = openPrs;
+    if (filters.attention) {
+      signals.attention = listAttentionByIssueId(db, candidates, signals.openPrs);
+    }
+    const matching = candidates.filter(
+      (id) =>
+        (!filters.attention || signals.attention?.get(id)?.reason === filters.attention) &&
+        (filters.openPr === undefined || openPrs.has(id) === filters.openPr),
+    );
+    if (matching.length === 0) return [];
+    conditions.push(issueIdsCondition(issues.id, matching));
   }
   // Triage is worked oldest-first (SYD-159) — humans clear the inbox in
   // filing order rather than always seeing whatever landed most recently.

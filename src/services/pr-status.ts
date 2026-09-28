@@ -28,6 +28,7 @@
 // that let SYD-93 get fixed twice in parallel.
 import { sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
+import { issueIdsCondition } from "./issue-scope.js";
 
 // SYD-280: attribution is a declared pr_links row, not a parsed branch name.
 // These two fragments are the whole trust model at the read sites, kept as
@@ -65,7 +66,8 @@ type Row = { issueId: number; prNumber: number; url: string; repo: string; headS
 // project key + number. Ordered by prNumber so listOpenPrByIssueId's Map
 // construction (later entries overwrite earlier ones for the same issueId)
 // keeps the newest PR when an issue somehow has more than one open at once.
-function openRows(db: Db, issueId?: number): Row[] {
+function openRows(db: Db, issueIds?: readonly number[]): Row[] {
+  if (issueIds?.length === 0) return [];
   return db.all<Row>(sql`
     SELECT pl.issue_id AS issueId,
            ps.pr_number AS prNumber,
@@ -77,22 +79,22 @@ function openRows(db: Db, issueId?: number): Row[] {
       ON lower(ps.repo) = lower(pl.repo) AND ps.pr_number = pl.pr_number
     WHERE ${LIVE_DELIVERS}
       AND ps.status = 'open'
-      ${issueId !== undefined ? sql`AND pl.issue_id = ${issueId}` : sql``}
+      AND ${issueIdsCondition(sql`pl.issue_id`, issueIds)}
     ORDER BY ps.pr_number ASC
   `);
 }
 
 export function getOpenPr(db: Db, issueId: number): OpenPr | null {
-  const rows = openRows(db, issueId);
+  const rows = openRows(db, [issueId]);
   const row = rows[rows.length - 1];
   return row
     ? { prNumber: row.prNumber, url: row.url, repo: row.repo, headSha: row.headSha }
     : null;
 }
 
-export function listOpenPrByIssueId(db: Db): Map<number, OpenPr> {
+export function listOpenPrByIssueId(db: Db, issueIds?: readonly number[]): Map<number, OpenPr> {
   return new Map(
-    openRows(db).map((r) => [
+    openRows(db, issueIds).map((r) => [
       r.issueId,
       { prNumber: r.prNumber, url: r.url, repo: r.repo, headSha: r.headSha },
     ]),

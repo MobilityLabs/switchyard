@@ -111,6 +111,12 @@ import {
   type RunningContainerSessionRow,
 } from "./worker-select.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
+import {
+  savePublication,
+  readPublications,
+  clearPublication,
+  type PendingPublication,
+} from "./worker-publications.js";
 import { publishAgentBranch, prFreshness, originOwnerRepo } from "./delivery-exec.js";
 import {
   agentBranch,
@@ -690,7 +696,81 @@ function killSession(child: ChildProcess, containerName: string | null): void {
  * that survives a worker restart still needs its exit reported and its
  * branch published, not just silently forgotten.
  */
-function finishSessionExit(
+function publishesContainers(config: WorkerConfig): boolean {
+  return !!(config.containerized && config.delivery && config.delivery.openPrs !== false);
+}
+
+// Deduplicate the normal exit handler and the polling recovery pass.
+const publishing = new Set<string>();
+
+async function publishPending(
+  publication: PendingPublication,
+  project: WorkerProject,
+  config: WorkerConfig,
+  token: string,
+  logLine: (text: string) => void,
+  knownLiveNames?: Set<string>,
+): Promise<void> {
+  const { ref, issueTitle, sessionId, exitCode } = publication;
+  const key = `${project.repo}:${ref}`;
+  if (publishing.has(key)) return;
+  publishing.add(key);
+  try {
+    // A local docker run/wait client can exit while its daemon-side container
+    // survives. Only confirmed container disappearance permits completion;
+    // an inspection error leaves the durable obligation intact for retry.
+    const liveNames = knownLiveNames ?? (await listLiveContainerNames());
+    if (liveNames.has(containerNameFor(ref))) return;
+    await reportSessionEnd(config, token, Promise.resolve(sessionId), exitCode);
+    const outcome = await publishAgentBranch(project.repo, ref, issueTitle, config.url, exitCode);
+    const line = formatPublishOutcome(agentBranch(ref), outcome);
+    console.log(`${ref}: ${line}`);
+    logLine(`[worker] ${line}\n`);
+    if (
+      (outcome.status === "opened" || outcome.status === "already-open") &&
+      outcome.prNumber !== null
+    ) {
+      const event: Extract<DeliveryEventInput, { type: "pr_opened" }> = {
+        type: "pr_opened",
+        prNumber: outcome.prNumber,
+        url: outcome.url,
+      };
+      try {
+        event.repo = await originOwnerRepo(project.repo);
+      } catch (err) {
+        console.error(`could not resolve origin repo for ${ref}: ${(err as Error).message}`);
+      }
+      try {
+        const fresh = await prFreshness(project.repo, outcome.prNumber);
+        event.headSha = fresh.headSha;
+        event.ghUpdatedAt = fresh.ghUpdatedAt;
+      } catch (err) {
+        console.error(`could not fetch PR freshness for ${ref}: ${(err as Error).message}`);
+      }
+      // The outbox survives until both the PR and its tracker observation
+      // exist. A crash/failed POST retries the idempotent already-open path.
+      await postDeliveryEvent(config, token, ref, event);
+    }
+    clearPublication(project.repo, config, ref);
+  } catch (err) {
+    const message = (err as Error).message;
+    console.error(`publish failed for ${ref}: ${message}`);
+    logLine(`[worker] publish failed: ${message}\n`);
+    await postComment(config, token, ref, publishFailureComment(ref, message)).catch((e: Error) =>
+      console.error(`could not comment publish failure for ${ref}: ${e.message}`),
+    );
+    await postDeliveryEvent(config, token, ref, {
+      type: "delivery_failed",
+      message: `publish failed: ${message}`,
+    }).catch((e: Error) =>
+      console.error(`could not record delivery_failed for ${ref}: ${e.message}`),
+    );
+  } finally {
+    publishing.delete(key);
+  }
+}
+
+async function finishSessionExit(
   ref: string,
   issueTitle: string,
   project: WorkerProject,
@@ -699,81 +779,43 @@ function finishSessionExit(
   sessionId: Promise<number | null>,
   exitCode: number | null,
   logLine: (text: string) => void,
-): void {
-  void reportSessionEnd(config, token, sessionId, exitCode, (message) =>
-    logLine(`[worker] ${message}\n`),
-  );
+  knownLiveNames?: Set<string>,
+): Promise<void> {
   console.log(`${ref} exited with code ${exitCode}`);
   logLine(`\n[worker] exited with code ${exitCode}\n`);
-  // Delivery gate (SYD-49): a containerized session that pushed agent/<ref>
-  // gets its branch published to GitHub as a PR, host-side (gh + git auth
-  // live here, never in the container). Merging still waits for a human
-  // done-stamp via scripts/deliver.ts. Publish fires on commit count alone,
-  // independent of a clean exit (SYD-118) — an errored/killed session that
-  // still committed partial work opens a PR too, so `exitCode` is passed
-  // through to mark the PR body when it isn't a clean exit.
-  if (config.containerized && config.delivery && config.delivery.openPrs !== false) {
-    publishAgentBranch(project.repo, ref, issueTitle, config.url, exitCode)
-      .then(async (outcome) => {
-        const line = formatPublishOutcome(agentBranch(ref), outcome);
-        console.log(`${ref}: ${line}`);
-        logLine(`[worker] ${line}\n`);
-        if (
-          (outcome.status === "opened" || outcome.status === "already-open") &&
-          outcome.prNumber !== null
-        ) {
-          // SYD-205: name the repo and GitHub's own head SHA/updated_at on
-          // the publish so pr_state has a producer at open time. Best-effort:
-          // a failed lookup must never drop the pr_opened publish itself —
-          // this event is what closes the claim gate.
-          const event: Extract<DeliveryEventInput, { type: "pr_opened" }> = {
-            type: "pr_opened",
-            prNumber: outcome.prNumber,
-            url: outcome.url,
-          };
-          try {
-            event.repo = await originOwnerRepo(project.repo);
-          } catch (err) {
-            console.error(`could not resolve origin repo for ${ref}: ${(err as Error).message}`);
-          }
-          try {
-            const fresh = await prFreshness(project.repo, outcome.prNumber);
-            event.headSha = fresh.headSha;
-            event.ghUpdatedAt = fresh.ghUpdatedAt;
-          } catch (err) {
-            console.error(
-              `could not fetch PR freshness for ${ref} #${outcome.prNumber}: ${(err as Error).message}`,
-            );
-          }
-          postDeliveryEvent(config, token, ref, event).catch((err: Error) => {
-            console.error(`could not record pr_opened event for ${ref}: ${err.message}`);
-            logLine(`[worker] could not record pr_opened event: ${err.message}\n`);
-          });
-        }
-      })
-      .catch((err: Error) => {
-        console.error(`publish failed for ${ref}: ${err.message}`);
-        logLine(`[worker] publish failed: ${err.message}\n`);
-        // SYD-257: previously this failure lived only in the local worker
-        // log — the issue itself, already moved to in_review by the session,
-        // showed no sign anything was wrong. Post actor-visible provenance
-        // (the git/gh stderr) and a delivery_failed event so the attention
-        // banner lights up instead of deliver.ts (and any human) waiting on
-        // a PR that was never opened.
-        postComment(config, token, ref, publishFailureComment(ref, err.message)).catch(
-          (e: Error) => {
-            console.error(`could not comment publish failure for ${ref}: ${e.message}`);
-            logLine(`[worker] could not comment publish failure: ${e.message}\n`);
-          },
-        );
-        postDeliveryEvent(config, token, ref, {
-          type: "delivery_failed",
-          message: `publish failed: ${err.message}`,
-        }).catch((e: Error) => {
-          console.error(`could not record delivery_failed event for ${ref}: ${e.message}`);
-          logLine(`[worker] could not record delivery_failed event: ${e.message}\n`);
-        });
-      });
+  if (!publishesContainers(config)) {
+    await reportSessionEnd(config, token, sessionId, exitCode);
+    return;
+  }
+  try {
+    const publication = { ref, issueTitle, sessionId: (await sessionId) ?? null, exitCode };
+    // Save before closing the tracker session: if the process stops after
+    // the PATCH, the server no longer lists it as active but this survives.
+    savePublication(project.repo, config, publication);
+    await publishPending(publication, project, config, token, logLine, knownLiveNames);
+  } catch (err) {
+    // Leave the server session active when persistence fails, so restart
+    // reconciliation can still discover it rather than forgetting the work.
+    console.error(`could not persist publication for ${ref}: ${(err as Error).message}`);
+  }
+}
+
+export async function recoverPublications(
+  config: WorkerConfig,
+  token: string,
+  knownLiveNames?: Set<string>,
+): Promise<void> {
+  if (!publishesContainers(config)) return;
+  const pending = Object.values(config.projects).flatMap((project) =>
+    readPublications(project.repo, config).map((publication) => ({ project, publication })),
+  );
+  if (pending.length === 0) return;
+  // A marker is written before spawning too. Do not publish an in-flight
+  // container, including one whose server session was already swept away.
+  const liveNames = knownLiveNames ?? (await listLiveContainerNames());
+  for (const { project, publication } of pending) {
+    if (active.has(publication.ref) || liveNames.has(containerNameFor(publication.ref))) continue;
+    await publishPending(publication, project, config, token, () => {}, liveNames);
   }
 }
 
@@ -831,8 +873,28 @@ export function dispatch(
   let cliMcpTmpDir: string | null = null;
 
   let child: ChildProcess;
+  let publicationSaved = false;
+  const clearNeverStartedPublication = () => {
+    if (!publicationSaved) return;
+    try {
+      clearPublication(project.repo, config, issue.ref);
+    } catch (err) {
+      console.error(
+        `could not clear unstarted publication for ${issue.ref}: ${(err as Error).message}`,
+      );
+    }
+  };
   try {
     if (config.containerized) {
+      if (publishesContainers(config)) {
+        savePublication(project.repo, config, {
+          ref: issue.ref,
+          issueTitle: issue.title,
+          sessionId: null,
+          exitCode: null,
+        });
+        publicationSaved = true;
+      }
       // The container is the sandbox: it clones the repo internally, works on
       // a branch, and pushes it back out — it never touches this host
       // filesystem beyond the /origin mount. See scripts/container-entry.sh.
@@ -900,6 +962,7 @@ export function dispatch(
     }
   } catch (err) {
     console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
+    clearNeverStartedPublication();
     // The host already claimed this issue; setup failed before any heartbeat
     // could start, so release the lease-held claim rather than strand it.
     if (cliMcpTmpDir) rmSync(cliMcpTmpDir, { recursive: true, force: true });
@@ -951,7 +1014,9 @@ export function dispatch(
   // 'spawn' only fires once the OS actually launched the process (see the
   // SYD-74 note in dispatchAnswer) — a failed spawn never creates a session.
   let sessionId: Promise<number | null> = Promise.resolve(null);
+  let spawned = false;
   child.on("spawn", () => {
+    spawned = true;
     sessionId = reportSessionStart(
       config,
       token,
@@ -971,10 +1036,20 @@ export function dispatch(
     active.delete(issue.ref);
     activeMode.delete(issue.ref);
     if (roleRunsAnswer(role)) triggerUnansweredDrain(config, token);
-    finishSessionExit(issue.ref, issue.title, project, config, token, sessionId, code, logLine);
+    void finishSessionExit(
+      issue.ref,
+      issue.title,
+      project,
+      config,
+      token,
+      sessionId,
+      code,
+      logLine,
+    );
   });
 
   child.on("error", (err) => {
+    if (!spawned) clearNeverStartedPublication();
     clearTimeout(watchdog);
     stopHeartbeat();
     cleanupLeaseArtifacts();
@@ -1301,8 +1376,16 @@ export async function runTick(
   await runGated(tickGate, async () => {
     if (roleRunsCode(role)) {
       try {
+        if (!opts.dryRun) await recoverPublications(config, token);
+        const pendingRefs = new Set(
+          Object.values(config.projects).flatMap((project) =>
+            readPublications(project.repo, config).map((publication) => publication.ref),
+          ),
+        );
         const issues = await fetchReadyIssues(config, token);
-        const eligible = filterRetryCapped(issues, retryState);
+        const eligible = filterRetryCapped(issues, retryState).filter(
+          (issue) => !pendingRefs.has(issue.ref),
+        );
         const selected = selectDispatchable(eligible, config, active.keys());
 
         for (const issue of selected) {
@@ -1545,7 +1628,7 @@ export function adoptContainerSession(
     activeMode.delete(session.ref);
     const parsed = Number.parseInt(output.trim(), 10);
     const exitCode = Number.isFinite(parsed) ? parsed : null;
-    finishSessionExit(
+    void finishSessionExit(
       session.ref,
       session.issueTitle,
       project,
@@ -1617,11 +1700,24 @@ export async function reconcileContainerSessions(
     console.log(
       `reconcile: ${session.ref} has no running container — closing stuck session ${session.id}`,
     );
-    await reportSessionEnd(config, token, Promise.resolve(session.id), null);
+    const project = config.projects[projectKeyOf(session.ref)];
+    if (!project) continue;
+    await finishSessionExit(
+      session.ref,
+      session.issueTitle,
+      project,
+      config,
+      token,
+      Promise.resolve(session.id),
+      null,
+      () => {},
+      liveNames,
+    );
   }
   for (const session of live) {
     adopt(session, config, token);
   }
+  await recoverPublications(config, token, liveNames);
 }
 
 /**

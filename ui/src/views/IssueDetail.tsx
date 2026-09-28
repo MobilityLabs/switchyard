@@ -405,7 +405,12 @@ export function AgentSessionStrip({ refId }: { refId: string }) {
   );
 }
 
-export default function IssueDetail({ refId, me }: { refId: string; me: Actor }) {
+export default function IssueDetail(props: { refId: string; me: Actor }) {
+  // Route changes must also reset drafts, uploads, modals and child form state.
+  return <IssueDetailSession key={props.refId} {...props} />;
+}
+
+function IssueDetailSession({ refId, me }: { refId: string; me: Actor }) {
   const { data, error, reload } = usePoll(() => getIssue(refId), [refId]);
   const [actionError, setActionError] = useState<string | null>(null);
   const [resolveOpen, setResolveOpen] = useState(false);
@@ -417,7 +422,7 @@ export default function IssueDetail({ refId, me }: { refId: string; me: Actor })
   const actorNames = useActorNames();
 
   if (error && !data) return <p className="error-bar">{error}</p>;
-  if (!data) return <p>Loading…</p>;
+  if (!data || data.ref !== refId) return <p>Loading…</p>;
 
   const projectKey = projectKeyFromRef(data.ref);
   const delivery = computeDeliveryStatus(data.activity);

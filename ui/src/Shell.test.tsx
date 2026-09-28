@@ -221,10 +221,8 @@ describe("Shell nav scope consistency", () => {
       });
       await renderShell();
       await act(async () => {});
-      const issuesCalls = calls.filter((u) => u.startsWith("/api/issues?"));
-      expect(
-        issuesCalls.some((u) => u.includes("status=in_review") && u.includes("project=SYD")),
-      ).toBe(true);
+      const issuesCalls = calls.filter((u) => u.startsWith("/api/issue-counts?"));
+      expect(issuesCalls.some((u) => u.includes("project=SYD"))).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }

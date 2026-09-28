@@ -1,5 +1,8 @@
 import type {
   Actor,
+  BoardPage,
+  BoardStatus,
+  DoneFilter,
   ActorWithStatus,
   AttentionReason,
   AgentSession,
@@ -98,6 +101,20 @@ export const listIssues = (
   return api<Issue[]>(`/api/issues${qs ? `?${qs}` : ""}`);
 };
 export const getIssue = (ref: string) => api<IssueDetail>(`/api/issues/${ref}`);
+export const getIssueCounts = (project?: string) =>
+  api<Partial<Record<Status, number>>>(
+    `/api/issue-counts${project ? `?${new URLSearchParams({ project })}` : ""}`,
+  );
+export const listBoard = (
+  project: string,
+  done: DoneFilter[],
+  before: Partial<Record<BoardStatus, number>> = {},
+) => {
+  const query = new URLSearchParams({ project, done: done.length ? done.join(",") : "all" });
+  for (const [status, cursor] of Object.entries(before))
+    query.set(`before_${status}`, String(cursor));
+  return api<BoardPage>(`/api/board?${query}`);
+};
 export const listAttachments = (ref: string) => api<Attachment[]>(`/api/issues/${ref}/attachments`);
 export const updateIssue = (
   ref: string,

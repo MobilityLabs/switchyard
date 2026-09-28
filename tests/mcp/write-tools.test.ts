@@ -7,7 +7,7 @@ import path from "node:path";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
+import { createIssue, getIssue, SUMMARY_MAX_LENGTH } from "../../src/services/issues.js";
 import { snoozeIssue } from "../../src/services/triage-actions.js";
 import { buildMcpServer } from "../../src/mcp/server.js";
 import { getActivity } from "../../src/services/comments.js";
@@ -36,6 +36,24 @@ beforeEach(async () => {
 });
 
 describe("MCP write tools", () => {
+  it("refuses service actors adding a dependency through MCP", async () => {
+    createIssue(db, human, { projectKey: "AIPI", title: "Blocker" });
+    createIssue(db, human, { projectKey: "AIPI", title: "Target" });
+    const service = createActor(db, { name: "poller", type: "service" }).actor;
+    const serviceClient = await connect(service);
+    try {
+      const result = await serviceClient.callTool({
+        name: "add_dependency",
+        arguments: { blocker_ref: "AIPI-1", blocked_ref: "AIPI-2" },
+      });
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/cannot add dependencies/);
+      expect(getActivity(db, "AIPI-2").map((e) => e.type)).toEqual(["created"]);
+    } finally {
+      await serviceClient.close();
+    }
+  });
+
   it("file_issue's description tells agents to set a suggested priority (SYD-65)", async () => {
     const { tools } = await client.listTools();
     const fileIssue = tools.find((t) => t.name === "file_issue")!;

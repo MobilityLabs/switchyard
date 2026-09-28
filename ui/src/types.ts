@@ -62,6 +62,33 @@ export type Issue = {
   openPr: { prNumber: number; url: string; repo: string; headSha: string | null } | null;
 };
 export const PR_LINK_ROLES = ["delivers", "references"] as const;
+export type BoardStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done";
+export type DoneFilter = "errors" | "not_merged" | "unlinked";
+export type BoardCard = Pick<
+  Issue,
+  | "id"
+  | "ref"
+  | "title"
+  | "status"
+  | "priority"
+  | "labels"
+  | "needsInput"
+  | "workerPreference"
+  | "attention"
+  | "openPr"
+  | "childCount"
+>;
+export type BoardPage = {
+  columns: Record<
+    BoardStatus,
+    {
+      items: BoardCard[];
+      total: number;
+      matching: number;
+      nextBeforeId: number | null;
+    }
+  >;
+};
 export type PrLinkRole = (typeof PR_LINK_ROLES)[number];
 
 /**

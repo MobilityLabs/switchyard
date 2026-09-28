@@ -41,6 +41,7 @@ import {
   type PollStateFile,
   type PollEvent,
   type RepoPollState,
+  type GhPr,
 } from "./github-poll-lib.js";
 import {
   listPullRequests,
@@ -122,7 +123,7 @@ export async function fetchProjects(
   return (await res.json()) as { id: number; key: string }[];
 }
 
-type GithubEventOutcome = { duplicate?: boolean };
+type GithubEventOutcome = { duplicate?: boolean; reason?: string };
 
 export async function postGithubEvent(
   url: string,
@@ -141,22 +142,29 @@ export async function postGithubEvent(
   return (await res.json().catch(() => ({}))) as GithubEventOutcome;
 }
 
-/** Open pr_state rows for a repo, from GET /api/pr-state — the refresh
- * work-list. Tolerant of an older server without the endpoint (deploy skew)
+type StoredPrState = { prNumber: number; status: "open" | "closed" | "merged" };
+
+/** Server PR state is the reconciliation baseline even when the poller's
+ * local state was deleted or the PR closed and reopened between polls.
+ * Tolerant of an older server without the endpoint (deploy skew)
  * and of transport errors: no list just means no targeted refresh this
  * tick. */
-async function fetchOpenPrNumbers(url: string, token: string, repo: string): Promise<number[]> {
+async function fetchPrState(url: string, token: string, repo: string): Promise<StoredPrState[]> {
   try {
     const res = await fetch(
-      `${url.replace(/\/$/, "")}/api/pr-state?repo=${encodeURIComponent(repo)}&status=open`,
+      `${url.replace(/\/$/, "")}/api/pr-state?repo=${encodeURIComponent(repo)}`,
       { headers: { authorization: `Bearer ${token}` } },
     );
     if (!res.ok) return [];
     const rows: unknown = await res.json();
     if (!Array.isArray(rows)) return [];
-    return rows
-      .map((r) => Number((r as { prNumber?: unknown }).prNumber))
-      .filter((n) => Number.isInteger(n));
+    return rows.filter(
+      (r): r is StoredPrState =>
+        r !== null &&
+        typeof r === "object" &&
+        Number.isInteger(r.prNumber) &&
+        ["open", "closed", "merged"].includes(r.status),
+    );
   } catch {
     return [];
   }
@@ -171,17 +179,47 @@ export async function pollRepo(
   state: PollStateFile,
   dryRun: boolean,
 ): Promise<void> {
-  const prs = await listPullRequests(fullName);
+  const windowPrs = await listPullRequests(fullName);
   const repoState: RepoPollState = state[fullName] ?? {};
+  const storedRows = await fetchPrState(config.url, token, fullName);
+  const storedByNumber = new Map(storedRows.map((row) => [row.prNumber, row.status]));
+  const prs: GhPr[] = [];
+  const confirmedReopened = new Set<number>();
+
+  // Search results can lag the PR itself. Never turn a stale OPEN search hit
+  // into an explicit reopened action without a targeted live read. The
+  // server baseline also repairs a reset local state file or a close/reopen
+  // episode that happened entirely between polls.
+  for (const pr of windowPrs) {
+    if (
+      pr.state === "OPEN" &&
+      (repoState[pr.number]?.state === "CLOSED" || storedByNumber.get(pr.number) === "closed")
+    ) {
+      try {
+        const live = await viewPullRequest(fullName, pr.number);
+        if (live.number !== pr.number) throw new Error("targeted refresh returned a different PR");
+        prs.push(live);
+        if (live.state === "OPEN") confirmedReopened.add(pr.number);
+      } catch (err) {
+        // Preserve the previous state and retry next tick; an unavailable
+        // confirmation is not evidence of a reopen.
+        console.error(
+          `github-poll: reopen confirmation of ${fullName}#${pr.number} failed: ${(err as Error).message}`,
+        );
+      }
+    } else {
+      prs.push(pr);
+    }
+  }
 
   // Targeted refresh (SYD-206): open pr_state rows outside the poll window
   // still get observed, on a slower cadence, so "absence is not evidence"
   // has a live producer behind it. Failures never transition anything — they
   // count toward the staleness alarm and get retried next interval.
-  const openRows = await fetchOpenPrNumbers(config.url, token, fullName);
+  const openRows = storedRows.filter((row) => row.status === "open").map((row) => row.prNumber);
   const candidates = selectRefreshCandidates(
     openRows,
-    new Set(prs.map((pr) => pr.number)),
+    new Set(windowPrs.map((pr) => pr.number)),
     repoState,
     Date.now(),
     REFRESH_INTERVAL_MS,
@@ -210,7 +248,7 @@ export async function pollRepo(
         .map(async (pr) => [pr.number, await latestRun(fullName, pr.headRefName)] as const),
     ),
   );
-  const { events, next } = observeRepoState(prs, runs, repoState);
+  const { events, next } = observeRepoState(prs, runs, repoState, confirmedReopened);
 
   for (const ev of events) {
     if (dryRun) {
@@ -218,6 +256,9 @@ export async function pollRepo(
       continue;
     }
     const outcome = await postGithubEvent(config.url, token, ev, fullName);
+    if (outcome.reason && ev.event === "pull_request" && ev.payload.action === "closed") {
+      console.error(`github-poll: ${fullName}: close observation rejected: ${outcome.reason}`);
+    }
     // Steady-state re-observation (SYD-177/206) is absorbed server-side every
     // tick; only log events the server actually recorded.
     if (!outcome.duplicate) console.log(`${fullName}: posted ${ev.event}`);

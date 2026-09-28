@@ -1,11 +1,16 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { assert, describe, it, expect, beforeEach } from "vitest";
 import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
 import { claimLeases, issues, events } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
-import { expireLeases, invalidateLease, getActiveLease } from "../../src/services/leases.js";
+import {
+  expireLeases,
+  invalidateLease,
+  getActiveLease,
+  validateLease,
+} from "../../src/services/leases.js";
 import { releaseStaleClaims } from "../../src/services/stale-claims.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
@@ -60,6 +65,56 @@ describe("expireLeases", () => {
     const id = getIssue(db, "AIPI-1").id;
     expect(expireLeases(db)).toBe(0);
     expect(getIssue(db, "AIPI-1").status).toBe("in_progress");
+  });
+
+  it("preserves a fresh same-actor claim when the old lease expired before its sweep", () => {
+    const id = claimThenExpireLease();
+    const { leaseToken } = claimIssue(db, agent, "AIPI-1");
+    expect(expireLeases(db)).toBe(0);
+    expect(getIssue(db, "AIPI-1")).toMatchObject({ status: "in_progress", assigneeId: agent.id });
+    expect(() => validateLease(db, id, agent.id, leaseToken)).not.toThrow();
+    expect(listIssueEvents(db, id).some((e) => e.type === "claim_released")).toBe(false);
+  });
+
+  it.each(["same", "different"])(
+    "retires a legacy expired predecessor without releasing its %s-actor replacement",
+    (holder) => {
+      const id = claimThenExpireLease();
+      const predecessor = db.select().from(claimLeases).get();
+      assert(predecessor);
+      const replacementActor =
+        holder === "same" ? agent : createActor(db, { name: "codex/worker", type: "agent" }).actor;
+      if (holder === "different") {
+        updateIssue(db, human, "AIPI-1", { assigneeName: replacementActor.name });
+      }
+      const { leaseToken } = claimIssue(db, replacementActor, "AIPI-1");
+      // Preserve the pre-fix duplicate-row shape while exercising the sweep's
+      // own generation check independently of corrected minting.
+      db.update(claimLeases)
+        .set({ invalidatedAt: null })
+        .where(eq(claimLeases.id, predecessor.id))
+        .run();
+
+      expect(expireLeases(db)).toBe(0);
+      expect(getIssue(db, "AIPI-1")).toMatchObject({
+        status: "in_progress",
+        assigneeId: replacementActor.id,
+      });
+      expect(() => validateLease(db, id, replacementActor.id, leaseToken)).not.toThrow();
+      expect(
+        db.select().from(claimLeases).where(eq(claimLeases.id, predecessor.id)).get()
+          ?.invalidatedAt,
+      ).toEqual(expect.any(Number));
+      expect(listIssueEvents(db, id).some((e) => e.type === "claim_released")).toBe(false);
+    },
+  );
+
+  it("does not release a historically reassigned issue whose new holder has no lease yet", () => {
+    const id = claimThenExpireLease();
+    db.update(issues).set({ assigneeId: human.id }).where(eq(issues.id, id)).run();
+    expect(expireLeases(db)).toBe(0);
+    expect(getIssue(db, "AIPI-1")).toMatchObject({ status: "in_progress", assigneeId: human.id });
+    expect(listIssueEvents(db, id).some((e) => e.type === "claim_released")).toBe(false);
   });
 
   it("does not release when the issue moved on before the sweep landed (race)", () => {

@@ -1,3 +1,4 @@
+import { declarePrLink } from "../../src/services/pr-links.js";
 // SYD-207 cutover invariants (spec: docs/2026-07-12-sync-simplification-
 // assessment.md Step 6): the backfill rides POST /api/github-events →
 // handleGithubWebhook, so these tests drive that exact ingestion and assert
@@ -56,7 +57,8 @@ function prPayload(
 
 describe("search-vs-claim-gate agreement (SYD-207)", () => {
   it("the ?openPr= filter and the claim gate answer from the same oracle", () => {
-    const { db, agent } = setup();
+    const { db, human, agent } = setup();
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 41 });
     handleGithubWebhook(
       db,
       "pull_request",

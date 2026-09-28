@@ -8,6 +8,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { WorkerConfig } from "../../scripts/worker-select.js";
 import type { GhPr, PollStateFile } from "../../scripts/github-poll-lib.js";
+import { openDb } from "../../src/db/index.js";
+import { createActor } from "../../src/services/actors.js";
+import { createProject } from "../../src/services/projects.js";
+import { createIssue } from "../../src/services/issues.js";
+import { addGithubRepo } from "../../src/services/github-repos.js";
+import { declarePrLink } from "../../src/services/pr-links.js";
+import { listPrState, upsertPrState } from "../../src/services/pr-state.js";
+import { getOpenPr } from "../../src/services/pr-status.js";
+import { handleGithubWebhook } from "../../src/services/github-webhook.js";
 
 vi.mock("../../scripts/github-poll-exec.js", () => ({
   listPullRequests: vi.fn(),
@@ -38,10 +47,10 @@ const fetchMock = vi.fn();
 
 /** Routes GET /api/pr-state to `openRows` and every other call (the
  * /api/github-events POSTs) to a generic ok outcome. */
-function routeFetch(openRows: { prNumber: number }[]) {
+function routeFetch(rows: { prNumber: number; status?: "open" | "closed" | "merged" }[]) {
   fetchMock.mockImplementation(async (url: unknown) => {
     if (String(url).includes("/api/pr-state")) {
-      return { ok: true, json: async () => openRows };
+      return { ok: true, json: async () => rows.map((r) => ({ status: "open", ...r })) };
     }
     return { ok: true, json: async () => ({ ok: true, handled: true, duplicate: true }) };
   });
@@ -58,6 +67,90 @@ afterEach(() => {
 });
 
 describe("pollRepo", () => {
+  it.each([undefined, "OPEN", "CLOSED"] as const)(
+    "repairs a server-side close via live-confirmed reopen with local state %s",
+    async (priorState) => {
+      const db = openDb(":memory:");
+      const human = createActor(db, { name: "sean", type: "human" }).actor;
+      createProject(db, human, { key: "SYD", name: "Switchyard" });
+      const issue = createIssue(db, human, { projectKey: "SYD", title: "Ship it" });
+      addGithubRepo(db, human, { fullName: "acme/widgets", projectKey: "SYD" });
+      declarePrLink(db, human, "SYD-1", { repo: "acme/widgets", prNumber: 7 });
+      upsertPrState(db, human, {
+        repo: "acme/widgets",
+        prNumber: 7,
+        status: "closed",
+        ghUpdatedAt: "2026-07-12T09:00:00Z",
+      });
+      vi.mocked(listPullRequests).mockResolvedValue([openPr(7)]);
+      const live = { ...openPr(7), updatedAt: "2026-07-12T11:00:00Z" };
+      vi.mocked(viewPullRequest).mockResolvedValue(live);
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        if (url.includes("/api/pr-state")) {
+          return { ok: true, json: async () => listPrState(db, { repo: "acme/widgets" }) };
+        }
+        const { event, payload, repo } = JSON.parse(String(init?.body));
+        const outcome = handleGithubWebhook(db, event, payload, repo);
+        return { ok: true, json: async () => outcome };
+      });
+      const state: PollStateFile = priorState
+        ? { "acme/widgets": { 7: { state: priorState, lastRunConclusion: null } } }
+        : {};
+
+      await pollRepo("acme/widgets", config, "tok", state, false);
+      expect(viewPullRequest).toHaveBeenCalledWith("acme/widgets", 7);
+      expect(getOpenPr(db, issue.id)?.prNumber).toBe(7);
+      const posts = fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/github-events"));
+      expect(JSON.parse(posts[0][1].body)).toMatchObject({
+        payload: { action: "reopened", pull_request: { updated_at: live.updatedAt } },
+      });
+
+      // The repaired baseline stops spending targeted calls on ordinary open refreshes.
+      vi.mocked(viewPullRequest).mockClear();
+      await pollRepo("acme/widgets", config, "tok", state, false);
+      expect(viewPullRequest).not.toHaveBeenCalled();
+      expect(getOpenPr(db, issue.id)?.prNumber).toBe(7);
+    },
+  );
+
+  it("does not reopen a stale OPEN search hit when the targeted PR is still closed", async () => {
+    vi.mocked(listPullRequests).mockResolvedValue([openPr(7)]);
+    vi.mocked(viewPullRequest).mockResolvedValue({ ...openPr(7), state: "CLOSED" });
+    routeFetch([{ prNumber: 7, status: "closed" }]);
+    const state: PollStateFile = {};
+
+    await pollRepo("acme/widgets", config, "tok", state, false);
+    const posts = fetchMock.mock.calls.filter(([url]) =>
+      String(url).endsWith("/api/github-events"),
+    );
+    expect(JSON.parse(posts[0][1].body)).toMatchObject({ payload: { action: "closed" } });
+    expect(state["acme/widgets"][7].state).toBe("CLOSED");
+  });
+
+  it("retries failed reopen confirmation without advancing or emitting the unverified state", async () => {
+    vi.mocked(listPullRequests).mockResolvedValue([openPr(7)]);
+    vi.mocked(viewPullRequest).mockRejectedValueOnce(new Error("GitHub unavailable"));
+    routeFetch([{ prNumber: 7, status: "closed" }]);
+    const state: PollStateFile = {
+      "acme/widgets": { 7: { state: "CLOSED", lastRunConclusion: null } },
+    };
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await pollRepo("acme/widgets", config, "tok", state, false);
+      expect(state["acme/widgets"][7].state).toBe("CLOSED");
+      expect(
+        fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/api/github-events")),
+      ).toHaveLength(0);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("reopen confirmation"));
+      vi.mocked(viewPullRequest).mockResolvedValue(openPr(7));
+      await pollRepo("acme/widgets", config, "tok", state, false);
+      expect(state["acme/widgets"][7].state).toBe("OPEN");
+      expect(viewPullRequest).toHaveBeenCalledTimes(2);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("does not persist repo state when posting an event fails", async () => {
     vi.mocked(listPullRequests).mockResolvedValue([openPr(7)]);
     fetchMock.mockRejectedValue(new Error("tracker down"));

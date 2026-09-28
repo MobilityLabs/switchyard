@@ -92,6 +92,8 @@ export const issues = sqliteTable(
     index("issues_status_idx").on(t.status),
     index("issues_assignee_id_idx").on(t.assigneeId),
     index("issues_queue_rank_idx").on(t.queueRank),
+    index("issues_parent_id_idx").on(t.parentId),
+    index("issues_project_status_idx").on(t.projectId, t.status),
   ],
 );
 
@@ -105,7 +107,10 @@ export const dependencies = sqliteTable(
       .notNull()
       .references(() => issues.id),
   },
-  (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] })],
+  (t) => [
+    primaryKey({ columns: [t.blockerId, t.blockedId] }),
+    index("dependencies_blocked_id_idx").on(t.blockedId),
+  ],
 );
 
 /**
@@ -199,7 +204,10 @@ export const events = sqliteTable(
     sessionId: integer("session_id").references(() => sessions.id),
     createdAt: integer("created_at").notNull().default(now()),
   },
-  (t) => [index("events_issue_id_idx").on(t.issueId)],
+  (t) => [
+    index("events_issue_id_idx").on(t.issueId),
+    index("events_type_issue_id_idx").on(t.type, t.issueId),
+  ],
 );
 
 export const sessions = sqliteTable("sessions", {

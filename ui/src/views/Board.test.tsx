@@ -11,13 +11,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import Board, { Card } from "./Board";
-import { listIssues, updateIssue } from "../api";
-import type { Issue } from "../types";
+import { listBoard, updateIssue } from "../api";
+import type { BoardPage, DoneFilter, Issue } from "../types";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.mock("../api", () => ({
-  listIssues: vi.fn(() => Promise.resolve([])),
+  listBoard: vi.fn(),
   updateIssue: vi.fn(() => Promise.resolve({})),
 }));
 
@@ -47,6 +47,31 @@ function issue(o: Partial<Issue> = {}): Issue {
     openPr: null,
     ...o,
   };
+}
+
+function boardPage(cards: Issue[], filters: DoneFilter[] = ["errors", "not_merged"]): BoardPage {
+  return {
+    columns: Object.fromEntries(
+      ["backlog", "todo", "in_progress", "in_review", "done"].map((status) => {
+        const all = cards.filter((card) => card.status === status);
+        const items =
+          status !== "done" || filters.length === 0
+            ? all
+            : all.filter(
+                (card) =>
+                  (filters.includes("errors") && card.attention?.reason === "delivery_failed") ||
+                  (filters.includes("not_merged") && card.openPr !== null) ||
+                  (filters.includes("unlinked") &&
+                    card.attention?.reason === "done_without_merged_pr"),
+              );
+        return [status, { items, total: all.length, matching: items.length, nextBeforeId: null }];
+      }),
+    ) as unknown as BoardPage["columns"],
+  };
+}
+
+function mockCards(cards: Issue[]) {
+  vi.mocked(listBoard).mockImplementation(async (_project, filters) => boardPage(cards, filters));
 }
 
 async function render(
@@ -208,8 +233,8 @@ describe("Board done-column filter chips", () => {
 
   beforeEach(() => {
     localStorage.clear();
-    vi.mocked(listIssues).mockClear();
-    vi.mocked(listIssues).mockResolvedValue(DONE_ISSUES);
+    vi.mocked(listBoard).mockClear();
+    mockCards(DONE_ISSUES);
   });
 
   it("defaults to the actionable view: errors + not-merged chips ON (SYD-175)", async () => {
@@ -219,6 +244,27 @@ describe("Board done-column filter chips", () => {
     expect(chip(done, "⛔ errors").getAttribute("aria-pressed")).toBe("true");
     expect(chip(done, "🔀 not merged").getAttribute("aria-pressed")).toBe("true");
     expect(chip(done, "all").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it.each(['["old_filter"]', '"errors"', '{"errors":true}'])(
+    "recovers from unsupported persisted filters: %s",
+    async (stored) => {
+      localStorage.setItem("switchyard:done-filters", stored);
+      const container = await renderBoard();
+      expect(listBoard).toHaveBeenLastCalledWith("SYD", ["errors", "not_merged"], {});
+      expect(refs(doneColumn(container)).sort()).toEqual(["SYD-2", "SYD-3"]);
+    },
+  );
+
+  it("hides stale actionable cards when a changed filter fails, then lets All recover", async () => {
+    const container = await renderBoard();
+    vi.mocked(listBoard).mockRejectedValueOnce(new Error("Temporary failure"));
+    await act(async () => chip(doneColumn(container), "⛔ errors").click());
+    expect(container.querySelectorAll(".card")).toHaveLength(0);
+    expect(container.textContent).toContain("Temporary failure");
+    expect(container.textContent).toContain("Retry");
+    await act(async () => chip(doneColumn(container), "all").click());
+    expect(refs(doneColumn(container))).toHaveLength(3);
   });
 
   it("the all pill shows the full done history (SYD-175)", async () => {
@@ -316,8 +362,8 @@ describe("Board done-column badge reflects total, not just filtered, count (SYD-
 
   beforeEach(() => {
     localStorage.clear();
-    vi.mocked(listIssues).mockClear();
-    vi.mocked(listIssues).mockResolvedValue(DONE_ISSUES);
+    vi.mocked(listBoard).mockClear();
+    mockCards(DONE_ISSUES);
   });
 
   it("shows visible/total when the default filters hide bounced/not-merged cards from the rest", async () => {
@@ -335,7 +381,7 @@ describe("Board done-column badge reflects total, not just filtered, count (SYD-
   });
 
   it("shows the plain total in other columns, which have no filters", async () => {
-    vi.mocked(listIssues).mockResolvedValue([issue({ ref: "SYD-9", status: "todo" })]);
+    mockCards([issue({ ref: "SYD-9", status: "todo" })]);
     const container = await renderBoard();
     const todoColumn = [...container.querySelectorAll(".column")].find((c) =>
       c.querySelector("h3")?.textContent?.includes("Todo"),
@@ -350,12 +396,12 @@ describe("Board done-column badge reflects total, not just filtered, count (SYD-
 describe("Board move sends the rendered PR head sha on done-stamp (SYD-208)", () => {
   beforeEach(() => {
     localStorage.clear();
-    vi.mocked(listIssues).mockClear();
+    vi.mocked(listBoard).mockClear();
     vi.mocked(updateIssue).mockClear();
   });
 
   async function renderBoardWith(cards: Issue[]): Promise<HTMLElement> {
-    vi.mocked(listIssues).mockResolvedValue(cards);
+    mockCards(cards);
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -431,5 +477,36 @@ describe("Board move sends the rendered PR head sha on done-stamp (SYD-208)", ()
       status: "done",
       expectedHeadSha: undefined,
     });
+  });
+});
+
+describe("Board bounded pages", () => {
+  it("requests an older page and can return without accumulating history", async () => {
+    localStorage.clear();
+    vi.mocked(listBoard).mockReset();
+    const first = boardPage([issue({ id: 60, ref: "SYD-60", status: "todo" })]);
+    first.columns.todo.nextBeforeId = 60;
+    first.columns.todo.total = first.columns.todo.matching = 100;
+    const second = boardPage([issue({ id: 59, ref: "SYD-59", status: "todo" })]);
+    second.columns.todo.total = second.columns.todo.matching = 100;
+    vi.mocked(listBoard).mockImplementation(async (_project, _filters, before) =>
+      before?.todo === 60 ? second : first,
+    );
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => root.render(<Board project="SYD" />));
+    const button = (label: string) =>
+      [...container.querySelectorAll("button")].find((b) => b.textContent === label)!;
+    await act(async () => {
+      const older = button("Older");
+      older.click();
+      older.click(); // repeated clicks must not duplicate the cursor stack
+    });
+    expect(listBoard).toHaveBeenLastCalledWith("SYD", ["errors", "not_merged"], { todo: 60 });
+    expect(container.querySelectorAll(".card")).toHaveLength(1);
+    expect(container.querySelector(".card .ref")?.textContent).toBe("SYD-59");
+    await act(async () => button("Newer").click());
+    expect(container.querySelector(".card .ref")?.textContent).toBe("SYD-60");
+    await act(async () => root.unmount());
   });
 });

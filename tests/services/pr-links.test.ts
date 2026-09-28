@@ -411,7 +411,7 @@ describe("the DoS the previous design died on", () => {
     expect(links[0].confirmedBy).toBeNull();
   });
 
-  it("the agent/<ref> branch path still declares delivers — parity with today", () => {
+  it("the agent/<ref> branch convention alone only suggests a reference", () => {
     const { db } = setup();
     handleGithubWebhook(db, "pull_request", {
       action: "opened",
@@ -427,10 +427,9 @@ describe("the DoS the previous design died on", () => {
     });
     const links = listLiveLinks(db, 1);
     expect(links).toHaveLength(1);
-    expect(links[0].role).toBe("delivers");
-    // Confirmed, matching the authority pr_state.issue_ref carries today — but
-    // by a non-human, so §5a recency binding still applies at the read sites.
-    expect(links[0].confirmedBy).not.toBeNull();
+    expect(links[0].role).toBe("references");
+    expect(links[0].confirmedBy).toBeNull();
+    expect(getOpenPr(db, 1)).toBeNull();
   });
 
   it("ingestion records no timeline event — the link row is the audit", () => {

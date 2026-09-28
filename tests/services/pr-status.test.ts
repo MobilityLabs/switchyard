@@ -6,6 +6,8 @@ import { createIssue, getIssue } from "../../src/services/issues.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
 import { recordDeliveryEvent } from "../../src/services/delivery-events.js";
 import { recordEvent } from "../../src/services/events.js";
+import { declarePrLink, listLiveLinks } from "../../src/services/pr-links.js";
+import type { Actor } from "../../src/services/actors.js";
 import { upsertPrState } from "../../src/services/pr-state.js";
 import {
   getOpenPr,
@@ -28,13 +30,19 @@ function setup() {
 
 /** An attributed observation for agent/<ref> — the shape every pr_state
  * writer (webhook, poller, publish, delivery, backfill) converges on. */
-function observe(
+function declaredObservation(
+  db: ReturnType<typeof openDb>,
+  human: Actor,
   ref: string,
   prNumber: number,
   status: "open" | "merged" | "closed",
   ghUpdatedAt: string,
   extra: { reopened?: boolean } = {},
 ) {
+  const issue = getIssue(db, ref);
+  if (!listLiveLinks(db, issue.id).some((l) => l.repo === REPO && l.prNumber === prNumber)) {
+    declarePrLink(db, human, ref, { repo: REPO, prNumber });
+  }
   return {
     repo: REPO,
     prNumber,
@@ -54,7 +62,11 @@ describe("getOpenPr (pr_state-derived, SYD-207)", () => {
 
   it("flags an issue with an open attributed row", () => {
     const { db, human } = setup();
-    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+    );
     expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toEqual({
       prNumber: 41,
       url: `https://github.com/${REPO}/pull/41`,
@@ -66,7 +78,7 @@ describe("getOpenPr (pr_state-derived, SYD-207)", () => {
   it("carries repo and headSha (SYD-208)", () => {
     const { db, human } = setup();
     upsertPrState(db, human, {
-      ...observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
       headSha: "abc123",
     });
     expect(getOpenPr(db, getIssue(db, "SYD-1").id)).toEqual({
@@ -80,21 +92,39 @@ describe("getOpenPr (pr_state-derived, SYD-207)", () => {
   it("clears when the row goes merged or closed", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
-    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
-    upsertPrState(db, human, observe("SYD-1", 41, "merged", "2026-07-13T11:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+    );
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "merged", "2026-07-13T11:00:00Z"),
+    );
     expect(getOpenPr(db, issueId)).toBeNull();
   });
 
   it("flags again after a genuine reopen", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
-    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
-    upsertPrState(db, human, observe("SYD-1", 41, "closed", "2026-07-13T11:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+    );
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "closed", "2026-07-13T11:00:00Z"),
+    );
     expect(getOpenPr(db, issueId)).toBeNull();
     upsertPrState(
       db,
       human,
-      observe("SYD-1", 41, "open", "2026-07-13T12:00:00Z", { reopened: true }),
+      declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T12:00:00Z", {
+        reopened: true,
+      }),
     );
     expect(getOpenPr(db, issueId)?.prNumber).toBe(41);
   });
@@ -131,9 +161,21 @@ describe("getOpenPr (pr_state-derived, SYD-207)", () => {
   it("a belated close for an old PR can't hide a newer still-open PR (SYD-125 shape)", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
-    upsertPrState(db, human, observe("SYD-1", 1, "open", "2026-07-13T09:00:00Z"));
-    upsertPrState(db, human, observe("SYD-1", 2, "open", "2026-07-13T10:00:00Z"));
-    upsertPrState(db, human, observe("SYD-1", 1, "closed", "2026-07-13T11:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 1, "open", "2026-07-13T09:00:00Z"),
+    );
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 2, "open", "2026-07-13T10:00:00Z"),
+    );
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 1, "closed", "2026-07-13T11:00:00Z"),
+    );
     expect(getOpenPr(db, issueId)).toEqual({
       prNumber: 2,
       url: `https://github.com/${REPO}/pull/2`,
@@ -168,7 +210,11 @@ describe("listOpenPrByIssueId (pr_state-derived, SYD-207)", () => {
   it("only includes issues with an open attributed row", () => {
     const { db, human } = setup();
     createIssue(db, human, { projectKey: "SYD", title: "Also shipping" }); // SYD-2
-    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+    );
 
     const open = getIssue(db, "SYD-1");
     const clean = getIssue(db, "SYD-2");
@@ -184,8 +230,16 @@ describe("listOpenPrByIssueId (pr_state-derived, SYD-207)", () => {
 
   it("keeps the newest PR when an issue somehow has two open rows", () => {
     const { db, human } = setup();
-    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
-    upsertPrState(db, human, observe("SYD-1", 55, "open", "2026-07-13T09:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+    );
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 55, "open", "2026-07-13T09:00:00Z"),
+    );
     expect(listOpenPrByIssueId(db).get(getIssue(db, "SYD-1").id)?.prNumber).toBe(55);
   });
 });
@@ -199,9 +253,13 @@ describe("getMergedPr (pr_state-derived, SYD-207)", () => {
   it("returns prNumber + the co-written transition event id", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
-    upsertPrState(db, human, observe("SYD-1", 41, "open", "2026-07-13T10:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "open", "2026-07-13T10:00:00Z"),
+    );
     upsertPrState(db, human, {
-      ...observe("SYD-1", 41, "merged", "2026-07-13T11:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 41, "merged", "2026-07-13T11:00:00Z"),
       mergeSha: "abc123",
     });
     const merged = getMergedPr(db, issueId);
@@ -212,13 +270,22 @@ describe("getMergedPr (pr_state-derived, SYD-207)", () => {
   it("returns the most recently merged PR when several exist", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
-    upsertPrState(db, human, observe("SYD-1", 41, "merged", "2026-07-13T10:00:00Z"));
-    upsertPrState(db, human, observe("SYD-1", 42, "merged", "2026-07-13T12:00:00Z"));
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 41, "merged", "2026-07-13T10:00:00Z"),
+    );
+    upsertPrState(
+      db,
+      human,
+      declaredObservation(db, human, "SYD-1", 42, "merged", "2026-07-13T12:00:00Z"),
+    );
     expect(getMergedPr(db, issueId)?.prNumber).toBe(42);
   });
 
   it("the delivery worker's merge (recordDeliveryEvent delivered) is visible", () => {
     const { db, human } = setup();
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 41 });
     const issueId = getIssue(db, "SYD-1").id;
     recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
@@ -241,15 +308,15 @@ describe("deliveryPinFor (SYD-208)", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
     upsertPrState(db, human, {
-      ...observe("SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
       headSha: "sha-closed",
     });
     upsertPrState(db, human, {
-      ...observe("SYD-1", 41, "merged", "2026-07-13T10:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 41, "merged", "2026-07-13T10:00:00Z"),
       headSha: "sha-merged",
     });
     upsertPrState(db, human, {
-      ...observe("SYD-1", 42, "open", "2026-07-13T08:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 42, "open", "2026-07-13T08:00:00Z"),
       headSha: "sha-open",
     });
     expect(deliveryPinFor(db, issueId)).toEqual({
@@ -264,11 +331,11 @@ describe("deliveryPinFor (SYD-208)", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
     upsertPrState(db, human, {
-      ...observe("SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
       headSha: "sha-closed",
     });
     upsertPrState(db, human, {
-      ...observe("SYD-1", 41, "merged", "2026-07-13T10:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 41, "merged", "2026-07-13T10:00:00Z"),
       headSha: "sha-merged",
     });
     expect(deliveryPinFor(db, issueId)).toEqual({
@@ -283,7 +350,7 @@ describe("deliveryPinFor (SYD-208)", () => {
     const { db, human } = setup();
     const issueId = getIssue(db, "SYD-1").id;
     upsertPrState(db, human, {
-      ...observe("SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
+      ...declaredObservation(db, human, "SYD-1", 40, "closed", "2026-07-13T09:00:00Z"),
       headSha: "sha-closed",
     });
     expect(deliveryPinFor(db, issueId)).toEqual({

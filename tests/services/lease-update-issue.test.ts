@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { and, eq, isNull } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
+import { claimLeases } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue, updateIssue, getIssue } from "../../src/services/issues.js";
-import { getActiveLease } from "../../src/services/leases.js";
+import { createIssue, updateIssue, claimIssue, getIssue } from "../../src/services/issues.js";
+import { getActiveLease, heartbeatLease, validateLease } from "../../src/services/leases.js";
 import { listIssueEvents } from "../../src/services/events.js";
 
 let db: Db, human: Actor, agent: Actor;
@@ -56,5 +58,52 @@ describe("updateIssue lease enforcement", () => {
     updateIssue(db, agent, "AIPI-1", { status: "in_progress" }, { minted });
     // human reassigns / edits without any lease token — must not throw
     expect(() => updateIssue(db, human, "AIPI-1", { priority: "high" })).not.toThrow();
+  });
+
+  it.each([
+    { toTodo: false, sameActor: false },
+    { toTodo: false, sameActor: true },
+    { toTodo: true, sameActor: false },
+    { toTodo: true, sameActor: true },
+  ])("retires an explicitly cleared claim before replacement ($toTodo, $sameActor)", (scenario) => {
+    const first = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, human, "AIPI-1", {
+      assigneeName: null,
+      ...(scenario.toTodo ? { status: "todo" as const } : {}),
+    });
+    expect(getActiveLease(db, first.issue.id)).toBeNull();
+    expect(() => heartbeatLease(db, first.issue.id, agent.id, first.leaseToken)).toThrow();
+
+    const nextActor = scenario.sameActor
+      ? agent
+      : createActor(db, { name: "codex/worker", type: "agent" }).actor;
+    const next = claimIssue(db, nextActor, "AIPI-1");
+    expect(() =>
+      updateIssue(db, nextActor, "AIPI-1", { title: "Progress" }, { presented: next.leaseToken }),
+    ).not.toThrow();
+    expect(() => validateLease(db, first.issue.id, agent.id, first.leaseToken)).toThrow();
+    expect(
+      db
+        .select()
+        .from(claimLeases)
+        .where(and(eq(claimLeases.issueId, first.issue.id), isNull(claimLeases.invalidatedAt)))
+        .all(),
+    ).toHaveLength(1);
+  });
+
+  it("retires the outgoing lease on direct human reassignment", () => {
+    const first = claimIssue(db, agent, "AIPI-1");
+    const nextActor = createActor(db, { name: "codex/worker", type: "agent" }).actor;
+    updateIssue(db, human, "AIPI-1", { assigneeName: nextActor.name });
+    expect(() => validateLease(db, first.issue.id, agent.id, first.leaseToken)).toThrow();
+    const next = claimIssue(db, nextActor, "AIPI-1");
+    expect(() => heartbeatLease(db, next.issue.id, nextActor.id, next.leaseToken)).not.toThrow();
+  });
+
+  it("retires a claim moved to todo even when the human preserves its assignee", () => {
+    const first = claimIssue(db, agent, "AIPI-1");
+    updateIssue(db, human, "AIPI-1", { status: "todo", assigneeName: agent.name });
+    expect(getActiveLease(db, first.issue.id)).toBeNull();
+    expect(() => heartbeatLease(db, first.issue.id, agent.id, first.leaseToken)).toThrow();
   });
 });

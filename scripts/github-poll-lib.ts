@@ -56,7 +56,7 @@ export type PollEvent =
   | { event: "pull_request"; payload: Record<string, unknown> }
   | { event: "check_suite"; payload: Record<string, unknown> };
 
-function prPayload(pr: GhPr, action: "opened" | "closed"): Record<string, unknown> {
+function prPayload(pr: GhPr, action: "opened" | "closed" | "reopened"): Record<string, unknown> {
   return {
     action,
     pull_request: {
@@ -89,7 +89,8 @@ function checkSuitePayload(pr: GhPr, run: GhRun): Record<string, unknown> {
 /**
  * Upsert-observed-state (SYD-206, replacing the old emit-transitions diff):
  * EVERY PR in the poll result yields a pull_request observation on every
- * tick — "opened" for OPEN, "closed" (with the `merged` flag) for
+ * tick — "opened" for OPEN ("reopened" after a confirmed close→open),
+ * "closed" (with the `merged` flag) for
  * CLOSED/MERGED, including PRs first observed already terminal. The server's
  * upsertPrState/dedupe absorbs repeats, so a lost POST heals within one tick
  * and a repo linked after its PRs settled still gets correct terminal state
@@ -106,6 +107,7 @@ export function observeRepoState(
   prs: GhPr[],
   runs: Map<number, GhRun | null>,
   prior: RepoPollState,
+  confirmedReopened: ReadonlySet<number> = new Set(),
 ): { events: PollEvent[]; next: RepoPollState } {
   const events: PollEvent[] = [];
   const next: RepoPollState = { ...prior };
@@ -114,7 +116,14 @@ export function observeRepoState(
     const known = prior[pr.number];
     events.push({
       event: "pull_request",
-      payload: prPayload(pr, pr.state === "OPEN" ? "opened" : "closed"),
+      payload: prPayload(
+        pr,
+        pr.state === "OPEN"
+          ? known?.state === "CLOSED" || confirmedReopened.has(pr.number)
+            ? "reopened"
+            : "opened"
+          : "closed",
+      ),
     });
 
     let lastRunConclusion = known?.lastRunConclusion ?? null;

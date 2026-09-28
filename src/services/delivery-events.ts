@@ -11,7 +11,8 @@ import { getIssue } from "./issues.js";
 import { recordEvent } from "./events.js";
 import { boundRepoFullNames, normalizeRepoFullName } from "./github-repos.js";
 import { parseGhTimestamp } from "./github-webhook.js";
-import { upsertPrState, attributedRef } from "./pr-state.js";
+import { upsertPrState } from "./pr-state.js";
+import { recordIngestedPrLink } from "./pr-links.js";
 
 export type DeployResult = { ran: false } | { ran: true; ok: boolean; tail: string };
 
@@ -62,7 +63,7 @@ export function recordDeliveryEvent(
   if (repo === null) {
     // SYD-205 deploy-skew rule: infer only when it's unambiguous.
     const bound = boundRepoFullNames(db, issue.projectId);
-    if (bound.length === 1) repo = bound[0];
+    if (bound.length === 1) repo = normalizeRepoFullName(bound[0]);
     else if (bound.length > 1) {
       throw new SwitchyardError(
         "repo is ambiguous — the issue's project has multiple bound repos, so this delivery event must name its repo.",
@@ -86,7 +87,22 @@ export function recordDeliveryEvent(
   // state, exactly as in webhook ingestion.
   if (repo !== null && (input.type === "pr_opened" || input.type === "delivered")) {
     const branch = `agent/${issue.ref}`;
-    if (attributedRef(db, repo, branch) === issue.ref) {
+    if (
+      boundRepoFullNames(db, issue.projectId).some((bound) => normalizeRepoFullName(bound) === repo)
+    ) {
+      // This route is authenticated as human/service infrastructure, and its
+      // explicit issue ref is the worker host's declaration. GitHub webhooks
+      // and poller observations have no such authority. Publication alone may
+      // establish the link; a later delivery must not invent missing attribution.
+      if (input.type === "pr_opened") {
+        recordIngestedPrLink(db, {
+          issueId: issue.id,
+          repo,
+          prNumber: input.prNumber,
+          role: "delivers",
+          actorId: actor.id,
+        });
+      }
       upsertPrState(db, actor, {
         repo,
         prNumber: input.prNumber,

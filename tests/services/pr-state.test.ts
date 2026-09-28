@@ -8,6 +8,8 @@ import { describe, it, expect } from "vitest";
 import { openDb, type Db } from "../../src/db/index.js";
 import { createActor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
+import { declarePrLink } from "../../src/services/pr-links.js";
+import { getOpenPr } from "../../src/services/pr-status.js";
 import { createIssue } from "../../src/services/issues.js";
 import { getActivity } from "../../src/services/comments.js";
 import { addGithubRepo } from "../../src/services/github-repos.js";
@@ -24,13 +26,16 @@ const T1 = "2026-07-12T10:00:00Z";
 const T2 = "2026-07-12T11:00:00Z";
 const T3 = "2026-07-12T12:00:00Z";
 
-function setup(opts: { bindRepo?: boolean } = {}) {
+function setup(opts: { bindRepo?: boolean; declare?: boolean } = {}) {
   const db = openDb(":memory:");
   const human = createActor(db, { name: "sean", type: "human" }).actor;
   const github = createActor(db, { name: "github", type: "agent" }).actor;
   createProject(db, human, { key: "SYD", name: "Switchyard" });
   createIssue(db, human, { projectKey: "SYD", title: "Ship v1" });
   if (opts.bindRepo !== false) addGithubRepo(db, human, { fullName: REPO, projectKey: "SYD" });
+  if (opts.bindRepo !== false && opts.declare !== false) {
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 12 });
+  }
   return { db, human, github };
 }
 
@@ -48,7 +53,7 @@ function obs(o: Partial<PrObservation> = {}): PrObservation {
 }
 
 describe("upsertPrState / insert + attribution", () => {
-  it("inserts an open row from a first observation, attributed via branch + repo binding, and co-writes gh_pr_opened", () => {
+  it("inserts an open row from a first observation, attributed via an explicit human declaration, and co-writes gh_pr_opened", () => {
     const { db, github } = setup();
     const outcome = upsertPrState(db, github, obs());
     expect(outcome).toMatchObject({ applied: true, transition: "opened" });
@@ -59,7 +64,7 @@ describe("upsertPrState / insert + attribution", () => {
       prNumber: 12,
       status: "open",
       branch: "agent/SYD-1",
-      issueRef: "SYD-1",
+      issueRef: null,
       headSha: "a".repeat(40),
       url: "https://github.com/acme/widgets/pull/12",
     });
@@ -79,6 +84,7 @@ describe("upsertPrState / insert + attribution", () => {
   it("normalizes repo casing on write and read: link lowercase, observe canonical case, binding + pr_state both resolve (SYD-212)", () => {
     const { db, human, github } = setup({ bindRepo: false });
     addGithubRepo(db, human, { fullName: REPO.toLowerCase(), projectKey: "SYD" });
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 12 });
 
     const canonicalRepo = "Acme/Widgets";
     const outcome = upsertPrState(db, github, obs({ repo: canonicalRepo }));
@@ -86,7 +92,8 @@ describe("upsertPrState / insert + attribution", () => {
 
     // Attribution succeeded (bound repo matched despite differing casing)...
     const rowByLower = findPrState(db, REPO.toLowerCase(), 12)!;
-    expect(rowByLower.issueRef).toBe("SYD-1");
+    expect(getOpenPr(db, 1)?.prNumber).toBe(12);
+    expect(rowByLower.issueRef).toBeNull();
     // ...and the stored row itself converged on one (lowercase) casing rather
     // than splitting into a second row under the canonical-case key.
     expect(rowByLower.repo).toBe("acme/widgets");
@@ -96,7 +103,7 @@ describe("upsertPrState / insert + attribution", () => {
   });
 
   it("refuses attribution for an agent/<ref> PR in a repo not bound to that ref's project (cross-repo), writing a display-only row and no event", () => {
-    const { db, human, github } = setup();
+    const { db, human, github } = setup({ declare: false });
     createProject(db, human, { key: "OTH", name: "Other" });
     addGithubRepo(db, human, { fullName: "acme/other", projectKey: "OTH" });
 
@@ -109,7 +116,7 @@ describe("upsertPrState / insert + attribution", () => {
   });
 
   it("never attributes from a non-agent branch (free-text scanning stays display-only)", () => {
-    const { db, github } = setup();
+    const { db, github } = setup({ declare: false });
     upsertPrState(db, github, obs({ branch: "feat/manual-work" }));
     expect(findPrState(db, REPO, 12)!.issueRef).toBeNull();
   });
@@ -118,7 +125,8 @@ describe("upsertPrState / insert + attribution", () => {
     const { db, github } = setup();
     upsertPrState(db, github, obs());
     upsertPrState(db, github, obs({ branch: null, ghUpdatedAt: T2 }));
-    expect(findPrState(db, REPO, 12)!.issueRef).toBe("SYD-1");
+    expect(getOpenPr(db, 1)?.prNumber).toBe(12);
+    expect(findPrState(db, REPO, 12)!.issueRef).toBeNull();
   });
 
   it("heals a PR first observed already merged (never-saw-open), co-writing gh_pr_merged", () => {

@@ -169,7 +169,7 @@ describe("recordDeliveryEvent / ingestion groundwork (SYD-205)", () => {
     const row = findPrState(db, "acme/bound", 12)!;
     expect(row).toMatchObject({
       status: "open",
-      issueRef: "SYD-1",
+      issueRef: null,
       branch: "agent/SYD-1",
       headSha: "a".repeat(40),
     });
@@ -203,7 +203,7 @@ describe("recordDeliveryEvent / ingestion groundwork (SYD-205)", () => {
       repo: "Acme/Bound",
     });
     expect(getActivity(db, "SYD-1")[1].payload).toMatchObject({ repo: "acme/bound" });
-    expect(findPrState(db, "acme/bound", 12)!.issueRef).toBe("SYD-1");
+    expect(findPrState(db, "acme/bound", 12)!.issueRef).toBeNull();
   });
 
   it("never writes pr_state when the event's repo is not bound to the issue's project", () => {

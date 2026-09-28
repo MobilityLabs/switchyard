@@ -10,6 +10,7 @@ export function usePasteUpload(ref: string, setDraft: Dispatch<SetStateAction<st
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const uploadsInFlight = useRef(0);
 
   async function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(e.clipboardData?.files ?? []);
@@ -21,6 +22,7 @@ export function usePasteUpload(ref: string, setDraft: Dispatch<SetStateAction<st
       );
       return;
     }
+    uploadsInFlight.current += 1;
     setUploading(true);
     setUploadError(null);
     try {
@@ -46,7 +48,8 @@ export function usePasteUpload(ref: string, setDraft: Dispatch<SetStateAction<st
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : String(err));
     } finally {
-      setUploading(false);
+      uploadsInFlight.current -= 1;
+      setUploading(uploadsInFlight.current > 0);
     }
   }
 

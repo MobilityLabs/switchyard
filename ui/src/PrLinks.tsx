@@ -170,15 +170,15 @@ export default function PrLinks({
       (e) => setError(e.message),
     );
 
-  const declare = (prNumber: number, role?: "delivers") => {
-    if (!targetRepo) {
+  const declare = (prNumber: number, role?: "delivers", linkedRepo = targetRepo) => {
+    if (!linkedRepo) {
       setError(
         "No GitHub repo is bound to this project — bind one in Settings → Integrations before declaring a link.",
       );
       return;
     }
     act(() =>
-      declarePrLink(refId, { repo: targetRepo, prNumber, role }).then(() => setPrInput("")),
+      declarePrLink(refId, { repo: linkedRepo, prNumber, role }).then(() => setPrInput("")),
     );
   };
 
@@ -187,7 +187,7 @@ export default function PrLinks({
     return (
       <li key={link.id} className="pr-link-row">
         <a href={safeHref(prUrl(link))} target="_blank" rel="noreferrer" className="pr-link-number">
-          #{link.prNumber}
+          {options.length > 1 && link.repo}#{link.prNumber}
         </a>{" "}
         <span className={state.className} title={state.title}>
           {state.label}
@@ -213,7 +213,7 @@ export default function PrLinks({
             <button
               className="pr-link-promote"
               title="Promote this suggestion to a delivers link — supersedes it and confirms in one step"
-              onClick={() => declare(link.prNumber, "delivers")}
+              onClick={() => declare(link.prNumber, "delivers", link.repo)}
             >
               This one carries the work
             </button>

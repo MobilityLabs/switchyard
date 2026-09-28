@@ -12,6 +12,7 @@ import { listOpenPrByIssueId } from "./pr-status.js";
 import { EXECUTABLE_GATE_ACTIONS, findOrCreatePendingAction, isHardGated } from "./hard-gate.js";
 import { getSetting } from "./settings.js";
 import { affinityRank, QUEUE_RANK_ORDER } from "./queue.js";
+import { issueIdsCondition } from "./issue-scope.js";
 import {
   callerClassification,
   isAttendedCaller,
@@ -29,6 +30,11 @@ export function addDependency(
   blockedRef: string,
   attr: Attribution = {},
 ): void {
+  if (actor.type === "service") {
+    throw new SwitchyardError(
+      "Service actors post events, read, and comment — they cannot add dependencies.",
+    );
+  }
   db.transaction((tx) => {
     const blocker = getIssue(tx, blockerRef);
     const blocked = getIssue(tx, blockedRef);
@@ -215,12 +221,18 @@ function isReachable(db: DbOrTx, fromId: number, toId: number): boolean {
  * worker reads can flag blocked issues in one query instead of N (SYD-160). The
  * Set collapses issues with several open blockers to a single id.
  */
-export function listBlockedIssueIds(db: Db): Set<number> {
+export function listBlockedIssueIds(db: Db, issueIds?: readonly number[]): Set<number> {
+  if (issueIds?.length === 0) return new Set();
   const rows = db
     .select({ blockedId: dependencies.blockedId })
     .from(dependencies)
     .innerJoin(issues, eq(dependencies.blockerId, issues.id))
-    .where(notInArray(issues.status, [...CLOSED]))
+    .where(
+      and(
+        notInArray(issues.status, [...CLOSED]),
+        issueIdsCondition(dependencies.blockedId, issueIds),
+      ),
+    )
     .all();
   return new Set(rows.map((r) => r.blockedId));
 }
