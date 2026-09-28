@@ -994,7 +994,11 @@ export function dispatch(
       }
       child = spawn(
         process.execPath,
-        [path.join(repoRoot(), "scripts", "worker-engine-runner.mjs"), "claude", ...cliArgs],
+        [
+          fileURLToPath(new URL("./worker-engine-runner.mjs", import.meta.url)),
+          "claude",
+          ...cliArgs,
+        ],
         {
           env: {
             ...process.env,
@@ -1305,7 +1309,7 @@ export function dispatchAnswer(
     child = spawn(
       process.execPath,
       [
-        path.join(repoRoot(), "scripts", "worker-engine-runner.mjs"),
+        fileURLToPath(new URL("./worker-engine-runner.mjs", import.meta.url)),
         "claude",
         "-p",
         buildAnswerPrompt(ref),
