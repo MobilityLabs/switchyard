@@ -492,6 +492,7 @@ describe("poller-down done-stamp then recovery (SYD-228)", () => {
     expect(listPendingDeliveryAuthorizations(db)).toEqual([]);
 
     // The poller recovers and observes the still-open PR.
+    declarePrLink(db, human, issue.ref, { repo: REPO, prNumber: 41 });
     upsertPrState(db, human, {
       repo: REPO,
       prNumber: 41,

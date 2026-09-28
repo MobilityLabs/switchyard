@@ -2,8 +2,8 @@
 // 2026-07-27-declared-pr-attribution-design.md).
 //
 // This module is the ONLY writer of pr_links. It replaces three string
-// inference sites — the strict agent/<ref> branch match (pr-state.ts's
-// attributedRef), the first free-text ref in a PR title/body
+// inference sites — the former strict agent/<ref> branch match,
+// the first free-text ref in a PR title/body
 // (github-webhook.ts's resolveRef), and a branch name reconstructed from the
 // issue ref (delivery-events.ts) — with a statement made by someone the system
 // can hold accountable.
@@ -198,8 +198,7 @@ function findLiveLink(
 }
 
 /**
- * The repo must be bound to the issue's project — the same rule attributedRef
- * enforces today (src/services/pr-state.ts). Without it any repo could claim
+ * The repo must be bound to the issue's project. Without it any repo could claim
  * any issue, which is the cross-project attribution hole SYD-206 closed.
  */
 function assertRepoBound(db: DbOrTx, projectId: number, repo: string): void {
@@ -315,42 +314,16 @@ export function declarePrLink(
 }
 
 /**
- * Ingestion's declaration path — webhook/poller and the worker's publish.
+ * Records an inert reference suggestion from GitHub, or the explicit issue
+ * declaration made by authenticated worker publication. Only the delivery
+ * service may pass `delivers`; external observations always pass `references`.
+ * A signed webhook authenticates GitHub's observation, never a fork author's
+ * relationship to an issue. Runs inside the caller's transaction.
  *
- * Separate from declarePrLink because ingestion is not an actor staking a
- * claim: it is the system recording an attribution it observed, attributed to
- * the synthetic `github` actor (which is type `agent`,
- * src/services/github-webhook.ts:176, and so could never satisfy the
- * claim+lease rules). Runs inside the caller's transaction.
- *
- * **Scope discipline — this is parity, not a widening.** Only the
- * branch-attributed path (a strict agent/<ref> match in a repo bound to that
- * ref's project) may pass `role: "delivers"`, because that is precisely the
- * signal that gates claims and proves landing *today*. Free-text ref matches
- * must pass `role: "references"`, which gates nothing and proves nothing — a
- * narrowing of today's behaviour, and the fix for the false-clear hole where
- * an unrelated PR that merely mentions an issue silences its warning.
- *
- * Note the untrusted-ingress caveat: POST /api/github-events accepts any
- * human/service token and is indistinguishable from an HMAC-verified delivery
- * (design "Scope", analysis §3.7). That is true of today's attribution too, so
- * this is not a regression — it is SYD-282's to fix, and this function must
- * not be read as making ingested merges trustworthy.
- *
- * Idempotent: a redelivery finds the live link and returns it unchanged. The
- * one exception is the upgrade below — a branch-attributed observation
- * supersedes a `references` suggestion an earlier free-text match minted for
- * the same (issue, repo, PR), because otherwise ingestion order would decide
- * whether a PR gates claims.
- *
- * **Records no event, deliberately.** The row itself carries the full audit
- * (declared_by, declared_at, role), and the observation that prompted it is
- * already on the timeline as gh_pr_opened/gh_pr_merged. Emitting an event too
- * would put a "pr_link_declared" line above every single PR in every activity
- * feed — a signal that fires on ordinary success, which is the noise class the
- * intent document's principle 5 warns about. Actor-initiated declarations
- * (declarePrLink/confirmPrLink/revokePrLink) DO record events, because those
- * are decisions someone made rather than bookkeeping the system did.
+ * Replays preserve a live link and never undo a revocation. A host publication
+ * may promote an existing references suggestion to delivers; an explicit
+ * declarePrLink call is required to override a revoked relationship.
+ * The host's publication event supplies the audit; suggestions add no event.
  */
 export function recordIngestedPrLink(
   tx: DbOrTx,
@@ -361,13 +334,13 @@ export function recordIngestedPrLink(
     role: PrLinkRole;
     actorId: number;
   },
-): PrLink {
+): PrLink | null {
   const repo = normalizeRepoFullName(input.repo);
   const now = nowSeconds();
   const existing = findLiveLink(tx, input.issueId, repo, input.prNumber);
   if (existing) {
-    // Upgrade only, never downgrade (SYD-287). The branch-attributed path is
-    // strictly more authoritative than the free-text one, so it supersedes a
+    // Upgrade only, never downgrade. Authenticated host publication
+    // is an explicit declaration, so it supersedes a
     // `references` suggestion the same way an actor's declaration does —
     // otherwise a PR that happened to be ingested by text first would keep a
     // suggestion where a claim-gating link belongs, and lose its co-written
@@ -376,10 +349,28 @@ export function recordIngestedPrLink(
     tx.update(prLinks).set({ revokedAt: now }).where(eq(prLinks.id, existing.id)).run();
   }
 
-  // A `delivers` link from the branch-attributed path is confirmed, matching
-  // the authority pr_state.issue_ref carries today — its confirmer is not a
-  // human, so §5a's recency binding still applies to it. A `references` link
-  // is never confirmed: it is a suggestion for a human to promote.
+  // An observation cannot undo an explicit revocation. Also suppress an
+  // inert references suggestion after a revoke, so the panel does not offer
+  // the same rejected relationship on every poll. A deliberate declarePrLink
+  // call may create a new live row and supersede this tombstone.
+  if (!existing) {
+    const revoked = tx
+      .select({ id: prLinks.id })
+      .from(prLinks)
+      .where(
+        and(
+          eq(prLinks.issueId, input.issueId),
+          sql`lower(${prLinks.repo}) = lower(${repo})`,
+          eq(prLinks.prNumber, input.prNumber),
+          sql`${prLinks.revokedAt} IS NOT NULL`,
+        ),
+      )
+      .get();
+    if (revoked) return null;
+  }
+
+  // Trusted host publication retains its existing confirmation semantics.
+  // External references suggestions are never confirmed.
   const confirmed = input.role === "delivers";
   const row = tx
     .insert(prLinks)

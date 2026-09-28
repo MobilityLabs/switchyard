@@ -51,7 +51,7 @@ describe("GET /pr-state", () => {
     expect(res.status).toBe(200);
     const rows = (await res.json()) as { prNumber: number; status: string; issueRef: string }[];
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ prNumber: 7, status: "open", issueRef: "SYD-1" });
+    expect(rows[0]).toMatchObject({ prNumber: 7, status: "open", issueRef: null });
   });
 
   it("returns all rows for a repo without a status filter", async () => {

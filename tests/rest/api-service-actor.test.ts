@@ -3,6 +3,7 @@ import { openDb, type Db } from "../../src/db/index.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
 import { createIssue } from "../../src/services/issues.js";
+import { listDependencies } from "../../src/services/dependencies.js";
 import { buildApiRoutes } from "../../src/rest/api-routes.js";
 
 // SYD-213: REST-layer authorization for a `service` token. The service-layer
@@ -23,6 +24,20 @@ beforeEach(() => {
 const svc = () => ({ authorization: `Bearer ${serviceToken}`, "content-type": "application/json" });
 
 describe("service token — REST-layer guards", () => {
+  it("CANNOT add a dependency", async () => {
+    createIssue(db, human, { projectKey: "SYD", title: "Blocked target" });
+    const res = await app.request("/dependencies", {
+      method: "POST",
+      headers: svc(),
+      body: JSON.stringify({ blockerRef: "SYD-1", blockedRef: "SYD-2" }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: expect.stringMatching(/cannot add dependencies/),
+    });
+    expect(listDependencies(db, "SYD-2").blockedBy).toEqual([]);
+  });
+
   it("CANNOT create an actor (requireHumanCaller)", async () => {
     const res = await app.request("/actors", {
       method: "POST",

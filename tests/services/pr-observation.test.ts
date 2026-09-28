@@ -295,11 +295,12 @@ describe("the SYD-280 regression fence still holds (SYD-287)", () => {
     },
   });
 
-  it("an agent/<ref> PR behaves exactly as before — one delivers link, one event, one row", () => {
-    const { db } = setup();
+  it("a declared agent/<ref> PR retains its attribution — one delivers link, one event, one row", () => {
+    const { db, human } = setup();
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 12 });
     const outcome = handleGithubWebhook(db, "pull_request", agentPr("opened"));
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
-    expect(findPrState(db, REPO, 12)).toMatchObject({ status: "open", issueRef: "SYD-1" });
+    expect(findPrState(db, REPO, 12)).toMatchObject({ status: "open", issueRef: null });
     const links = listLiveLinks(db, 1);
     expect(links).toHaveLength(1);
     expect(links[0].role).toBe("delivers");
@@ -349,6 +350,7 @@ describe("the SYD-280 regression fence still holds (SYD-287)", () => {
 
   it("still queues an agent/<ref> PR — the guard bounds the queue, it does not empty it", () => {
     const { db, human } = setup();
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 12 });
     handleGithubWebhook(db, "pull_request", {
       action: "opened",
       repository: { full_name: REPO },
@@ -365,7 +367,7 @@ describe("the SYD-280 regression fence still holds (SYD-287)", () => {
     expect(pending[0].pin).toMatchObject({ prNumber: 12, repo: REPO });
   });
 
-  it("never writes issueRef from a link — that column stays branch-derived until it is dropped", () => {
+  it("never writes issueRef from a link — that column retains legacy data only", () => {
     const { db, human } = setup();
     declare(db, human);
     handleGithubWebhook(db, "pull_request", featPr("opened"));

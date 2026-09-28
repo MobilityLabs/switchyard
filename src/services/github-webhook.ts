@@ -10,9 +10,8 @@
 //   first, then a bare ref in free text (PR title/body, or commit messages for
 //   push). This is display, and a string may decide it.
 // - IS THE PR ATTRIBUTED to an issue's work? DECLARED, never parsed: a live
-//   `delivers` row in pr_links (SYD-280). An `agent/<ref>` branch auto-declares
-//   its own link inside upsertPrState, which is why dispatched work needs no
-//   extra step; everyone else calls declare_pr_link.
+//   `delivers` row in pr_links (SYD-280). The authenticated worker host
+//   declares at publish; a branch name from GitHub only suggests a reference.
 //
 // pull_request ingestion answers NEITHER question before writing `pr_state`:
 // since SYD-287 every PR in a bound repo is observed, because pr_state records
@@ -35,7 +34,7 @@ import { getOrCreateActor } from "./actors.js";
 import { getIssue, issueRefById } from "./issues.js";
 import { recordEvent } from "./events.js";
 import { boundRepoFullNames, findGithubRepo, normalizeRepoFullName } from "./github-repos.js";
-import { upsertPrState, attributedRef, type PrObservation } from "./pr-state.js";
+import { upsertPrState, type PrObservation } from "./pr-state.js";
 import { recordIngestedPrLink, deliversLinkIssueIds } from "./pr-links.js";
 
 const GITHUB_ACTOR_NAME = "github";
@@ -307,8 +306,6 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
   // sole-bound-repo inference above.
   const linkedIssueIds =
     resolvedRepo === null ? [] : deliversLinkIssueIds(db, resolvedRepo, prNumber);
-  const branchAttributed =
-    resolvedRepo !== null && attributedRef(db, resolvedRepo, branch) !== null;
 
   // OBSERVATION (SYD-206, widened by SYD-287). Every PR in a bound repo, full
   // stop — no branch test, no link test.
@@ -376,7 +373,7 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
   // text ref's issue already took upsertPrState's canonical co-write, which is
   // what keeps one transition from appearing twice.
   let displayOutcome: GithubWebhookOutcome | null = null;
-  if (issue !== undefined && !branchAttributed && !linkedIssueIds.includes(issue.id)) {
+  if (issue !== undefined && !linkedIssueIds.includes(issue.id)) {
     const textOnlyRef = issue.ref;
     const byPrNumber = { jsonPath: "$.prNumber", value: prNumber };
     if (action === "opened") {

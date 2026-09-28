@@ -23,13 +23,9 @@
 //   an observation; a PR missing from a poll window simply produces no call.
 // - This table holds no attribution. It is a pure observation of a PR, keyed
 //   (repo, prNumber); which issue a PR belongs to lives in pr_links (SYD-280).
-//   `issueRef` survives only as the SYD-280 §10 step-3 dual-write, written
-//   from the branch and read by nothing — never from a link, which would
-//   re-couple the two facts this split exists to separate. Step 4 drops it.
-// - A strict agent/<ref> match on a repo bound to that ref's project is the
-//   AUTO-DECLARATION trigger, not a gate: it records the `delivers` link the
-//   worker would otherwise have to declare by hand. An agent/SYD-1 PR in some
-//   other project's repo declares nothing.
+//   `issueRef` retains legacy cutover data only. New observations never infer
+//   attribution from a branch, including agent/<ref> in a linked repository.
+//   Worker publication declares through the authenticated delivery service.
 // - On a real transition it co-writes ONE canonical audit event per issue
 //   holding a live `delivers` link (gh_pr_opened/gh_pr_merged/gh_pr_closed/
 //   gh_pr_reopened), deduped against history via findEventIdByPayload so a
@@ -40,15 +36,13 @@
 
 import { and, eq, sql } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
-import { prState, githubRepos, type EventKind } from "../db/schema.js";
+import { prState, type EventKind } from "../db/schema.js";
 import type { Actor } from "./actors.js";
 import { SwitchyardError } from "./errors.js";
-import { getIssue } from "./issues.js";
-import { getProjectByKey } from "./projects.js";
 import { normalizeRepoFullName } from "./github-repos.js";
 import { recordEvent, findEventIdByPayload } from "./events.js";
-import { parseGhTimestamp, refFromBranch } from "./github-webhook.js";
-import { recordIngestedPrLink, deliversLinkIssueIds } from "./pr-links.js";
+import { parseGhTimestamp } from "./github-webhook.js";
+import { deliversLinkIssueIds } from "./pr-links.js";
 
 export type PrStateRow = typeof prState.$inferSelect;
 export type PrStatus = "open" | "merged" | "closed";
@@ -105,40 +99,6 @@ export function listPrState(db: Db, filter: { repo?: string; status?: string } =
   ].filter((c) => c !== undefined);
   const query = db.select().from(prState);
   return (conditions.length > 0 ? query.where(and(...conditions)) : query).all();
-}
-
-/** issueRef for a PR, or null: strict agent/<ref> branch match, repo bound to
- * that ref's project, and the issue actually exists. */
-export function attributedRef(
-  db: DbOrTx,
-  repo: string,
-  branch: string | null | undefined,
-): string | null {
-  const ref = refFromBranch(branch);
-  if (!ref) return null;
-  let projectId: number;
-  try {
-    projectId = getProjectByKey(db, ref.split("-")[0]).id;
-  } catch {
-    return null;
-  }
-  const bound = db
-    .select({ id: githubRepos.id })
-    .from(githubRepos)
-    .where(
-      and(
-        sql`lower(${githubRepos.fullName}) = lower(${repo})`,
-        eq(githubRepos.projectId, projectId),
-      ),
-    )
-    .get();
-  if (!bound) return null;
-  try {
-    getIssue(db, ref);
-  } catch {
-    return null;
-  }
-  return ref;
 }
 
 const EVENT_KIND: Record<PrTransition, EventKind> = {
@@ -200,31 +160,19 @@ export function upsertPrState(db: Db, actor: Actor, input: PrObservation): Upser
     const decision = decide(existing, o, ts);
     if (!decision.apply) return { applied: false, transition: null, reason: decision.reason };
 
-    const issueRef = attributedRef(tx, o.repo, o.branch) ?? existing?.issueRef ?? null;
-
-    // SYD-280: the branch-attributed path co-declares the issue<->PR link.
-    // Done here rather than at each caller because upsertPrState is the ONLY
-    // pr_state writer, so this one site covers webhook, poller, the worker's
-    // publish and the delivery merge. Idempotent, so refreshes and
-    // redeliveries are no-ops.
-    if (issueRef !== null) {
-      recordIngestedPrLink(tx, {
-        issueId: getIssue(tx, issueRef).id,
-        repo: o.repo,
-        prNumber: o.prNumber,
-        role: "delivers",
-        actorId: actor.id,
-      });
-    }
+    // Observations never establish attribution: even a signed GitHub event
+    // can describe a fork whose author chose agent/<ref>. The authenticated
+    // worker host declares at publish; every other author declares explicitly.
+    // Retain old cutover data only. New observations must not seed a later
+    // backfill with a branch-derived assertion.
+    const issueRef = existing?.issueRef ?? null;
 
     let lastTransitionEventId = existing?.lastTransitionEventId ?? null;
     if (decision.transition !== null) {
       // SYD-287: the issues this transition is canonical for are the ones
       // holding a live `delivers` link — read from pr_links, not from the
-      // branch-derived issueRef above. For agent/<ref> work that is the same
-      // single issue it always was (the auto-declaration a few lines up wrote
-      // its link), so the SYD-280 regression fence holds; for an interactive
-      // feat/ PR it is the only reason the merge reaches a timeline at all.
+      // legacy issueRef column. Authenticated publication and explicit
+      // declarations share this path for worker and interactive PRs.
       // A PR declared by more than one issue (design §3, SYD-274) gets the
       // event on each; the row's single lastTransitionEventId takes the
       // earliest declarer's, which deliversLinkIssueIds orders first.

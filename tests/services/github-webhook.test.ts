@@ -14,7 +14,7 @@ import {
   refsFromText,
   repositoryFullName,
 } from "../../src/services/github-webhook.js";
-import { listLiveLinks } from "../../src/services/pr-links.js";
+import { declarePrLink, listLiveLinks } from "../../src/services/pr-links.js";
 
 function setup(boundRepos: string[] = []) {
   const db = openDb(":memory:");
@@ -567,10 +567,12 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
 
   it("writes an attributed pr_state row on opened, with exactly one gh_pr_opened event (co-write, no double record)", () => {
     const db = setup(["acme/bound"]);
+    const declarer = createActor(db, { name: "declarer", type: "human" }).actor;
+    declarePrLink(db, declarer, "SYD-1", { repo: "acme/bound", prNumber: 12 });
     const outcome = handleGithubWebhook(db, "pull_request", opened("opened"));
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
     const row = findPrState(db, "acme/bound", 12)!;
-    expect(row).toMatchObject({ status: "open", issueRef: "SYD-1", headSha: "a".repeat(40) });
+    expect(row).toMatchObject({ status: "open", issueRef: null, headSha: "a".repeat(40) });
     expect(getActivity(db, "SYD-1").filter((a) => a.type === "gh_pr_opened")).toHaveLength(1);
   });
 
@@ -684,6 +686,8 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
   it("attributes and writes pr_state despite a casing mismatch between the linked repo and the payload's repository.full_name (SYD-212)", () => {
     // Repo linked with a hand-typed lowercase full name...
     const db = setup(["acme/bound"]);
+    const declarer = createActor(db, { name: "declarer", type: "human" }).actor;
+    declarePrLink(db, declarer, "SYD-1", { repo: "acme/bound", prNumber: 12 });
     // ...but the real webhook delivery carries GitHub's canonical case.
     const outcome = handleGithubWebhook(db, "pull_request", {
       ...opened("opened"),
@@ -691,7 +695,7 @@ describe("handleGithubWebhook / pr_state integration (SYD-206)", () => {
     });
     expect(outcome).toEqual({ handled: true, ref: "SYD-1", type: "gh_pr_opened" });
     const row = findPrState(db, "acme/bound", 12)!;
-    expect(row).toMatchObject({ status: "open", issueRef: "SYD-1", repo: "acme/bound" });
+    expect(row).toMatchObject({ status: "open", issueRef: null, repo: "acme/bound" });
     // The stored row itself is normalized, not left as the canonical-case
     // string the payload happened to carry.
     expect(findPrState(db, "Acme/Bound", 12)?.repo).toBe("acme/bound");

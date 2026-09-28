@@ -64,6 +64,7 @@ describe("getAttention", () => {
     // lands in pr_state with a co-written transition event newer than the
     // failure — that is what clears the flag now (the deleted SYD-94
     // reconcile pass used to do this with per-ref gh lookups).
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 7 });
     upsertPrState(db, human, {
       repo: REPO,
       prNumber: 7,
@@ -197,6 +198,7 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
     updateIssue(db, human, "SYD-1", { status: "in_review" });
     updateIssue(db, human, "SYD-1", { status: "done" });
     expect(getAttention(db, getIssue(db, "SYD-1").id)?.reason).toBe("done_without_merged_pr");
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 9 });
     upsertPrState(db, human, {
       repo: REPO,
       prNumber: 9,
@@ -466,6 +468,7 @@ describe("getAttention — done_without_merged_pr (SYD-204)", () => {
     const { db, human, agent } = setup();
     updateIssue(db, human, "SYD-1", { status: "todo" });
     claimIssue(db, agent, "SYD-1");
+    declarePrLink(db, human, "SYD-1", { repo: REPO, prNumber: 41 });
     recordDeliveryEvent(db, human, "SYD-1", {
       type: "delivered",
       prNumber: 41,

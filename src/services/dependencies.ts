@@ -29,6 +29,11 @@ export function addDependency(
   blockedRef: string,
   attr: Attribution = {},
 ): void {
+  if (actor.type === "service") {
+    throw new SwitchyardError(
+      "Service actors post events, read, and comment — they cannot add dependencies.",
+    );
+  }
   db.transaction((tx) => {
     const blocker = getIssue(tx, blockerRef);
     const blocked = getIssue(tx, blockedRef);
