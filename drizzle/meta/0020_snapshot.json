@@ -55,9 +55,7 @@
       "indexes": {
         "actors_name_unique": {
           "name": "actors_name_unique",
-          "columns": [
-            "name"
-          ],
+          "columns": ["name"],
           "isUnique": true
         }
       },
@@ -116,10 +114,7 @@
       "indexes": {
         "affirmation_keys_active_uniq": {
           "name": "affirmation_keys_active_uniq",
-          "columns": [
-            "actor_id",
-            "public_key"
-          ],
+          "columns": ["actor_id", "public_key"],
           "isUnique": true,
           "where": "revoked_at is null"
         }
@@ -129,12 +124,8 @@
           "name": "affirmation_keys_actor_id_actors_id_fk",
           "tableFrom": "affirmation_keys",
           "tableTo": "actors",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -215,9 +206,7 @@
       "indexes": {
         "agent_sessions_issue_id_idx": {
           "name": "agent_sessions_issue_id_idx",
-          "columns": [
-            "issue_id"
-          ],
+          "columns": ["issue_id"],
           "isUnique": false
         }
       },
@@ -226,12 +215,8 @@
           "name": "agent_sessions_issue_id_issues_id_fk",
           "tableFrom": "agent_sessions",
           "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["issue_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -239,12 +224,8 @@
           "name": "agent_sessions_actor_id_actors_id_fk",
           "tableFrom": "agent_sessions",
           "tableTo": "actors",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -313,12 +294,8 @@
           "name": "attachments_issue_id_issues_id_fk",
           "tableFrom": "attachments",
           "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["issue_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -326,12 +303,8 @@
           "name": "attachments_actor_id_actors_id_fk",
           "tableFrom": "attachments",
           "tableTo": "actors",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -429,16 +402,12 @@
       "indexes": {
         "claim_leases_token_hash_unique": {
           "name": "claim_leases_token_hash_unique",
-          "columns": [
-            "token_hash"
-          ],
+          "columns": ["token_hash"],
           "isUnique": true
         },
         "claim_leases_issue_id_idx": {
           "name": "claim_leases_issue_id_idx",
-          "columns": [
-            "issue_id"
-          ],
+          "columns": ["issue_id"],
           "isUnique": false
         }
       },
@@ -447,12 +416,8 @@
           "name": "claim_leases_issue_id_issues_id_fk",
           "tableFrom": "claim_leases",
           "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["issue_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -460,12 +425,8 @@
           "name": "claim_leases_actor_id_actors_id_fk",
           "tableFrom": "claim_leases",
           "tableTo": "actors",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -545,16 +506,12 @@
       "indexes": {
         "delivery_attempts_authorization_id_idx": {
           "name": "delivery_attempts_authorization_id_idx",
-          "columns": [
-            "authorization_id"
-          ],
+          "columns": ["authorization_id"],
           "isUnique": false
         },
         "delivery_attempts_issue_ref_idx": {
           "name": "delivery_attempts_issue_ref_idx",
-          "columns": [
-            "issue_ref"
-          ],
+          "columns": ["issue_ref"],
           "isUnique": false
         }
       },
@@ -563,12 +520,8 @@
           "name": "delivery_attempts_authorization_id_events_id_fk",
           "tableFrom": "delivery_attempts",
           "tableTo": "events",
-          "columnsFrom": [
-            "authorization_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["authorization_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -623,9 +576,7 @@
       "indexes": {
         "dependencies_blocked_id_idx": {
           "name": "dependencies_blocked_id_idx",
-          "columns": [
-            "blocked_id"
-          ],
+          "columns": ["blocked_id"],
           "isUnique": false
         }
       },
@@ -634,12 +585,8 @@
           "name": "dependencies_blocker_id_issues_id_fk",
           "tableFrom": "dependencies",
           "tableTo": "issues",
-          "columnsFrom": [
-            "blocker_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["blocker_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -647,22 +594,15 @@
           "name": "dependencies_blocked_id_issues_id_fk",
           "tableFrom": "dependencies",
           "tableTo": "issues",
-          "columnsFrom": [
-            "blocked_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["blocked_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "dependencies_blocker_id_blocked_id_pk": {
-          "columns": [
-            "blocker_id",
-            "blocked_id"
-          ],
+          "columns": ["blocker_id", "blocked_id"],
           "name": "dependencies_blocker_id_blocked_id_pk"
         }
       },
@@ -734,17 +674,12 @@
       "indexes": {
         "events_issue_id_idx": {
           "name": "events_issue_id_idx",
-          "columns": [
-            "issue_id"
-          ],
+          "columns": ["issue_id"],
           "isUnique": false
         },
         "events_type_issue_id_idx": {
           "name": "events_type_issue_id_idx",
-          "columns": [
-            "type",
-            "issue_id"
-          ],
+          "columns": ["type", "issue_id"],
           "isUnique": false
         }
       },
@@ -753,12 +688,8 @@
           "name": "events_issue_id_issues_id_fk",
           "tableFrom": "events",
           "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["issue_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -766,12 +697,8 @@
           "name": "events_actor_id_actors_id_fk",
           "tableFrom": "events",
           "tableTo": "actors",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -779,12 +706,8 @@
           "name": "events_via_agent_id_actors_id_fk",
           "tableFrom": "events",
           "tableTo": "actors",
-          "columnsFrom": [
-            "via_agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["via_agent_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -792,12 +715,8 @@
           "name": "events_session_id_sessions_id_fk",
           "tableFrom": "events",
           "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -849,9 +768,7 @@
       "indexes": {
         "github_repos_full_name_unique": {
           "name": "github_repos_full_name_unique",
-          "columns": [
-            "full_name"
-          ],
+          "columns": ["full_name"],
           "isUnique": true
         }
       },
@@ -860,12 +777,8 @@
           "name": "github_repos_project_id_projects_id_fk",
           "tableFrom": "github_repos",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1034,45 +947,32 @@
       "indexes": {
         "issues_project_id_idx": {
           "name": "issues_project_id_idx",
-          "columns": [
-            "project_id"
-          ],
+          "columns": ["project_id"],
           "isUnique": false
         },
         "issues_status_idx": {
           "name": "issues_status_idx",
-          "columns": [
-            "status"
-          ],
+          "columns": ["status"],
           "isUnique": false
         },
         "issues_assignee_id_idx": {
           "name": "issues_assignee_id_idx",
-          "columns": [
-            "assignee_id"
-          ],
+          "columns": ["assignee_id"],
           "isUnique": false
         },
         "issues_queue_rank_idx": {
           "name": "issues_queue_rank_idx",
-          "columns": [
-            "queue_rank"
-          ],
+          "columns": ["queue_rank"],
           "isUnique": false
         },
         "issues_parent_id_idx": {
           "name": "issues_parent_id_idx",
-          "columns": [
-            "parent_id"
-          ],
+          "columns": ["parent_id"],
           "isUnique": false
         },
         "issues_project_status_idx": {
           "name": "issues_project_status_idx",
-          "columns": [
-            "project_id",
-            "status"
-          ],
+          "columns": ["project_id", "status"],
           "isUnique": false
         }
       },
@@ -1081,12 +981,8 @@
           "name": "issues_project_id_projects_id_fk",
           "tableFrom": "issues",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1094,12 +990,8 @@
           "name": "issues_assignee_id_actors_id_fk",
           "tableFrom": "issues",
           "tableTo": "actors",
-          "columnsFrom": [
-            "assignee_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["assignee_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1107,12 +999,8 @@
           "name": "issues_creator_id_actors_id_fk",
           "tableFrom": "issues",
           "tableTo": "actors",
-          "columnsFrom": [
-            "creator_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["creator_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1120,12 +1008,8 @@
           "name": "issues_parent_id_issues_id_fk",
           "tableFrom": "issues",
           "tableTo": "issues",
-          "columnsFrom": [
-            "parent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["parent_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1184,9 +1068,7 @@
       "indexes": {
         "login_links_token_hash_unique": {
           "name": "login_links_token_hash_unique",
-          "columns": [
-            "token_hash"
-          ],
+          "columns": ["token_hash"],
           "isUnique": true
         }
       },
@@ -1195,12 +1077,8 @@
           "name": "login_links_actor_id_actors_id_fk",
           "tableFrom": "login_links",
           "tableTo": "actors",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1289,11 +1167,7 @@
       "indexes": {
         "pending_actions_active_uniq": {
           "name": "pending_actions_active_uniq",
-          "columns": [
-            "session_id",
-            "issue_id",
-            "action_type"
-          ],
+          "columns": ["session_id", "issue_id", "action_type"],
           "isUnique": true,
           "where": "status = 'pending'"
         }
@@ -1303,12 +1177,8 @@
           "name": "pending_actions_session_id_sessions_id_fk",
           "tableFrom": "pending_actions",
           "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1316,12 +1186,8 @@
           "name": "pending_actions_issue_id_issues_id_fk",
           "tableFrom": "pending_actions",
           "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["issue_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1329,12 +1195,8 @@
           "name": "pending_actions_affirmed_by_id_actors_id_fk",
           "tableFrom": "pending_actions",
           "tableTo": "actors",
-          "columnsFrom": [
-            "affirmed_by_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["affirmed_by_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1421,27 +1283,18 @@
       "indexes": {
         "pr_links_live_idx": {
           "name": "pr_links_live_idx",
-          "columns": [
-            "issue_id",
-            "repo",
-            "pr_number"
-          ],
+          "columns": ["issue_id", "repo", "pr_number"],
           "isUnique": true,
           "where": "\"pr_links\".\"revoked_at\" IS NULL"
         },
         "pr_links_pr_idx": {
           "name": "pr_links_pr_idx",
-          "columns": [
-            "repo",
-            "pr_number"
-          ],
+          "columns": ["repo", "pr_number"],
           "isUnique": false
         },
         "pr_links_issue_idx": {
           "name": "pr_links_issue_idx",
-          "columns": [
-            "issue_id"
-          ],
+          "columns": ["issue_id"],
           "isUnique": false
         }
       },
@@ -1450,12 +1303,8 @@
           "name": "pr_links_issue_id_issues_id_fk",
           "tableFrom": "pr_links",
           "tableTo": "issues",
-          "columnsFrom": [
-            "issue_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["issue_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1463,12 +1312,8 @@
           "name": "pr_links_declared_by_actors_id_fk",
           "tableFrom": "pr_links",
           "tableTo": "actors",
-          "columnsFrom": [
-            "declared_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["declared_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1476,12 +1321,8 @@
           "name": "pr_links_confirmed_by_actors_id_fk",
           "tableFrom": "pr_links",
           "tableTo": "actors",
-          "columnsFrom": [
-            "confirmed_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["confirmed_by"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1568,19 +1409,14 @@
       "indexes": {
         "pr_state_issue_ref_idx": {
           "name": "pr_state_issue_ref_idx",
-          "columns": [
-            "issue_ref"
-          ],
+          "columns": ["issue_ref"],
           "isUnique": false
         }
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {
         "pr_state_repo_pr_number_pk": {
-          "columns": [
-            "repo",
-            "pr_number"
-          ],
+          "columns": ["repo", "pr_number"],
           "name": "pr_state_repo_pr_number_pk"
         }
       },
@@ -1631,9 +1467,7 @@
       "indexes": {
         "projects_key_unique": {
           "name": "projects_key_unique",
-          "columns": [
-            "key"
-          ],
+          "columns": ["key"],
           "isUnique": true
         }
       },
@@ -1707,9 +1541,7 @@
       "indexes": {
         "sessions_token_hash_unique": {
           "name": "sessions_token_hash_unique",
-          "columns": [
-            "token_hash"
-          ],
+          "columns": ["token_hash"],
           "isUnique": true
         }
       },
@@ -1718,12 +1550,8 @@
           "name": "sessions_actor_id_actors_id_fk",
           "tableFrom": "sessions",
           "tableTo": "actors",
-          "columnsFrom": [
-            "actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
@@ -1731,12 +1559,8 @@
           "name": "sessions_via_agent_id_actors_id_fk",
           "tableFrom": "sessions",
           "tableTo": "actors",
-          "columnsFrom": [
-            "via_agent_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["via_agent_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1784,12 +1608,8 @@
           "name": "settings_updated_by_actor_id_actors_id_fk",
           "tableFrom": "settings",
           "tableTo": "actors",
-          "columnsFrom": [
-            "updated_by_actor_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["updated_by_actor_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -1877,12 +1697,8 @@
           "name": "webhooks_project_id_projects_id_fk",
           "tableFrom": "webhooks",
           "tableTo": "projects",
-          "columnsFrom": [
-            "project_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["project_id"],
+          "columnsTo": ["id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
