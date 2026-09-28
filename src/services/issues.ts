@@ -29,6 +29,7 @@ import {
   heartbeatLease,
 } from "./leases.js";
 import { isHardGated, findOrCreatePendingAction, EXECUTABLE_GATE_ACTIONS } from "./hard-gate.js";
+import { issueIdsCondition } from "./issue-scope.js";
 
 export type Provenance = {
   sourceType: "session" | "todo" | "ci" | "manual";
@@ -151,11 +152,15 @@ export function listChildren(db: DbOrTx, ref: string): IssueView[] {
 }
 
 /** Map of parent issue id → number of children, for at-a-glance epic badges. */
-export function childCountsByParent(db: DbOrTx): Map<number, number> {
+export function childCountsByParent(
+  db: DbOrTx,
+  parentIds?: readonly number[],
+): Map<number, number> {
+  if (parentIds?.length === 0) return new Map();
   const rows = db
     .select({ parentId: issues.parentId, count: sql<number>`count(*)` })
     .from(issues)
-    .where(sql`${issues.parentId} is not null`)
+    .where(and(sql`${issues.parentId} is not null`, issueIdsCondition(issues.parentId, parentIds)))
     .groupBy(issues.parentId)
     .all();
   const map = new Map<number, number>();

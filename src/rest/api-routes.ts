@@ -50,6 +50,7 @@ import {
   recordProgressNote,
 } from "../services/agent-sessions.js";
 import { getAttention, listAttentionByIssueId } from "../services/attention.js";
+import { BOARD_STATUSES, getBoard, issueCounts, type DoneFilter } from "../services/board.js";
 import { getOpenPr, listOpenPrByIssueId, deliveryPinFor } from "../services/pr-status.js";
 import { listQueue, setQueuePosition } from "../services/queue.js";
 import {
@@ -60,7 +61,7 @@ import {
 } from "../services/delivery-attempts.js";
 import { listRecentEventsPage, listUnansweredQuestions } from "../services/events.js";
 import { getDeliveryHealth } from "../services/delivery-health.js";
-import { searchIssues, type SearchFilters } from "../services/search.js";
+import { searchIssues, type SearchSignals, type SearchFilters } from "../services/search.js";
 import { requestHumanInput } from "../services/needs-input.js";
 import {
   snoozeIssue,
@@ -240,27 +241,53 @@ export function buildApiRoutes(db: Db, attachmentsDir: string = defaultAttachmen
 
   app.get("/me", (c) => c.json(c.var.actor));
 
+  app.get("/issue-counts", (c) => c.json(issueCounts(db, c.req.query("project") || undefined)));
+  app.get("/board", (c) => {
+    const done = c.req.query("done");
+    return c.json(
+      getBoard(db, {
+        projectKey: c.req.query("project") ?? "",
+        doneFilters:
+          done === undefined ? undefined : done === "all" ? [] : (done.split(",") as DoneFilter[]),
+        before: Object.fromEntries(
+          BOARD_STATUSES.flatMap((status) => {
+            const cursor = c.req.query(`before_${status}`);
+            return cursor === undefined ? [] : [[status, Number(cursor)]];
+          }),
+        ),
+        limit: c.req.query("limit") === undefined ? undefined : Number(c.req.query("limit")),
+      }),
+    );
+  });
+
   app.get("/issues", (c) => {
-    const results = searchIssues(db, {
-      projectKey: c.req.query("project") || undefined,
-      status: (c.req.query("status") as Status | undefined) || undefined,
-      assigneeName: c.req.query("assignee") || undefined,
-      label: c.req.query("label") || undefined,
-      text: c.req.query("text") || undefined,
-      needsInput: c.req.query("needs_input") === "true" ? true : undefined,
-      excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
-      attention: (c.req.query("attention") as SearchFilters["attention"]) || undefined,
-      openPr:
-        c.req.query("open_pr") === "true"
-          ? true
-          : c.req.query("open_pr") === "false"
-            ? false
-            : undefined,
-    });
-    const attention = listAttentionByIssueId(db);
-    const openPrs = listOpenPrByIssueId(db);
-    const blocked = listBlockedIssueIds(db);
-    const childCounts = childCountsByParent(db);
+    const signals: SearchSignals = {};
+    const results = searchIssues(
+      db,
+      {
+        projectKey: c.req.query("project") || undefined,
+        status: (c.req.query("status") as Status | undefined) || undefined,
+        assigneeName: c.req.query("assignee") || undefined,
+        label: c.req.query("label") || undefined,
+        text: c.req.query("text") || undefined,
+        needsInput: c.req.query("needs_input") === "true" ? true : undefined,
+        excludeSnoozed: c.req.query("exclude_snoozed") === "true" ? true : undefined,
+        attention: (c.req.query("attention") as SearchFilters["attention"]) || undefined,
+        openPr:
+          c.req.query("open_pr") === "true"
+            ? true
+            : c.req.query("open_pr") === "false"
+              ? false
+              : undefined,
+      },
+      signals,
+    );
+    if (results.length === 0) return c.json([]);
+    const ids = results.map((issue) => issue.id);
+    const openPrs = signals.openPrs ?? listOpenPrByIssueId(db, ids);
+    const attention = signals.attention ?? listAttentionByIssueId(db, ids, openPrs);
+    const blocked = listBlockedIssueIds(db, ids);
+    const childCounts = childCountsByParent(db, ids);
     return c.json(
       results.map((r) => ({
         ...r,

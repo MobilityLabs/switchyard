@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { listIssues, updateIssue } from "../api";
+import { listBoard, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { PollErrorBar } from "../PollErrorBar";
 import { href, issueRoute, navigate } from "../router";
-import type { Issue, Status } from "../types";
+import type { BoardCard, BoardStatus, DoneFilter, Status } from "../types";
 import { attentionChip } from "../attention";
 
-const BOARD_COLUMNS: Status[] = ["backlog", "todo", "in_progress", "in_review", "done"];
+const BOARD_COLUMNS: BoardStatus[] = ["backlog", "todo", "in_progress", "in_review", "done"];
 const LABELS: Record<string, string> = {
   backlog: "Backlog",
   todo: "Todo",
@@ -27,7 +27,6 @@ const LABELS: Record<string, string> = {
 // them is per-issue by design (Sean's call: click through them, no bulk
 // script), so the filter that finds them is what makes that a queue rather than
 // an archaeology exercise.
-type DoneFilter = "errors" | "not_merged" | "unlinked";
 
 const DONE_FILTERS_STORAGE_KEY = "switchyard:done-filters";
 const DEFAULT_DONE_FILTERS: DoneFilter[] = ["errors", "not_merged"];
@@ -35,7 +34,15 @@ const DEFAULT_DONE_FILTERS: DoneFilter[] = ["errors", "not_merged"];
 function loadDoneFilters(): Set<DoneFilter> {
   try {
     const stored = localStorage.getItem(DONE_FILTERS_STORAGE_KEY);
-    if (stored !== null) return new Set(JSON.parse(stored) as DoneFilter[]);
+    if (stored !== null) {
+      const parsed: unknown = JSON.parse(stored);
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((value) => ["errors", "not_merged", "unlinked"].includes(value))
+      ) {
+        return new Set(parsed as DoneFilter[]);
+      }
+    }
   } catch {
     // Storage disabled or corrupted — fall through to the default.
   }
@@ -51,15 +58,50 @@ function storeDoneFilters(filters: Set<DoneFilter>): void {
 }
 
 export default function Board({ project }: { project: string }) {
-  const { data, error, reload } = usePoll(() => listIssues({ project }), [project]);
+  return <ProjectBoard key={project} project={project} />;
+}
+
+function ProjectBoard({ project }: { project: string }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [doneFilters, setDoneFilters] = useState<Set<DoneFilter>>(loadDoneFilters);
+  const [pages, setPages] = useState<Partial<Record<BoardStatus, number[]>>>({});
+  const before = Object.fromEntries(
+    Object.entries(pages).flatMap(([status, cursors]) =>
+      cursors.length ? [[status, cursors[cursors.length - 1]]] : [],
+    ),
+  );
+  const filterKey = [...doneFilters].sort().join(",");
+  const cursorKey = JSON.stringify(before);
+  const requestKey = `${project}:${filterKey}:${cursorKey}`;
+  const {
+    data: response,
+    error,
+    reload,
+  } = usePoll(
+    async () => ({ requestKey, board: await listBoard(project, [...doneFilters], before) }),
+    [requestKey],
+  );
+  // A failed/slow filter or page request must not leave cards from the old
+  // selection actionable beneath the new controls.
+  const data = response?.board;
+  const loading = response?.requestKey !== requestKey;
 
-  if (error && !data) return <p className="error-bar">{error}</p>;
+  if (error && !data)
+    return (
+      <div>
+        <p className="error-bar">{error}</p>
+        <button type="button" onClick={reload}>
+          Retry
+        </button>
+      </div>
+    );
   if (!data) return <p>Loading…</p>;
 
   const move = (ref: string, status: Status) => {
-    const issue = data.find((i) => i.ref === ref);
+    if (loading) return;
+    const issue = Object.values(data.columns)
+      .flatMap((page) => page.items)
+      .find((i) => i.ref === ref);
     return updateIssue(ref, {
       status,
       expectedHeadSha: status === "done" ? (issue?.openPr?.headSha ?? undefined) : undefined,
@@ -72,7 +114,8 @@ export default function Board({ project }: { project: string }) {
     );
   };
 
-  const toggleDoneFilter = (f: DoneFilter) =>
+  const toggleDoneFilter = (f: DoneFilter) => {
+    setPages((prev) => ({ ...prev, done: [] }));
     setDoneFilters((prev) => {
       const next = new Set(prev);
       if (next.has(f)) next.delete(f);
@@ -80,13 +123,16 @@ export default function Board({ project }: { project: string }) {
       storeDoneFilters(next);
       return next;
     });
+  };
 
-  const showAllDone = () =>
+  const showAllDone = () => {
+    setPages((prev) => ({ ...prev, done: [] }));
     setDoneFilters(() => {
       const next = new Set<DoneFilter>();
       storeDoneFilters(next);
       return next;
     });
+  };
 
   return (
     <section className="board-view">
@@ -96,22 +142,22 @@ export default function Board({ project }: { project: string }) {
         </p>
       )}
       <PollErrorBar error={error} />
+      {loading &&
+        (error ? (
+          <button type="button" onClick={reload}>
+            Retry
+          </button>
+        ) : (
+          <p role="status">Loading cards…</p>
+        ))}
       <div className="board">
         {BOARD_COLUMNS.map((col) => {
-          const allCards = data.filter((i) => i.status === col);
-          let cards = allCards;
-          if (col === "done" && doneFilters.size > 0) {
-            cards = cards.filter(
-              (i) =>
-                (doneFilters.has("errors") && i.attention?.reason === "delivery_failed") ||
-                (doneFilters.has("not_merged") && i.openPr != null) ||
-                (doneFilters.has("unlinked") && i.attention?.reason === "done_without_merged_pr"),
-            );
-          }
+          const page = data.columns[col];
+          const cards = loading ? [] : page.items;
           const badgeText =
-            col === "done" && cards.length !== allCards.length
-              ? `${cards.length}/${allCards.length}`
-              : String(cards.length);
+            col === "done" && page.matching !== page.total
+              ? `${page.matching}/${page.total}`
+              : String(page.total);
           return (
             <div
               key={col}
@@ -120,13 +166,13 @@ export default function Board({ project }: { project: string }) {
               onDrop={(e) => {
                 e.preventDefault();
                 const ref = e.dataTransfer.getData("text/plain");
-                if (ref) move(ref, col);
+                if (ref && !loading) move(ref, col);
               }}
             >
               <h3>
                 {LABELS[col]}{" "}
                 <span className="badge" title={col === "done" ? "visible / total done" : undefined}>
-                  {badgeText}
+                  {loading ? "…" : badgeText}
                 </span>
                 {col === "done" && (
                   <span className="done-filters">
@@ -173,6 +219,37 @@ export default function Board({ project }: { project: string }) {
                 {cards.map((issue) => (
                   <Card key={issue.ref} issue={issue} onMove={move} />
                 ))}
+                {((pages[col]?.length ?? 0) > 0 || page.nextBeforeId !== null) && (
+                  <div className="board-pagination" aria-label={`${LABELS[col]} pages`}>
+                    <span>
+                      {cards.length} shown · {page.matching} matching
+                    </span>{" "}
+                    <button
+                      type="button"
+                      disabled={loading || !pages[col]?.length}
+                      onClick={() =>
+                        setPages((prev) => ({ ...prev, [col]: prev[col]?.slice(0, -1) ?? [] }))
+                      }
+                    >
+                      Newer
+                    </button>{" "}
+                    <button
+                      type="button"
+                      disabled={loading || page.nextBeforeId === null}
+                      onClick={() => {
+                        const next = page.nextBeforeId;
+                        if (next !== null)
+                          setPages((prev) => {
+                            const cursors = prev[col] ?? [];
+                            if (cursors[cursors.length - 1] === next) return prev;
+                            return { ...prev, [col]: [...cursors, next] };
+                          });
+                      }}
+                    >
+                      Older
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           );
@@ -186,7 +263,7 @@ export function Card({
   issue,
   onMove,
 }: {
-  issue: Issue;
+  issue: BoardCard;
   onMove?: (ref: string, status: Status) => void;
 }) {
   const open = () => navigate(issueRoute(issue.ref));

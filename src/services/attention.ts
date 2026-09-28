@@ -35,19 +35,21 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index.js";
 import { getDeviation, listDeviationByIssueId, type DeviationFlag } from "./deviation.js";
+import { issueIdsCondition } from "./issue-scope.js";
+import type { OpenPr } from "./pr-status.js";
 
 export type AttentionFlag = { reason: "delivery_failed"; message: string } | DeviationFlag;
 
 type Row = { issueId: number; message: string | null };
 
-function unresolvedDeliveryFailures(db: Db, issueId?: number): Row[] {
+function unresolvedDeliveryFailures(db: Db, issueIds?: readonly number[]): Row[] {
   return db.all<Row>(sql`
     SELECT latest.issue_id AS issueId, json_extract(f.payload, '$.message') AS message
     FROM (
       SELECT issue_id, MAX(id) AS eventId
       FROM events
       WHERE type = 'delivery_failed'
-      ${issueId !== undefined ? sql`AND issue_id = ${issueId}` : sql``}
+      AND ${issueIdsCondition(sql`issue_id`, issueIds)}
       GROUP BY issue_id
     ) latest
     JOIN events f ON f.id = latest.eventId
@@ -70,7 +72,7 @@ function unresolvedDeliveryFailures(db: Db, issueId?: number): Row[] {
   `);
 }
 
-function unresolvedDoneWithoutMerge(db: Db, issueId?: number): Row[] {
+function unresolvedDoneWithoutMerge(db: Db, issueIds?: readonly number[]): Row[] {
   return db.all<Row>(sql`
     SELECT latest.issue_id AS issueId, json_extract(f.payload, '$.message') AS message
     FROM (
@@ -78,7 +80,7 @@ function unresolvedDoneWithoutMerge(db: Db, issueId?: number): Row[] {
       FROM events
       WHERE type = 'process_deviation'
         AND json_extract(payload, '$.reason') = 'done_without_merged_pr'
-        ${issueId !== undefined ? sql`AND issue_id = ${issueId}` : sql``}
+        AND ${issueIdsCondition(sql`issue_id`, issueIds)}
       GROUP BY issue_id
     ) latest
     JOIN events f ON f.id = latest.eventId
@@ -135,11 +137,11 @@ function unresolvedDoneWithoutMerge(db: Db, issueId?: number): Row[] {
 }
 
 export function getAttention(db: Db, issueId: number): AttentionFlag | null {
-  const [row] = unresolvedDeliveryFailures(db, issueId);
+  const [row] = unresolvedDeliveryFailures(db, [issueId]);
   if (row) return { reason: "delivery_failed", message: row.message ?? "delivery failed" };
   const deviation = getDeviation(db, issueId);
   if (deviation) return deviation;
-  const [doneRow] = unresolvedDoneWithoutMerge(db, issueId);
+  const [doneRow] = unresolvedDoneWithoutMerge(db, [issueId]);
   if (doneRow) {
     return {
       reason: "done_without_merged_pr",
@@ -149,18 +151,23 @@ export function getAttention(db: Db, issueId: number): AttentionFlag | null {
   return null;
 }
 
-export function listAttentionByIssueId(db: Db): Map<number, AttentionFlag> {
+export function listAttentionByIssueId(
+  db: Db,
+  issueIds?: readonly number[],
+  openPrs?: Map<number, OpenPr>,
+): Map<number, AttentionFlag> {
+  if (issueIds?.length === 0) return new Map();
   // Start from deviations, then let done_without_merged_pr and finally
   // unresolved delivery failures overwrite — delivery_failed (a hard error)
   // outranks everything else on collision.
-  const map = new Map<number, AttentionFlag>(listDeviationByIssueId(db));
-  for (const r of unresolvedDoneWithoutMerge(db)) {
+  const map = new Map<number, AttentionFlag>(listDeviationByIssueId(db, issueIds, openPrs));
+  for (const r of unresolvedDoneWithoutMerge(db, issueIds)) {
     map.set(r.issueId, {
       reason: "done_without_merged_pr",
       message: r.message ?? "done without a merged PR",
     });
   }
-  for (const r of unresolvedDeliveryFailures(db)) {
+  for (const r of unresolvedDeliveryFailures(db, issueIds)) {
     map.set(r.issueId, { reason: "delivery_failed", message: r.message ?? "delivery failed" });
   }
   return map;

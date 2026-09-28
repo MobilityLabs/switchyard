@@ -19,6 +19,7 @@ import {
 } from "./pr-status.js";
 import { getSetting } from "./settings.js";
 import { recordEvent } from "./events.js";
+import { issueIdsCondition } from "./issue-scope.js";
 
 export type DeviationReason =
   | "open_pr_not_in_review"
@@ -36,7 +37,7 @@ export type DeviationComputation = DeviationFlag & {
   prNumber: number | null;
 };
 
-type IssueRow = typeof issues.$inferSelect;
+type IssueRow = Pick<typeof issues.$inferSelect, "id" | "status" | "needsInput" | "createdAt">;
 
 // `done` earns its place here for done_pr_not_delivered only (SYD-261) — the
 // three older rules all require todo/in_progress/in_review and stay inert for
@@ -201,14 +202,25 @@ export function getDeviation(db: Db, issueId: number): DeviationFlag | null {
   return c ? { reason: c.reason, message: c.message } : null;
 }
 
-export function listDeviationByIssueId(db: Db): Map<number, DeviationFlag> {
+export function listDeviationByIssueId(
+  db: Db,
+  issueIds?: readonly number[],
+  openPrs = listOpenPrByIssueId(db, issueIds),
+): Map<number, DeviationFlag> {
+  if (issueIds?.length === 0) return new Map();
   const now = Math.floor(Date.now() / 1000);
   const threshold = getSetting(db, "claims.deviation_seconds");
-  const openPrs = listOpenPrByIssueId(db);
   const rows = db
-    .select()
+    .select({
+      id: issues.id,
+      status: issues.status,
+      needsInput: issues.needsInput,
+      createdAt: issues.createdAt,
+    })
     .from(issues)
-    .where(inArray(issues.status, [...CANDIDATE_STATUSES]))
+    .where(
+      and(inArray(issues.status, [...CANDIDATE_STATUSES]), issueIdsCondition(issues.id, issueIds)),
+    )
     .all();
   const out = new Map<number, DeviationFlag>();
   for (const issue of rows) {
@@ -244,7 +256,14 @@ export function emitProcessDeviations(db: Db): number {
   const now = Math.floor(Date.now() / 1000);
   const threshold = getSetting(db, "claims.deviation_seconds");
   const rows = db
-    .select()
+    .select({
+      id: issues.id,
+      status: issues.status,
+      needsInput: issues.needsInput,
+      createdAt: issues.createdAt,
+      assigneeId: issues.assigneeId,
+      creatorId: issues.creatorId,
+    })
     .from(issues)
     .where(inArray(issues.status, [...CANDIDATE_STATUSES]))
     .all();

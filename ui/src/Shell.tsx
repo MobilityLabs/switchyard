@@ -12,7 +12,7 @@ import {
   useRoute,
   type Route,
 } from "./router";
-import { logout, listIssues, listAgentSessions, listPendingActions } from "./api";
+import { logout, getIssueCounts, listAgentSessions, listPendingActions } from "./api";
 import { usePoll } from "./usePoll";
 
 // Search box lives in the topbar so it's reachable from every view (SYD-86).
@@ -81,11 +81,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
   // has one, else the remembered project, else the first project.
   const boardProject = scopeKey ?? rememberedProject ?? allProjects[0]?.key ?? "";
 
-  const inReview = usePoll(
-    () => listIssues({ status: "in_review", project: scopeKey ?? undefined }),
-    [scopeKey],
-    30000,
-  );
+  const inReview = usePoll(() => getIssueCounts(scopeKey ?? undefined), [scopeKey], 30000);
   const liveSessions = usePoll(() => listAgentSessions({ active: true }), [], 15000);
   const pendingApprovals = usePoll(() => listPendingActions("pending"), [], 15000);
 
@@ -127,9 +123,7 @@ export default function Shell(props: { me: Actor; projects: Project[]; children:
             className={route.view === "review" ? "active" : ""}
           >
             Review
-            {inReview.data && inReview.data.length > 0 && (
-              <span className="badge">{inReview.data.length}</span>
-            )}
+            {!!inReview.data?.in_review && <span className="badge">{inReview.data.in_review}</span>}
           </a>
           <a
             href={href({ view: "agents", scope })}
