@@ -5,6 +5,12 @@ import { answerKey, type WorkerConfig } from "../../scripts/worker-select.js";
 
 const spawnMock = vi.fn();
 
+vi.mock("../../scripts/worker-publications.js", () => ({
+  savePublication: vi.fn(),
+  readPublications: vi.fn(() => []),
+  clearPublication: vi.fn(),
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };

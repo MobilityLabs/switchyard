@@ -33,7 +33,7 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   closeDeadAgentPr: (...args: unknown[]) => closeDeadAgentPr(...args),
 }));
 
-const { deliverQueue, tick, warnOnRelaxedBranchProtection } =
+const { deliverQueue, tick, warnOnRelaxedBranchProtection, startDeliveryPolling } =
   await import("../../scripts/deliver.js");
 
 const token = "test-token";
@@ -848,5 +848,50 @@ describe("warnOnRelaxedBranchProtection (SYD-209/SYD-222)", () => {
     const failing = await warnOnRelaxedBranchProtection(config);
 
     expect(failing).toEqual(["SYD", "NOC"]);
+  });
+});
+
+describe("scheduled delivery protection scope (review finding 1)", () => {
+  it("keeps a blocked project out of both the initial and later ticks", async () => {
+    resetExecMocks();
+    vi.useFakeTimers();
+    const config: WorkerConfig = {
+      url: "http://localhost:3300",
+      label: "auto",
+      intervalSeconds: 300,
+      maxConcurrent: 1,
+      projects: { SYD: { repo: "/repo/syd" } },
+      delivery: { requireBranchProtection: true, pollSeconds: 1 },
+    };
+    installFetch({
+      pending: [
+        {
+          authorizationId: 5,
+          ref: "SYD-9",
+          kind: "done_stamp",
+          pin: { repo: "acme/widgets", prNumber: 42, headSha: "s0" },
+        },
+      ],
+      unfinished: [],
+      deployRetries: [],
+    });
+    const gate = newTickGate();
+    const timer = startDeliveryPolling(config, token, gate, false, []);
+    try {
+      await tick(config, token, gate, false, []);
+      // Even a future caller that forgets the verified set fails closed.
+      await tick(config, token, gate, false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(
+        fetchMock().mock.calls.filter(([u]) => String(u).endsWith("/api/delivery-work")),
+      ).toHaveLength(4);
+      expect(startCalls("SYD-9")).toHaveLength(0);
+      expect(prLiveState).not.toHaveBeenCalled();
+      expect(mergeAgentPr).not.toHaveBeenCalled();
+    } finally {
+      clearInterval(timer);
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 });

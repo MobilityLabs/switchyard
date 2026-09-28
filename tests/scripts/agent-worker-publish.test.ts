@@ -8,8 +8,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { WorkerConfig } from "../../scripts/worker-select.js";
+import { savePublication, clearPublication } from "../../scripts/worker-publications.js";
 
 const spawnMock = vi.fn();
+
+vi.mock("../../scripts/worker-publications.js", () => ({
+  savePublication: vi.fn(),
+  readPublications: vi.fn(() => []),
+  clearPublication: vi.fn(),
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -88,6 +95,8 @@ beforeEach(() => {
   active.clear();
   activeMode.clear();
   spawnMock.mockReset();
+  vi.mocked(savePublication).mockClear();
+  vi.mocked(clearPublication).mockClear();
   publishAgentBranch.mockReset();
   prFreshness.mockReset();
   originOwnerRepo.mockReset();
@@ -185,5 +194,26 @@ describe("publish failure surfaces on the board (SYD-257)", () => {
     expect(commentBodies()[0]).toContain("ssh: connect to host github.com: config error");
 
     errorSpy.mockRestore();
+  });
+});
+
+describe("publication intent cleanup", () => {
+  it("clears the intent when spawn throws before starting a container", () => {
+    spawnMock.mockImplementation(() => {
+      throw new Error("spawn setup failed");
+    });
+    dispatch(issue, config, "tok", "code");
+    expect(savePublication).toHaveBeenCalledOnce();
+    expect(clearPublication).toHaveBeenCalledWith("/repo/syd", config, "SYD-9");
+    expect(publishAgentBranch).not.toHaveBeenCalled();
+  });
+
+  it("clears the intent on an asynchronous failed spawn", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    dispatch(issue, config, "tok", "code");
+    child.emit("error", new Error("ENOENT: docker"));
+    expect(clearPublication).toHaveBeenCalledWith("/repo/syd", config, "SYD-9");
+    expect(publishAgentBranch).not.toHaveBeenCalled();
   });
 });

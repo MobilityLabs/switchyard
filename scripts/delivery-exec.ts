@@ -158,9 +158,12 @@ export async function publishAgentBranch(
 ): Promise<PublishOutcome> {
   const branch = agentBranch(ref);
   try {
-    await runGit(["-C", repo, "rev-parse", "--verify", `refs/heads/${branch}`]);
-  } catch {
-    return { status: "no-branch" };
+    await runGit(["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+  } catch (err) {
+    // Exit 1 means the ref is absent. Invalid repositories, unreadable files
+    // and other Git errors must remain retryable publication obligations.
+    if ((err as { code?: number | string }).code === 1) return { status: "no-branch" };
+    throw err;
   }
   const ahead = await runGit(["-C", repo, "rev-list", `${MAIN_BRANCH}..${branch}`, "--count"]);
   if (ahead === "0") return { status: "no-commits" };
@@ -409,8 +412,26 @@ export async function attemptAutoRebase(
   await ensureCleanClone(repo, cloneDir);
   try {
     await runGit(["-C", cloneDir, ...buildFetchAgentBranchArgs(ref)]);
-  } catch {
-    return { status: "no-branch" };
+  } catch (fetchError) {
+    // A failed fetch can be a transport or local filesystem problem. Only
+    // ls-remote's documented "no matching refs" exit code proves absence;
+    // callers close the PR for no-branch, so uncertainty must not reach it.
+    try {
+      await runGit([
+        "-C",
+        cloneDir,
+        "ls-remote",
+        "--exit-code",
+        "--heads",
+        "origin",
+        `refs/heads/${agentBranch(ref)}`,
+      ]);
+    } catch (lookupError) {
+      if ((lookupError as { code?: number | string }).code === 2) {
+        return { status: "no-branch" };
+      }
+    }
+    throw fetchError;
   }
   // The live anchor: compare the head GitHub actually has for the branch
   // against the heads the worker authorized. FETCH_HEAD is the just-fetched
@@ -422,13 +443,16 @@ export async function attemptAutoRebase(
   await runGit(["-C", cloneDir, ...buildCheckoutRebaseBranchArgs(ref)]);
   try {
     await runGit(["-C", cloneDir, ...buildRebaseOntoMainArgs()]);
-  } catch {
+  } catch (rebaseError) {
     const filesOut = await runGit(["-C", cloneDir, ...buildConflictFilesArgs()]).catch(() => "");
     const files = filesOut
       .split("\n")
       .map((f) => f.trim())
       .filter(Boolean);
     await runGit(["-C", cloneDir, ...buildRebaseAbortArgs()]).catch(() => {});
+    // Signing failures, full disks and interrupted Git state are not code
+    // conflicts. Preserve the error and the remote PR/branch in those cases.
+    if (files.length === 0) throw rebaseError;
     return { status: "conflict", files };
   }
   await runGit(["-C", cloneDir, ...buildForcePushWithLeaseArgs(ref)]);

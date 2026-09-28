@@ -20,6 +20,7 @@ import {
   attemptAutoRebase,
   checkBranchProtection,
   mergeAgentPr,
+  publishAgentBranch,
   closeDeadAgentPr,
 } from "../../scripts/delivery-exec.js";
 
@@ -392,6 +393,95 @@ describe("attemptAutoRebase S0 anchor (SYD-209)", () => {
     const res = await attemptAutoRebase(repo, cloneDir, "TEST-1", ["a-head-we-never-authorized"]);
 
     expect(res).toEqual({ status: "head-moved", observed: head });
+  });
+
+  it("retains publication errors instead of treating an unreadable repository as an absent branch", async () => {
+    const { repo } = await setupRemoteAndAgentBranch();
+    writeFileSync(path.join(repo, ".git", "config"), "[invalid git configuration");
+    await expect(
+      publishAgentBranch(repo, "TEST-1", "test", "http://tracker.invalid"),
+    ).rejects.toThrow(/config/);
+  });
+
+  it("still recognizes a positively absent local publication branch", async () => {
+    const { repo } = await setupRemoteAndAgentBranch();
+    await expect(
+      publishAgentBranch(repo, "TEST-999", "test", "http://tracker.invalid"),
+    ).resolves.toEqual({ status: "no-branch" });
+  });
+
+  it("does not classify a failed transport as a missing branch (review finding 2)", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "fetch-error-clone-"));
+    const binDir = mkdtempSync(path.join(tmpdir(), "fetch-error-bin-"));
+    const realGit = (await execFileP("which", ["git"])).stdout.trim();
+    writeFileSync(
+      path.join(binDir, "git"),
+      `#!/bin/sh
+case "$*" in *"fetch origin agent/TEST-1"*) echo "simulated transport reset" >&2; exit 128;; esac
+exec "${realGit}" "$@"
+`,
+      { mode: 0o755 },
+    );
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${oldPath}`;
+    try {
+      await expect(attemptAutoRebase(repo, cloneDir, "TEST-1", [head])).rejects.toThrow(
+        "simulated transport reset",
+      );
+    } finally {
+      process.env.PATH = oldPath;
+    }
+    expect(
+      (await execFileP("git", ["-C", repo, "ls-remote", "origin", "refs/heads/agent/TEST-1"]))
+        .stdout,
+    ).toContain(head);
+  });
+
+  it("returns no-branch only when a successful remote query confirms absence", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    await g(repo, "push", "origin", "--delete", "agent/TEST-1");
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "missing-branch-clone-"));
+    await expect(attemptAutoRebase(repo, cloneDir, "TEST-1", [head])).resolves.toEqual({
+      status: "no-branch",
+    });
+  });
+
+  it("preserves a valid branch when nonconflicting rebase fails to sign", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    await g(repo, "checkout", "main");
+    writeFileSync(path.join(repo, "unrelated.txt"), "main advanced");
+    await g(repo, "add", ".");
+    await g(repo, "commit", "-qm", "advance main");
+    await g(repo, "push", "origin", "main");
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "signing-error-clone-"));
+    const remote = (
+      await execFileP("git", ["-C", repo, "remote", "get-url", "origin"])
+    ).stdout.trim();
+    await execFileP("git", ["clone", remote, cloneDir]);
+    await g(cloneDir, "config", "user.name", "test");
+    await g(cloneDir, "config", "user.email", "test@example.com");
+    await g(cloneDir, "config", "commit.gpgsign", "true");
+    await g(cloneDir, "config", "gpg.program", "/nonexistent-review-gpg");
+    await expect(attemptAutoRebase(repo, cloneDir, "TEST-1", [head])).rejects.toThrow(/gpg|sign/);
+    expect(
+      (await execFileP("git", ["-C", repo, "ls-remote", "origin", "refs/heads/agent/TEST-1"]))
+        .stdout,
+    ).toContain(head);
+  });
+
+  it("still identifies an actual conflicting index", async () => {
+    const { repo, head } = await setupRemoteAndAgentBranch();
+    await g(repo, "checkout", "main");
+    writeFileSync(path.join(repo, "feat.txt"), "different feature");
+    await g(repo, "add", ".");
+    await g(repo, "commit", "-qm", "conflicting main change");
+    await g(repo, "push", "origin", "main");
+    const cloneDir = mkdtempSync(path.join(tmpdir(), "real-conflict-clone-"));
+    await expect(attemptAutoRebase(repo, cloneDir, "TEST-1", [head])).resolves.toEqual({
+      status: "conflict",
+      files: ["feat.txt"],
+    });
   });
 
   it("rebases and force-pushes when the fetched head is the authorized S0", async () => {

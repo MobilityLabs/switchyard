@@ -961,10 +961,10 @@ async function tick(
   token: string,
   gate: ReturnType<typeof newTickGate>,
   dryRun: boolean,
-  // SYD-284: the projects branch protection allows us to deliver for. Defaults
-  // to every configured project, so a caller that doesn't opt into the gate
-  // behaves exactly as before.
-  deliverableKeys: string[] = Object.keys(config.projects),
+  // Omitting the verified scope must fail closed when protection is required.
+  deliverableKeys: string[] = config.delivery?.requireBranchProtection
+    ? []
+    : Object.keys(config.projects),
 ): Promise<void> {
   await runGated(gate, async () => {
     const url = `${apiBase(config)}/api/delivery-work`;
@@ -1039,6 +1039,24 @@ export async function warnOnRelaxedBranchProtection(config: WorkerConfig): Promi
   return failing;
 }
 
+/** Keep the verified project scope attached to every scheduled tick. */
+export function startDeliveryPolling(
+  config: WorkerConfig,
+  token: string,
+  gate: ReturnType<typeof newTickGate>,
+  dryRun: boolean,
+  deliverableKeys: string[],
+): ReturnType<typeof setInterval> {
+  return setInterval(
+    () => {
+      tick(config, token, gate, dryRun, deliverableKeys).catch((err) =>
+        console.error(`delivery tick failed: ${(err as Error).message}`),
+      );
+    },
+    (config.delivery?.pollSeconds ?? DEFAULT_POLL_SECONDS) * 1000,
+  );
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const once = args.includes("--once");
@@ -1108,11 +1126,7 @@ async function main(): Promise<void> {
   console.log(
     `delivery worker polling every ${pollSeconds}s (projects: ${Object.keys(config.projects).join(", ")})`,
   );
-  const timer = setInterval(() => {
-    tick(config, token, gate, dryRun).catch((err) =>
-      console.error(`delivery tick failed: ${(err as Error).message}`),
-    );
-  }, pollSeconds * 1000);
+  const timer = startDeliveryPolling(config, token, gate, dryRun, deliverableKeys);
 
   const stop = () => {
     clearInterval(timer);
