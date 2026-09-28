@@ -61,7 +61,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
+import { assertWorkerExecution, parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import {
   selectDispatchable,
   filterRetryCapped,
@@ -839,9 +839,10 @@ export function dispatch(
     if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
   };
   try {
+    assertWorkerExecution(config, role);
     mkdirSync(logDir, { recursive: true });
   } catch (err) {
-    releaseOnSetupFailure(err, "prepare the log dir");
+    releaseOnSetupFailure(err, "prepare the session");
     return;
   }
   const logPath = path.join(logDir, `${issue.ref}.log`);
@@ -1191,6 +1192,7 @@ export function dispatchAnswer(
   token: string,
   opts: { dryRun: boolean },
 ): void {
+  assertWorkerExecution(config, "answer");
   const key = answerKey(ref);
   if (active.has(key)) return;
   if (remainingAnswerCapacity(config, active.keys()) <= 0) {
@@ -1373,6 +1375,9 @@ export async function runTick(
   role: WorkerRole,
   opts: { dryRun: boolean },
 ): Promise<void> {
+  // Reject unsupported engines before polling or claiming any work, including
+  // callers that bypass loadConfig (tests, integrations, or a mutated config).
+  assertWorkerExecution(config, role);
   await runGated(tickGate, async () => {
     if (roleRunsCode(role)) {
       try {
@@ -1767,6 +1772,7 @@ async function main(): Promise<void> {
   // switchyard-worker.codex.json`) can name its own token env var (`token:
   // "SWITCHYARD_CODEX_TOKEN"`) — the secret stays in .env, never in the plist.
   const config = loadConfig(configPathFromArgs(args, defaultConfigPath(), repoRoot()));
+  assertWorkerExecution(config, role);
   const tokenVar = config.token ?? "SWITCHYARD_TOKEN";
   const token = process.env[tokenVar];
   if (!token) {

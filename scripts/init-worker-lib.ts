@@ -4,6 +4,53 @@
 
 import type { WorkerConfig, WorkerRole, WorkerStackCli } from "./worker-select.js";
 
+/** Capabilities of the implemented runners, shared by doctor and dispatch. */
+export function validateWorkerExecution(
+  config: Pick<WorkerConfig, "engine" | "runner" | "containerized" | "egress">,
+  role?: WorkerRole,
+): string[] {
+  const problems: string[] = [];
+  const engine = config.engine ?? "claude";
+  const runner = config.runner ?? "cli";
+  if (config.containerized !== undefined && typeof config.containerized !== "boolean") {
+    problems.push("`containerized` must be true or false, not a string");
+  }
+  if (runner !== "cli" && runner !== "sdk") {
+    problems.push('`runner` must be "cli" or "sdk"');
+  }
+  if (engine !== "claude" && engine !== "codex" && engine !== "gemini") {
+    problems.push('`engine` must be "claude", "codex", or "gemini"');
+  }
+  if (runner === "sdk" && config.containerized === true) {
+    problems.push(
+      '`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)',
+    );
+  }
+  if (engine === "codex" || engine === "gemini") {
+    if (runner !== "cli" || config.containerized !== true) {
+      problems.push(
+        `engine "${engine}" requires \`runner: "cli"\` and \`containerized: true\`; host CLI and SDK runners only support Claude`,
+      );
+    }
+    if (role !== undefined && role !== "code") {
+      problems.push(
+        `engine "${engine}" does not support answer sessions; launch with --role code and use a separate Claude worker for answers`,
+      );
+    }
+  }
+  if (engine === "codex" && config.egress === "open") {
+    problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
+  }
+  return problems;
+}
+
+export function assertWorkerExecution(config: WorkerConfig, role: WorkerRole): void {
+  const problems = validateWorkerExecution(config, role);
+  if (problems.length > 0) {
+    throw new Error(`unsupported worker execution:\n  - ${problems.join("\n  - ")}`);
+  }
+}
+
 /**
  * Minimal .env parser: KEY=VALUE lines, optional `export ` prefix, optional
  * single/double quotes around the value, `#` comments and blank lines skipped.
@@ -43,9 +90,7 @@ export function validateWorkerConfig(raw: unknown): string[] {
   if (typeof c.url !== "string" || !/^https?:\/\/./.test(c.url)) {
     problems.push('`url` must be an http(s) URL, e.g. "http://100.85.158.109:3300"');
   }
-  if (c.containerized !== undefined && typeof c.containerized !== "boolean") {
-    problems.push("`containerized` must be true or false, not a string");
-  }
+  problems.push(...validateWorkerExecution(c));
   if (c.egress !== undefined && c.egress !== "proxy" && c.egress !== "open") {
     problems.push('`egress` must be "proxy" or "open"');
   }
@@ -54,26 +99,6 @@ export function validateWorkerConfig(raw: unknown): string[] {
     (!Array.isArray(c.egressAllow) || c.egressAllow.some((d) => typeof d !== "string"))
   ) {
     problems.push("`egressAllow` must be an array of hostnames");
-  }
-  const runner = c.runner ?? "cli";
-  if (runner !== "cli" && runner !== "sdk") {
-    problems.push('`runner` must be "cli" or "sdk"');
-  }
-  if (runner === "sdk" && c.containerized === true) {
-    problems.push(
-      '`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)',
-    );
-  }
-  if (
-    c.engine !== undefined &&
-    c.engine !== "claude" &&
-    c.engine !== "codex" &&
-    c.engine !== "gemini"
-  ) {
-    problems.push('`engine` must be "claude", "codex", or "gemini"');
-  }
-  if (c.engine === "codex" && c.egress === "open") {
-    problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
   }
   if (c.token !== undefined && (typeof c.token !== "string" || c.token.length === 0)) {
     problems.push(

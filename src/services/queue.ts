@@ -26,7 +26,7 @@
 // agent from recording the order a review just produced. The move is recorded
 // as an event either way, so who reordered what is always answerable.
 
-import { asc, eq, isNotNull, sql } from "drizzle-orm";
+import { asc, eq, isNotNull } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/index.js";
 import { issues } from "../db/schema.js";
 import type { Actor } from "./actors.js";
@@ -114,24 +114,3 @@ export function setQueuePosition(
     return listQueue(tx);
   });
 }
-
-/**
- * Sort key placing issues the caller's own classification prefers ahead of
- * unclaimed ones, and issues preferred by some OTHER worker last.
- *
- * Soft by design (SYD-201: worker_preference "never restricts — an idle worker
- * still falls back to it"), so this only ever reorders; the one hard rule
- * lives in nextTask, where a non-human is refused `interactive` issues
- * outright. Because ranks are a total order, this can only break ties among
- * UNRANKED issues — an explicit human ordering outranks affinity, which is the
- * point of having one.
- */
-export function affinityRank(classification: string) {
-  return sql`CASE
-    WHEN ${issues.workerPreference} IS NULL THEN 1
-    WHEN ${issues.workerPreference} = ${classification} THEN 0
-    ELSE 2 END`;
-}
-
-/** NULL ranks sort last, spelled portably rather than relying on NULLS LAST. */
-export const QUEUE_RANK_ORDER = sql`CASE WHEN ${issues.queueRank} IS NULL THEN 1 ELSE 0 END, ${issues.queueRank}`;

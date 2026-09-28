@@ -254,8 +254,28 @@ do not require provider credentials. SDK behavior follows the official
 and [settings-source](https://code.claude.com/docs/en/agent-sdk/claude-code-features)
 documentation.
 
-Registering non-Claude runners (Codex, Antigravity, Cursor) is being
-researched in SYD-46.
+`engine` selects Claude (the default), Codex, or Gemini. The supported modes are:
+
+| Engine | CLI code sessions | SDK code sessions | Process roles |
+| --- | --- | --- | --- |
+| Claude | Host or container | Host only | `code`, `answer`, `all` |
+| Codex | Container only | Unsupported | `code` only |
+| Gemini | Container only | Unsupported | `code` only |
+
+Answer sessions currently use Claude on the host, including when a Claude
+worker's code sessions are containerized. Codex and Gemini workers must use
+`runner: "cli"`, `containerized: true`, and **`--role code`**; the default
+`all` role is rejected instead of silently using Claude to answer. Run a
+separate Claude worker for answers. For example, copy the example config,
+set `engine: "codex"` and `image: "switchyard-worker-codex"`, then launch:
+
+```bash
+npx tsx scripts/agent-worker.ts --config switchyard-worker.codex.json --role code
+```
+
+For Gemini, use `engine: "gemini"` and `image: "switchyard-worker-gemini"`
+with the same code role. When installing a non-Claude default config through
+the doctor, use `npm run init-worker -- --install-launchd-code`.
 
 Safety model: the label gate (nothing runs unlabeled), `maxConcurrent` (caps
 concurrent headless sessions), and the fact that dispatched work still flows

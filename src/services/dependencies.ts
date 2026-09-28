@@ -11,7 +11,7 @@ import { recordEvent } from "./events.js";
 import { listOpenPrByIssueId } from "./pr-status.js";
 import { EXECUTABLE_GATE_ACTIONS, findOrCreatePendingAction, isHardGated } from "./hard-gate.js";
 import { getSetting } from "./settings.js";
-import { affinityRank, QUEUE_RANK_ORDER } from "./queue.js";
+import { taskOrderSql } from "./task-order.js";
 import { issueIdsCondition } from "./issue-scope.js";
 import {
   callerClassification,
@@ -20,8 +20,6 @@ import {
 } from "./worker-preference.js";
 
 const CLOSED = ["done", "canceled"] as const;
-const PRIORITY_RANK = sql`CASE ${issues.priority}
-  WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END`;
 
 export function addDependency(
   db: Db,
@@ -287,7 +285,7 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
   // headless worker cannot finish this" (SYD-239), and worker-select.ts already
   // skips it at dispatch — but nextTask ignored it entirely, so an agent asking
   // for work directly could still be handed one. Everything else about
-  // worker_preference stays soft, sorted by affinityRank below.
+  // worker_preference stays soft, sorted by taskOrderSql below.
   // Keyed on "is a person watching", not "is this a person" — an attended
   // agent session is the caller this work is FOR (see isAttendedCaller).
   if (!isAttendedCaller(actor)) {
@@ -306,12 +304,7 @@ export function nextTask(db: Db, actor: Actor, projectKey?: string): IssueView |
     .select()
     .from(issues)
     .where(and(...conditions))
-    .orderBy(
-      QUEUE_RANK_ORDER,
-      affinityRank(callerClassification(actor)),
-      PRIORITY_RANK,
-      issues.createdAt,
-    )
+    .orderBy(...taskOrderSql(callerClassification(actor)))
     .limit(1)
     .all();
   return candidates[0] ? toView(db, candidates[0]) : null;

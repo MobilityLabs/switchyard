@@ -636,6 +636,72 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each([
+    { engine: "codex", runner: "sdk", containerized: false },
+    { engine: "gemini", runner: "cli", containerized: false },
+    { engine: "claude", runner: "sdk", containerized: true },
+  ] as const)(
+    "rejects unsupported execution before fetching or claiming: %j",
+    async (execution) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        runTick({ ...config, ...execution }, "tok", "code", { dryRun: false }),
+      ).rejects.toThrow(/unsupported worker execution/);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["codex", "gemini"] as const)(
+    "does not launch Claude answers for a %s worker",
+    async (engine) => {
+      const unsupported = { ...config, engine, containerized: true };
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(runTick(unsupported, "tok", "all", { dryRun: false })).rejects.toThrow(
+        /--role code/,
+      );
+      expect(() => dispatchAnswer("SYD-267", unsupported, "tok", { dryRun: false })).toThrow(
+        /--role code/,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(answerState.has("SYD-267")).toBe(false);
+    },
+  );
+
+  it("releases an existing lease if direct dispatch receives an unsupported configuration", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    dispatch(
+      {
+        ref: "SYD-267",
+        title: "wrong engine",
+        labels: ["auto"],
+        assigneeId: null,
+        needsInput: false,
+        updatedAt: 1,
+      },
+      { ...config, engine: "codex", runner: "sdk" },
+      "tok",
+      "code",
+      { leaseToken: "lease_267" },
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3300/api/issues/SYD-267",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({ "X-Switchyard-Lease": "lease_267" }),
+        body: JSON.stringify({ status: "todo" }),
+      }),
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it("claims the issue host-side and dispatches once the claim succeeds", async () => {
     const ref = "SYD-122a";
     const issue = {

@@ -27,6 +27,7 @@ import {
   suggestStackCli,
   summarizeRoleStatus,
   validateWorkerConfig,
+  validateWorkerExecution,
   wellKnownCliInstall,
   workerLaunchdLabel,
   type UserStackCapture,
@@ -208,22 +209,52 @@ describe("validateWorkerConfig", () => {
     expect(problems.join(" ")).toMatch(/engine/);
   });
 
-  it("accepts engine: codex", () => {
-    expect(validateWorkerConfig({ ...good, engine: "codex" })).toEqual([]);
-  });
+  for (const engine of [undefined, "claude", "codex", "gemini"] as const) {
+    for (const runner of [undefined, "cli", "sdk"] as const) {
+      for (const containerized of [undefined, false, true]) {
+        const supported =
+          engine === undefined || engine === "claude"
+            ? runner !== "sdk" || containerized !== true
+            : runner !== "sdk" && containerized === true;
+        it(`${supported ? "accepts" : "rejects"} engine=${engine}, runner=${runner}, containerized=${containerized}`, () => {
+          const problems = validateWorkerConfig({ ...good, engine, runner, containerized });
+          expect(problems.length === 0).toBe(supported);
+        });
+      }
+    }
+  }
 
-  it("accepts engine: gemini, including with egress: open (its open mode passes the real key)", () => {
-    expect(validateWorkerConfig({ ...good, engine: "gemini" })).toEqual([]);
-    expect(validateWorkerConfig({ ...good, engine: "gemini", egress: "open" })).toEqual([]);
+  it("accepts Gemini container CLI with open egress (its open mode passes the real key)", () => {
+    expect(
+      validateWorkerConfig({ ...good, engine: "gemini", containerized: true, egress: "open" }),
+    ).toEqual([]);
   });
 
   it("rejects engine: codex with egress: open, and still accepts codex with the default proxy egress", () => {
-    const problems = validateWorkerConfig({ ...good, engine: "codex", egress: "open" });
+    const problems = validateWorkerConfig({
+      ...good,
+      engine: "codex",
+      containerized: true,
+      egress: "open",
+    });
     expect(problems.join(" ")).toMatch(/codex/);
     expect(problems.join(" ")).toMatch(/egress|open|proxy/);
-    expect(validateWorkerConfig({ ...good, engine: "codex", egress: "proxy" })).toEqual([]);
-    expect(validateWorkerConfig({ ...good, engine: "codex" })).toEqual([]);
+    expect(
+      validateWorkerConfig({ ...good, engine: "codex", containerized: true, egress: "proxy" }),
+    ).toEqual([]);
+    expect(validateWorkerConfig({ ...good, engine: "codex", containerized: true })).toEqual([]);
   });
+
+  it.each(["codex", "gemini"] as const)(
+    "requires the code role for %s instead of silently answering with Claude",
+    (engine) => {
+      const config = { ...good, engine, containerized: true };
+      expect(validateWorkerExecution(config, "code")).toEqual([]);
+      for (const role of ["answer", "all"] as const) {
+        expect(validateWorkerExecution(config, role).join(" ")).toMatch(/--role code/);
+      }
+    },
+  );
 
   it("accepts a string token env-var name and rejects a non-string / empty one", () => {
     expect(validateWorkerConfig({ ...good, token: "SWITCHYARD_CODEX_TOKEN" })).toEqual([]);

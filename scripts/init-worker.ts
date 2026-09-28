@@ -93,6 +93,7 @@ import {
   suggestStackCli,
   summarizeRoleStatus,
   validateWorkerConfig,
+  assertWorkerExecution,
   workerLaunchdLabel,
   DELIVER_LAUNCHD_LABEL,
   POLL_LAUNCHD_LABEL,
@@ -477,7 +478,14 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         results.push({ name: "switchyard-worker.json", ok: false, note: problems.join("; ") });
       } else {
         config = raw as WorkerConfig;
-        results.push({ name: "switchyard-worker.json", ok: true });
+        results.push({
+          name: "switchyard-worker.json",
+          ok: true,
+          note:
+            config.engine && config.engine !== "claude"
+              ? `${config.engine}: container CLI only; launch with --role code (or --install-launchd-code). Answers require a separate Claude worker.`
+              : undefined,
+        });
       }
     } catch (err) {
       results.push({
@@ -1395,10 +1403,12 @@ function captureStack(config: WorkerConfig | null, onlyKey: string | undefined):
   }
 }
 
-function selfTest(): void {
+function selfTest(config: WorkerConfig | null): void {
   console.log("\nself-test: one dry-run worker tick (nothing is dispatched)\n");
   const env = loadEnv();
-  const run = spawnSync("npx", ["tsx", "scripts/agent-worker.ts", "--once", "--dry-run"], {
+  const args = ["tsx", "scripts/agent-worker.ts", "--once", "--dry-run"];
+  if (config?.engine && config.engine !== "claude") args.push("--role", "code");
+  const run = spawnSync("npx", args, {
     cwd: repoRoot,
     env,
     stdio: "inherit",
@@ -1448,10 +1458,18 @@ async function main(): Promise<void> {
   }
   console.log("\nall checks passed");
 
-  if (args.includes("--self-test")) selfTest();
-  if (args.includes("--install-launchd")) installLaunchd("all");
-  if (args.includes("--install-launchd-code")) installLaunchd("code");
-  if (args.includes("--install-launchd-answer")) installLaunchd("answer");
+  if (args.includes("--self-test")) selfTest(config);
+  for (const [flag, role] of [
+    ["--install-launchd", "all"],
+    ["--install-launchd-code", "code"],
+    ["--install-launchd-answer", "answer"],
+  ] as const) {
+    if (args.includes(flag)) {
+      if (!config) throw new Error("a valid worker config is required to install a worker");
+      assertWorkerExecution(config, role);
+      installLaunchd(role);
+    }
+  }
   if (args.includes("--install-launchd-deliver")) installLaunchdDeliver(config);
   if (args.includes("--install-launchd-poll")) installLaunchdPoll();
 
