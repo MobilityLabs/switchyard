@@ -23,7 +23,11 @@ def flow(url, headers=None):
         connection.Client(peername=("127.0.0.1", 1234), sockname=("127.0.0.1", 8888)),
         connection.Server(address=("api.anthropic.com", 443)),
     )
-    result.request = http.Request.make("POST", url, b'{"stream":true}', headers or {})
+    result.request = http.Request.make("POST", url, b'{"stream":true}')
+    # Request.make assigns the URL after constructing headers, which rewrites
+    # Host to match it. Apply adversarial headers afterward so mismatch cases
+    # actually reach the policy with different target and Host values.
+    result.request.headers.update(headers or {})
     return result
 
 
@@ -69,6 +73,8 @@ class ProxyContract(unittest.TestCase):
         ]:
             with self.subTest(url=url, host=host):
                 f = flow(url, {"Host": host})
+                if url.startswith(("https://registry.npmjs.org/", "https://api.openai.com/")):
+                    self.assertNotEqual(f.request.host, f.request.pretty_host)
                 addon.request(f)
                 self.assertEqual(f.response.status_code, 403)
                 self.assertNotIn("authorization", f.request.headers)
