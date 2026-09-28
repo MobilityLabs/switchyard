@@ -9,7 +9,8 @@
 // This file lives in worker-sdk/ (own package.json, own node_modules) because
 // the SDK peer-depends on zod@4 while the main app is pinned to zod@3.
 // agent-worker.ts imports it via a runtime-computed path so the main
-// typecheck and the server Docker image never depend on it. Auth is the same
+// app typecheck and server Docker image never depend on it. The isolated
+// SDK typecheck is part of `npm run typecheck`. Auth is the same
 // CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from the environment.
 
 import { appendFileSync } from "node:fs";
@@ -26,6 +27,8 @@ export type SdkSessionOpts = {
    * argv, never in the LLM transcript. Omitted for non-lease (answer) sessions. */
   switchyardLeaseToken?: string;
   allowedTools: string[];
+  /** Optional provider model; omitted to retain the provider's default. */
+  model?: string;
   logPath: string;
   /** Watchdog (SYD-115): abort the query if it runs longer than this. No timeout when omitted. */
   timeoutMs?: number;
@@ -43,6 +46,11 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
   // the worker relies on it settling to free the concurrency slot.
   const log = (line: string) => {
     try {
+      // Provider errors can echo request metadata. Never persist our MCP
+      // authorization or session lease even if it appears in an SDK event.
+      for (const secret of [o.switchyardToken, o.switchyardLeaseToken]) {
+        if (secret) line = line.replaceAll(secret, "[redacted]");
+      }
       appendFileSync(o.logPath, `${line}\n`);
     } catch {
       /* log dir gone or disk full — the session matters more than the log */
@@ -57,9 +65,10 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
   const abortController = new AbortController();
   // SYD-210 Layer B: fold the host's heartbeat-cancellation signal into the
   // query's own abort so a lease the worker can no longer renew stops the run.
+  const cancel = () => abortController.abort();
   if (o.externalAbortSignal) {
-    if (o.externalAbortSignal.aborted) abortController.abort();
-    else o.externalAbortSignal.addEventListener("abort", () => abortController.abort());
+    if (o.externalAbortSignal.aborted) return 1;
+    o.externalAbortSignal.addEventListener("abort", cancel, { once: true });
   }
   const watchdog =
     o.timeoutMs !== undefined
@@ -75,6 +84,12 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
       prompt: o.prompt,
       options: {
         cwd: o.cwd,
+        // Match the CLI's coding-agent prompt and load the repository's
+        // CLAUDE.md, rules, skills and hooks. Exclude ambient user/local
+        // settings deliberately; this host runner still requires trust.
+        systemPrompt: { type: "preset", preset: "claude_code" },
+        settingSources: ["project"],
+        ...(o.model ? { model: o.model } : {}),
         permissionMode: "acceptEdits",
         allowedTools: o.allowedTools,
         abortController,
@@ -95,10 +110,11 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
       }
     }
   } catch (err) {
-    log(`[sdk] session error: ${(err as Error).message}`);
+    log(`[sdk] session error: ${err instanceof Error ? err.message : String(err)}`);
     exit = 1;
   } finally {
     if (watchdog) clearTimeout(watchdog);
+    o.externalAbortSignal?.removeEventListener("abort", cancel);
   }
-  return exit;
+  return abortController.signal.aborted ? 1 : exit;
 }

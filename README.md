@@ -236,9 +236,23 @@ There is more than one way to spin up a session; `runner` in
 - `"sdk"` — run the session in-process through the Claude Agent SDK. The MCP
   bearer token is handed over as an in-memory object (never argv, never a
   temp file), and the worker log gets one line per tool call instead of an
-  opaque transcript. Setup: `npm install --prefix worker-sdk` (its deps are
+  opaque transcript. Setup: `npm ci --prefix worker-sdk --ignore-scripts` (its deps are
   isolated there because the SDK wants zod@4 and the app is on zod@3).
-  Not combinable with `containerized` yet.
+  This is a **trusted, host-only Claude runner**, not an isolation boundary:
+  it runs with the worker host's filesystem and environment access and cannot
+  be combined with `containerized`. Prefer the containerized CLI for unattended
+  work. The SDK explicitly uses the `claude_code` system prompt and
+  `settingSources: ["project"]`, loading repository instructions, skills and
+  hooks while excluding user/local settings. Global configuration and managed
+  policy may still apply; project hooks must be trusted.
+
+The SDK is pinned in its isolated lockfile. After updating it, run
+`npm run typecheck:worker-sdk` and the SDK runner tests; both are included in
+the normal required checks and CI. These checks mock provider sessions and
+do not require provider credentials. SDK behavior follows the official
+[system prompt](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts)
+and [settings-source](https://code.claude.com/docs/en/agent-sdk/claude-code-features)
+documentation.
 
 Registering non-Claude runners (Codex, Antigravity, Cursor) is being
 researched in SYD-46.
@@ -451,6 +465,8 @@ SWITCHYARD_URL=http://localhost:3300 SWITCHYARD_TOKEN=... DREAMER_DRY_RUN=1 sh s
 ## Development
 
 ```bash
+npm ci
+npm ci --prefix worker-sdk --ignore-scripts
 npm test
 npm run typecheck
 ```

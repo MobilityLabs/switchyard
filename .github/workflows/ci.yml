@@ -27,12 +27,16 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            worker-sdk/package-lock.json
       # --ignore-scripts blocks EVERY dependency's install/postinstall script
       # (agent-authored deps land in these PR builds), then we explicitly
       # rebuild only better-sqlite3 — the one native module the app needs — so
       # its prebuilt binary is present for the test run. This is the
       # single-package allowlist the SYD-209 spec calls for.
       - run: npm ci --ignore-scripts
+      - run: npm ci --prefix worker-sdk --ignore-scripts
       - run: npm rebuild better-sqlite3
       - run: npm run lint
       - run: npm run format:check
