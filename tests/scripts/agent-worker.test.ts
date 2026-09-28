@@ -11,9 +11,24 @@ vi.mock("../../scripts/worker-publications.js", () => ({
   clearPublication: vi.fn(),
 }));
 
+vi.mock("../../scripts/worker-exchange.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/worker-exchange.js")>()),
+  prepareWorkerExchange: vi.fn(),
+  importWorkerExchange: vi.fn(),
+  clearWorkerExchange: vi.fn(),
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+    execFile: (
+      _command: string,
+      _args: string[],
+      callback: (error: Error | null, result: { stdout: string; stderr: string }) => void,
+    ) => callback(null, { stdout: "", stderr: "" }),
+  };
 });
 
 vi.mock("node:fs", async (importOriginal) => {

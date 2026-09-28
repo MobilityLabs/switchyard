@@ -65,16 +65,10 @@ export async function run(
 }
 
 /**
- * Runs git with repo hooks disabled (`-c core.hooksPath=/dev/null`). Every
- * git invocation in this file targets a directory a containerized dispatch
- * session mounts read-write as /origin — project.repo for ordinary work
- * dispatch (buildDockerArgs, worker-select.ts) or the shared deliver.ts
- * cloneDir for conflict-resolution dispatch (buildConflictResolutionDockerArgs,
- * delivery-lib.ts). A prompt-injected session has Bash+Write in there and can
- * plant e.g. .git/hooks/pre-push directly on the mount; without this flag a
- * later host-side git command against that same directory (push, checkout,
- * rebase, ...) would execute the planted hook as the host/worker user, which
- * holds GitHub push credentials — container-to-host RCE (SYD-109).
+ * Runs host-side Git with hooks disabled. Worker exchange import reconstructs
+ * a private repository rather than trusting the mounted Git config/hooks;
+ * keep this extra boundary for delivery repositories and legacy sessions
+ * that began before the exchange isolation rollout.
  */
 export async function runGit(
   args: string[],

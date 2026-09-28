@@ -1,3 +1,4 @@
+import { workerExchangeRepo } from "../../scripts/worker-exchange.js";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   selectDispatchable,
@@ -1076,10 +1077,11 @@ describe("buildDockerArgs", () => {
     expect(args.some((a) => a.includes("_PROXY") || a.includes("_proxy"))).toBe(false);
   });
 
-  it("mounts the right repo", () => {
+  it("mounts only the per-session exchange outside the host checkout", () => {
     const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
     const vIndex = args.indexOf("-v");
-    expect(args[vIndex + 1]).toBe("/repo/syd:/origin");
+    expect(args[vIndex + 1]).toBe(`${workerExchangeRepo(project.repo, config, "SYD-1")}:/origin`);
+    expect(args).not.toContain("/repo/syd:/origin");
   });
 
   it("passes the issue ref through as ISSUE_REF and the container name", () => {

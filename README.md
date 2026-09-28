@@ -298,10 +298,10 @@ less than it does bare on the host.
 By default, dispatched sessions run bare on the host: same process, same
 working tree, same filesystem access as anything else you run locally. Set
 `containerized: true` and Switchyard instead runs the session inside a
-disposable Docker container that clones the repo internally, works on a
-branch, and pushes the branch back — it is structurally unable to touch your
-host filesystem or push to `main`. This is the recommended default; the bare
-mode above stays available for repos or setups where Docker isn't practical.
+disposable Docker container that receives a sanitized Git exchange, works on
+an issue branch, and returns commits for host-side review and publication.
+The live checkout, host Git configuration, credentials, and worker state are
+outside its mount. Bare mode remains available for trusted local sessions.
 
 Build the worker images before dispatching (rebuild after changing their
 entrypoints or helpers). Claude, Codex, and Gemini CLI versions are pinned in
@@ -339,32 +339,52 @@ CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`
 ANTHROPIC_API_KEY=...         # or a raw API key
 ```
 
-`scripts/agent-worker.ts` passes these through to the container via bare
-`-e VAR` (no value embedded in argv) — see `buildDockerArgs` in
-`scripts/worker-select.ts`. Inside the container, `scripts/container-entry.sh`
-clones `/origin` (the host repo, mounted read-write) into `/work`, checks out
-`agent/<ref>`, runs the same `claude -p` session as bare mode (with an
-addendum reminding it to commit and to name the branch in its issue
-comment), and pushes `agent/<ref>` back to `/origin` if it produced any
-commits. The container gets no host filesystem beyond that one mount, and can
-only ever push that one branch name — merging stays a human decision, same
-as bare mode.
+In the default proxy mode, provider credentials stay in the egress sidecar;
+the session receives a placeholder. With `egress: "open"`, provider credentials
+are passed through via bare `-e VAR` arguments (their values never enter argv).
+The tracker token and session lease authorize the session's tracker operations.
+
+Each dispatch creates a bare exchange at
+`~/.switchyard/worker-exchanges/<worker-and-repo-scope>/<ref>/origin.git`.
+Only that repository is mounted at `/origin`; its host-owned recovery metadata
+is outside the mount. The exchange contains the configured base branch and,
+when present, the existing `agent/<ref>` branch. Entrypoints clone it into
+`/work`, continue existing agent work or start at the base branch, then push
+commits back to the exchange. Untracked files, working-tree edits, other
+branches, host Git config/hooks, and credentials are not exported.
+
+After Docker confirms the container has stopped, the host reconstructs a
+private quarantine from regular Git object files and exactly `agent/<ref>`.
+It never runs Git against worker-controlled config or hooks, follows object
+alternates, or imports arbitrary refs. Strict object checks, ancestry checks,
+and an atomic comparison against the original host ref prevent overwriting
+concurrent host work. Imports are limited to 2 GiB and 100,000 object files;
+Git operations time out after two minutes. A failure retains the exchange
+and publication intent for investigation/retry. Successful import and publication
+remove it; disabling automatic PRs still imports and recovers committed work.
+
+Exported history is source data: committed secrets must be removed from that
+history before dispatch. The worker rejects root `.env`, local/production/
+development/staging env variants, `.superpowers/`, and `switchyard-worker.json`
+in exported history. Example env files, `.env.test`, and fixture env files are
+allowed. This targeted check is not a general credential scanner. Pending
+exchanges survive host-worker restarts; do not delete them before recovering
+unpublished commits. Existing pre-upgrade sessions retain their original mounts
+until they finish, so drain those sessions when rolling out this isolation change.
 
 ### Egress allowlist (SYD-110)
 
-Containerized sessions carry secrets in env (`SWITCHYARD_TOKEN`, and
-`CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`); with open networking, a
-prompt-injected session — or a malicious npm lifecycle script during the
-pre-session `npm ci` — could simply POST them somewhere. Two layers close
-this:
+Containerized sessions need scoped tracker credentials. Provider credentials
+stay outside the session in proxy mode; open networking deliberately gives up
+that protection. The default egress controls reduce what a compromised session
+or dependency-install script can reach:
 
 1. **Network egress allowlist (default on).** Session containers join an
    `--internal` Docker network (`syd-workers`) with no route out; their only
-   exit is a tinyproxy sidecar (`syd-egress`, built by
+   HTTP(S) exit is a mitmproxy sidecar (`syd-egress`, built by
    `npm run build:worker-image` from `Dockerfile.egress-proxy`) that forwards
-   only to `api.anthropic.com`, `registry.npmjs.org`, `registry.yarnpkg.com`
-   (yarn's default registry — SYD-269), and the tracker host
-   from `url`. Add hosts with `egressAllow: ["host.name"]`; opt out entirely
+   to the configured provider, package-registry, and tracker allowlist. It
+   injects provider credentials only for the matching provider hosts. Add hosts with `egressAllow: ["host.name"]`; opt out entirely
    with `egress: "open"` in `switchyard-worker.json`. The worker stands the
    network and sidecar up automatically at startup (and refuses to start if
    it can't — deliver.ts warns instead, since merges shouldn't stop). Known
@@ -373,7 +393,7 @@ this:
    could in principle relay.
 
 2. **Secret-free dependency install.** `scripts/install-guard.mjs` strips the
-   three secret vars from the install's environment, so third-party lifecycle
+   session credentials from the install's environment, so third-party lifecycle
    scripts never see them (native-module builds still work — the reason we
    don't use `--ignore-scripts`). It runs whichever frozen install the target
    repo's lockfile calls for — `npm ci`, `yarn install --frozen-lockfile` or
@@ -388,7 +408,8 @@ Unattended agent work never lands on `main` (or the NAS) until a human stamps
 the issue `done`. Three pieces (SYD-49):
 
 1. **Workers open PRs.** When a containerized session exits having pushed
-   `agent/<ref>` into the host repo, the worker pushes that branch to GitHub
+   `agent/<ref>` into its exchange, the host validates and imports that branch,
+   then pushes it to GitHub
    and opens a PR titled with the ref — host-side, so containers never hold
    GitHub credentials. Controlled by `delivery.openPrs` (default true when the
    `delivery` block exists).

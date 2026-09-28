@@ -1,6 +1,7 @@
 // Pure dispatch-selection logic for scripts/agent-worker.ts.
 // Kept separate from the polling/spawning loop so it's trivially unit-testable.
 
+import { workerExchangeRepo } from "./worker-exchange.js";
 import { DEFAULT_CODEX_IMAGE } from "./engines/codex.js";
 import {
   DEFAULT_GEMINI_IMAGE,
@@ -1281,7 +1282,7 @@ export function buildDockerArgs(
     "no-new-privileges",
     ...egressDockerArgs(config),
     "-v",
-    `${project.repo}:/origin`,
+    `${workerExchangeRepo(project.repo, config, issue.ref)}:/origin`,
     "-e",
     `ISSUE_REF=${issue.ref}`,
     "-e",

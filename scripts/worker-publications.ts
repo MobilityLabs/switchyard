@@ -12,6 +12,8 @@ const publicationSchema = z.object({
   issueTitle: z.string(),
   sessionId: z.number().int().positive().nullable(),
   exitCode: z.number().int().nullable(),
+  /** New sessions import a sanitized exchange; absent on pre-upgrade markers. */
+  exchange: z.boolean().optional(),
 });
 export type PendingPublication = z.infer<typeof publicationSchema>;
 

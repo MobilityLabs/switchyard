@@ -117,6 +117,12 @@ import {
   clearPublication,
   type PendingPublication,
 } from "./worker-publications.js";
+import {
+  prepareWorkerExchange,
+  hasWorkerExchange,
+  importWorkerExchange,
+  clearWorkerExchange,
+} from "./worker-exchange.js";
 import { publishAgentBranch, prFreshness, originOwnerRepo } from "./delivery-exec.js";
 import {
   agentBranch,
@@ -721,7 +727,13 @@ async function publishPending(
     // an inspection error leaves the durable obligation intact for retry.
     const liveNames = knownLiveNames ?? (await listLiveContainerNames());
     if (liveNames.has(containerNameFor(ref))) return;
+    const imported = importWorkerExchange(project, config, ref);
     await reportSessionEnd(config, token, Promise.resolve(sessionId), exitCode);
+    if (!publishesContainers(config) || (publication.exchange && !imported)) {
+      clearWorkerExchange(project.repo, config, ref);
+      clearPublication(project.repo, config, ref);
+      return;
+    }
     const outcome = await publishAgentBranch(project.repo, ref, issueTitle, config.url, exitCode);
     const line = formatPublishOutcome(agentBranch(ref), outcome);
     console.log(`${ref}: ${line}`);
@@ -751,6 +763,7 @@ async function publishPending(
       // exist. A crash/failed POST retries the idempotent already-open path.
       await postDeliveryEvent(config, token, ref, event);
     }
+    clearWorkerExchange(project.repo, config, ref);
     clearPublication(project.repo, config, ref);
   } catch (err) {
     const message = (err as Error).message;
@@ -783,12 +796,19 @@ async function finishSessionExit(
 ): Promise<void> {
   console.log(`${ref} exited with code ${exitCode}`);
   logLine(`\n[worker] exited with code ${exitCode}\n`);
-  if (!publishesContainers(config)) {
+  if (!config.containerized) {
     await reportSessionEnd(config, token, sessionId, exitCode);
     return;
   }
   try {
-    const publication = { ref, issueTitle, sessionId: (await sessionId) ?? null, exitCode };
+    const pending = readPublications(project.repo, config).find((entry) => entry.ref === ref);
+    const publication = {
+      ...pending,
+      ref,
+      issueTitle,
+      sessionId: (await sessionId) ?? null,
+      exitCode,
+    };
     // Save before closing the tracker session: if the process stops after
     // the PATCH, the server no longer lists it as active but this survives.
     savePublication(project.repo, config, publication);
@@ -805,7 +825,7 @@ export async function recoverPublications(
   token: string,
   knownLiveNames?: Set<string>,
 ): Promise<void> {
-  if (!publishesContainers(config)) return;
+  if (!config.containerized) return;
   const pending = Object.values(config.projects).flatMap((project) =>
     readPublications(project.repo, config).map((publication) => ({ project, publication })),
   );
@@ -878,6 +898,7 @@ export function dispatch(
   const clearNeverStartedPublication = () => {
     if (!publicationSaved) return;
     try {
+      clearWorkerExchange(project.repo, config, issue.ref);
       clearPublication(project.repo, config, issue.ref);
     } catch (err) {
       console.error(
@@ -887,18 +908,29 @@ export function dispatch(
   };
   try {
     if (config.containerized) {
-      if (publishesContainers(config)) {
-        savePublication(project.repo, config, {
-          ref: issue.ref,
-          issueTitle: issue.title,
-          sessionId: null,
-          exitCode: null,
-        });
-        publicationSaved = true;
+      if (
+        readPublications(project.repo, config).some((entry) => entry.ref === issue.ref) ||
+        hasWorkerExchange(project.repo, config, issue.ref)
+      ) {
+        throw new Error(
+          `unfinished worker exchange/publication for ${issue.ref}; recover it before redispatch`,
+        );
       }
-      // The container is the sandbox: it clones the repo internally, works on
-      // a branch, and pushes it back out — it never touches this host
-      // filesystem beyond the /origin mount. See scripts/container-entry.sh.
+      // Persist before preparation too: a crash while copying objects leaves
+      // a recoverable obligation, never an orphan that blocks redispatch.
+      // Persist for every container, even when automatic PR publication is
+      // disabled: importing its output after a restart is still mandatory.
+      savePublication(project.repo, config, {
+        ref: issue.ref,
+        issueTitle: issue.title,
+        sessionId: null,
+        exitCode: null,
+        exchange: true,
+      });
+      publicationSaved = true;
+      prepareWorkerExchange(project, config, issue.ref);
+      // Only the sanitized exchange is mounted. The live checkout, .env,
+      // Git config and host recovery/lease state stay outside the container.
       const dockerArgs = buildDockerArgs(issue, project, config, process.env, opts);
       child = spawn("docker", dockerArgs, {
         detached: true,

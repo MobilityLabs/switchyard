@@ -794,21 +794,17 @@ export function deliveryFailureComment(ref: string, message: string): string {
 }
 
 /**
- * Posted when the host-side publish step (SYD-49: `git push` + `gh pr
- * create`, run by agent-worker.ts right after a containerized session exits)
- * fails (SYD-257). Distinct from deliveryFailureComment (a merge-time
- * failure once a PR already exists) — here the session's work is committed
- * on `agent/<ref>` in the host repo but never reached GitHub, so there is no
- * PR yet for "Retry delivery" to re-authorize; a human has to fix the
- * publish problem (e.g. host git/gh auth) and push/open the PR by hand, or
- * re-dispatch the issue.
+ * Import, GitHub publication, or tracker-observation failures retain a durable
+ * retry obligation. The branch may still be in the session exchange, and a
+ * PR may already exist, so do not promise either outcome before recovery.
  */
 export function publishFailureComment(ref: string, message: string): string {
   return (
     `Publish FAILED for ${ref}: ${message}\n` +
-    `The session's work is committed on ${agentBranch(ref)} in the host repo, but \`git push\` / ` +
-    `\`gh pr create\` did not reach GitHub — there is no PR yet. Check the worker log, fix the ` +
-    `underlying problem, then push ${agentBranch(ref)} and open the PR by hand (or re-dispatch the issue).`
+    `The host could not finish importing or publishing ${agentBranch(ref)}. ` +
+    `Its publication intent and any session exchange are retained for retry. ` +
+    `Check the worker log and fix the underlying problem; do not delete the exchange or ` +
+    `re-dispatch until the committed work has been recovered.`
   );
 }
 
