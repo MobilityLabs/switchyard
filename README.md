@@ -223,14 +223,18 @@ The launcher compiles host services on demand, or ahead of time with
 `npm run build:server`. It fingerprints source, configuration, dependency
 lockfiles, the installed TypeScript compiler, and the Node version. Completed
 builds live in `dist/server/<64-character hash>/`; the extra path component
-is intentional. Each service imports its own immutable generation, so another
+is intentional. Hand-written `scripts/**/*.mjs` runtime files are copied into
+each generation, and their contents and `.d.mts`/`.d.cts` declarations are
+fingerprinted alongside TypeScript sources. Each service imports its own
+immutable generation, so another
 startup cannot replace files underneath it, including files imported later.
 Concurrent cold starts may briefly run multiple compilers, but publication is
 atomic and only one complete generation is retained per fingerprint. A failed
 compile fails startup and leaves earlier builds intact.
 
-`dist/server/build-info.json` records the last published generation for
-inspection; services do not follow this pointer after startup. Old generations
+`dist/server/build-info.json` records the last selected generation for
+inspection, including cache hits. It does not describe every running service;
+services do not follow this pointer after startup. Old generations
 are retained because running services may still need them, so disk usage grows
 with changed builds. To reclaim the cache, stop **all** host services, remove
 `dist/server`, run `npm run build:server`, then restart the services. This also

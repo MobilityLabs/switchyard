@@ -18,6 +18,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -48,14 +49,16 @@ function collectFiles(dir, extension, out) {
 function computeSourceHash() {
   const files = [];
   for (const dir of ["scripts", "src"]) {
-    collectFiles(path.join(repoRoot, dir), ".ts", files);
+    for (const extension of [".ts", ".tsx", ".mts", ".cts"]) {
+      collectFiles(path.join(repoRoot, dir), extension, files);
+    }
   }
+  collectFiles(path.join(repoRoot, "scripts"), ".mjs", files);
   for (const extra of [
     "tsconfig.build.json",
     "tsconfig.json",
     "package.json",
     "package-lock.json",
-    "scripts/run-compiled.mjs",
   ]) {
     files.push(path.join(repoRoot, extra));
   }
@@ -76,6 +79,17 @@ function computeSourceHash() {
     hash.update("\0");
   }
   return hash.digest("hex");
+}
+
+/** TypeScript does not emit the hand-written runtime sidecars it imports. */
+function copyScriptAssets(staging) {
+  const assets = [];
+  collectFiles(path.join(repoRoot, "scripts"), ".mjs", assets);
+  for (const source of assets) {
+    const destination = path.join(staging, path.relative(repoRoot, source));
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(source, destination);
+  }
 }
 
 function readBuildInfo(dir, sourceHash) {
@@ -110,13 +124,20 @@ function ensureBuilt() {
   const sourceHash = computeSourceHash();
   const generation = path.join(distDir, sourceHash);
   const existing = readBuildInfo(generation, sourceHash);
-  if (existing) return generation;
+  if (existing) {
+    publishBuildInfo(existing);
+    return generation;
+  }
   // An existing but incomplete generation is never overwritten: a running
   // process could already hold imports from it. Fail closed for operator repair.
   if (existsSync(generation)) {
     // A competing builder may have published between our first read and the
     // existence check. Re-read before treating this as a broken generation.
-    if (readBuildInfo(generation, sourceHash)) return generation;
+    const winner = readBuildInfo(generation, sourceHash);
+    if (winner) {
+      publishBuildInfo(winner);
+      return generation;
+    }
     throw new Error(`[run-compiled] invalid build generation: ${generation}`);
   }
 
@@ -141,6 +162,7 @@ function ensureBuilt() {
         { cause: result.error },
       );
     }
+    copyScriptAssets(staging);
     if (computeSourceHash() !== sourceHash) {
       throw new Error("[run-compiled] compile inputs changed during the build; retry startup.");
     }

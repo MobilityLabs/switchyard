@@ -184,6 +184,41 @@ describe("compiled host launcher", () => {
     expect(hashes.size).toBe(5);
   });
 
+  it("copies imported MJS sidecars and rebuilds when their code or declarations change", async () => {
+    write("scripts/telemetry/metadata.mjs", 'export const model = "first";');
+    write("scripts/telemetry/metadata.d.mts", "export const model: string;");
+    appendFileSync(
+      path.join(root, "scripts/agent-worker.ts"),
+      '\nconst { model } = await import("./telemetry/metadata.mjs");\nconsole.log("MODEL:" + model);',
+    );
+    const first = await launch(["agent-worker"]).result;
+    expect(first.code, first.output).toBe(0);
+    expect(first.output).toContain("MODEL:first");
+    const firstHash = buildInfo().sourceHash;
+
+    write("scripts/telemetry/metadata.mjs", 'export const model = "second";');
+    const second = await launch(["agent-worker"]).result;
+    expect(second.code, second.output).toBe(0);
+    expect(second.output).toContain("MODEL:second");
+    const secondHash = buildInfo().sourceHash;
+    expect(secondHash).not.toBe(firstHash);
+    expect(
+      readFileSync(
+        path.join(root, "dist/server", firstHash, "scripts/telemetry/metadata.mjs"),
+        "utf8",
+      ),
+    ).toContain('"first"');
+
+    write("scripts/telemetry/metadata.d.mts", 'export const model: "second";');
+    expect((await launch().result).code).toBe(0);
+    expect(buildInfo().sourceHash).not.toBe(secondHash);
+    const declarationHash = buildInfo().sourceHash;
+    write("scripts/telemetry/commonjs.d.cts", "export const version: string;");
+    expect((await launch().result).code).toBe(0);
+    expect(buildInfo().sourceHash).not.toBe(declarationHash);
+    expect(compilationCount()).toBe(4);
+  });
+
   it("rejects inputs changed while compilation is in progress", async () => {
     expect((await launch().result).code).toBe(0);
     const previous = buildInfo();
@@ -203,7 +238,8 @@ describe("compiled host launcher", () => {
     const gate = path.join(root, "entry-gate");
     const oldService = launch(["agent-worker"], { ENTRY_GATE: gate });
     await until(() => existsSync(`${gate}.started`));
-    const oldHash = buildInfo().sourceHash;
+    const oldInfo = buildInfo();
+    const oldHash = oldInfo.sourceHash;
     write("src/value.ts", 'export const version = "v2";');
     const newService = await launch(["agent-worker"]).result;
     expect(newService.code, newService.output).toBe(0);
@@ -213,5 +249,12 @@ describe("compiled host launcher", () => {
     const oldResult = await oldService.result;
     expect(oldResult.code, oldResult.output).toBe(0);
     expect(oldResult.output).toContain("ENTRY:v1:");
+
+    // Returning to old inputs selects the cached generation without compiling,
+    // and refreshes the informational pointer while retaining original builtAt.
+    write("src/value.ts", 'export const version = "v1";');
+    expect((await launch().result).code).toBe(0);
+    expect(buildInfo()).toEqual(oldInfo);
+    expect(compilationCount()).toBe(2);
   });
 });
