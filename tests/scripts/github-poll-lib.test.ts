@@ -67,6 +67,14 @@ describe("diffRepoState / pull requests", () => {
     ]);
   });
 
+  it("emits reopened for a closed PR confirmed open, including after local state resets", () => {
+    const prior: RepoPollState = { 1: { state: "CLOSED", lastRunConclusion: null } };
+    expect(diffRepoState([pr({})], new Map(), prior).events[0].payload.action).toBe("reopened");
+    expect(diffRepoState([pr({})], new Map(), {}, new Set([1])).events[0].payload.action).toBe(
+      "reopened",
+    );
+  });
+
   it("emits closed (merged:false) when a tracked-open PR is later closed unmerged", () => {
     const prior: RepoPollState = { 1: { state: "OPEN", lastRunConclusion: null } };
     const { events, next } = diffRepoState([pr({ state: "CLOSED" })], new Map(), prior);

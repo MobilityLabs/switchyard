@@ -145,7 +145,14 @@ export type GithubWebhookOutcome =
   // `ref` is null when nothing attributes the PR to an issue — since SYD-287 a
   // PR in a bound repo is observed regardless, so "handled" no longer implies
   // "belongs to someone". Naming an issue anyway would be a guess.
-  | { handled: true; ref: string | null; type: string; duplicate?: true; recorded?: false }
+  | {
+      handled: true;
+      ref: string | null;
+      type: string;
+      duplicate?: true;
+      recorded?: false;
+      reason?: string;
+    }
   | { handled: false; reason: string };
 
 /**
@@ -363,7 +370,13 @@ function handlePullRequest(db: Db, rawPayload: unknown, repo: string | null): Gi
     observedOutcome =
       applied.transition !== null
         ? { handled: true, ref, type }
-        : { handled: true, ref, type, duplicate: true };
+        : {
+            handled: true,
+            ref,
+            type,
+            duplicate: true,
+            ...(applied.reason ? { reason: applied.reason } : {}),
+          };
   }
 
   // DISPLAY. Unchanged, but no longer the observation's else-branch: a PR

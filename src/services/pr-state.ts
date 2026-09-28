@@ -10,10 +10,13 @@
 // consistent windowed search, so:
 //
 // - Terminal states never regress. merged is final; closed may still become
-//   merged (a merge is more final than a close); open-after-terminal happens
+//   merged (a merge is more final than a close); open-after-close happens
 //   ONLY via an explicit `reopened` observation whose GitHub timestamp is
 //   strictly newer than the stored terminal row's (fail-closed on a missing
 //   or unparseable timestamp on either side).
+// - Closing is reversible: a close cannot overwrite a newer open observation
+//   (in particular an explicit reopen). Merge evidence remains final even
+//   when delayed, and a merged row can never reopen.
 // - Same-status refreshes are monotonic on ghUpdatedAt: an observation with
 //   no timestamp, or one older than the stored row, is a no-op. Equal
 //   timestamps apply (same-second last-write-wins — GitHub timestamps have
@@ -125,11 +128,19 @@ function decide(existing: PrStateRow | undefined, o: PrObservation, ts: number |
     return { apply: true, transition: null };
   }
   if (existing.status === "open") {
-    // Terminal transitions are governed by the terminal rules alone, not the
-    // monotonic guard — a close/merge must land even if its timestamp lost a
-    // race with a same-status refresh.
+    // A delayed close from a previous episode must not undo a newer reopen.
+    // Unlike merge evidence, an unmerged close is reversible and needs to
+    // be at least as fresh as the open observation it would replace.
+    if (
+      o.status === "closed" &&
+      existing.ghUpdatedAt !== null &&
+      (ts === null || ts < existing.ghUpdatedAt)
+    ) {
+      return { apply: false, reason: "close is missing or older than the stored open observation" };
+    }
     return { apply: true, transition: o.status === "merged" ? "merged" : "closed" };
   }
+  if (existing.status === "merged") return { apply: false, reason: "merged is final" };
   if (existing.status === "closed" && o.status === "merged") {
     return { apply: true, transition: "merged" };
   }
