@@ -14,8 +14,10 @@ export const LEASE_TTL_SETTING = "claims.lease_ttl_seconds" as const;
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 /**
- * The single active lease of an issue: not invalidated and not past
- * expires_at. At most one by construction (a claim is 1:1 with an issue).
+ * The current assignee's latest lease, while still valid. Older generations
+ * never become current again, even if a legacy duplicate has a longer TTL
+ * than its replacement. This also tolerates rows written before reassignment
+ * invalidated leases: an outgoing assignee's token cannot remain active.
  */
 export function getActiveLease(
   db: DbOrTx,
@@ -24,16 +26,24 @@ export function getActiveLease(
 ): ClaimLease | null {
   return (
     db
-      .select()
+      .select({ lease: claimLeases })
       .from(claimLeases)
+      .innerJoin(
+        issues,
+        and(eq(issues.id, claimLeases.issueId), eq(issues.assigneeId, claimLeases.actorId)),
+      )
       .where(
         and(
           eq(claimLeases.issueId, issueId),
           isNull(claimLeases.invalidatedAt),
           gt(claimLeases.expiresAt, now),
+          sql`NOT EXISTS (
+            SELECT 1 FROM claim_leases newer
+            WHERE newer.issue_id = ${claimLeases.issueId} AND newer.id > ${claimLeases.id}
+          )`,
         ),
       )
-      .get() ?? null
+      .get()?.lease ?? null
   );
 }
 
@@ -43,23 +53,28 @@ export function getActiveLease(
  * Runs inside the caller's transaction so a lease and its claim are atomic.
  */
 export function mintLease(
-  tx: DbOrTx,
+  db: DbOrTx,
   issueId: number,
   actorId: number,
   ttlSeconds: number,
 ): string {
   const token = mintToken("lease");
   const now = nowSeconds();
-  tx.insert(claimLeases)
-    .values({
-      issueId,
-      actorId,
-      tokenHash: hashToken(token),
-      expiresAt: now + ttlSeconds,
-      lastBeatAt: now,
-    })
-    .run();
-  return token;
+  return db.transaction((tx) => {
+    // Retire expired predecessors too: otherwise the next expiry sweep could
+    // mistake their old claim for this new generation.
+    invalidateLease(tx, issueId);
+    tx.insert(claimLeases)
+      .values({
+        issueId,
+        actorId,
+        tokenHash: hashToken(token),
+        expiresAt: now + ttlSeconds,
+        lastBeatAt: now,
+      })
+      .run();
+    return token;
+  });
 }
 
 /**
@@ -115,17 +130,15 @@ export function heartbeatLease(
 }
 
 /**
- * Marks the active lease of an issue invalidated (takeover / self-release /
- * human-answer release). No-op if there is no active lease. The REASON is
+ * Retires all outstanding lease generations, including expired or historical
+ * duplicate rows (takeover / reassignment / release). The REASON is
  * carried by the event the caller co-records (claim_released{reason} /
  * lease_taken_over), not stored on the lease row.
  */
 export function invalidateLease(tx: DbOrTx, issueId: number): void {
-  const active = getActiveLease(tx, issueId);
-  if (!active) return;
   tx.update(claimLeases)
     .set({ invalidatedAt: sql`(unixepoch())` })
-    .where(eq(claimLeases.id, active.id))
+    .where(and(eq(claimLeases.issueId, issueId), isNull(claimLeases.invalidatedAt)))
     .run();
 }
 
@@ -170,30 +183,43 @@ export function expireLeases(db: Db, now: number = nowSeconds(), serverStartedAt
     .all();
   let released = 0;
   for (const lease of expired) {
-    const issue = db.select().from(issues).where(eq(issues.id, lease.issueId)).get();
-    const actorId = issue?.assigneeId ?? issue?.creatorId ?? lease.actorId;
     const wasReleased = db.transaction((tx) => {
       // Always invalidate the expired lease, even if the issue moved on, so the
       // next sweep does not re-scan it.
-      tx.update(claimLeases)
+      const retired = tx
+        .update(claimLeases)
         .set({ invalidatedAt: sql`(unixepoch())` })
-        .where(eq(claimLeases.id, lease.id))
+        .where(
+          and(
+            eq(claimLeases.id, lease.id),
+            isNull(claimLeases.invalidatedAt),
+            lte(claimLeases.expiresAt, now),
+          ),
+        )
         .run();
+      if (retired.changes === 0) return false;
       const result = tx
         .update(issues)
         .set({ status: "todo", assigneeId: null, updatedAt: sql`(unixepoch())` })
         .where(
           and(
             eq(issues.id, lease.issueId),
+            eq(issues.assigneeId, lease.actorId),
             eq(issues.status, "in_progress"),
             eq(issues.needsInput, false),
+            // A historical predecessor must never release a newer claim,
+            // whether the replacement is live, expired, or already retired.
+            sql`NOT EXISTS (
+              SELECT 1 FROM claim_leases newer
+              WHERE newer.issue_id = ${lease.issueId} AND newer.id > ${lease.id}
+            )`,
           ),
         )
         .run();
       if (result.changes === 0) return false;
       recordEvent(tx, {
         issueId: lease.issueId,
-        actorId,
+        actorId: lease.actorId,
         type: "claim_released",
         payload: { reason: "lease_expired" },
       });

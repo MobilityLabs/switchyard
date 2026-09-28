@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { assert, describe, it, expect, beforeEach } from "vitest";
+import { eq } from "drizzle-orm";
 import { openDb, type Db } from "../../src/db/index.js";
+import { claimLeases, issues } from "../../src/db/schema.js";
 import { createActor, type Actor } from "../../src/services/actors.js";
 import { createProject } from "../../src/services/projects.js";
-import { createIssue } from "../../src/services/issues.js";
+import { createIssue, updateIssue } from "../../src/services/issues.js";
 import { getActiveLease, mintLease, validateLease } from "../../src/services/leases.js";
 import { getSetting } from "../../src/services/settings.js";
 
@@ -13,6 +15,7 @@ beforeEach(() => {
   agent = createActor(db, { name: "claude/worker", type: "agent" }).actor;
   createProject(db, human, { key: "AIPI", name: "aipi" });
   issueId = createIssue(db, human, { projectKey: "AIPI", title: "t" }).id;
+  updateIssue(db, human, "AIPI-1", { status: "in_progress", assigneeName: agent.name });
 });
 
 describe("leases", () => {
@@ -39,5 +42,31 @@ describe("leases", () => {
     const stale = mintLease(db, other, agent.id, -10);
     expect(getActiveLease(db, other)).toBeNull(); // past expires_at ⇒ not active
     expect(() => validateLease(db, other, agent.id, stale)).toThrow();
+  });
+
+  it("does not resurrect a legacy predecessor when its replacement expires", () => {
+    const first = mintLease(db, issueId, agent.id, 3600);
+    const firstId = getActiveLease(db, issueId)?.id;
+    assert(firstId !== undefined);
+    mintLease(db, issueId, agent.id, -10);
+    // Simulate duplicate outstanding rows written before replacement retired
+    // predecessors. The older, longer-lived token must not become current.
+    db.update(claimLeases).set({ invalidatedAt: null }).where(eq(claimLeases.id, firstId)).run();
+    expect(getActiveLease(db, issueId)).toBeNull();
+    expect(() => validateLease(db, issueId, agent.id, first)).toThrow();
+  });
+
+  it("rejects a legacy token whose actor no longer owns the issue", () => {
+    const token = mintLease(db, issueId, agent.id, 3600);
+    // Historical human reassignment did not retire the outgoing lease.
+    db.update(issues).set({ assigneeId: human.id }).where(eq(issues.id, issueId)).run();
+    expect(getActiveLease(db, issueId)).toBeNull();
+    expect(() => validateLease(db, issueId, agent.id, token)).toThrow();
+  });
+
+  it("rolls back predecessor retirement if replacement minting fails", () => {
+    const token = mintLease(db, issueId, agent.id, 3600);
+    expect(() => mintLease(db, issueId, -1, 3600)).toThrow();
+    expect(() => validateLease(db, issueId, agent.id, token)).not.toThrow();
   });
 });
