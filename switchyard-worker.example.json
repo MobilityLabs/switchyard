@@ -9,7 +9,7 @@
     "SYD": {
       "repo": "/Users/sean/sites/switchyard",
       "stack": {
-        "node": "20",
+        "node": "24",
         "cli": [{ "name": "gh", "check": "gh --version", "install": "brew install gh" }],
         "ports": [3300]
       }

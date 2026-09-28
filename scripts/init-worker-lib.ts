@@ -223,7 +223,7 @@ function validateWorkerStack(projectKey: string, raw: unknown): string[] {
   const stack = raw as Record<string, unknown>;
 
   if (stack.node !== undefined && (typeof stack.node !== "string" || stack.node.trim() === "")) {
-    problems.push(`projects.${projectKey}.stack.node must be a non-empty string, e.g. "20"`);
+    problems.push(`projects.${projectKey}.stack.node must be a non-empty string, e.g. "24"`);
   }
 
   if (stack.ports !== undefined) {
@@ -838,8 +838,9 @@ export function formatUserStackCapture(capture: UserStackCapture): string {
  */
 const WELL_KNOWN_CLI_INSTALL: Record<string, string> = {
   gh: "brew install gh",
-  codex: "npm install -g @openai/codex",
-  gemini: "npm install -g @google/gemini-cli",
+  // Keep repair/capture advice aligned with the worker image defaults (#268).
+  codex: "npm install -g @openai/codex@0.157.1",
+  gemini: "npm install -g @google/gemini-cli@0.61.0",
 };
 
 /** Looks up a well-known install command by CLI name, case-insensitively. */

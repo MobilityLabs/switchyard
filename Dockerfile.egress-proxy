@@ -14,7 +14,7 @@
 # NOTE: confirm the mitmproxy tag exists on Docker Hub at build time and bump as
 # releases land — pinned for reproducibility (matches the alpine pin the old
 # image used).
-FROM mitmproxy/mitmproxy:11.1.3
+FROM mitmproxy/mitmproxy:12.2.3
 
 # The base image runs as the non-root `mitmproxy` user (uid 1000, home
 # /home/mitmproxy). Become root only to place files + prep the CA dir, then

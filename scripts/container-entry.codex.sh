@@ -138,8 +138,8 @@ chmod 600 "$CODEX_HOME/auth.json"
 
 # The container is the sandbox here, not codex's own approval/sandbox layer
 # -- headless full-auto is fine inside a disposable, network-scoped clone.
-# Spike (Task 1): codex 0.142.5 dropped `--ask-for-approval`; the headless
-# full-auto flag is --dangerously-bypass-approvals-and-sandbox.
+# --dangerously-bypass-approvals-and-sandbox disables the inner sandbox and
+# approval prompts; this entrypoint is only for the isolated container path.
 set +e
 codex exec --dangerously-bypass-approvals-and-sandbox "$WORKER_PROMPT" < /dev/null
 CODEX_EXIT=$?

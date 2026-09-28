@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { wellKnownCliInstall } from "../../scripts/init-worker-lib.js";
 
 // SYD-224: better-sqlite3's prebuild-install fetch can't reach github.com
 // inside the worker egress allowlist, so it must fall back to `node-gyp
@@ -101,5 +102,19 @@ describe("Dockerfile.worker.codex pinned CLI version (SYD-227)", () => {
 
   it("records the installed version in build output", () => {
     expect(raw).toContain("codex --version");
+  });
+});
+
+describe("all worker image dependency pins (#268)", () => {
+  it.each([
+    ["codex", "Dockerfile.worker.codex", "CODEX_CLI_VERSION", "@openai/codex"],
+    ["gemini", "Dockerfile.worker.gemini", "GEMINI_CLI_VERSION", "@google/gemini-cli"],
+  ])("keeps the %s doctor repair command aligned with its image", (engine, file, arg, pkg) => {
+    const raw = readFileSync(path.join(__dirname, "../..", file), "utf8");
+    const version = raw.match(new RegExp(`^ARG ${arg}=(\\d+\\.\\d+\\.\\d+)$`, "m"))?.[1];
+    expect(version).toBeDefined();
+    expect(raw).toContain(`npm install -g ${pkg}@\${${arg}}`);
+    expect(raw).toContain(`${engine} --version`);
+    expect(wellKnownCliInstall(engine)).toBe(`npm install -g ${pkg}@${version}`);
   });
 });

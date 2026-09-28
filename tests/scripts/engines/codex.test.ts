@@ -32,8 +32,7 @@ describe("codex engine builders", () => {
   });
 
   it("builds a headless codex exec argv (container is the sandbox)", () => {
-    // Spike (Task 1): codex 0.142.5 dropped --ask-for-approval; headless
-    // full-auto is --dangerously-bypass-approvals-and-sandbox.
+    // The container supplies isolation; the CLI must not wait for approvals.
     expect(buildCodexExecArgs("do the thing")).toEqual([
       "exec",
       "--dangerously-bypass-approvals-and-sandbox",

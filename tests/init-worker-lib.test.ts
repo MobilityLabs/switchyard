@@ -1096,8 +1096,8 @@ describe("formatUserStackCapture (SYD-82)", () => {
 describe("wellKnownCliInstall (SYD-87)", () => {
   it("returns an install command for well-known reviewer CLIs, case-insensitively", () => {
     expect(wellKnownCliInstall("gh")).toBe("brew install gh");
-    expect(wellKnownCliInstall("Codex")).toBe("npm install -g @openai/codex");
-    expect(wellKnownCliInstall("GEMINI")).toBe("npm install -g @google/gemini-cli");
+    expect(wellKnownCliInstall("Codex")).toBe("npm install -g @openai/codex@0.157.1");
+    expect(wellKnownCliInstall("GEMINI")).toBe("npm install -g @google/gemini-cli@0.61.0");
   });
 
   it("returns undefined for an unrecognized CLI", () => {
@@ -1108,8 +1108,12 @@ describe("wellKnownCliInstall (SYD-87)", () => {
 describe("suggestStackCli (SYD-82, SYD-87)", () => {
   it("builds a --version check per name and pre-fills install for well-known CLIs only", () => {
     expect(suggestStackCli(["codex", "gemini", "some-internal-tool"])).toEqual([
-      { name: "codex", check: "codex --version", install: "npm install -g @openai/codex" },
-      { name: "gemini", check: "gemini --version", install: "npm install -g @google/gemini-cli" },
+      { name: "codex", check: "codex --version", install: "npm install -g @openai/codex@0.157.1" },
+      {
+        name: "gemini",
+        check: "gemini --version",
+        install: "npm install -g @google/gemini-cli@0.61.0",
+      },
       { name: "some-internal-tool", check: "some-internal-tool --version" },
     ]);
   });
@@ -1128,7 +1132,7 @@ describe("formatDockerfileStackGuidance (SYD-87)", () => {
       ),
     ).toEqual([
       "  - gh: brew install gh",
-      "  - codex (captured, not yet in stack.cli): npm install -g @openai/codex",
+      "  - codex (captured, not yet in stack.cli): npm install -g @openai/codex@0.157.1",
       "  - some-internal-tool (captured, not yet in stack.cli): (no install command known)",
     ]);
   });

@@ -303,9 +303,11 @@ branch, and pushes the branch back — it is structurally unable to touch your
 host filesystem or push to `main`. This is the recommended default; the bare
 mode above stays available for repos or setups where Docker isn't practical.
 
-Build the worker image once (rebuild after changing `scripts/container-entry.sh`).
-The CLI versions are pinned in their respective Dockerfiles — to upgrade, bump
-their defaults (or override via build arguments) and rebuild.
+Build the worker images before dispatching (rebuild after changing their
+entrypoints or helpers). Claude, Codex, and Gemini CLI versions are pinned in
+their respective Dockerfiles. Upgrade the defaults and matching doctor install
+advice together, then rebuild and smoke-test; the complete procedure and proxy
+rollout steps are in [Worker dependency upgrades](docs/worker-upgrades.md).
 
 For the Anthropic/Claude worker:
 ```bash
@@ -319,6 +321,13 @@ For the Codex worker:
 npm run build:worker-image-codex
 # or, to use a different version without editing the Dockerfile:
 docker build -f Dockerfile.worker.codex --build-arg CODEX_CLI_VERSION=x.y.z -t switchyard-worker-codex .
+```
+
+For the Gemini worker:
+```bash
+npm run build:worker-image-gemini
+# or, to use a different version without editing the Dockerfile:
+docker build -f Dockerfile.worker.gemini --build-arg GEMINI_CLI_VERSION=x.y.z -t switchyard-worker-gemini .
 ```
 
 Set `containerized: true` in `switchyard-worker.json` (and optionally
