@@ -8,9 +8,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { WorkerConfig } from "../../scripts/worker-select.js";
-import { savePublication, clearPublication } from "../../scripts/worker-publications.js";
+import {
+  savePublication,
+  clearPublication,
+  readPublications,
+} from "../../scripts/worker-publications.js";
 
 const spawnMock = vi.fn();
+const dockerPs = vi.fn(() => "");
 
 vi.mock("../../scripts/worker-publications.js", () => ({
   savePublication: vi.fn(),
@@ -20,7 +25,21 @@ vi.mock("../../scripts/worker-publications.js", () => ({
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+    execFile: (
+      _command: string,
+      _args: string[],
+      callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+    ) => {
+      try {
+        callback(null, { stdout: dockerPs(), stderr: "" });
+      } catch (error) {
+        callback(error as Error);
+      }
+    },
+  };
 });
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -44,7 +63,8 @@ vi.mock("../../scripts/delivery-exec.js", () => ({
   originOwnerRepo: (...args: unknown[]) => originOwnerRepo(...args),
 }));
 
-const { dispatch, active, activeMode } = await import("../../scripts/agent-worker.js");
+const { dispatch, active, activeMode, recoverPublications } =
+  await import("../../scripts/agent-worker.js");
 
 class FakeChildProcess extends EventEmitter {
   pid: number | undefined;
@@ -95,6 +115,8 @@ beforeEach(() => {
   active.clear();
   activeMode.clear();
   spawnMock.mockReset();
+  dockerPs.mockReset().mockReturnValue("");
+  vi.mocked(readPublications).mockReturnValue([]);
   vi.mocked(savePublication).mockClear();
   vi.mocked(clearPublication).mockClear();
   publishAgentBranch.mockReset();
@@ -215,5 +237,47 @@ describe("publication intent cleanup", () => {
     child.emit("error", new Error("ENOENT: docker"));
     expect(clearPublication).toHaveBeenCalledWith("/repo/syd", config, "SYD-9");
     expect(publishAgentBranch).not.toHaveBeenCalled();
+  });
+});
+
+describe("container completion verification", () => {
+  it("keeps the obligation when the local docker client exits before its container", async () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    dockerPs.mockReturnValue("syd-SYD-9\n");
+    publishAgentBranch.mockResolvedValue({ status: "no-commits" });
+    dispatch(issue, config, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+    child.emit("exit", 1);
+    await vi.waitFor(() => expect(dockerPs).toHaveBeenCalledOnce());
+    expect(publishAgentBranch).not.toHaveBeenCalled();
+    expect(clearPublication).not.toHaveBeenCalled();
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) => String(url).includes("/agent-sessions/") && init?.method === "PATCH",
+      ),
+    ).toBe(false);
+    vi.mocked(readPublications).mockReturnValue([
+      { ref: issue.ref, issueTitle: issue.title, sessionId: null, exitCode: 1 },
+    ]);
+    await recoverPublications(config, "tok", new Set());
+    expect(publishAgentBranch).toHaveBeenCalledOnce();
+    expect(clearPublication).toHaveBeenCalledWith("/repo/syd", config, issue.ref);
+  });
+
+  it("preserves the publication marker if Docker inspection fails", async () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    dockerPs.mockImplementation(() => {
+      throw new Error("Docker daemon unavailable");
+    });
+    dispatch(issue, config, "tok", "code");
+    child.pid = 111;
+    child.emit("spawn");
+    child.emit("exit", 1);
+    await vi.waitFor(() => expect(dockerPs).toHaveBeenCalledOnce());
+    expect(publishAgentBranch).not.toHaveBeenCalled();
+    expect(clearPublication).not.toHaveBeenCalled();
   });
 });

@@ -709,12 +709,18 @@ async function publishPending(
   config: WorkerConfig,
   token: string,
   logLine: (text: string) => void,
+  knownLiveNames?: Set<string>,
 ): Promise<void> {
   const { ref, issueTitle, sessionId, exitCode } = publication;
   const key = `${project.repo}:${ref}`;
   if (publishing.has(key)) return;
   publishing.add(key);
   try {
+    // A local docker run/wait client can exit while its daemon-side container
+    // survives. Only confirmed container disappearance permits completion;
+    // an inspection error leaves the durable obligation intact for retry.
+    const liveNames = knownLiveNames ?? (await listLiveContainerNames());
+    if (liveNames.has(containerNameFor(ref))) return;
     await reportSessionEnd(config, token, Promise.resolve(sessionId), exitCode);
     const outcome = await publishAgentBranch(project.repo, ref, issueTitle, config.url, exitCode);
     const line = formatPublishOutcome(agentBranch(ref), outcome);
@@ -773,6 +779,7 @@ async function finishSessionExit(
   sessionId: Promise<number | null>,
   exitCode: number | null,
   logLine: (text: string) => void,
+  knownLiveNames?: Set<string>,
 ): Promise<void> {
   console.log(`${ref} exited with code ${exitCode}`);
   logLine(`\n[worker] exited with code ${exitCode}\n`);
@@ -785,7 +792,7 @@ async function finishSessionExit(
     // Save before closing the tracker session: if the process stops after
     // the PATCH, the server no longer lists it as active but this survives.
     savePublication(project.repo, config, publication);
-    await publishPending(publication, project, config, token, logLine);
+    await publishPending(publication, project, config, token, logLine, knownLiveNames);
   } catch (err) {
     // Leave the server session active when persistence fails, so restart
     // reconciliation can still discover it rather than forgetting the work.
@@ -808,7 +815,7 @@ export async function recoverPublications(
   const liveNames = knownLiveNames ?? (await listLiveContainerNames());
   for (const { project, publication } of pending) {
     if (active.has(publication.ref) || liveNames.has(containerNameFor(publication.ref))) continue;
-    await publishPending(publication, project, config, token, () => {});
+    await publishPending(publication, project, config, token, () => {}, liveNames);
   }
 }
 
@@ -1704,6 +1711,7 @@ export async function reconcileContainerSessions(
       Promise.resolve(session.id),
       null,
       () => {},
+      liveNames,
     );
   }
   for (const session of live) {
