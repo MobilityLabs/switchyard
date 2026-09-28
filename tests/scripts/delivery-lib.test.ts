@@ -648,9 +648,10 @@ describe("publish-failure comment (SYD-257)", () => {
     expect(body).toContain("ssh: connect to host github.com: config error");
   });
 
-  it("says there is no PR yet, unlike a merge-time delivery failure", () => {
+  it("retains recoverable work without claiming import or PR creation succeeded", () => {
     const body = publishFailureComment("SYD-9", "boom");
-    expect(body).toContain("no PR yet");
+    expect(body).toContain("retained for retry");
+    expect(body).not.toContain("in the host repo");
   });
 });
 

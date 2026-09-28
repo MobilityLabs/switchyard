@@ -1,3 +1,4 @@
+import { workerExchangeRepo } from "../../scripts/worker-exchange.js";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   selectDispatchable,
@@ -82,6 +83,56 @@ const issue = (overrides: Partial<WorkerIssue>): WorkerIssue => ({
 });
 
 describe("selectDispatchable", () => {
+  it("fills capacity in manual queue order before affinity, priority, or age (#266)", () => {
+    const candidates = [
+      issue({
+        ref: "SYD-1",
+        queueRank: null,
+        priority: "urgent",
+        workerPreference: "claude",
+        createdAt: 1,
+      }),
+      issue({
+        ref: "SYD-2",
+        queueRank: 200,
+        priority: "urgent",
+        workerPreference: "claude",
+        createdAt: 2,
+      }),
+      issue({
+        ref: "SYD-3",
+        queueRank: 100,
+        priority: "low",
+        workerPreference: "codex",
+        createdAt: 3,
+      }),
+    ];
+    expect(selectDispatchable(candidates, config, []).map((i) => i.ref)).toEqual([
+      "SYD-3",
+      "SYD-2",
+    ]);
+  });
+
+  it("skips ineligible ranked work and keeps label, project, and active-capacity gates (#266)", () => {
+    const candidates = [
+      issue({ ref: "SYD-1", queueRank: 100, blocked: true }),
+      issue({ ref: "SYD-2", queueRank: 200, labels: [] }),
+      issue({ ref: "OTHER-1", queueRank: 300 }),
+      issue({ ref: "SYD-3", queueRank: 400, workerPreference: "interactive" }),
+      issue({ ref: "SYD-4", queueRank: 500, assigneeId: 1 }),
+      issue({ ref: "SYD-5", queueRank: 600, needsInput: true }),
+      issue({
+        ref: "SYD-6",
+        queueRank: 700,
+        openPr: { prNumber: 1, url: "https://example.com/pr/1" },
+      }),
+      issue({ ref: "SYD-7", queueRank: 800 }),
+      issue({ ref: "SYD-8", queueRank: 900 }),
+      issue({ ref: "SYD-9", priority: "urgent" }),
+    ];
+    expect(selectDispatchable(candidates, config, ["SYD-7"]).map((i) => i.ref)).toEqual(["SYD-8"]);
+  });
+
   it("suppresses a full project's work, logs once, and resumes below the limit", () => {
     const issues = [issue({ ref: "SYD-1" }), issue({ ref: "AIPI-1" })];
     const limited = {
@@ -1026,10 +1077,11 @@ describe("buildDockerArgs", () => {
     expect(args.some((a) => a.includes("_PROXY") || a.includes("_proxy"))).toBe(false);
   });
 
-  it("mounts the right repo", () => {
+  it("mounts only the per-session exchange outside the host checkout", () => {
     const args = buildDockerArgs(issue({ ref: "SYD-1" }), project, config, oauthEnv);
     const vIndex = args.indexOf("-v");
-    expect(args[vIndex + 1]).toBe("/repo/syd:/origin");
+    expect(args[vIndex + 1]).toBe(`${workerExchangeRepo(project.repo, config, "SYD-1")}:/origin`);
+    expect(args).not.toContain("/repo/syd:/origin");
   });
 
   it("passes the issue ref through as ISSUE_REF and the container name", () => {

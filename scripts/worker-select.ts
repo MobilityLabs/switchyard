@@ -1,6 +1,8 @@
 // Pure dispatch-selection logic for scripts/agent-worker.ts.
 // Kept separate from the polling/spawning loop so it's trivially unit-testable.
 
+import { workerExchangeRepo } from "./worker-exchange.js";
+import { resolveWorkerModel } from "./worker-telemetry.mjs";
 import { DEFAULT_CODEX_IMAGE } from "./engines/codex.js";
 import {
   DEFAULT_GEMINI_IMAGE,
@@ -9,10 +11,14 @@ import {
   GEMINI_API_KEY_AUTH_TYPE,
 } from "./engines/gemini.js";
 import { INTERACTIVE_PREFERENCE } from "../src/services/worker-preference.js";
+import { compareTaskOrder } from "../src/services/task-order.js";
 
 /** The subset of an /api/issues row the selector needs. */
 export type WorkerIssue = {
+  id?: number;
   ref: string; // "<PROJECT>-<number>"
+  /** Explicit board order comes before engine affinity, priority, and age. */
+  queueRank?: number | null;
   labels: string[];
   assigneeId: number | null;
   needsInput: boolean;
@@ -35,8 +41,7 @@ export type WorkerIssue = {
   blocked?: boolean;
   /**
    * The issue's priority, used to order candidates so dispatch honors priority
-   * (SYD-160) — mirrors next_task's PRIORITY_RANK. Optional/unknown values sort
-   * last (see priorityRank).
+   * (SYD-160). Optional/unknown values sort last in the shared task order.
    */
   priority?: string;
   /** Creation timestamp, the oldest-first tiebreak within a priority (SYD-160). */
@@ -50,17 +55,6 @@ export type WorkerIssue = {
    */
   workerPreference?: string | null;
 };
-
-/**
- * Priority ordering for dispatch selection (SYD-160), mirroring the SQL
- * PRIORITY_RANK in src/services/dependencies.ts: urgent first, then high,
- * medium, low, and anything unset/unknown last.
- */
-const PRIORITY_RANK: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
-
-function priorityRank(priority: string | undefined): number {
-  return priority !== undefined && priority in PRIORITY_RANK ? PRIORITY_RANK[priority] : 4;
-}
 
 /** One extra CLI tool a project's dispatched sessions need beyond the baseline (git, node, claude). */
 export type WorkerStackCli = {
@@ -89,6 +83,8 @@ export type WorkerStack = {
 
 export type WorkerProject = {
   repo: string;
+  /** Optional model override for this project; takes precedence over worker.model. */
+  model?: string;
   stack?: WorkerStack;
   /** Integration branch containerized dispatch bases agent/<ref> on (default "main"). */
   baseBranch?: string;
@@ -121,6 +117,8 @@ export type GithubPollConfig = {
 
 export type WorkerConfig = {
   url: string;
+  /** Optional requested model; absent preserves the engine/provider default. */
+  model?: string;
   label: string;
   intervalSeconds: number;
   /** How often to scan the event feed for answered escalations (default 15s). */
@@ -198,6 +196,18 @@ const DEFAULT_ALLOWED_TOOLS = [
   "Glob",
 ];
 const DEFAULT_WORKER_IMAGE = "switchyard-worker";
+
+/** Use the same image for dispatch and every doctor probe. */
+export function workerImage(config: Pick<WorkerConfig, "image" | "engine">): string {
+  return (
+    config.image ??
+    (config.engine === "codex"
+      ? DEFAULT_CODEX_IMAGE
+      : config.engine === "gemini"
+        ? DEFAULT_GEMINI_IMAGE
+        : DEFAULT_WORKER_IMAGE)
+  );
+}
 export const DEFAULT_MAX_ANSWER_CONCURRENT = 2;
 const DEFAULT_BASE_BRANCH = "main";
 export const DEFAULT_SESSION_TIMEOUT_SECONDS = 3600;
@@ -379,9 +389,8 @@ export function checkRoleLockConflict(
  * alongside claimIssue's own check, for a claim that was released back to todo
  * while its PR is still open), isn't already running, and fits within remaining
  * maxConcurrent capacity (existing active dispatches + newly selected <=
- * maxConcurrent). Candidates are considered highest-priority-first, then
- * oldest-first within a priority (SYD-160), so capacity is filled by priority
- * rather than by the feed's arrival order.
+ * maxConcurrent). Candidates follow the same manual queue, affinity, priority,
+ * and age order as nextTask, independently of the feed's arrival order.
  */
 // Defined in src/services/worker-preference.ts (a leaf module, no imports) and
 // re-exported here so this file's existing importers are unaffected. The server
@@ -416,29 +425,7 @@ export function selectDispatchable<T extends WorkerIssue>(
     }
   }
 
-  // Soft routing (SYD-201): this worker's classification is its engine. An
-  // issue matching it sorts first, neutral (no preference) next, another
-  // classification's last — ahead of priority, so each worker prefers its own
-  // but (since nothing is excluded below) still falls back to foreign-preferred
-  // work when it's all that's left. No preference set anywhere => all neutral,
-  // i.e. today's behavior unchanged.
-  const classification = config.engine ?? "claude";
-  const affinity = (issue: T): number => {
-    const pref = issue.workerPreference;
-    if (pref == null) return 1; // neutral
-    return pref === classification ? 0 : 2; // match : foreign
-  };
-
-  // Then mirror next_task's (PRIORITY_RANK, createdAt) ordering so dispatch
-  // honors priority regardless of the order /api/issues returned rows in
-  // (desc(id), i.e. newest-first). Array.sort is stable, so equal keys keep feed order.
-  const ordered = [...issues].sort((a, b) => {
-    const byAffinity = affinity(a) - affinity(b);
-    if (byAffinity !== 0) return byAffinity;
-    const byPriority = priorityRank(a.priority) - priorityRank(b.priority);
-    if (byPriority !== 0) return byPriority;
-    return (a.createdAt ?? 0) - (b.createdAt ?? 0);
-  });
+  const ordered = [...issues].sort(compareTaskOrder(config.engine ?? "claude"));
 
   const selected: T[] = [];
   for (const issue of ordered) {
@@ -1241,13 +1228,7 @@ export function buildDockerArgs(
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   const baseBranch = project.baseBranch ?? DEFAULT_BASE_BRANCH;
   const prompt = buildContainerizedPrompt(issue.ref, { ...opts, baseBranch });
-  const image =
-    config.image ??
-    (engine === "codex"
-      ? DEFAULT_CODEX_IMAGE
-      : engine === "gemini"
-        ? DEFAULT_GEMINI_IMAGE
-        : DEFAULT_WORKER_IMAGE);
+  const image = workerImage(config);
   const stackChecks = stackChecksEnv(project.stack);
 
   // Provider-credential handling depends on the egress mode (SYD-186) and,
@@ -1312,7 +1293,7 @@ export function buildDockerArgs(
     "no-new-privileges",
     ...egressDockerArgs(config),
     "-v",
-    `${project.repo}:/origin`,
+    `${workerExchangeRepo(project.repo, config, issue.ref)}:/origin`,
     "-e",
     `ISSUE_REF=${issue.ref}`,
     "-e",
@@ -1334,6 +1315,11 @@ export function buildDockerArgs(
     `WORKER_PROMPT=${prompt}`,
     "-e",
     `ALLOWED_TOOLS=${allowedTools.join(",")}`,
+    "-e",
+    "WORKER_SESSION_KEY",
+    ...(resolveWorkerModel(config, project)
+      ? ["-e", `WORKER_MODEL=${resolveWorkerModel(config, project)}`]
+      : []),
     ...(stackChecks ? ["-e", `STACK_CHECKS=${stackChecks}`] : []),
     "-e",
     `BASE_BRANCH=${baseBranch}`,

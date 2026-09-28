@@ -47,6 +47,7 @@
 
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   readFileSync,
@@ -61,7 +62,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
+import { assertWorkerExecution, parseDotEnv, validateWorkerConfig } from "./init-worker-lib.js";
 import {
   selectDispatchable,
   filterRetryCapped,
@@ -110,6 +111,8 @@ import {
   type DispatchPolicy,
   type RunningContainerSessionRow,
 } from "./worker-select.js";
+import { resolveWorkerModel } from "./worker-telemetry.mjs";
+import { containerImageMetadata } from "./worker-image-metadata.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
 import {
   savePublication,
@@ -117,6 +120,12 @@ import {
   clearPublication,
   type PendingPublication,
 } from "./worker-publications.js";
+import {
+  prepareWorkerExchange,
+  hasWorkerExchange,
+  importWorkerExchange,
+  clearWorkerExchange,
+} from "./worker-exchange.js";
 import { publishAgentBranch, prFreshness, originOwnerRepo } from "./delivery-exec.js";
 import {
   agentBranch,
@@ -721,7 +730,13 @@ async function publishPending(
     // an inspection error leaves the durable obligation intact for retry.
     const liveNames = knownLiveNames ?? (await listLiveContainerNames());
     if (liveNames.has(containerNameFor(ref))) return;
+    const imported = importWorkerExchange(project, config, ref);
     await reportSessionEnd(config, token, Promise.resolve(sessionId), exitCode);
+    if (!publishesContainers(config) || (publication.exchange && !imported)) {
+      clearWorkerExchange(project.repo, config, ref);
+      clearPublication(project.repo, config, ref);
+      return;
+    }
     const outcome = await publishAgentBranch(project.repo, ref, issueTitle, config.url, exitCode);
     const line = formatPublishOutcome(agentBranch(ref), outcome);
     console.log(`${ref}: ${line}`);
@@ -751,6 +766,7 @@ async function publishPending(
       // exist. A crash/failed POST retries the idempotent already-open path.
       await postDeliveryEvent(config, token, ref, event);
     }
+    clearWorkerExchange(project.repo, config, ref);
     clearPublication(project.repo, config, ref);
   } catch (err) {
     const message = (err as Error).message;
@@ -783,12 +799,19 @@ async function finishSessionExit(
 ): Promise<void> {
   console.log(`${ref} exited with code ${exitCode}`);
   logLine(`\n[worker] exited with code ${exitCode}\n`);
-  if (!publishesContainers(config)) {
+  if (!config.containerized) {
     await reportSessionEnd(config, token, sessionId, exitCode);
     return;
   }
   try {
-    const publication = { ref, issueTitle, sessionId: (await sessionId) ?? null, exitCode };
+    const pending = readPublications(project.repo, config).find((entry) => entry.ref === ref);
+    const publication = {
+      ...pending,
+      ref,
+      issueTitle,
+      sessionId: (await sessionId) ?? null,
+      exitCode,
+    };
     // Save before closing the tracker session: if the process stops after
     // the PATCH, the server no longer lists it as active but this survives.
     savePublication(project.repo, config, publication);
@@ -805,7 +828,7 @@ export async function recoverPublications(
   token: string,
   knownLiveNames?: Set<string>,
 ): Promise<void> {
-  if (!publishesContainers(config)) return;
+  if (!config.containerized) return;
   const pending = Object.values(config.projects).flatMap((project) =>
     readPublications(project.repo, config).map((publication) => ({ project, publication })),
   );
@@ -839,15 +862,17 @@ export function dispatch(
     if (opts.leaseToken) void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
   };
   try {
+    assertWorkerExecution(config, role);
     mkdirSync(logDir, { recursive: true });
   } catch (err) {
-    releaseOnSetupFailure(err, "prepare the log dir");
+    releaseOnSetupFailure(err, "prepare the session");
     return;
   }
   const logPath = path.join(logDir, `${issue.ref}.log`);
+  const sessionKey = randomUUID();
 
   if ((config.runner ?? "cli") === "sdk") {
-    dispatchSdk(issue, project.repo, config, token, role, logPath, opts);
+    dispatchSdk(issue, project.repo, config, token, role, logPath, { ...opts, sessionKey });
     return;
   }
 
@@ -877,6 +902,7 @@ export function dispatch(
   const clearNeverStartedPublication = () => {
     if (!publicationSaved) return;
     try {
+      clearWorkerExchange(project.repo, config, issue.ref);
       clearPublication(project.repo, config, issue.ref);
     } catch (err) {
       console.error(
@@ -886,18 +912,29 @@ export function dispatch(
   };
   try {
     if (config.containerized) {
-      if (publishesContainers(config)) {
-        savePublication(project.repo, config, {
-          ref: issue.ref,
-          issueTitle: issue.title,
-          sessionId: null,
-          exitCode: null,
-        });
-        publicationSaved = true;
+      if (
+        readPublications(project.repo, config).some((entry) => entry.ref === issue.ref) ||
+        hasWorkerExchange(project.repo, config, issue.ref)
+      ) {
+        throw new Error(
+          `unfinished worker exchange/publication for ${issue.ref}; recover it before redispatch`,
+        );
       }
-      // The container is the sandbox: it clones the repo internally, works on
-      // a branch, and pushes it back out — it never touches this host
-      // filesystem beyond the /origin mount. See scripts/container-entry.sh.
+      // Persist before preparation too: a crash while copying objects leaves
+      // a recoverable obligation, never an orphan that blocks redispatch.
+      // Persist for every container, even when automatic PR publication is
+      // disabled: importing its output after a restart is still mandatory.
+      savePublication(project.repo, config, {
+        ref: issue.ref,
+        issueTitle: issue.title,
+        sessionId: null,
+        exitCode: null,
+        exchange: true,
+      });
+      publicationSaved = true;
+      prepareWorkerExchange(project, config, issue.ref);
+      // Only the sanitized exchange is mounted. The live checkout, .env,
+      // Git config and host recovery/lease state stay outside the container.
       const dockerArgs = buildDockerArgs(issue, project, config, process.env, opts);
       child = spawn("docker", dockerArgs, {
         detached: true,
@@ -917,6 +954,7 @@ export function dispatch(
         env: {
           ...process.env,
           SWITCHYARD_TOKEN: token,
+          WORKER_SESSION_KEY: sessionKey,
           ...(opts.leaseToken ? { SWITCHYARD_LEASE: opts.leaseToken } : {}),
         },
       });
@@ -954,11 +992,24 @@ export function dispatch(
         cliMcpTmpDir = tmpDir;
         cliArgs.push("--mcp-config", configPath);
       }
-      child = spawn("claude", cliArgs, {
-        cwd: project.repo,
-        detached: true,
-        stdio: ["ignore", fd, fd],
-      });
+      child = spawn(
+        process.execPath,
+        [
+          fileURLToPath(new URL("./worker-engine-runner.mjs", import.meta.url)),
+          "claude",
+          ...cliArgs,
+        ],
+        {
+          env: {
+            ...process.env,
+            WORKER_MODEL: resolveWorkerModel(config, project) ?? "",
+            WORKER_SESSION_KEY: sessionKey,
+          },
+          cwd: project.repo,
+          detached: true,
+          stdio: ["ignore", fd, fd, "ipc"],
+        },
+      );
     }
   } catch (err) {
     console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
@@ -975,6 +1026,20 @@ export function dispatch(
   active.set(issue.ref, child);
   activeMode.set(issue.ref, config.containerized ? "container" : "cli");
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
+
+  if (!config.containerized) {
+    child.on("message", (message) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        "type" in message &&
+        message.type === "worker.launch_error" &&
+        opts.leaseToken
+      ) {
+        void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
+      }
+    });
+  }
 
   // SYD-210 Layer B: persist the lease for a container so a worker restart can
   // re-adopt it and resume heartbeats (see adoptContainerSession). Bare-CLI
@@ -1016,6 +1081,20 @@ export function dispatch(
   let sessionId: Promise<number | null> = Promise.resolve(null);
   let spawned = false;
   child.on("spawn", () => {
+    if (config.containerized) {
+      void containerImageMetadata(containerNameFor(issue.ref))
+        .then((metadata) =>
+          logLine(
+            `${JSON.stringify({ type: "worker.image", session_key: sessionKey, ...metadata })}\n`,
+          ),
+        )
+        .catch(() =>
+          logLine(
+            `${JSON.stringify({ type: "worker.image", session_key: sessionKey, image_id: null, image_digests: [] })}\n`,
+          ),
+        );
+    }
+
     spawned = true;
     sessionId = reportSessionStart(
       config,
@@ -1083,7 +1162,7 @@ function dispatchSdk(
   token: string,
   role: WorkerRole,
   logPath: string,
-  opts: { resumed?: boolean; leaseToken?: string },
+  opts: { resumed?: boolean; leaseToken?: string; sessionKey: string },
 ): void {
   const allowedTools = config.allowedTools ?? [
     "mcp__switchyard__*",
@@ -1134,6 +1213,8 @@ function dispatchSdk(
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
       mod.runSdkSession({
         prompt: buildPrompt(issue.ref, opts),
+        model: resolveWorkerModel(config, config.projects[projectKeyOf(issue.ref)]),
+        sessionKey: opts.sessionKey,
         cwd: repo,
         switchyardUrl: config.url,
         switchyardToken: token,
@@ -1191,6 +1272,7 @@ export function dispatchAnswer(
   token: string,
   opts: { dryRun: boolean },
 ): void {
+  assertWorkerExecution(config, "answer");
   const key = answerKey(ref);
   if (active.has(key)) return;
   if (remainingAnswerCapacity(config, active.keys()) <= 0) {
@@ -1213,10 +1295,11 @@ export function dispatchAnswer(
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${ref}.answer.log`);
+  const sessionKey = randomUUID();
 
   if ((config.runner ?? "cli") === "sdk") {
     recordAnswerAttempt(answerState, ref);
-    dispatchAnswerSdk(ref, project.repo, config, token, logPath);
+    dispatchAnswerSdk(ref, project.repo, config, token, logPath, sessionKey);
     return;
   }
 
@@ -1224,9 +1307,25 @@ export function dispatchAnswer(
   let child: ChildProcess;
   try {
     child = spawn(
-      "claude",
-      ["-p", buildAnswerPrompt(ref), "--allowedTools", ANSWER_ALLOWED_TOOLS.join(",")],
-      { cwd: project.repo, detached: true, stdio: ["ignore", fd, fd] },
+      process.execPath,
+      [
+        fileURLToPath(new URL("./worker-engine-runner.mjs", import.meta.url)),
+        "claude",
+        "-p",
+        buildAnswerPrompt(ref),
+        "--allowedTools",
+        ANSWER_ALLOWED_TOOLS.join(","),
+      ],
+      {
+        cwd: project.repo,
+        detached: true,
+        stdio: ["ignore", fd, fd, "ipc"],
+        env: {
+          ...process.env,
+          WORKER_MODEL: resolveWorkerModel(config, project) ?? "",
+          WORKER_SESSION_KEY: sessionKey,
+        },
+      },
     );
   } catch (err) {
     console.error(`failed to dispatch answer session for ${ref}: ${(err as Error).message}`);
@@ -1250,13 +1349,19 @@ export function dispatchAnswer(
     killSession(child, null);
   }, timeoutMs);
 
-  // `child.pid` is only populated once the OS has actually spawned the
-  // process; reading it synchronously here printed `pid undefined` on a
-  // spawn failure (e.g. ENOENT for a bare `claude` not on launchd's PATH —
-  // SYD-74), since the 'error' event fires on a later tick. Waiting for
-  // 'spawn' also means a failed spawn never reaches recordAnswerAttempt, so
-  // environment errors can't eat the answers-per-issue cap.
-  child.on("spawn", () => {
+  // A running Node wrapper does not prove the provider binary exists. Only
+  // its IPC acknowledgment of the provider's spawn consumes an answer attempt.
+  let providerStarted = false;
+  child.on("message", (message) => {
+    if (
+      providerStarted ||
+      !message ||
+      typeof message !== "object" ||
+      !("type" in message) ||
+      message.type !== "worker.provider_started"
+    )
+      return;
+    providerStarted = true;
     recordAnswerAttempt(answerState, ref);
     console.log(`dispatched answer session for ${ref} (pid ${child.pid}) -> ${logPath}`);
   });
@@ -1283,6 +1388,7 @@ function dispatchAnswerSdk(
   config: WorkerConfig,
   token: string,
   logPath: string,
+  sessionKey: string,
 ): void {
   const key = answerKey(ref);
   const safeAppend = (text: string) => {
@@ -1301,6 +1407,8 @@ function dispatchAnswerSdk(
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
       mod.runSdkSession({
         prompt: buildAnswerPrompt(ref),
+        model: resolveWorkerModel(config, config.projects[projectKeyOf(ref)]),
+        sessionKey,
         cwd: repo,
         switchyardUrl: config.url,
         switchyardToken: token,
@@ -1373,6 +1481,9 @@ export async function runTick(
   role: WorkerRole,
   opts: { dryRun: boolean },
 ): Promise<void> {
+  // Reject unsupported engines before polling or claiming any work, including
+  // callers that bypass loadConfig (tests, integrations, or a mutated config).
+  assertWorkerExecution(config, role);
   await runGated(tickGate, async () => {
     if (roleRunsCode(role)) {
       try {
@@ -1767,6 +1878,7 @@ async function main(): Promise<void> {
   // switchyard-worker.codex.json`) can name its own token env var (`token:
   // "SWITCHYARD_CODEX_TOKEN"`) — the secret stays in .env, never in the plist.
   const config = loadConfig(configPathFromArgs(args, defaultConfigPath(), repoRoot()));
+  assertWorkerExecution(config, role);
   const tokenVar = config.token ?? "SWITCHYARD_TOKEN";
   const token = process.env[tokenVar];
   if (!token) {

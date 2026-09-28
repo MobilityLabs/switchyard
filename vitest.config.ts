@@ -15,5 +15,7 @@ enforceNodeEngines(pkg.engines?.node, process.version, {
 });
 
 export default defineConfig({
-  test: { include: ["tests/**/*.test.{ts,mjs}", "ui/src/**/*.test.{ts,tsx}"] },
+  test: {
+    include: ["tests/**/*.test.{ts,mjs}", "ui/src/**/*.test.{ts,tsx}", "worker-sdk/**/*.test.ts"],
+  },
 });

@@ -2,7 +2,55 @@
 // Kept separate from the CLI so parsing, validation, and plist rendering are
 // trivially unit-testable without touching the filesystem or network.
 
+import { isValidWorkerModel } from "./worker-telemetry.mjs";
 import type { WorkerConfig, WorkerRole, WorkerStackCli } from "./worker-select.js";
+
+/** Capabilities of the implemented runners, shared by doctor and dispatch. */
+export function validateWorkerExecution(
+  config: Pick<WorkerConfig, "engine" | "runner" | "containerized" | "egress">,
+  role?: WorkerRole,
+): string[] {
+  const problems: string[] = [];
+  const engine = config.engine ?? "claude";
+  const runner = config.runner ?? "cli";
+  if (config.containerized !== undefined && typeof config.containerized !== "boolean") {
+    problems.push("`containerized` must be true or false, not a string");
+  }
+  if (runner !== "cli" && runner !== "sdk") {
+    problems.push('`runner` must be "cli" or "sdk"');
+  }
+  if (engine !== "claude" && engine !== "codex" && engine !== "gemini") {
+    problems.push('`engine` must be "claude", "codex", or "gemini"');
+  }
+  if (runner === "sdk" && config.containerized === true) {
+    problems.push(
+      '`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)',
+    );
+  }
+  if (engine === "codex" || engine === "gemini") {
+    if (runner !== "cli" || config.containerized !== true) {
+      problems.push(
+        `engine "${engine}" requires \`runner: "cli"\` and \`containerized: true\`; host CLI and SDK runners only support Claude`,
+      );
+    }
+    if (role !== undefined && role !== "code") {
+      problems.push(
+        `engine "${engine}" does not support answer sessions; launch with --role code and use a separate Claude worker for answers`,
+      );
+    }
+  }
+  if (engine === "codex" && config.egress === "open") {
+    problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
+  }
+  return problems;
+}
+
+export function assertWorkerExecution(config: WorkerConfig, role: WorkerRole): void {
+  const problems = validateWorkerExecution(config, role);
+  if (problems.length > 0) {
+    throw new Error(`unsupported worker execution:\n  - ${problems.join("\n  - ")}`);
+  }
+}
 
 /**
  * Minimal .env parser: KEY=VALUE lines, optional `export ` prefix, optional
@@ -43,9 +91,7 @@ export function validateWorkerConfig(raw: unknown): string[] {
   if (typeof c.url !== "string" || !/^https?:\/\/./.test(c.url)) {
     problems.push('`url` must be an http(s) URL, e.g. "http://100.85.158.109:3300"');
   }
-  if (c.containerized !== undefined && typeof c.containerized !== "boolean") {
-    problems.push("`containerized` must be true or false, not a string");
-  }
+  problems.push(...validateWorkerExecution(c));
   if (c.egress !== undefined && c.egress !== "proxy" && c.egress !== "open") {
     problems.push('`egress` must be "proxy" or "open"');
   }
@@ -55,25 +101,10 @@ export function validateWorkerConfig(raw: unknown): string[] {
   ) {
     problems.push("`egressAllow` must be an array of hostnames");
   }
-  const runner = c.runner ?? "cli";
-  if (runner !== "cli" && runner !== "sdk") {
-    problems.push('`runner` must be "cli" or "sdk"');
-  }
-  if (runner === "sdk" && c.containerized === true) {
+  if (c.model !== undefined && !isValidWorkerModel(c.model)) {
     problems.push(
-      '`runner: "sdk"` sessions run in-process on the host — remove `containerized: true` (container SDK image is not built yet)',
+      "`model` must be a non-empty model identifier (letters, digits, ., _, :, /, -; max 200 chars)",
     );
-  }
-  if (
-    c.engine !== undefined &&
-    c.engine !== "claude" &&
-    c.engine !== "codex" &&
-    c.engine !== "gemini"
-  ) {
-    problems.push('`engine` must be "claude", "codex", or "gemini"');
-  }
-  if (c.engine === "codex" && c.egress === "open") {
-    problems.push('engine "codex" requires the injecting proxy — remove `egress: "open"`');
   }
   if (c.token !== undefined && (typeof c.token !== "string" || c.token.length === 0)) {
     problems.push(
@@ -107,6 +138,11 @@ export function validateWorkerConfig(raw: unknown): string[] {
     for (const [key, project] of Object.entries(c.projects)) {
       if (typeof project?.repo !== "string" || project.repo.trim() === "") {
         problems.push(`projects.${key}.repo must be a path to a local git repo`);
+      }
+      if (project?.model !== undefined && !isValidWorkerModel(project.model)) {
+        problems.push(
+          `projects.${key}.model must be a non-empty model identifier (letters, digits, ., _, :, /, -; max 200 chars)`,
+        );
       }
       if (project?.stack !== undefined) {
         problems.push(...validateWorkerStack(key, project.stack));
@@ -198,7 +234,7 @@ function validateWorkerStack(projectKey: string, raw: unknown): string[] {
   const stack = raw as Record<string, unknown>;
 
   if (stack.node !== undefined && (typeof stack.node !== "string" || stack.node.trim() === "")) {
-    problems.push(`projects.${projectKey}.stack.node must be a non-empty string, e.g. "20"`);
+    problems.push(`projects.${projectKey}.stack.node must be a non-empty string, e.g. "24"`);
   }
 
   if (stack.ports !== undefined) {
@@ -813,8 +849,9 @@ export function formatUserStackCapture(capture: UserStackCapture): string {
  */
 const WELL_KNOWN_CLI_INSTALL: Record<string, string> = {
   gh: "brew install gh",
-  codex: "npm install -g @openai/codex",
-  gemini: "npm install -g @google/gemini-cli",
+  // Keep repair/capture advice aligned with the worker image defaults (#268).
+  codex: "npm install -g @openai/codex@0.157.1",
+  gemini: "npm install -g @google/gemini-cli@0.61.0",
 };
 
 /** Looks up a well-known install command by CLI name, case-insensitively. */

@@ -16,7 +16,7 @@ This repo tracks its own work in Switchyard itself (project key `SYD`) via the `
 npm run dev            # server on :3300 (tsx src/server.ts); SWITCHYARD_DB / PORT env override
 npm test               # vitest run (all tests)
 npx vitest run tests/services/issues-update.test.ts   # single test file
-npm run typecheck      # checks BOTH tsconfigs: app (tsc --noEmit) and ui (tsc -p ui)
+npm run typecheck      # checks app, ui, and isolated worker-sdk tsconfigs
 npm run lint           # eslint .
 npm run format:check   # prettier --check . (npm run format to fix)
 npm run build:ui       # vite build → dist/ui (server 404s SPA routes until this exists)
@@ -44,7 +44,7 @@ npx tsx scripts/syd.ts whoami --as SWITCHYARD_TOKEN            # pick a credenti
 
 Before any write it prints `acting as <name> (<type>) via <KEY>`. Read that line. Variable names describe the *actor*, not the tier — `SWITCHYARD_HUMAN_TOKEN` is a person, `SWITCHYARD_GITHUB_POLLER_TOKEN` and `SWITCHYARD_DELIVER_POLLER_TOKEN` are `service` actors, and `SWITCHYARD_TOKEN` is the dispatch worker's *agent* token, which the delivery and GitHub-ingestion endpoints refuse on purpose.
 
-`worker-sdk/` has isolated dependencies (`npm install --prefix worker-sdk`) because the Claude Agent SDK needs zod@4 while the app is on zod@3.
+`worker-sdk/` has isolated dependencies (`npm ci --prefix worker-sdk --ignore-scripts`) because the Claude Agent SDK needs zod@4 while the app is on zod@3. Install them before running the required checks; CI installs both lockfiles. `npm run typecheck:worker-sdk` checks the runner against its pinned SDK without adding the SDK to app dependencies.
 
 ## Constraints & conventions
 

@@ -1,3 +1,4 @@
+import { prepareWorkerExchange, clearWorkerExchange } from "../../scripts/worker-exchange.js";
 // The host-side publish step's pr_opened event gains repo + headSha +
 // ghUpdatedAt (SYD-205): the worker is the named freshness producer for agent
 // PRs at publish time — without headSha here, pr_state (SYD-206) has no
@@ -21,6 +22,13 @@ vi.mock("../../scripts/worker-publications.js", () => ({
   savePublication: vi.fn(),
   readPublications: vi.fn(() => []),
   clearPublication: vi.fn(),
+}));
+
+vi.mock("../../scripts/worker-exchange.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/worker-exchange.js")>()),
+  prepareWorkerExchange: vi.fn(),
+  importWorkerExchange: vi.fn(),
+  clearWorkerExchange: vi.fn(),
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -220,6 +228,26 @@ describe("publish failure surfaces on the board (SYD-257)", () => {
 });
 
 describe("publication intent cleanup", () => {
+  it("cleans this attempt when exchange preparation fails before spawn", () => {
+    vi.mocked(prepareWorkerExchange).mockImplementationOnce(() => {
+      throw new Error("root .env tracked");
+    });
+    dispatch(issue, config, "tok", "code");
+    expect(savePublication).toHaveBeenCalledOnce();
+    expect(clearWorkerExchange).toHaveBeenCalledWith("/repo/syd", config, "SYD-9");
+    expect(clearPublication).toHaveBeenCalledWith("/repo/syd", config, "SYD-9");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+  it("does not overwrite or clear an existing publication obligation", () => {
+    vi.mocked(readPublications).mockReturnValue([
+      { ref: issue.ref, issueTitle: "Existing", sessionId: 99, exitCode: null, exchange: true },
+    ]);
+    dispatch(issue, config, "tok", "code");
+    expect(savePublication).not.toHaveBeenCalled();
+    expect(clearPublication).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("clears the intent when spawn throws before starting a container", () => {
     spawnMock.mockImplementation(() => {
       throw new Error("spawn setup failed");

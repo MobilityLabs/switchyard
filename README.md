@@ -236,12 +236,46 @@ There is more than one way to spin up a session; `runner` in
 - `"sdk"` — run the session in-process through the Claude Agent SDK. The MCP
   bearer token is handed over as an in-memory object (never argv, never a
   temp file), and the worker log gets one line per tool call instead of an
-  opaque transcript. Setup: `npm install --prefix worker-sdk` (its deps are
+  opaque transcript. Setup: `npm ci --prefix worker-sdk --ignore-scripts` (its deps are
   isolated there because the SDK wants zod@4 and the app is on zod@3).
-  Not combinable with `containerized` yet.
+  This is a **trusted, host-only Claude runner**, not an isolation boundary:
+  it runs with the worker host's filesystem and environment access and cannot
+  be combined with `containerized`. Prefer the containerized CLI for unattended
+  work. The SDK explicitly uses the `claude_code` system prompt and
+  `settingSources: ["project"]`, loading repository instructions, skills and
+  hooks while excluding user/local settings. Global configuration and managed
+  policy may still apply; project hooks must be trusted.
 
-Registering non-Claude runners (Codex, Antigravity, Cursor) is being
-researched in SYD-46.
+The SDK is pinned in its isolated lockfile. After updating it, run
+`npm run typecheck:worker-sdk` and the SDK runner tests; both are included in
+the normal required checks and CI. These checks mock provider sessions and
+do not require provider credentials. SDK behavior follows the official
+[system prompt](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts)
+and [settings-source](https://code.claude.com/docs/en/agent-sdk/claude-code-features)
+documentation.
+
+`engine` selects Claude (the default), Codex, or Gemini. The supported modes are:
+
+| Engine | CLI code sessions | SDK code sessions | Process roles |
+| --- | --- | --- | --- |
+| Claude | Host or container | Host only | `code`, `answer`, `all` |
+| Codex | Container only | Unsupported | `code` only |
+| Gemini | Container only | Unsupported | `code` only |
+
+Answer sessions currently use Claude on the host, including when a Claude
+worker's code sessions are containerized. Codex and Gemini workers must use
+`runner: "cli"`, `containerized: true`, and **`--role code`**; the default
+`all` role is rejected instead of silently using Claude to answer. Run a
+separate Claude worker for answers. For example, copy the example config,
+set `engine: "codex"` and `image: "switchyard-worker-codex"`, then launch:
+
+```bash
+npx tsx scripts/agent-worker.ts --config switchyard-worker.codex.json --role code
+```
+
+For Gemini, use `engine: "gemini"` and `image: "switchyard-worker-gemini"`
+with the same code role. When installing a non-Claude default config through
+the doctor, use `npm run init-worker -- --install-launchd-code`.
 
 Safety model: the label gate (nothing runs unlabeled), `maxConcurrent` (caps
 concurrent headless sessions), and the fact that dispatched work still flows
@@ -264,14 +298,16 @@ less than it does bare on the host.
 By default, dispatched sessions run bare on the host: same process, same
 working tree, same filesystem access as anything else you run locally. Set
 `containerized: true` and Switchyard instead runs the session inside a
-disposable Docker container that clones the repo internally, works on a
-branch, and pushes the branch back — it is structurally unable to touch your
-host filesystem or push to `main`. This is the recommended default; the bare
-mode above stays available for repos or setups where Docker isn't practical.
+disposable Docker container that receives a sanitized Git exchange, works on
+an issue branch, and returns commits for host-side review and publication.
+The live checkout, host Git configuration, credentials, and worker state are
+outside its mount. Bare mode remains available for trusted local sessions.
 
-Build the worker image once (rebuild after changing `scripts/container-entry.sh`).
-The CLI versions are pinned in their respective Dockerfiles — to upgrade, bump
-their defaults (or override via build arguments) and rebuild.
+Build the worker images before dispatching (rebuild after changing their
+entrypoints or helpers). Claude, Codex, and Gemini CLI versions are pinned in
+their respective Dockerfiles. Upgrade the defaults and matching doctor install
+advice together, then rebuild and smoke-test; the complete procedure and proxy
+rollout steps are in [Worker dependency upgrades](docs/worker-upgrades.md).
 
 For the Anthropic/Claude worker:
 ```bash
@@ -287,6 +323,13 @@ npm run build:worker-image-codex
 docker build -f Dockerfile.worker.codex --build-arg CODEX_CLI_VERSION=x.y.z -t switchyard-worker-codex .
 ```
 
+For the Gemini worker:
+```bash
+npm run build:worker-image-gemini
+# or, to use a different version without editing the Dockerfile:
+docker build -f Dockerfile.worker.gemini --build-arg GEMINI_CLI_VERSION=x.y.z -t switchyard-worker-gemini .
+```
+
 Set `containerized: true` in `switchyard-worker.json` (and optionally
 `image` if you're using something other than the default `switchyard-worker`
 tag), and make sure the worker process's environment has one of:
@@ -296,32 +339,52 @@ CLAUDE_CODE_OAUTH_TOKEN=...   # from `claude setup-token`
 ANTHROPIC_API_KEY=...         # or a raw API key
 ```
 
-`scripts/agent-worker.ts` passes these through to the container via bare
-`-e VAR` (no value embedded in argv) — see `buildDockerArgs` in
-`scripts/worker-select.ts`. Inside the container, `scripts/container-entry.sh`
-clones `/origin` (the host repo, mounted read-write) into `/work`, checks out
-`agent/<ref>`, runs the same `claude -p` session as bare mode (with an
-addendum reminding it to commit and to name the branch in its issue
-comment), and pushes `agent/<ref>` back to `/origin` if it produced any
-commits. The container gets no host filesystem beyond that one mount, and can
-only ever push that one branch name — merging stays a human decision, same
-as bare mode.
+In the default proxy mode, provider credentials stay in the egress sidecar;
+the session receives a placeholder. With `egress: "open"`, provider credentials
+are passed through via bare `-e VAR` arguments (their values never enter argv).
+The tracker token and session lease authorize the session's tracker operations.
+
+Each dispatch creates a bare exchange at
+`~/.switchyard/worker-exchanges/<worker-and-repo-scope>/<ref>/origin.git`.
+Only that repository is mounted at `/origin`; its host-owned recovery metadata
+is outside the mount. The exchange contains the configured base branch and,
+when present, the existing `agent/<ref>` branch. Entrypoints clone it into
+`/work`, continue existing agent work or start at the base branch, then push
+commits back to the exchange. Untracked files, working-tree edits, other
+branches, host Git config/hooks, and credentials are not exported.
+
+After Docker confirms the container has stopped, the host reconstructs a
+private quarantine from regular Git object files and exactly `agent/<ref>`.
+It never runs Git against worker-controlled config or hooks, follows object
+alternates, or imports arbitrary refs. Strict object checks, ancestry checks,
+and an atomic comparison against the original host ref prevent overwriting
+concurrent host work. Imports are limited to 2 GiB and 100,000 object files;
+Git operations time out after two minutes. A failure retains the exchange
+and publication intent for investigation/retry. Successful import and publication
+remove it; disabling automatic PRs still imports and recovers committed work.
+
+Exported history is source data: committed secrets must be removed from that
+history before dispatch. The worker rejects root `.env`, local/production/
+development/staging env variants, `.superpowers/`, and `switchyard-worker.json`
+in exported history. Example env files, `.env.test`, and fixture env files are
+allowed. This targeted check is not a general credential scanner. Pending
+exchanges survive host-worker restarts; do not delete them before recovering
+unpublished commits. Existing pre-upgrade sessions retain their original mounts
+until they finish, so drain those sessions when rolling out this isolation change.
 
 ### Egress allowlist (SYD-110)
 
-Containerized sessions carry secrets in env (`SWITCHYARD_TOKEN`, and
-`CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY`); with open networking, a
-prompt-injected session — or a malicious npm lifecycle script during the
-pre-session `npm ci` — could simply POST them somewhere. Two layers close
-this:
+Containerized sessions need scoped tracker credentials. Provider credentials
+stay outside the session in proxy mode; open networking deliberately gives up
+that protection. The default egress controls reduce what a compromised session
+or dependency-install script can reach:
 
 1. **Network egress allowlist (default on).** Session containers join an
    `--internal` Docker network (`syd-workers`) with no route out; their only
-   exit is a tinyproxy sidecar (`syd-egress`, built by
+   HTTP(S) exit is a mitmproxy sidecar (`syd-egress`, built by
    `npm run build:worker-image` from `Dockerfile.egress-proxy`) that forwards
-   only to `api.anthropic.com`, `registry.npmjs.org`, `registry.yarnpkg.com`
-   (yarn's default registry — SYD-269), and the tracker host
-   from `url`. Add hosts with `egressAllow: ["host.name"]`; opt out entirely
+   to the configured provider, package-registry, and tracker allowlist. It
+   injects provider credentials only for the matching provider hosts. Add hosts with `egressAllow: ["host.name"]`; opt out entirely
    with `egress: "open"` in `switchyard-worker.json`. The worker stands the
    network and sidecar up automatically at startup (and refuses to start if
    it can't — deliver.ts warns instead, since merges shouldn't stop). Known
@@ -330,7 +393,7 @@ this:
    could in principle relay.
 
 2. **Secret-free dependency install.** `scripts/install-guard.mjs` strips the
-   three secret vars from the install's environment, so third-party lifecycle
+   session credentials from the install's environment, so third-party lifecycle
    scripts never see them (native-module builds still work — the reason we
    don't use `--ignore-scripts`). It runs whichever frozen install the target
    repo's lockfile calls for — `npm ci`, `yarn install --frozen-lockfile` or
@@ -345,7 +408,8 @@ Unattended agent work never lands on `main` (or the NAS) until a human stamps
 the issue `done`. Three pieces (SYD-49):
 
 1. **Workers open PRs.** When a containerized session exits having pushed
-   `agent/<ref>` into the host repo, the worker pushes that branch to GitHub
+   `agent/<ref>` into its exchange, the host validates and imports that branch,
+   then pushes it to GitHub
    and opens a PR titled with the ref — host-side, so containers never hold
    GitHub credentials. Controlled by `delivery.openPrs` (default true when the
    `delivery` block exists).
@@ -451,6 +515,8 @@ SWITCHYARD_URL=http://localhost:3300 SWITCHYARD_TOKEN=... DREAMER_DRY_RUN=1 sh s
 ## Development
 
 ```bash
+npm ci
+npm ci --prefix worker-sdk --ignore-scripts
 npm test
 npm run typecheck
 ```
@@ -458,3 +524,7 @@ npm run typecheck
 Token-lean architecture maps for coding agents live in `codemaps/`
 (generated — regenerate with the `/update-codemaps` skill rather than
 hand-editing).
+
+For optional per-worker/project model selection, recorded runtime versions and
+provider-reported models, and an operator-run comparison procedure, see
+[worker model selection and benchmarks](docs/worker-model-benchmarks.md).

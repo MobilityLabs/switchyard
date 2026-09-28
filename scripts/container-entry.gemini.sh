@@ -1,12 +1,12 @@
 #!/bin/sh
 # Container entrypoint for Switchyard's Gemini engine (SYD-225) -- the gemini
 # counterpart of container-entry.sh (SYD-30) / container-entry.codex.sh
-# (SYD-187). Same contract: clone the host repo (mounted read-write at /origin)
+# (SYD-187). Same contract: clone the sanitized session exchange (mounted read-write at /origin)
 # into /work, check out a fresh agent/<ref> branch, run a headless gemini
 # session against the clone, and push the branch back to /origin if the session
 # produced any commits. The container has no access to the host filesystem
-# beyond the /origin mount, and only ever pushes agent/<ref> branches -- merging
-# to main stays a human decision made outside the container.
+# beyond the /origin mount; the host imports only its expected agent/<ref>
+# branch after validation. Merging to main remains a human decision.
 #
 # Auth is a static AI-Studio API key: the real GEMINI_API_KEY lives only in the
 # syd-egress sidecar, which injects it as the x-goog-api-key header for
@@ -27,7 +27,7 @@
 #   STACK_CHECKS              JSON array of {name, check, install} (SYD-76)
 #   BASE_BRANCH               integration branch to base agent/<ref> on (default "main")
 #
-# Host repo mounted read-write at /origin.
+# Only the sanitized session exchange is mounted read-write at /origin.
 
 set -eu
 
@@ -49,7 +49,7 @@ fi
 # refuses the clone with "detected dubious ownership".
 git config --global --add safe.directory /origin
 
-git clone /origin /work
+git clone --no-local /origin /work
 cd /work
 
 # Pre-trust the workspace (SYD-80): kept for parity with the other entry
@@ -62,7 +62,11 @@ node /prime-workspace-trust.mjs /work
 # whatever branch the host happened to have checked out at clone time.
 BASE_BRANCH="${BASE_BRANCH:-main}"
 git fetch origin "$BASE_BRANCH"
-git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+if git show-ref --verify --quiet "refs/remotes/origin/agent/$ISSUE_REF"; then
+  git checkout -b "agent/$ISSUE_REF" "origin/agent/$ISSUE_REF"
+else
+  git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+fi
 
 # Recorded after the branch is set up, so the commit count below reflects only
 # what the session itself produced.
@@ -115,7 +119,7 @@ chmod 600 "$HOME/.gemini/settings.json"
 # --prompt runs one non-interactive turn. SWITCHYARD_TOKEN / SWITCHYARD_LEASE
 # stay exported so gemini expands them into the MCP headers at connect time.
 set +e
-gemini --yolo --prompt "$WORKER_PROMPT" < /dev/null
+node /worker-engine-runner.mjs gemini --yolo --prompt "$WORKER_PROMPT" < /dev/null
 GEMINI_EXIT=$?
 set -e
 

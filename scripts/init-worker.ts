@@ -67,7 +67,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerConfig, WorkerProject, WorkerRole } from "./worker-select.js";
-import { workerPidFileName } from "./worker-select.js";
+import { workerImage, workerPidFileName } from "./worker-select.js";
 import { resolveDeliveryToken, resolvePollerToken, tokenSourceName } from "./delivery-lib.js";
 import { isLocked } from "./pidfile.js";
 import {
@@ -93,6 +93,7 @@ import {
   suggestStackCli,
   summarizeRoleStatus,
   validateWorkerConfig,
+  assertWorkerExecution,
   workerLaunchdLabel,
   DELIVER_LAUNCHD_LABEL,
   POLL_LAUNCHD_LABEL,
@@ -175,7 +176,7 @@ function checkPlistPinnedNode(opts: {
  */
 export function runsOk(cmd: string, config: WorkerConfig): boolean {
   if (config.containerized) {
-    const image = config.image ?? "switchyard-worker";
+    const image = workerImage(config);
     return (
       spawnSync("docker", ["run", "--rm", "--entrypoint", "sh", image, "-c", cmd], {
         stdio: "ignore",
@@ -198,7 +199,7 @@ export function checkProjectStack(
   if (stack.node) {
     let actual: string | null;
     if (config.containerized) {
-      const image = config.image ?? "switchyard-worker";
+      const image = workerImage(config);
       const out = spawnSync("docker", ["run", "--rm", "--entrypoint", "node", image, "--version"], {
         encoding: "utf8",
       });
@@ -234,6 +235,66 @@ export function checkProjectStack(
     });
   }
 
+  return results;
+}
+
+/** Check the image and credentials the selected container engine actually uses. */
+export function checkContainerPrerequisites(
+  config: WorkerConfig,
+  env: NodeJS.ProcessEnv,
+): CheckResult[] {
+  const engine = config.engine ?? "claude";
+  const image = workerImage(config);
+  const hasDocker = commandExists("docker");
+  const results: CheckResult[] = [{ name: "docker CLI", ok: hasDocker }];
+  if (hasDocker) {
+    const inspect = spawnSync("docker", ["image", "inspect", image], { stdio: "ignore" });
+    const suffix = engine === "claude" ? "" : `-${engine}`;
+    const buildHint =
+      image === workerImage({ engine })
+        ? `run: npm run build:worker-image${suffix}`
+        : `build or pull the configured ${engine}-compatible image "${image}"`;
+    results.push({
+      name: `worker image "${image}"`,
+      ok: inspect.status === 0,
+      note: inspect.status === 0 ? undefined : `not built — ${buildHint}`,
+    });
+  }
+  if (engine === "codex") {
+    results.push(
+      {
+        name: "CODEX_OAUTH_TOKEN",
+        ok: Boolean(env.CODEX_OAUTH_TOKEN),
+        note: env.CODEX_OAUTH_TOKEN
+          ? "in .env / environment"
+          : "required for the credential-injecting proxy's ChatGPT authentication",
+      },
+      {
+        name: "CODEX_ACCOUNT_ID",
+        ok: Boolean(env.CODEX_ACCOUNT_ID),
+        note: env.CODEX_ACCOUNT_ID
+          ? "in .env / environment"
+          : "required by the Codex container: the non-secret ChatGPT account UUID",
+      },
+    );
+  } else if (engine === "gemini") {
+    results.push({
+      name: "GEMINI_API_KEY",
+      ok: Boolean(env.GEMINI_API_KEY),
+      note: env.GEMINI_API_KEY
+        ? "in .env / environment"
+        : "required for Gemini API-key authentication",
+    });
+  } else {
+    const hasClaudeAuth = Boolean(env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY);
+    results.push({
+      name: "CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY)",
+      ok: hasClaudeAuth,
+      note: hasClaudeAuth
+        ? "in .env / environment"
+        : "required for containerized sessions — `claude setup-token`",
+    });
+  }
   return results;
 }
 
@@ -477,7 +538,14 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         results.push({ name: "switchyard-worker.json", ok: false, note: problems.join("; ") });
       } else {
         config = raw as WorkerConfig;
-        results.push({ name: "switchyard-worker.json", ok: true });
+        results.push({
+          name: "switchyard-worker.json",
+          ok: true,
+          note:
+            config.engine && config.engine !== "claude"
+              ? `${config.engine}: container CLI only; launch with --role code (or --install-launchd-code). Answers require a separate Claude worker.`
+              : undefined,
+        });
       }
     } catch (err) {
       results.push({
@@ -556,25 +624,7 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         : "not set — SDK sessions fall back to the local claude login",
     });
   } else if (config?.containerized) {
-    const hasDocker = commandExists("docker");
-    results.push({ name: "docker CLI", ok: hasDocker });
-    if (hasDocker) {
-      const image = config.image ?? "switchyard-worker";
-      const inspect = spawnSync("docker", ["image", "inspect", image], { stdio: "ignore" });
-      results.push({
-        name: `worker image "${image}"`,
-        ok: inspect.status === 0,
-        note: inspect.status === 0 ? undefined : "not built — run: npm run build:worker-image",
-      });
-    }
-    const hasClaudeAuth = Boolean(env.CLAUDE_CODE_OAUTH_TOKEN || env.ANTHROPIC_API_KEY);
-    results.push({
-      name: "CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY)",
-      ok: hasClaudeAuth,
-      note: hasClaudeAuth
-        ? "in .env / environment"
-        : "required for containerized sessions — `claude setup-token`",
-    });
+    results.push(...checkContainerPrerequisites(config, env));
   } else {
     results.push({
       name: "claude CLI",
@@ -601,8 +651,9 @@ async function doctor(): Promise<{ results: CheckResult[]; config: WorkerConfig 
         : `mode ${mode.toString(8)} is group/world-readable — run: chmod 600 .env`,
     });
   }
-  const token = env.SWITCHYARD_TOKEN;
-  results.push({ name: "SWITCHYARD_TOKEN", ok: Boolean(token) });
+  const tokenVar = config?.token ?? "SWITCHYARD_TOKEN";
+  const token = env[tokenVar];
+  results.push({ name: tokenVar, ok: Boolean(token) });
 
   if (config) {
     const base = config.url.replace(/\/$/, "");
@@ -1395,10 +1446,12 @@ function captureStack(config: WorkerConfig | null, onlyKey: string | undefined):
   }
 }
 
-function selfTest(): void {
+function selfTest(config: WorkerConfig | null): void {
   console.log("\nself-test: one dry-run worker tick (nothing is dispatched)\n");
   const env = loadEnv();
-  const run = spawnSync("npx", ["tsx", "scripts/agent-worker.ts", "--once", "--dry-run"], {
+  const args = ["tsx", "scripts/agent-worker.ts", "--once", "--dry-run"];
+  if (config?.engine && config.engine !== "claude") args.push("--role", "code");
+  const run = spawnSync("npx", args, {
     cwd: repoRoot,
     env,
     stdio: "inherit",
@@ -1448,10 +1501,18 @@ async function main(): Promise<void> {
   }
   console.log("\nall checks passed");
 
-  if (args.includes("--self-test")) selfTest();
-  if (args.includes("--install-launchd")) installLaunchd("all");
-  if (args.includes("--install-launchd-code")) installLaunchd("code");
-  if (args.includes("--install-launchd-answer")) installLaunchd("answer");
+  if (args.includes("--self-test")) selfTest(config);
+  for (const [flag, role] of [
+    ["--install-launchd", "all"],
+    ["--install-launchd-code", "code"],
+    ["--install-launchd-answer", "answer"],
+  ] as const) {
+    if (args.includes(flag)) {
+      if (!config) throw new Error("a valid worker config is required to install a worker");
+      assertWorkerExecution(config, role);
+      installLaunchd(role);
+    }
+  }
   if (args.includes("--install-launchd-deliver")) installLaunchdDeliver(config);
   if (args.includes("--install-launchd-poll")) installLaunchdPoll();
 

@@ -24,6 +24,8 @@ class Response:
         r = types.SimpleNamespace()
         r.status_code = status_code
         r.content = content
+        r.headers = {} if headers is None else headers
+        r.stream = False
         return r
 http_mod.Response = Response
 mitm = types.ModuleType("mitmproxy")
@@ -139,5 +141,94 @@ addon.request(f)
 assert f.response is not None and f.response.status_code == 403, f.response
 `);
     expectOk(r);
+  });
+});
+
+describe("provider proxy upgrade contract (#269)", () => {
+  it.each([
+    ["api.anthropic.com", "registry.npmjs.org"],
+    ["registry.npmjs.org", "api.anthropic.com"],
+    ["api.openai.com", "api.anthropic.com"],
+  ])("rejects HTTPS target %s with a different Host %s before injection", (host, prettyHost) => {
+    const r = runHook(`
+f = Flow(Req("https", "${host}", pretty_host="${prettyHost}"))
+addon.request(f)
+assert f.response.status_code == 403
+assert "sk-ant-oat-REALSECRET" not in repr(f.request.headers)
+`);
+    expectOk(r);
+  });
+
+  it("rejects cleartext provider traffic even if the provider is explicitly allowlisted", () => {
+    expectOk(
+      runHook(
+        `
+f = Flow(Req("http", "api.anthropic.com"))
+addon.request(f)
+assert f.response.status_code == 403
+`,
+        { ALLOWED_DOMAINS: "api.anthropic.com" },
+      ),
+    );
+  });
+
+  it("replaces all caller auth headers for each supported provider without changing its body", () => {
+    expectOk(
+      runHook(
+        `
+cases = [
+    ("api.anthropic.com", "authorization", "Bearer sk-ant-oat-REALSECRET"),
+    ("api.openai.com", "authorization", "Bearer openai-fixture"),
+    ("chatgpt.com", "authorization", "Bearer codex-fixture"),
+    ("generativelanguage.googleapis.com", "x-goog-api-key", "gemini-fixture"),
+]
+for host, header, value in cases:
+    f = Flow(Req("https", host, headers={key: "placeholder" for key in addon._AUTH_HEADERS}))
+    f.request.content = b'{"stream":true}'
+    addon.request(f)
+    assert f.response is None
+    assert f.request.headers == {header: value}, f.request.headers
+    assert f.request.content == b'{"stream":true}'
+`,
+        {
+          OPENAI_API_KEY: "openai-fixture",
+          CODEX_OAUTH_TOKEN: "codex-fixture",
+          GEMINI_API_KEY: "gemini-fixture",
+        },
+      ),
+    );
+  });
+
+  it("rechecks a redirect target and never grants it the original provider credential", () => {
+    expectOk(
+      runHook(`
+initial = Flow(Req("https", "api.anthropic.com"))
+addon.request(initial)
+initial.response = Response.make(307, headers={"location": "https://evil.example.com/collect"})
+addon.responseheaders(initial)
+assert initial.response.status_code == 307
+assert initial.response.headers["location"] == "https://evil.example.com/collect"
+followup = Flow(Req("https", "evil.example.com"))
+addon.http_connect(followup)
+assert followup.response.status_code == 403
+addon.request(followup)
+assert followup.response.status_code == 403
+assert followup.request.headers == {}
+`),
+    );
+  });
+
+  it("streams SSE responses without changing headers or content, while leaving JSON buffered", () => {
+    expectOk(
+      runHook(`
+for content_type, expected in [("text/event-stream; charset=utf-8", True), ("application/json", False)]:
+    f = Flow(Req("https", "chatgpt.com"))
+    f.response = Response.make(200, b"data: chunk\\n\\n", {"content-type": content_type})
+    addon.responseheaders(f)
+    assert f.response.stream is expected
+    assert f.response.content == b"data: chunk\\n\\n"
+    assert f.response.headers == {"content-type": content_type}
+`),
+    );
   });
 });

@@ -42,8 +42,8 @@ export function buildCodexConfigToml(
   return toml;
 }
 
-// Spike (Task 1): headless full-auto in codex 0.142.5 (the container is the
-// sandbox). `--ask-for-approval never` was removed in this version.
+// The disposable container supplies isolation. This flag disables Codex's
+// inner sandbox and approval prompts; it is not appropriate for a host runner.
 export function buildCodexExecArgs(prompt: string): string[] {
   return ["exec", "--dangerously-bypass-approvals-and-sandbox", prompt];
 }

@@ -21,7 +21,7 @@ RUN apt-get update \
 # @openai/codex` would silently pick up whatever is newest at build
 # time. Bump via `--build-arg CODEX_CLI_VERSION=x.y.z` or by editing the
 # default below; see README's containerized-mode section for the update steps.
-ARG CODEX_CLI_VERSION=0.145.0
+ARG CODEX_CLI_VERSION=0.157.1
 RUN npm install -g @openai/codex@${CODEX_CLI_VERSION} \
     && codex --version
 
@@ -36,6 +36,7 @@ RUN npm install -g pnpm@${PNPM_VERSION} \
 COPY scripts/container-entry.codex.sh /entry.sh
 COPY scripts/prime-workspace-trust.mjs /prime-workspace-trust.mjs
 COPY scripts/install-guard.mjs /install-guard.mjs
+COPY scripts/worker-engine-runner.mjs scripts/worker-telemetry.mjs /
 RUN chmod +x /entry.sh
 
 # Out-of-band attachment uploader (SYD-182): baked in so any dispatched worker

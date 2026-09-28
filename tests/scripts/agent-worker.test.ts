@@ -11,9 +11,24 @@ vi.mock("../../scripts/worker-publications.js", () => ({
   clearPublication: vi.fn(),
 }));
 
+vi.mock("../../scripts/worker-exchange.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/worker-exchange.js")>()),
+  prepareWorkerExchange: vi.fn(),
+  importWorkerExchange: vi.fn(),
+  clearWorkerExchange: vi.fn(),
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+    execFile: (
+      _command: string,
+      _args: string[],
+      callback: (error: Error | null, result: { stdout: string; stderr: string }) => void,
+    ) => callback(null, { stdout: "", stderr: "" }),
+  };
 });
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -109,10 +124,27 @@ describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
     // process actually launched — simulate that ordering here.
     child.pid = 4242;
     child.emit("spawn");
+    expect(answerState.get(ref)).toBeUndefined();
+    child.emit("message", { type: "worker.provider_started" });
+    child.emit("message", { type: "worker.provider_started" }); // duplicate ACK is harmless
 
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("pid 4242"));
     expect(answerState.get(ref)).toBe(1);
 
+    logSpy.mockRestore();
+  });
+
+  it("does not consume the answer cap when the wrapper starts but the provider is missing", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    dispatchAnswer(ref, config, "token", { dryRun: false });
+    child.pid = 4242;
+    child.emit("spawn");
+    child.emit("message", { type: "worker.launch_error" });
+    child.emit("exit", 127);
+    expect(answerState.get(ref)).toBeUndefined();
+    expect(active.has(answerKey(ref))).toBe(false);
     logSpy.mockRestore();
   });
 
@@ -635,6 +667,72 @@ describe("host-side pre-claim before dispatch (SYD-122)", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    { engine: "codex", runner: "sdk", containerized: false },
+    { engine: "gemini", runner: "cli", containerized: false },
+    { engine: "claude", runner: "sdk", containerized: true },
+  ] as const)(
+    "rejects unsupported execution before fetching or claiming: %j",
+    async (execution) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(
+        runTick({ ...config, ...execution }, "tok", "code", { dryRun: false }),
+      ).rejects.toThrow(/unsupported worker execution/);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["codex", "gemini"] as const)(
+    "does not launch Claude answers for a %s worker",
+    async (engine) => {
+      const unsupported = { ...config, engine, containerized: true };
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(runTick(unsupported, "tok", "all", { dryRun: false })).rejects.toThrow(
+        /--role code/,
+      );
+      expect(() => dispatchAnswer("SYD-267", unsupported, "tok", { dryRun: false })).toThrow(
+        /--role code/,
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(answerState.has("SYD-267")).toBe(false);
+    },
+  );
+
+  it("releases an existing lease if direct dispatch receives an unsupported configuration", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn(async () => ({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    dispatch(
+      {
+        ref: "SYD-267",
+        title: "wrong engine",
+        labels: ["auto"],
+        assigneeId: null,
+        needsInput: false,
+        updatedAt: 1,
+      },
+      { ...config, engine: "codex", runner: "sdk" },
+      "tok",
+      "code",
+      { leaseToken: "lease_267" },
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:3300/api/issues/SYD-267",
+      expect.objectContaining({
+        method: "PATCH",
+        headers: expect.objectContaining({ "X-Switchyard-Lease": "lease_267" }),
+        body: JSON.stringify({ status: "todo" }),
+      }),
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
 
   it("claims the issue host-side and dispatches once the claim succeeds", async () => {
     const ref = "SYD-122a";

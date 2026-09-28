@@ -2,12 +2,12 @@
 # Container entrypoint for Switchyard's containerized dispatch mode (SYD-30).
 #
 # Runs inside a disposable Docker container (see ../Dockerfile.worker): clones
-# the host repo (mounted read-write at /origin) into /work, checks out a
+# the sanitized session exchange (mounted read-write at /origin) into /work, checks out a
 # fresh branch, runs a headless Claude Code session against the clone, and
 # pushes the branch back to /origin if the session produced any commits. The
 # container has no access to the host filesystem beyond the /origin mount,
-# and only ever pushes agent/<ref> branches — merging to main stays a human
-# decision made outside the container.
+# and the host imports only its expected agent/<ref> branch after validation.
+# Merging to main stays a human decision outside the container.
 #
 # Required env:
 #   ISSUE_REF                e.g. "SYD-30"
@@ -33,7 +33,7 @@
 # the entrypoint's only job afterward is to fail loudly if a rebase was left
 # unresolved.
 #
-# Host repo mounted read-write at /origin.
+# Only the sanitized session exchange is mounted read-write at /origin.
 
 set -eu
 
@@ -68,7 +68,7 @@ fi
 # refuses the clone with "detected dubious ownership".
 git config --global --add safe.directory /origin
 
-git clone /origin /work
+git clone --no-local /origin /work
 cd /work
 
 # Pre-trust the workspace (SYD-80): otherwise Claude Code treats /work as
@@ -96,7 +96,11 @@ else
   # back whatever branch the host happened to have checked out at clone time,
   # which is nondeterministic from the container's point of view.
   git fetch origin "$BASE_BRANCH"
-  git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+  if git show-ref --verify --quiet "refs/remotes/origin/agent/$ISSUE_REF"; then
+    git checkout -b "agent/$ISSUE_REF" "origin/agent/$ISSUE_REF"
+  else
+    git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+  fi
 fi
 
 # Recorded after the branch is set up, so the commit count below (work mode
@@ -149,7 +153,7 @@ unset SWITCHYARD_LEASE
 # The container is the sandbox here, not the tool allowlist -- a generous
 # allowlist inside a disposable, network-scoped clone is fine.
 set +e
-claude -p "$WORKER_PROMPT" --mcp-config /tmp/switchyard-mcp.json --permission-mode acceptEdits --allowedTools "$ALLOWED_TOOLS"
+node /worker-engine-runner.mjs claude -p "$WORKER_PROMPT" --mcp-config /tmp/switchyard-mcp.json --permission-mode acceptEdits --allowedTools "$ALLOWED_TOOLS"
 CLAUDE_EXIT=$?
 set -e
 

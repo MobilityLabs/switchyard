@@ -1,12 +1,12 @@
 #!/bin/sh
 # Container entrypoint for Switchyard's Codex engine (SYD-187) -- the
 # codex-exec counterpart of container-entry.sh (SYD-30). Same contract: clone
-# the host repo (mounted read-write at /origin) into /work, check out a fresh
+# the sanitized session exchange (mounted read-write at /origin) into /work, check out a fresh
 # agent/<ref> branch, run a headless codex session against the clone, and push
 # the branch back to /origin if the session produced any commits. The
 # container has no access to the host filesystem beyond the /origin mount,
-# and only ever pushes agent/<ref> branches -- merging to main stays a human
-# decision made outside the container.
+# and the host imports only its expected agent/<ref> branch after validation.
+# Merging to main stays a human decision outside the container.
 #
 # Auth is the user's ChatGPT subscription login: the real OAuth token lives
 # only in the syd-egress sidecar, which injects it via MITM (SYD-186); this
@@ -26,7 +26,7 @@
 #                             verified before codex exec runs; see stack-check.mjs
 #   BASE_BRANCH               integration branch to base agent/<ref> on (default "main")
 #
-# Host repo mounted read-write at /origin.
+# Only the sanitized session exchange is mounted read-write at /origin.
 
 set -eu
 
@@ -56,7 +56,7 @@ fi
 # refuses the clone with "detected dubious ownership".
 git config --global --add safe.directory /origin
 
-git clone /origin /work
+git clone --no-local /origin /work
 cd /work
 
 # Pre-trust the workspace (SYD-80): otherwise Claude Code treats /work as
@@ -71,7 +71,11 @@ node /prime-workspace-trust.mjs /work
 # which is nondeterministic from the container's point of view.
 BASE_BRANCH="${BASE_BRANCH:-main}"
 git fetch origin "$BASE_BRANCH"
-git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+if git show-ref --verify --quiet "refs/remotes/origin/agent/$ISSUE_REF"; then
+  git checkout -b "agent/$ISSUE_REF" "origin/agent/$ISSUE_REF"
+else
+  git checkout -b "agent/$ISSUE_REF" "origin/$BASE_BRANCH"
+fi
 
 # Recorded after the branch is set up, so the commit count below reflects
 # only what the session itself produced.
@@ -138,10 +142,10 @@ chmod 600 "$CODEX_HOME/auth.json"
 
 # The container is the sandbox here, not codex's own approval/sandbox layer
 # -- headless full-auto is fine inside a disposable, network-scoped clone.
-# Spike (Task 1): codex 0.142.5 dropped `--ask-for-approval`; the headless
-# full-auto flag is --dangerously-bypass-approvals-and-sandbox.
+# --dangerously-bypass-approvals-and-sandbox disables the inner sandbox and
+# approval prompts; this entrypoint is only for the isolated container path.
 set +e
-codex exec --dangerously-bypass-approvals-and-sandbox "$WORKER_PROMPT" < /dev/null
+node /worker-engine-runner.mjs codex --dangerously-bypass-approvals-and-sandbox "$WORKER_PROMPT" < /dev/null
 CODEX_EXIT=$?
 set -e
 

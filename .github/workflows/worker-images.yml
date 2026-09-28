@@ -1,0 +1,103 @@
+name: Worker images
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile.worker*"
+      - "Dockerfile.egress-proxy"
+      - ".dockerignore"
+      - "scripts/container-entry*.sh"
+      - "scripts/egress-*"
+      - "scripts/worker-engine-runner.mjs"
+      - "scripts/worker-telemetry.mjs"
+      - "scripts/prime-workspace-trust.mjs"
+      - "scripts/install-guard.mjs"
+      - "scripts/attach.mjs"
+      - "tests/scripts/egress-proxy-contract.py"
+      - ".github/workflows/worker-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: worker-image (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: claude
+            dockerfile: Dockerfile.worker
+            binary: claude
+          - engine: codex
+            dockerfile: Dockerfile.worker.codex
+            binary: codex
+          - engine: gemini
+            dockerfile: Dockerfile.worker.gemini
+            binary: gemini
+          - engine: proxy
+            dockerfile: Dockerfile.egress-proxy
+            binary: mitmdump
+    env:
+      IMAGE: switchyard-smoke:${{ matrix.engine }}
+      DOCKERFILE: ${{ matrix.dockerfile }}
+      BINARY: ${{ matrix.binary }}
+      ENGINE: ${{ matrix.engine }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build --pull -f "$DOCKERFILE" -t "$IMAGE" .
+      - name: Check binary and supported headless flags without network or credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(docker run --rm --network none --entrypoint "$BINARY" "$IMAGE" --version)
+          printf '%s\n' "$version"
+          if [ "$ENGINE" = proxy ]; then
+            expected=$(sed -n 's/^FROM mitmproxy\/mitmproxy://p' "$DOCKERFILE")
+          else
+            expected=$(sed -n 's/^ARG \(CLAUDE_CODE\|CODEX_CLI\|GEMINI_CLI\)_VERSION=//p' "$DOCKERFILE")
+          fi
+          test -n "$expected"
+          [[ "$version" == *"$expected"* ]]
+          case "$ENGINE" in
+            claude)
+              docker run --rm --network none --entrypoint claude "$IMAGE" --help > /tmp/worker-help
+              grep -F -- --output-format /tmp/worker-help
+              grep -F -- --model /tmp/worker-help
+              ;;
+            codex)
+              docker run --rm --network none --entrypoint codex "$IMAGE" exec --help > /tmp/worker-help
+              grep -F -- --json /tmp/worker-help
+              grep -F -- --dangerously-bypass-approvals-and-sandbox /tmp/worker-help
+              ;;
+            gemini)
+              docker run --rm --network none --entrypoint gemini "$IMAGE" --help > /tmp/worker-help
+              grep -F -- --output-format /tmp/worker-help
+              grep -F -- --approval-mode /tmp/worker-help
+              ;;
+            proxy)
+              docker run --rm --network none --entrypoint python3 \
+                -e PYTHONDONTWRITEBYTECODE=1 -v "$PWD:/review:ro" "$IMAGE" \
+                /review/tests/scripts/egress-proxy-contract.py
+              # Load the actual addon and start the actual entrypoint. No ports
+              # are published and network=none prevents any provider request.
+              docker run -d --name proxy-smoke --network none \
+                -e ALLOWED_DOMAINS=registry.npmjs.org "$IMAGE"
+              trap 'docker logs proxy-smoke; docker rm -f proxy-smoke >/dev/null' EXIT
+              for attempt in {1..30}; do
+                test "$(docker inspect -f '{{.State.Running}}' proxy-smoke)" = true
+                if docker exec proxy-smoke python3 -c \
+                  'import socket; socket.create_connection(("127.0.0.1", 8888), timeout=1).close()'; then
+                  exit 0
+                fi
+                sleep 1
+              done
+              exit 1
+              ;;
+          esac

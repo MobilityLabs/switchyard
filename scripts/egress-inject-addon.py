@@ -95,18 +95,20 @@ def request_decision(scheme: str, host: str, pretty_host: str, allowlist: set) -
     arbitrary target. Credentials are never injected over cleartext, so plain
     HTTP to a provider host is denied outright, not injected.
 
-    MITM'd TLS flows re-check the CONNECT decision (defense in depth) and
-    inject only when the Host header names a provider host.
+    MITM'd TLS flows require agreement between the target and Host header.
+    Otherwise an allowed destination could receive another provider's key.
     """
     h = host.lower()
     p = pretty_host.lower()
     if (scheme or "").lower() != "https":
+        if h in PROVIDER_HOSTS or p in PROVIDER_HOSTS:
+            return "deny"
         if host_allowed(h, allowlist) and host_allowed(p, allowlist):
             return "allow"
         return "deny"
-    if connect_decision(h, allowlist) == "deny":
+    if h != p or connect_decision(h, allowlist) == "deny":
         return "deny"
-    return "inject" if p in PROVIDER_HOSTS else "allow"
+    return "inject" if h in PROVIDER_HOSTS else "allow"
 
 
 def parse_allowlist(env: Mapping) -> set:
@@ -177,6 +179,19 @@ def request(flow) -> None:  # noqa: ANN001
             _apply(flow.request.headers, ops)
 
 
+def responseheaders(flow) -> None:  # noqa: ANN001
+    """Forward provider SSE chunks immediately, without buffering a turn.
+
+    Only the response body streams. Request bodies remain buffered so request()
+    validates the destination and injects credentials before upstream delivery.
+    Redirects are returned to the client unchanged; every follow-up request is
+    independently subject to the same CONNECT/request gates.
+    """
+    content_type = flow.response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if flow.request.host.lower() in PROVIDER_HOSTS and content_type == "text/event-stream":
+        flow.response.stream = True
+
+
 def _selftest() -> None:
     # Anthropic OAuth vs API-key branch.
     a = injection_for("api.anthropic.com", {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-XYZ"})
@@ -224,10 +239,12 @@ def _selftest() -> None:
     # Host-header smuggle: allowlisted target, provider Host header -> deny.
     assert request_decision("http", "registry.npmjs.org", "api.anthropic.com", allow) == "deny"
     assert request_decision("http", "api.anthropic.com", "registry.npmjs.org", allow) == "deny"
-    # MITM'd TLS flows: provider -> inject; non-provider Host header on a
-    # provider connection -> forward without injection; denied host -> deny.
+    # MITM'd TLS flows: only matching provider target/Host pairs get a key.
     assert request_decision("https", "api.anthropic.com", "api.anthropic.com", allow) == "inject"
-    assert request_decision("https", "api.anthropic.com", "elsewhere.example", allow) == "allow"
+    assert request_decision("https", "api.anthropic.com", "elsewhere.example", allow) == "deny"
+    assert request_decision("https", "registry.npmjs.org", "api.anthropic.com", allow) == "deny"
+    assert request_decision("https", "api.openai.com", "api.anthropic.com", allow) == "deny"
+    assert request_decision("http", "api.anthropic.com", "api.anthropic.com", PROVIDER_HOSTS) == "deny"
     assert request_decision("https", "evil.example.com", "evil.example.com", allow) == "deny"
 
     # Allowlist parsing from the env string.
