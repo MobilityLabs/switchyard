@@ -1,7 +1,7 @@
 {
   // SYD-268: compiles the host-side launchd entry points (and whatever they
   // pull in from scripts/ and src/) to plain JS so launchd can run a single
-  // `node dist/server/scripts/<entry>.js` process instead of
+  // `node scripts/run-compiled.mjs <entry>` process instead of
   // `node -> tsx shim -> node+esbuild loader` per service. Deliberately does
   // NOT touch the root tsconfig.json's `noEmit: true` — `npm run typecheck`
   // depends on that staying a check-only config.
@@ -13,6 +13,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
+    // The launcher overrides this with a private staging directory, then
+    // publishes the complete output at dist/server/<source hash>.
     "outDir": "dist/server",
     "rootDir": "."
   },

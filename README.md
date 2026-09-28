@@ -212,11 +212,34 @@ npm run init-worker -- --install-launchd  # + install a KeepAlive LaunchAgent (m
 `--install-launchd` writes `~/Library/LaunchAgents/com.switchyard.worker.plist`
 and loads it: the worker starts immediately, restarts if it crashes (a clean
 stop stays down — `launchctl unload` to stop it), and comes back after reboot.
-No secrets and no shell are involved in the plist — launchd execs `tsx`
-directly and the worker itself reads the repo `.env` (0600) at start. Two
+No secrets and no shell are involved in the plist — launchd execs `node
+scripts/run-compiled.mjs <entry>` and the worker itself reads the repo `.env`
+(0600) at start. Two
 worker loops can't run at once: the loop takes a pidfile lock
 (`.superpowers/worker.pid`), and the installer additionally refuses to load
 the LaunchAgent while any worker process is running.
+
+The launcher compiles host services on demand, or ahead of time with
+`npm run build:server`. It fingerprints source, configuration, dependency
+lockfiles, the installed TypeScript compiler, and the Node version. Completed
+builds live in `dist/server/<64-character hash>/`; the extra path component
+is intentional. Hand-written `scripts/**/*.mjs` runtime files are copied into
+each generation, and their contents and `.d.mts`/`.d.cts` declarations are
+fingerprinted alongside TypeScript sources. Each service imports its own
+immutable generation, so another
+startup cannot replace files underneath it, including files imported later.
+Concurrent cold starts may briefly run multiple compilers, but publication is
+atomic and only one complete generation is retained per fingerprint. A failed
+compile fails startup and leaves earlier builds intact.
+
+`dist/server/build-info.json` records the last selected generation for
+inspection, including cache hits. It does not describe every running service;
+services do not follow this pointer after startup. Old generations
+are retained because running services may still need them, so disk usage grows
+with changed builds. To reclaim the cache, stop **all** host services, remove
+`dist/server`, run `npm run build:server`, then restart the services. This also
+cleans staging directories left by a forcibly killed compiler and legacy
+`dist/server/scripts` output. Do not delete generations while services run.
 
 To run it by hand instead:
 

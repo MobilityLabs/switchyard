@@ -1,95 +1,106 @@
 #!/usr/bin/env node
-// SYD-268: launcher for the compiled host scripts (dist/server/scripts/*.js).
+// SYD-268: one resident node process per host service, without a tsx loader.
+// #272: never compile into a directory a running service can import from.
+// Each content-addressed generation is built privately, then published with
+// one directory rename. Concurrent builders may do redundant work, but only
+// a complete generation wins. There is no lock to strand after a crash.
 //
-// Plain JS on purpose — this file is never itself compiled, so it needs no
-// build step to run. It exists so launchd runs one plain `node` process per
-// service (node -> run-compiled.mjs -> dist/server/scripts/<entry>.js)
-// instead of the old node -> tsx shim -> node+esbuild loader chain, without
-// ever risking a worker that silently runs month-old compiled code:
-//
-//   1. compute a content hash over the compile inputs (every .ts under
-//      scripts/ and src/, plus tsconfig.build.json, tsconfig.json,
-//      package.json),
-//   2. compare it to dist/server/build-info.json's `sourceHash`,
-//   3. if missing or different, run `tsc -p tsconfig.build.json`
-//      synchronously (a transient child that exits before the service
-//      starts) and write a fresh build-info.json,
-//   4. `await import()` dist/server/scripts/<entry>.js in this same
-//      process — one resident node process, never stale.
-//
-// `npm run build:server` (and CI) share this exact logic via `--build-only`,
-// so a manual/CI build and a launchd-triggered build produce byte-identical
-// build-info.json semantics.
+// A launcher imports its exact generation, not a mutable "current" symlink.
+// Retain old generations for running services' lazy imports; remove dist/server
+// only when all host services are stopped. Legacy dist/server/scripts output
+// is left untouched, but new launchers never use it.
 //
 // Usage:
 //   node scripts/run-compiled.mjs <entry> [...args passed to the entry]
 //   node scripts/run-compiled.mjs --build-only
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// This file lives directly in scripts/ and is never compiled/moved, so one
-// level up is always the real repo root — unlike the repoRoot() helpers in
-// the compiled entries themselves, which have to handle two possible layouts.
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const distDir = path.join(repoRoot, "dist", "server");
-const buildInfoPath = path.join(distDir, "build-info.json");
-
 const require = createRequire(import.meta.url);
+const entries = ["agent-worker", "deliver", "github-poll"];
 
-/** Recursively collects every `.ts` file under `dir`, skipping `node_modules` and dotdirs. */
-function collectTsFiles(dir, out) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return; // dir doesn't exist (e.g. a fresh checkout with no src/ yet) — nothing to hash
-  }
-  for (const entry of entries) {
+function collectFiles(dir, extension, out) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) collectTsFiles(full, out);
-    else if (entry.isFile() && entry.name.endsWith(".ts")) out.push(full);
+    if (entry.isDirectory()) collectFiles(full, extension, out);
+    else if (entry.isFile() && entry.name.endsWith(extension)) out.push(full);
   }
 }
 
-/**
- * Content hash over the compile inputs (SYD-268): every `.ts` under
- * `scripts/` and `src/`, plus the three config files whose contents change
- * what tsc emits. `worker-sdk/` is deliberately excluded — it's never
- * compiled (see scripts/agent-worker.ts's dispatchSdk), so a change there
- * doesn't need to trigger a dist/server rebuild.
- */
+/** Include both declared dependencies and the compiler actually installed. */
 function computeSourceHash() {
   const files = [];
-  collectTsFiles(path.join(repoRoot, "scripts"), files);
-  collectTsFiles(path.join(repoRoot, "src"), files);
-  for (const extra of ["tsconfig.build.json", "tsconfig.json", "package.json"]) {
+  for (const dir of ["scripts", "src"]) {
+    for (const extension of [".ts", ".tsx", ".mts", ".cts"]) {
+      collectFiles(path.join(repoRoot, dir), extension, files);
+    }
+  }
+  collectFiles(path.join(repoRoot, "scripts"), ".mjs", files);
+  for (const extra of [
+    "tsconfig.build.json",
+    "tsconfig.json",
+    "package.json",
+    "package-lock.json",
+  ]) {
     files.push(path.join(repoRoot, extra));
   }
+  // npm's installed-tree lock catches an install that differs from the root
+  // lock. The compiler package and JS bytes also catch a compiler replaced in
+  // place, even when neither lockfile was changed.
+  const installedLock = path.join(repoRoot, "node_modules", ".package-lock.json");
+  if (existsSync(installedLock)) files.push(installedLock);
+  const compilerPackage = require.resolve("typescript/package.json");
+  files.push(compilerPackage, require.resolve("typescript/bin/tsc"));
+  collectFiles(path.join(path.dirname(compilerPackage), "lib"), ".js", files);
 
-  const relPaths = files.map((f) => path.relative(repoRoot, f).split(path.sep).join("/")).sort();
-
-  const hash = createHash("sha256");
-  for (const rel of relPaths) {
-    hash.update(rel);
+  const hash = createHash("sha256").update(`generation-v1\0${process.version}\0`);
+  for (const file of files.sort()) {
+    hash.update(path.relative(repoRoot, file).split(path.sep).join("/"));
     hash.update("\0");
-    hash.update(readFileSync(path.join(repoRoot, rel)));
+    hash.update(readFileSync(file));
     hash.update("\0");
   }
   return hash.digest("hex");
 }
 
-function readBuildInfo() {
-  if (!existsSync(buildInfoPath)) return null;
+/** TypeScript does not emit the hand-written runtime sidecars it imports. */
+function copyScriptAssets(staging) {
+  const assets = [];
+  collectFiles(path.join(repoRoot, "scripts"), ".mjs", assets);
+  for (const source of assets) {
+    const destination = path.join(staging, path.relative(repoRoot, source));
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(source, destination);
+  }
+}
+
+function readBuildInfo(dir, sourceHash) {
   try {
-    return JSON.parse(readFileSync(buildInfoPath, "utf8"));
+    const info = JSON.parse(readFileSync(path.join(dir, "build-info.json"), "utf8"));
+    return info.sourceHash === sourceHash &&
+      entries.every((entry) => existsSync(path.join(dir, "scripts", `${entry}.js`)))
+      ? info
+      : null;
   } catch {
-    return null; // corrupt/partial build-info.json — treat like "no build yet"
+    return null;
   }
 }
 
@@ -98,91 +109,100 @@ function gitHeadOf() {
   return res.status === 0 ? res.stdout.trim() : undefined;
 }
 
-/** Runs `tsc -p tsconfig.build.json` synchronously. Returns its exit code. */
-function runTsc() {
-  const tscBin = require.resolve("typescript/bin/tsc");
-  const result = spawnSync(
-    process.execPath,
-    [tscBin, "-p", path.join(repoRoot, "tsconfig.build.json")],
-    {
-      cwd: repoRoot,
-      stdio: "inherit",
-    },
-  );
-  return result.status ?? 1;
+/** Atomic informational pointer; imports always use the immutable generation. */
+function publishBuildInfo(info) {
+  const temporary = path.join(distDir, `.build-info-${randomUUID()}.json`);
+  try {
+    writeFileSync(temporary, `${JSON.stringify(info, null, 2)}\n`, { flag: "wx" });
+    renameSync(temporary, path.join(distDir, "build-info.json"));
+  } finally {
+    rmSync(temporary, { force: true });
+  }
 }
 
-/**
- * Builds dist/server if its build-info.json is missing or stale (SYD-268's
- * staleness guard). Exits the process with a clear message if the compile
- * fails — a worker must never silently start against a half-built or
- * month-old dist/server.
- */
 function ensureBuilt() {
   const sourceHash = computeSourceHash();
-  const existing = readBuildInfo();
-  if (existing && existing.sourceHash === sourceHash) {
-    return { rebuilt: false, sourceHash };
+  const generation = path.join(distDir, sourceHash);
+  const existing = readBuildInfo(generation, sourceHash);
+  if (existing) {
+    publishBuildInfo(existing);
+    return generation;
+  }
+  // An existing but incomplete generation is never overwritten: a running
+  // process could already hold imports from it. Fail closed for operator repair.
+  if (existsSync(generation)) {
+    // A competing builder may have published between our first read and the
+    // existence check. Re-read before treating this as a broken generation.
+    const winner = readBuildInfo(generation, sourceHash);
+    if (winner) {
+      publishBuildInfo(winner);
+      return generation;
+    }
+    throw new Error(`[run-compiled] invalid build generation: ${generation}`);
   }
 
-  console.log(
-    existing
-      ? "[run-compiled] source changed since the last compiled build — rebuilding dist/server..."
-      : "[run-compiled] no compiled build found — building dist/server...",
-  );
-  const code = runTsc();
-  if (code !== 0) {
-    console.error(
-      `\n[run-compiled] FATAL: \`tsc -p tsconfig.build.json\` failed (exit ${code}). ` +
-        "Fix the compile error above — a stale or half-built dist/server must never run.\n",
-    );
-    process.exit(code || 1);
-  }
-
+  console.log("[run-compiled] compile inputs changed or missing — building a new generation...");
   mkdirSync(distDir, { recursive: true });
-  const buildInfo = { sourceHash, builtAt: new Date().toISOString(), gitHead: gitHeadOf() };
-  writeFileSync(buildInfoPath, `${JSON.stringify(buildInfo, null, 2)}\n`);
-  console.log(`[run-compiled] built dist/server (sourceHash ${sourceHash.slice(0, 12)}...)`);
-  return { rebuilt: true, sourceHash };
+  const staging = mkdtempSync(path.join(distDir, ".building-"));
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        require.resolve("typescript/bin/tsc"),
+        "-p",
+        path.join(repoRoot, "tsconfig.build.json"),
+        "--outDir",
+        staging,
+      ],
+      { cwd: repoRoot, stdio: "inherit" },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `[run-compiled] tsc failed (exit ${result.status ?? 1}); previous builds are untouched.`,
+        { cause: result.error },
+      );
+    }
+    copyScriptAssets(staging);
+    if (computeSourceHash() !== sourceHash) {
+      throw new Error("[run-compiled] compile inputs changed during the build; retry startup.");
+    }
+    const info = { sourceHash, builtAt: new Date().toISOString(), gitHead: gitHeadOf() };
+    writeFileSync(path.join(staging, "build-info.json"), `${JSON.stringify(info, null, 2)}\n`);
+    if (!readBuildInfo(staging, sourceHash)) {
+      throw new Error("[run-compiled] compiler did not produce every required host entry.");
+    }
+    try {
+      renameSync(staging, generation);
+    } catch (error) {
+      // Another launcher can win the rename while we compile. A nonempty,
+      // complete generation is immutable, so safely reuse that winner.
+      if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
+      if (!readBuildInfo(generation, sourceHash)) throw error;
+    }
+    publishBuildInfo(readBuildInfo(generation, sourceHash));
+    console.log(`[run-compiled] built generation ${sourceHash.slice(0, 12)}...`);
+    return generation;
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
 }
 
 async function main() {
   const [, , first, ...rest] = process.argv;
-
   if (first === "--build-only") {
     ensureBuilt();
     return;
   }
-
-  if (!first || first.startsWith("-")) {
-    console.error(
+  if (!entries.includes(first)) {
+    throw new Error(
       "usage: node scripts/run-compiled.mjs <entry> [...args]\n" +
         "       node scripts/run-compiled.mjs --build-only\n" +
-        "<entry> is one of: agent-worker, deliver, github-poll",
+        `<entry> is one of: ${entries.join(", ")}`,
     );
-    process.exit(1);
   }
-
-  ensureBuilt();
-
-  const entryPath = path.join(distDir, "scripts", `${first}.js`);
-  if (!existsSync(entryPath)) {
-    console.error(
-      `[run-compiled] compiled entry not found: ${entryPath}\n` +
-        `(expected "${first}" to be one of agent-worker, deliver, github-poll)`,
-    );
-    process.exit(1);
-  }
-
-  // The entry module's own `if (import.meta.url === \`file://${process.argv[1]}\`)`
-  // guard (its equivalent of "am I the thing node was invoked on") — and its
-  // own `process.argv.slice(2)` argv parsing — both assume node was invoked
-  // directly on it. Since we're dynamically importing it instead, rewrite
-  // argv so both keep working unmodified: argv[1] becomes the compiled
-  // entry's own path, and everything after the entry name on our own argv
-  // becomes what the entry sees after its own path.
+  const entryPath = path.join(ensureBuilt(), "scripts", `${first}.js`);
+  // Preserve each entry's direct-invocation guard and argument parsing.
   process.argv = [process.argv[0], entryPath, ...rest];
-
   await import(pathToFileURL(entryPath).href);
 }
 
