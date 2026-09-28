@@ -524,3 +524,7 @@ npm run typecheck
 Token-lean architecture maps for coding agents live in `codemaps/`
 (generated — regenerate with the `/update-codemaps` skill rather than
 hand-editing).
+
+For optional per-worker/project model selection, recorded runtime versions and
+provider-reported models, and an operator-run comparison procedure, see
+[worker model selection and benchmarks](docs/worker-model-benchmarks.md).

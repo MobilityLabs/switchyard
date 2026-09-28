@@ -2,6 +2,7 @@
 // Kept separate from the CLI so parsing, validation, and plist rendering are
 // trivially unit-testable without touching the filesystem or network.
 
+import { isValidWorkerModel } from "./worker-telemetry.mjs";
 import type { WorkerConfig, WorkerRole, WorkerStackCli } from "./worker-select.js";
 
 /** Capabilities of the implemented runners, shared by doctor and dispatch. */
@@ -100,6 +101,11 @@ export function validateWorkerConfig(raw: unknown): string[] {
   ) {
     problems.push("`egressAllow` must be an array of hostnames");
   }
+  if (c.model !== undefined && !isValidWorkerModel(c.model)) {
+    problems.push(
+      "`model` must be a non-empty model identifier (letters, digits, ., _, :, /, -; max 200 chars)",
+    );
+  }
   if (c.token !== undefined && (typeof c.token !== "string" || c.token.length === 0)) {
     problems.push(
       "`token` must be a non-empty string (the NAME of the env var holding this worker's token)",
@@ -132,6 +138,11 @@ export function validateWorkerConfig(raw: unknown): string[] {
     for (const [key, project] of Object.entries(c.projects)) {
       if (typeof project?.repo !== "string" || project.repo.trim() === "") {
         problems.push(`projects.${key}.repo must be a path to a local git repo`);
+      }
+      if (project?.model !== undefined && !isValidWorkerModel(project.model)) {
+        problems.push(
+          `projects.${key}.model must be a non-empty model identifier (letters, digits, ., _, :, /, -; max 200 chars)`,
+        );
       }
       if (project?.stack !== undefined) {
         problems.push(...validateWorkerStack(key, project.stack));

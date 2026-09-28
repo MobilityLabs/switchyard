@@ -13,7 +13,10 @@
 // SDK typecheck is part of `npm run typecheck`. Auth is the same
 // CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY) from the environment.
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { normalizeProviderEvent, parseRuntimeVersion } from "../scripts/worker-telemetry.mjs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { formatSdkEvent, type SdkEventLike } from "./sdk-format.js";
 
@@ -29,6 +32,8 @@ export type SdkSessionOpts = {
   allowedTools: string[];
   /** Optional provider model; omitted to retain the provider's default. */
   model?: string;
+  /** Correlates runtime and provider metadata across repeated issue sessions. */
+  sessionKey?: string;
   logPath: string;
   /** Watchdog (SYD-115): abort the query if it runs longer than this. No timeout when omitted. */
   timeoutMs?: number;
@@ -56,6 +61,30 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
       /* log dir gone or disk full — the session matters more than the log */
     }
   };
+  let sdkVersion: string | null = null;
+  try {
+    const require = createRequire(import.meta.url);
+    const packagePath = join(
+      dirname(require.resolve("@anthropic-ai/claude-agent-sdk")),
+      "package.json",
+    );
+    sdkVersion = parseRuntimeVersion(JSON.parse(readFileSync(packagePath, "utf8")).version);
+  } catch {
+    /* unknown installed version stays unknown */
+  }
+  log(
+    JSON.stringify({
+      type: "worker.runtime",
+      session_key: o.sessionKey,
+      engine: "claude",
+      runner: "sdk",
+      requested_model: o.model ?? null,
+      sdk_version: sdkVersion,
+      cli_version: null,
+      image_id: null,
+      started_at: new Date().toISOString(),
+    }),
+  );
   let exit = 1;
   // Watchdog (SYD-115): an SDK query that never yields a `result` message
   // (a stuck tool call, a wedged CLI subprocess under the hood) would
@@ -103,6 +132,8 @@ export async function runSdkSession(o: SdkSessionOpts): Promise<number> {
       },
     });
     for await (const message of stream) {
+      const event = normalizeProviderEvent("claude", message);
+      if (event) log(JSON.stringify({ session_key: o.sessionKey, ...event }));
       const line = formatSdkEvent(message as SdkEventLike);
       if (line) log(line);
       if (message.type === "result") {

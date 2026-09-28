@@ -124,10 +124,27 @@ describe("dispatchAnswer (SYD-74: PATH pinning fallout)", () => {
     // process actually launched — simulate that ordering here.
     child.pid = 4242;
     child.emit("spawn");
+    expect(answerState.get(ref)).toBeUndefined();
+    child.emit("message", { type: "worker.provider_started" });
+    child.emit("message", { type: "worker.provider_started" }); // duplicate ACK is harmless
 
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("pid 4242"));
     expect(answerState.get(ref)).toBe(1);
 
+    logSpy.mockRestore();
+  });
+
+  it("does not consume the answer cap when the wrapper starts but the provider is missing", () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    dispatchAnswer(ref, config, "token", { dryRun: false });
+    child.pid = 4242;
+    child.emit("spawn");
+    child.emit("message", { type: "worker.launch_error" });
+    child.emit("exit", 127);
+    expect(answerState.get(ref)).toBeUndefined();
+    expect(active.has(answerKey(ref))).toBe(false);
     logSpy.mockRestore();
   });
 

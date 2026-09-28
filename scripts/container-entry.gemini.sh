@@ -119,7 +119,7 @@ chmod 600 "$HOME/.gemini/settings.json"
 # --prompt runs one non-interactive turn. SWITCHYARD_TOKEN / SWITCHYARD_LEASE
 # stay exported so gemini expands them into the MCP headers at connect time.
 set +e
-gemini --yolo --prompt "$WORKER_PROMPT" < /dev/null
+node /worker-engine-runner.mjs gemini --yolo --prompt "$WORKER_PROMPT" < /dev/null
 GEMINI_EXIT=$?
 set -e
 

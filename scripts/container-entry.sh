@@ -153,7 +153,7 @@ unset SWITCHYARD_LEASE
 # The container is the sandbox here, not the tool allowlist -- a generous
 # allowlist inside a disposable, network-scoped clone is fine.
 set +e
-claude -p "$WORKER_PROMPT" --mcp-config /tmp/switchyard-mcp.json --permission-mode acceptEdits --allowedTools "$ALLOWED_TOOLS"
+node /worker-engine-runner.mjs claude -p "$WORKER_PROMPT" --mcp-config /tmp/switchyard-mcp.json --permission-mode acceptEdits --allowedTools "$ALLOWED_TOOLS"
 CLAUDE_EXIT=$?
 set -e
 

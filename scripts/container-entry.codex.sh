@@ -145,7 +145,7 @@ chmod 600 "$CODEX_HOME/auth.json"
 # --dangerously-bypass-approvals-and-sandbox disables the inner sandbox and
 # approval prompts; this entrypoint is only for the isolated container path.
 set +e
-codex exec --dangerously-bypass-approvals-and-sandbox "$WORKER_PROMPT" < /dev/null
+node /worker-engine-runner.mjs codex --dangerously-bypass-approvals-and-sandbox "$WORKER_PROMPT" < /dev/null
 CODEX_EXIT=$?
 set -e
 

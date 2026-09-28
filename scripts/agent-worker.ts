@@ -47,6 +47,7 @@
 
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   readFileSync,
@@ -110,6 +111,8 @@ import {
   type DispatchPolicy,
   type RunningContainerSessionRow,
 } from "./worker-select.js";
+import { resolveWorkerModel } from "./worker-telemetry.mjs";
+import { containerImageMetadata } from "./worker-image-metadata.js";
 import { acquirePidLock, isLocked } from "./pidfile.js";
 import {
   savePublication,
@@ -866,9 +869,10 @@ export function dispatch(
     return;
   }
   const logPath = path.join(logDir, `${issue.ref}.log`);
+  const sessionKey = randomUUID();
 
   if ((config.runner ?? "cli") === "sdk") {
-    dispatchSdk(issue, project.repo, config, token, role, logPath, opts);
+    dispatchSdk(issue, project.repo, config, token, role, logPath, { ...opts, sessionKey });
     return;
   }
 
@@ -950,6 +954,7 @@ export function dispatch(
         env: {
           ...process.env,
           SWITCHYARD_TOKEN: token,
+          WORKER_SESSION_KEY: sessionKey,
           ...(opts.leaseToken ? { SWITCHYARD_LEASE: opts.leaseToken } : {}),
         },
       });
@@ -987,11 +992,20 @@ export function dispatch(
         cliMcpTmpDir = tmpDir;
         cliArgs.push("--mcp-config", configPath);
       }
-      child = spawn("claude", cliArgs, {
-        cwd: project.repo,
-        detached: true,
-        stdio: ["ignore", fd, fd],
-      });
+      child = spawn(
+        process.execPath,
+        [path.join(repoRoot(), "scripts", "worker-engine-runner.mjs"), "claude", ...cliArgs],
+        {
+          env: {
+            ...process.env,
+            WORKER_MODEL: resolveWorkerModel(config, project) ?? "",
+            WORKER_SESSION_KEY: sessionKey,
+          },
+          cwd: project.repo,
+          detached: true,
+          stdio: ["ignore", fd, fd, "ipc"],
+        },
+      );
     }
   } catch (err) {
     console.error(`failed to dispatch ${issue.ref}: ${(err as Error).message}`);
@@ -1008,6 +1022,20 @@ export function dispatch(
   active.set(issue.ref, child);
   activeMode.set(issue.ref, config.containerized ? "container" : "cli");
   console.log(`dispatched ${issue.ref} (pid ${child.pid}) -> ${logPath}`);
+
+  if (!config.containerized) {
+    child.on("message", (message) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        "type" in message &&
+        message.type === "worker.launch_error" &&
+        opts.leaseToken
+      ) {
+        void releaseClaimHost(config, token, opts.leaseToken, issue.ref);
+      }
+    });
+  }
 
   // SYD-210 Layer B: persist the lease for a container so a worker restart can
   // re-adopt it and resume heartbeats (see adoptContainerSession). Bare-CLI
@@ -1049,6 +1077,20 @@ export function dispatch(
   let sessionId: Promise<number | null> = Promise.resolve(null);
   let spawned = false;
   child.on("spawn", () => {
+    if (config.containerized) {
+      void containerImageMetadata(containerNameFor(issue.ref))
+        .then((metadata) =>
+          logLine(
+            `${JSON.stringify({ type: "worker.image", session_key: sessionKey, ...metadata })}\n`,
+          ),
+        )
+        .catch(() =>
+          logLine(
+            `${JSON.stringify({ type: "worker.image", session_key: sessionKey, image_id: null, image_digests: [] })}\n`,
+          ),
+        );
+    }
+
     spawned = true;
     sessionId = reportSessionStart(
       config,
@@ -1116,7 +1158,7 @@ function dispatchSdk(
   token: string,
   role: WorkerRole,
   logPath: string,
-  opts: { resumed?: boolean; leaseToken?: string },
+  opts: { resumed?: boolean; leaseToken?: string; sessionKey: string },
 ): void {
   const allowedTools = config.allowedTools ?? [
     "mcp__switchyard__*",
@@ -1167,6 +1209,8 @@ function dispatchSdk(
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
       mod.runSdkSession({
         prompt: buildPrompt(issue.ref, opts),
+        model: resolveWorkerModel(config, config.projects[projectKeyOf(issue.ref)]),
+        sessionKey: opts.sessionKey,
         cwd: repo,
         switchyardUrl: config.url,
         switchyardToken: token,
@@ -1247,10 +1291,11 @@ export function dispatchAnswer(
   const logDir = path.join(project.repo, ".superpowers", "worker-logs");
   mkdirSync(logDir, { recursive: true });
   const logPath = path.join(logDir, `${ref}.answer.log`);
+  const sessionKey = randomUUID();
 
   if ((config.runner ?? "cli") === "sdk") {
     recordAnswerAttempt(answerState, ref);
-    dispatchAnswerSdk(ref, project.repo, config, token, logPath);
+    dispatchAnswerSdk(ref, project.repo, config, token, logPath, sessionKey);
     return;
   }
 
@@ -1258,9 +1303,25 @@ export function dispatchAnswer(
   let child: ChildProcess;
   try {
     child = spawn(
-      "claude",
-      ["-p", buildAnswerPrompt(ref), "--allowedTools", ANSWER_ALLOWED_TOOLS.join(",")],
-      { cwd: project.repo, detached: true, stdio: ["ignore", fd, fd] },
+      process.execPath,
+      [
+        path.join(repoRoot(), "scripts", "worker-engine-runner.mjs"),
+        "claude",
+        "-p",
+        buildAnswerPrompt(ref),
+        "--allowedTools",
+        ANSWER_ALLOWED_TOOLS.join(","),
+      ],
+      {
+        cwd: project.repo,
+        detached: true,
+        stdio: ["ignore", fd, fd, "ipc"],
+        env: {
+          ...process.env,
+          WORKER_MODEL: resolveWorkerModel(config, project) ?? "",
+          WORKER_SESSION_KEY: sessionKey,
+        },
+      },
     );
   } catch (err) {
     console.error(`failed to dispatch answer session for ${ref}: ${(err as Error).message}`);
@@ -1284,13 +1345,19 @@ export function dispatchAnswer(
     killSession(child, null);
   }, timeoutMs);
 
-  // `child.pid` is only populated once the OS has actually spawned the
-  // process; reading it synchronously here printed `pid undefined` on a
-  // spawn failure (e.g. ENOENT for a bare `claude` not on launchd's PATH —
-  // SYD-74), since the 'error' event fires on a later tick. Waiting for
-  // 'spawn' also means a failed spawn never reaches recordAnswerAttempt, so
-  // environment errors can't eat the answers-per-issue cap.
-  child.on("spawn", () => {
+  // A running Node wrapper does not prove the provider binary exists. Only
+  // its IPC acknowledgment of the provider's spawn consumes an answer attempt.
+  let providerStarted = false;
+  child.on("message", (message) => {
+    if (
+      providerStarted ||
+      !message ||
+      typeof message !== "object" ||
+      !("type" in message) ||
+      message.type !== "worker.provider_started"
+    )
+      return;
+    providerStarted = true;
     recordAnswerAttempt(answerState, ref);
     console.log(`dispatched answer session for ${ref} (pid ${child.pid}) -> ${logPath}`);
   });
@@ -1317,6 +1384,7 @@ function dispatchAnswerSdk(
   config: WorkerConfig,
   token: string,
   logPath: string,
+  sessionKey: string,
 ): void {
   const key = answerKey(ref);
   const safeAppend = (text: string) => {
@@ -1335,6 +1403,8 @@ function dispatchAnswerSdk(
     .then((mod: { runSdkSession: (o: object) => Promise<number> }) =>
       mod.runSdkSession({
         prompt: buildAnswerPrompt(ref),
+        model: resolveWorkerModel(config, config.projects[projectKeyOf(ref)]),
+        sessionKey,
         cwd: repo,
         switchyardUrl: config.url,
         switchyardToken: token,

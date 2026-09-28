@@ -87,6 +87,46 @@ describe("runSdkSession", () => {
     );
   });
 
+  it("records SDK version, requested model and separately observed model metadata", async () => {
+    options.model = "requested-model";
+    queryMock.mockImplementation(() =>
+      asQuery(
+        (async function* () {
+          yield {
+            type: "system",
+            subtype: "init",
+            model: "actual-model",
+            claude_code_version: "2.1.283",
+            authorization: "secret-auth",
+          } as unknown as SDKMessage;
+          yield result();
+        })(),
+      ),
+    );
+    expect(await runSdkSession(options)).toBe(0);
+    const log = readFileSync(options.logPath, "utf8");
+    const events = log
+      .split("\n")
+      .filter((line) => line.startsWith("{"))
+      .map((line) => JSON.parse(line));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "worker.runtime",
+        sdk_version: expect.stringMatching(/^\d+\.\d+\.\d+/),
+        requested_model: "requested-model",
+        cli_version: null,
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "worker.event",
+        effective_models: ["actual-model"],
+        cli_version: "2.1.283",
+      }),
+    );
+    expect(log).not.toContain("secret-auth");
+  });
+
   it("does not start a provider session after the host cancels its lease", async () => {
     const host = new AbortController();
     host.abort();

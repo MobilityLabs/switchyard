@@ -2,6 +2,7 @@
 // Kept separate from the polling/spawning loop so it's trivially unit-testable.
 
 import { workerExchangeRepo } from "./worker-exchange.js";
+import { resolveWorkerModel } from "./worker-telemetry.mjs";
 import { DEFAULT_CODEX_IMAGE } from "./engines/codex.js";
 import {
   DEFAULT_GEMINI_IMAGE,
@@ -82,6 +83,8 @@ export type WorkerStack = {
 
 export type WorkerProject = {
   repo: string;
+  /** Optional model override for this project; takes precedence over worker.model. */
+  model?: string;
   stack?: WorkerStack;
   /** Integration branch containerized dispatch bases agent/<ref> on (default "main"). */
   baseBranch?: string;
@@ -114,6 +117,8 @@ export type GithubPollConfig = {
 
 export type WorkerConfig = {
   url: string;
+  /** Optional requested model; absent preserves the engine/provider default. */
+  model?: string;
   label: string;
   intervalSeconds: number;
   /** How often to scan the event feed for answered escalations (default 15s). */
@@ -1310,6 +1315,11 @@ export function buildDockerArgs(
     `WORKER_PROMPT=${prompt}`,
     "-e",
     `ALLOWED_TOOLS=${allowedTools.join(",")}`,
+    "-e",
+    "WORKER_SESSION_KEY",
+    ...(resolveWorkerModel(config, project)
+      ? ["-e", `WORKER_MODEL=${resolveWorkerModel(config, project)}`]
+      : []),
     ...(stackChecks ? ["-e", `STACK_CHECKS=${stackChecks}`] : []),
     "-e",
     `BASE_BRANCH=${baseBranch}`,
