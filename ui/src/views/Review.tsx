@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { addComment, getIssue, listIssues, updateIssue } from "../api";
 import { usePoll } from "../usePoll";
 import { usePasteUpload } from "../usePasteUpload";
@@ -16,6 +16,26 @@ import { ALL_SCOPE, navigate, redirect } from "../router";
 import { countNewArrivals, firstRef, pickAdjacentRef } from "./reviewQueue";
 import { attentionChip } from "../attention";
 
+function ignoresReviewShortcut(e: KeyboardEvent): boolean {
+  if (
+    e.defaultPrevented ||
+    e.ctrlKey ||
+    e.metaKey ||
+    e.altKey ||
+    e.shiftKey ||
+    e.repeat ||
+    e.isComposing
+  )
+    return true;
+  const target = e.target;
+  return (
+    target instanceof Element &&
+    target.closest(
+      'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"], .modal',
+    ) !== null
+  );
+}
+
 export default function Review({
   project,
   currentRef,
@@ -29,15 +49,12 @@ export default function Review({
     () => listIssues({ project: project ?? undefined, status: "in_review" }),
     [project],
   );
-  const actorNames = useActorNames();
 
   // The reviewer's working order — a snapshot of refs, distinct from the
   // live-polled `data`. It only catches up to `data` when the reviewer
   // moves (next/prev/approve/send back/jump), so a new arrival or reorder
   // mid-poll never swaps the item on screen out from under them.
   const [queue, setQueue] = useState<Issue[]>([]);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
 
   // Switching the project scope invalidates the snapshot so the reviewer
   // starts fresh in the new scope instead of carrying over a queue whose
@@ -75,16 +92,6 @@ export default function Review({
   const leftReview = currentRef !== null && data !== null && !current;
   const newArrivals = data ? countNewArrivals(data, queue) : 0;
 
-  const { onPaste, uploading, uploadError, setUploadError, textareaRef } = usePasteUpload(
-    current?.ref ?? "",
-    setDraft,
-  );
-
-  const detail = usePoll<IssueDetailType | null>(
-    () => (current ? getIssue(current.ref) : Promise.resolve(null)),
-    [current?.ref],
-  );
-
   // Every issue switch — prev/next, approve, send back, or a direct
   // /review/:ref navigation — starts the reviewer at the top of the panel
   // rather than wherever the previous issue's scroll position landed
@@ -96,7 +103,6 @@ export default function Review({
 
   function moveTo(ref: string | null) {
     if (data) setQueue(data);
-    setDraft("");
     navigate({ view: "review", scope: project ?? ALL_SCOPE, ref });
   }
   function next() {
@@ -108,66 +114,10 @@ export default function Review({
   function jumpToNext() {
     moveTo(pickAdjacentRef(queue, currentRef, 1) ?? firstRef(list));
   }
-  function approve() {
-    if (!current) return;
-    const nextRef = pickAdjacentRef(queue, currentRef, 1);
-    updateIssue(current.ref, {
-      status: "done",
-      expectedHeadSha: current.openPr?.headSha ?? undefined,
-    }).then(
-      () => {
-        setActionError(null);
-        reload();
-        moveTo(nextRef);
-      },
-      (e) => setActionError(e.message),
-    );
-  }
-  function sendBack() {
-    if (!current) return;
-    const body = draft.trim();
-    if (!body) {
-      setActionError("A comment is required to send an issue back — write what needs to change.");
-      return;
-    }
-    const nextRef = pickAdjacentRef(queue, currentRef, 1);
-    addComment(current.ref, body)
-      .then(() => updateIssue(current.ref, { status: "todo" }))
-      .then(
-        () => {
-          setActionError(null);
-          reload();
-          moveTo(nextRef);
-        },
-        (e) => setActionError(e.message),
-      );
-  }
-
-  function postComment() {
-    if (!current) return;
-    const body = draft.trim();
-    if (!body) return;
-    addComment(current.ref, body).then(
-      () => {
-        setActionError(null);
-        setDraft("");
-        detail.reload();
-      },
-      (e) => setActionError(e.message),
-    );
-  }
-
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === "TEXTAREA" || tag === "INPUT") return;
-      if (e.key === "a") {
-        e.preventDefault();
-        approve();
-      } else if (e.key === "s") {
-        e.preventDefault();
-        sendBack();
-      } else if (e.key === "j" || e.key === "ArrowRight") {
+      if (ignoresReviewShortcut(e)) return;
+      if (e.key === "j" || e.key === "ArrowRight") {
         e.preventDefault();
         next();
       } else if (e.key === "k" || e.key === "ArrowLeft") {
@@ -178,7 +128,7 @@ export default function Review({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, currentRef, draft, queue]);
+  }, [currentRef, queue, data, project]);
 
   if (error && !data) return <p className="error-bar">{error}</p>;
   if (!data) return <p>Loading…</p>;
@@ -196,11 +146,6 @@ export default function Review({
 
   return (
     <section className="review">
-      {actionError && (
-        <p className="error-bar">
-          {actionError} <button onClick={() => setActionError(null)}>×</button>
-        </p>
-      )}
       <PollErrorBar error={error} />
 
       <header className="review-head">
@@ -226,101 +171,215 @@ export default function Review({
       )}
 
       {current && (
-        <article className="review-issue panel">
-          <div className="issue-head">
-            <span className="ref">{current.ref}</span>
-            <h3>{current.title}</h3>
-            <span className={`badge prio prio-${current.priority}`}>{current.priority}</span>
-            {current.attention &&
-              (() => {
-                const chip = attentionChip(current.attention);
-                return chip ? (
-                  <span className={chip.className} title={current.attention.message}>
-                    {chip.label}
-                  </span>
-                ) : null;
-              })()}
-          </div>
+        <ReviewIssue
+          key={current.ref}
+          current={current}
+          me={me}
+          onVerdict={() => {
+            reload();
+            moveTo(pickAdjacentRef(queue, currentRef, 1));
+          }}
+        />
+      )}
+    </section>
+  );
+}
 
-          {current.sourceType && (
-            <div className="provenance panel">
-              Filed from: {current.sourceType} · {current.sourceDetail ?? ""}
-              {current.sourceUrl && (
-                <>
-                  {" "}
-                  ·{" "}
-                  <a href={safeHref(current.sourceUrl)} target="_blank" rel="noreferrer">
-                    link
-                  </a>
-                </>
-              )}
-            </div>
+// Each selected issue owns its async work and local editor state. The queue
+// stays in Review, so resetting this subtree never changes the working order.
+function ReviewIssue({
+  current,
+  me,
+  onVerdict,
+}: {
+  current: Issue;
+  me: Actor;
+  onVerdict: () => void;
+}) {
+  const actorNames = useActorNames();
+  const [draft, setDraft] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [acting, setActing] = useState(false);
+  const inFlight = useRef(false);
+  const live = useRef(false);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  const paste = usePasteUpload(current.ref, setDraft);
+  const { uploading } = paste;
+  const detail = usePoll<IssueDetailType>(() => getIssue(current.ref), [current.ref]);
+  const currentDetail = detail.data?.ref === current.ref ? detail.data : null;
+
+  async function runAction(work: () => Promise<unknown>, complete: () => void) {
+    if (uploading || inFlight.current) return;
+    inFlight.current = true;
+    setActing(true);
+    setActionError(null);
+    try {
+      await work();
+      if (live.current) complete();
+    } catch (error) {
+      if (live.current) setActionError(error instanceof Error ? error.message : String(error));
+    } finally {
+      inFlight.current = false;
+      if (live.current) setActing(false);
+    }
+  }
+
+  function approve() {
+    void runAction(
+      () =>
+        updateIssue(current.ref, {
+          status: "done",
+          expectedHeadSha: current.openPr?.headSha ?? undefined,
+        }),
+      onVerdict,
+    );
+  }
+  function sendBack() {
+    if (uploading || inFlight.current) return;
+    const body = draft.trim();
+    if (!body) {
+      setActionError("A comment is required to send an issue back — write what needs to change.");
+      return;
+    }
+    void runAction(async () => {
+      await addComment(current.ref, body);
+      await updateIssue(current.ref, { status: "todo" });
+    }, onVerdict);
+  }
+  function postComment() {
+    const body = draft.trim();
+    if (!body) return;
+    void runAction(
+      () => addComment(current.ref, body),
+      () => {
+        setDraft("");
+        detail.reload();
+      },
+    );
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (ignoresReviewShortcut(e)) return;
+      if (e.key === "a") {
+        e.preventDefault();
+        approve();
+      } else if (e.key === "s") {
+        e.preventDefault();
+        sendBack();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, draft, uploading, onVerdict]);
+
+  return (
+    <article className="review-issue panel">
+      {actionError && (
+        <p className="error-bar">
+          {actionError} <button onClick={() => setActionError(null)}>×</button>
+        </p>
+      )}
+      <PollErrorBar error={detail.error} />
+      <div className="issue-head">
+        <span className="ref">{current.ref}</span>
+        <h3>{current.title}</h3>
+        <span className={`badge prio prio-${current.priority}`}>{current.priority}</span>
+        {current.attention &&
+          (() => {
+            const chip = attentionChip(current.attention);
+            return chip ? (
+              <span className={chip.className} title={current.attention.message}>
+                {chip.label}
+              </span>
+            ) : null;
+          })()}
+      </div>
+
+      {current.sourceType && (
+        <div className="provenance panel">
+          Filed from: {current.sourceType} · {current.sourceDetail ?? ""}
+          {current.sourceUrl && (
+            <>
+              {" "}
+              ·{" "}
+              <a href={safeHref(current.sourceUrl)} target="_blank" rel="noreferrer">
+                link
+              </a>
+            </>
           )}
+        </div>
+      )}
 
-          {current.description ? (
-            <div className="description panel">
-              <Markdown
-                text={current.description}
-                projectKey={projectKeyFromRef(current.ref)}
-                knownActorNames={actorNames}
-              />
-            </div>
-          ) : (
-            <p className="empty">No description.</p>
-          )}
-          {current.description && <DesignEmbeds text={current.description} />}
+      {current.description ? (
+        <div className="description panel">
+          <Markdown
+            text={current.description}
+            projectKey={projectKeyFromRef(current.ref)}
+            knownActorNames={actorNames}
+          />
+        </div>
+      ) : (
+        <p className="empty">No description.</p>
+      )}
+      {current.description && <DesignEmbeds text={current.description} />}
 
-          <h4>Activity</h4>
-          <div className="activity">
-            {detail.data ? (
-              <ActivityFeed
-                activity={detail.data.activity}
-                projectKey={projectKeyFromRef(current.ref)}
-                knownActorNames={actorNames}
-              />
-            ) : (
-              <p className="empty">Loading activity…</p>
-            )}
-          </div>
+      <h4>Activity</h4>
+      <div className="activity">
+        {currentDetail ? (
+          <ActivityFeed
+            activity={currentDetail.activity}
+            projectKey={projectKeyFromRef(current.ref)}
+            knownActorNames={actorNames}
+          />
+        ) : (
+          <p className="empty">Loading activity…</p>
+        )}
+      </div>
 
-          {/* SYD-290: the reviewer is already looking at the PR when they
+      {/* SYD-290: the reviewer is already looking at the PR when they
               authorize, so confirming its link belongs here — but as its own
               button, NOT folded into Approve. Confirmation is the one act the
               model reserves for a person; making it a side effect of a
               different verdict would mean a human vouches for a link without
               ever choosing to. */}
-          {detail.data && (
-            <PrLinks
-              refId={current.ref}
-              projectId={current.projectId}
-              links={detail.data.prLinks}
-              activity={detail.data.activity}
-              me={me}
-              onChanged={detail.reload}
-              compact
-            />
-          )}
-
-          <Composer
-            value={draft}
-            onChange={setDraft}
-            placeholder="Write a comment… (Comment posts it; required for Send back; paste an image or video to attach it)"
-            paste={{ onPaste, uploading, uploadError, setUploadError, textareaRef }}
-          />
-
-          <div className="review-verdicts">
-            <button className="primary" disabled={uploading} onClick={approve}>
-              Approve → done <kbd>a</kbd>
-            </button>
-            <button disabled={uploading} onClick={sendBack}>
-              Send back → todo <kbd>s</kbd>
-            </button>
-            <button disabled={!draft.trim() || uploading} onClick={postComment}>
-              Comment
-            </button>
-          </div>
-        </article>
+      {currentDetail && (
+        <PrLinks
+          refId={current.ref}
+          projectId={current.projectId}
+          links={currentDetail.prLinks}
+          activity={currentDetail.activity}
+          me={me}
+          onChanged={detail.reload}
+          compact
+        />
       )}
-    </section>
+
+      <Composer
+        value={draft}
+        onChange={setDraft}
+        placeholder="Write a comment… (Comment posts it; required for Send back; paste an image or video to attach it)"
+        paste={paste}
+        disabled={acting}
+      />
+
+      <div className="review-verdicts">
+        <button className="primary" disabled={uploading || acting} onClick={approve}>
+          Approve → done <kbd>a</kbd>
+        </button>
+        <button disabled={uploading || acting} onClick={sendBack}>
+          Send back → todo <kbd>s</kbd>
+        </button>
+        <button disabled={!draft.trim() || uploading || acting} onClick={postComment}>
+          Comment
+        </button>
+      </div>
+    </article>
   );
 }

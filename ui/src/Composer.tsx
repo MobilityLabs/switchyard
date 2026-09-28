@@ -11,12 +11,14 @@ export function Composer({
   placeholder,
   paste,
   children,
+  disabled = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
   paste: ReturnType<typeof usePasteUpload> | ReturnType<typeof useDeferredPasteUpload>;
   children?: ReactNode;
+  disabled?: boolean;
 }) {
   const { onPaste, uploading, uploadError, setUploadError, textareaRef } = paste;
   return (
@@ -28,6 +30,7 @@ export function Composer({
       )}
       <div className="composer">
         <textarea
+          disabled={disabled}
           ref={textareaRef}
           value={value}
           placeholder={placeholder}
