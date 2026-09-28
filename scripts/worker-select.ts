@@ -191,6 +191,18 @@ const DEFAULT_ALLOWED_TOOLS = [
   "Glob",
 ];
 const DEFAULT_WORKER_IMAGE = "switchyard-worker";
+
+/** Use the same image for dispatch and every doctor probe. */
+export function workerImage(config: Pick<WorkerConfig, "image" | "engine">): string {
+  return (
+    config.image ??
+    (config.engine === "codex"
+      ? DEFAULT_CODEX_IMAGE
+      : config.engine === "gemini"
+        ? DEFAULT_GEMINI_IMAGE
+        : DEFAULT_WORKER_IMAGE)
+  );
+}
 export const DEFAULT_MAX_ANSWER_CONCURRENT = 2;
 const DEFAULT_BASE_BRANCH = "main";
 export const DEFAULT_SESSION_TIMEOUT_SECONDS = 3600;
@@ -1211,13 +1223,7 @@ export function buildDockerArgs(
   const allowedTools = config.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
   const baseBranch = project.baseBranch ?? DEFAULT_BASE_BRANCH;
   const prompt = buildContainerizedPrompt(issue.ref, { ...opts, baseBranch });
-  const image =
-    config.image ??
-    (engine === "codex"
-      ? DEFAULT_CODEX_IMAGE
-      : engine === "gemini"
-        ? DEFAULT_GEMINI_IMAGE
-        : DEFAULT_WORKER_IMAGE);
+  const image = workerImage(config);
   const stackChecks = stackChecksEnv(project.stack);
 
   // Provider-credential handling depends on the egress mode (SYD-186) and,
